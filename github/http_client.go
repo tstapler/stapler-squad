@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -19,8 +20,17 @@ var ghHTTPClient = &http.Client{Timeout: 30 * time.Second}
 // an httptest.Server so requests never reach the real API.
 var GhBaseURL = "https://api.github.com/"
 
+// ghTokenCache holds the most recently read keychain token and the time it was
+// fetched.  env-var tokens bypass the cache entirely (they are cheap to read).
+var (
+	ghTokenCacheVal atomic.Value // stores string
+	ghTokenCacheAt  atomic.Int64 // unix-nanosecond timestamp of last fetch
+)
+
+const ghTokenCacheTTL = time.Minute
+
 // getGHToken returns a GitHub personal access token for native HTTP calls.
-// Precedence: GITHUB_TOKEN env → GH_TOKEN env → OS keychain.
+// Precedence: GITHUB_TOKEN env → GH_TOKEN env → OS keychain (cached 1 min).
 // Returns an empty string (not an error) when no token source is available so
 // callers can decide whether to degrade gracefully.
 func getGHToken(_ context.Context) string {
@@ -30,10 +40,18 @@ func getGHToken(_ context.Context) string {
 	if tok := os.Getenv("GH_TOKEN"); tok != "" {
 		return tok
 	}
-	if tok := GetKeychainToken(); tok != "" {
-		return tok
+	now := time.Now().UnixNano()
+	if now-ghTokenCacheAt.Load() < int64(ghTokenCacheTTL) {
+		if tok, _ := ghTokenCacheVal.Load().(string); tok != "" {
+			return tok
+		}
 	}
-	return ""
+	tok := GetKeychainToken()
+	if tok != "" {
+		ghTokenCacheVal.Store(tok)
+		ghTokenCacheAt.Store(now)
+	}
+	return tok
 }
 
 // rateLimitWarningThreshold triggers a warning log when X-RateLimit-Remaining

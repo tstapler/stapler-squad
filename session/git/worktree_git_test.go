@@ -25,15 +25,12 @@ func (e *raceSimulatorExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
 }
 
 // TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine
-// verifies the double-checked locking invariant: IsDirtyWithHint must return the
-// locally-computed value (dirty), not the shared cache slot (g.isDirtyCache).
+// verifies the return-own-observation invariant: IsDirtyWithHint must return the
+// locally-computed value, not a re-read of the cache slot.
 //
-// Reproduces the pre-fix bug: if a concurrent goroutine wins the write lock and
-// stores a different value between our git call and our write-lock acquisition,
-// the pre-fix code returned the racing goroutine's value instead of ours.
-//
-// Pre-fix behaviour: returns false (racing goroutine's cached value) — test FAILS.
-// Post-fix behaviour: returns true (our locally-computed value)      — test PASSES.
+// With atomic.Value the write is unconditional, so a race can't suppress our Store.
+// The test simulates a racing goroutine that stores false into the cache WHILE our
+// git subprocess is running; our code must still return true (its own observation).
 func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingGoroutine(t *testing.T) {
 	mock := &raceSimulatorExecutor{
 		output: []byte("M file.txt\n"), // our goroutine sees the worktree as dirty
@@ -44,28 +41,22 @@ func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingG
 	)
 
 	// The raceSetup closure runs inside CombinedOutput, simulating a concurrent
-	// goroutine that wins the write lock while our call is "in flight".
-	// It stores dirty=false with a fresh timestamp, making the cache appear valid.
+	// goroutine that stores dirty=false while our git call is "in flight".
 	mock.raceSetup = func() {
-		g.isDirtyCacheMu.Lock()
-		g.isDirtyCache = false          // racing goroutine observed: not dirty
-		g.isDirtyCacheTime = time.Now() // marks cache fresh — causes our write to be skipped
-		g.isDirtyCacheMu.Unlock()
+		g.isDirtyCache.Store(dirtyCacheState{dirty: false, time: time.Now()})
 	}
 
-	// Start with a stale cache so IsDirtyWithHint takes the slow (git) path.
-	g.isDirtyCacheMu.Lock()
-	g.isDirtyCacheTime = time.Time{}
-	g.isDirtyCacheMu.Unlock()
+	// Start with an invalid cache so IsDirtyWithHint takes the slow (git) path.
+	g.isDirtyCache.Store(dirtyCacheState{}) // zero time = cache invalid
 
 	got, err := g.IsDirtyWithHint(false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// We computed dirty=true from the git output.  The racing goroutine stored
-	// false. The invariant: we must return our own observation (true).
+	// We computed dirty=true. The racing goroutine stored false. The invariant:
+	// we must return our own observation (true), overwriting the racing store.
 	if !got {
-		t.Errorf("IsDirtyWithHint = false; want true (locally computed value, not racing goroutine's cached value)")
+		t.Errorf("IsDirtyWithHint = false; want true (locally computed value)")
 	}
 }

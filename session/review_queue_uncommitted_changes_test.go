@@ -98,7 +98,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 			t.Fatalf("Failed to create modified file: %v", err)
 		}
 		// Invalidate the dirty cache so the next checkSession re-runs git status.
-		// In production this happens naturally after isDirtyCacheTTL (15s); in tests
+		// In production this happens naturally after IsDirtyCacheTTL (30s) or IsDirtyCleanCacheTTL (5min); in tests
 		// we invalidate explicitly since we know we just changed the filesystem.
 		worktree.InvalidateDirtyCache()
 
@@ -356,7 +356,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		t.Fatalf("Failed to create modified file: %v", err)
 	}
 	// Invalidate cache so the running poller picks up the change on its next tick
-	// rather than waiting for isDirtyCacheTTL (15s) to elapse.
+	// rather than waiting for IsDirtyCacheTTL (30s) or IsDirtyCleanCacheTTL (5min) to elapse.
 	worktree.InvalidateDirtyCache()
 
 	// Wait for poller to detect changes

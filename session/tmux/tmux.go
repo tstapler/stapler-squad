@@ -8,10 +8,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/executor"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
 	"os/exec"
@@ -24,6 +20,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const ProgramClaude = "claude"
@@ -116,11 +117,12 @@ type TmuxSession struct {
 	lastKnownCols atomic.Int32
 	lastKnownRows atomic.Int32
 
-	// Session existence caching to avoid repeated list-sessions calls
-	existsCacheMutex deadlock.RWMutex
-	existsCache      bool
-	existsCacheTime  time.Time
-	existsCacheTTL   time.Duration
+	// Session existence caching — lock-free via atomic.Value snapshot.
+	// existsSF coalesces concurrent subprocess calls so only one list-sessions
+	// runs at a time; no lock is held during the subprocess.
+	existsCache    atomic.Value       // stores existsCacheState; zero value = cache invalid
+	existsSF       singleflight.Group //nolint:exhaustruct
+	existsCacheTTL time.Duration      // read-only after construction
 
 	// Control mode streaming infrastructure (replaces pipe-pane + FIFO)
 	controlModeCmd         *exec.Cmd              // tmux -C attach process
@@ -128,7 +130,7 @@ type TmuxSession struct {
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu       deadlock.RWMutex       // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
+	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
 	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
 	controlModeStartMu     sync.Mutex             // Serializes Start/Stop so only one process starts at a time
 	controlModeRefCount    int                    // Number of active Start/Stop pairs; protected by controlModeSubMu
@@ -179,6 +181,12 @@ const (
 )
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
+
+// existsCacheState is the immutable snapshot stored in TmuxSession.existsCache.
+type existsCacheState struct {
+	exists bool
+	time   time.Time
+}
 
 // recoveryMu and recoveryInFlight guard against concurrent tmux server recovery attempts.
 // When the server dies all sessions detect the failure simultaneously; only one should
@@ -1601,79 +1609,54 @@ func (t *TmuxSession) DoesSessionExist() bool {
 		// Registry returned false — do not trust it blindly; fall through.
 	}
 
-	// Check cache first (read lock)
-	t.existsCacheMutex.RLock()
-	if time.Since(t.existsCacheTime) < t.existsCacheTTL {
-		cached := t.existsCache
-		t.existsCacheMutex.RUnlock()
-		return cached
-	}
-	t.existsCacheMutex.RUnlock()
-
-	// Cache expired or not set, get fresh data (write lock).
-	// IMPORTANT: do NOT call recoverFromServerFailure while this lock is held —
-	// recovery runs subprocess calls that can take seconds and would stall all
-	// concurrent callers of DoesSessionExist on the same session.
-	t.existsCacheMutex.Lock()
-
-	// Double-check cache hasn't been updated by another goroutine
-	if time.Since(t.existsCacheTime) < t.existsCacheTTL {
-		result := t.existsCache
-		t.existsCacheMutex.Unlock()
-		return result
-	}
-
-	// Use list-sessions to get actual running sessions for reliable checking.
-	// sessionExistsTimeout is sized to be more resilient under high system load.
-	ctx, cancel := context.WithTimeout(context.Background(), sessionExistsTimeout)
-	defer cancel()
-
-	output, err := t.listSessionsRaw(ctx)
-
-	// Check if error is due to timeout
-	if ctx.Err() == context.DeadlineExceeded {
-		log.Warn("timeout checking if tmux session exists", "session", t.sanitizedName)
-		t.existsCache = false
-		t.existsCacheTime = time.Now()
-		t.existsCacheMutex.Unlock()
-		return false
-	}
-
-	if err != nil {
-		// Detect server failure before releasing the lock so we can record the cache state,
-		// then release and call recovery outside the lock (recovery is slow — subprocess calls).
-		needsRecovery := t.serverSocket == "" && serverNotRunning(output)
-		t.existsCache = false
-		t.existsCacheTime = time.Now()
-		t.existsCacheMutex.Unlock()
-		if needsRecovery {
-			recoverFromServerFailure(t.serverSocket, "DoesSessionExist")
-		}
-		return false
-	}
-
-	// Parse the output to check if our session exists
-	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
-	exists := false
-	for _, session := range sessions {
-		if session == t.sanitizedName {
-			exists = true
-			break
+	// Fast path: lock-free atomic load.
+	if v := t.existsCache.Load(); v != nil {
+		state := v.(existsCacheState)
+		if !state.time.IsZero() && time.Since(state.time) < t.existsCacheTTL {
+			return state.exists
 		}
 	}
 
-	// Update cache and release lock
-	t.existsCache = exists
-	t.existsCacheTime = time.Now()
-	t.existsCacheMutex.Unlock()
-	return exists
+	// Slow path: coalesce concurrent misses via singleflight.
+	// No lock is held during the subprocess — fixes the previous anti-pattern
+	// of holding existsCacheMutex across listSessionsRaw (a subprocess call).
+	v, _, _ := t.existsSF.Do("", func() (interface{}, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionExistsTimeout)
+		defer cancel()
+		output, err := t.listSessionsRaw(ctx)
+
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Warn("timeout checking if tmux session exists", "session", t.sanitizedName)
+			t.existsCache.Store(existsCacheState{exists: false, time: time.Now()})
+			return false, nil
+		}
+
+		if err != nil {
+			needsRecovery := t.serverSocket == "" && serverNotRunning(output)
+			t.existsCache.Store(existsCacheState{exists: false, time: time.Now()})
+			if needsRecovery {
+				recoverFromServerFailure(t.serverSocket, "DoesSessionExist")
+			}
+			return false, nil
+		}
+
+		sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
+		exists := false
+		for _, session := range sessions {
+			if session == t.sanitizedName {
+				exists = true
+				break
+			}
+		}
+		t.existsCache.Store(existsCacheState{exists: exists, time: time.Now()})
+		return exists, nil
+	})
+	return v.(bool)
 }
 
-// invalidateExistsCache clears the session existence cache to force a fresh check
+// invalidateExistsCache clears the session existence cache to force a fresh check.
 func (t *TmuxSession) invalidateExistsCache() {
-	t.existsCacheMutex.Lock()
-	defer t.existsCacheMutex.Unlock()
-	t.existsCacheTime = time.Time{} // Zero time forces cache miss
+	t.existsCache.Store(existsCacheState{}) // zero time = cache invalid
 }
 
 // DoesSessionExistNoCache checks if session exists WITHOUT using cache.

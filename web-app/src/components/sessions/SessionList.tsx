@@ -88,6 +88,97 @@ interface SessionListProps {
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
 type SortDir = 'asc' | 'desc';
 
+// Stable-callback prop types for SessionRowWrapper.
+// Using (session: Session) / (id: string) shapes lets the parent pass
+// one useCallback per action instead of one closure per row.
+interface SessionRowHandlers {
+  onSessionClick?: (session: Session) => void;
+  onSessionOpenInNewPane?: (session: Session) => void;
+  onDeleteSession?: (id: string) => Promise<void> | void;
+  onPauseSession?: (id: string) => void;
+  onResumeSession?: (session: Session) => void;
+  onCloneSession?: (id: string) => void;
+  onNewWorkspaceSession?: (id: string) => void;
+  onRestartSession?: (id: string) => Promise<boolean | void>;
+  onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
+  onRunOneShot?: (sessionId: string) => Promise<void>;
+  onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (id: string, message: string) => void;
+  onClearConversationState?: (id: string) => Promise<boolean>;
+  onHibernateSession?: (id: string) => void;
+  onResumeHibernatedSession?: (id: string) => void;
+  onUpdateTags?: (id: string, tags: string[]) => void;
+  onToggleSession?: (id: string, e: React.MouseEvent) => void;
+}
+
+interface SessionRowWrapperProps extends SessionRowHandlers {
+  session: Session;
+  visibleColumns: ColumnKey[];
+  selectMode: boolean;
+  isSelected: boolean;
+  suppressApprovalSubStatus: boolean;
+}
+
+// Memoized wrapper: turns stable per-action handlers into per-session closures
+// only once per session identity change. The outer SessionList can pass one
+// useCallback per action (e.g. onDeleteSession accepts an id), and this wrapper
+// creates the () => onDeleteSession(session.id) closure just once.
+const SessionRowWrapper = React.memo(function SessionRowWrapper({
+  session,
+  visibleColumns,
+  selectMode,
+  isSelected,
+  suppressApprovalSubStatus,
+  onSessionClick,
+  onSessionOpenInNewPane,
+  onDeleteSession,
+  onPauseSession,
+  onResumeSession,
+  onCloneSession,
+  onNewWorkspaceSession,
+  onRestartSession,
+  onCreateCheckpoint,
+  onRunOneShot,
+  onSetRateLimitEnabled,
+  onToggleAutonomousMode,
+  onSteerAutonomousSession,
+  onClearConversationState,
+  onHibernateSession,
+  onResumeHibernatedSession,
+  onUpdateTags,
+  onToggleSession,
+}: SessionRowWrapperProps) {
+  const id = session.id;
+  return (
+    <SessionRow
+      session={session}
+      onClick={onSessionClick ? () => onSessionClick(session) : undefined}
+      onPause={onPauseSession ? () => onPauseSession(id) : undefined}
+      onResume={onResumeSession ? () => onResumeSession(session) : undefined}
+      onDelete={onDeleteSession ? () => onDeleteSession(id) : undefined}
+      onClone={onCloneSession ? () => onCloneSession(id) : undefined}
+      onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
+      onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
+      onRestart={onRestartSession}
+      onCreateCheckpoint={onCreateCheckpoint}
+      onRunOneShot={onRunOneShot}
+      onSetRateLimitEnabled={onSetRateLimitEnabled}
+      onToggleAutonomousMode={onToggleAutonomousMode}
+      onSteerAutonomousSession={onSteerAutonomousSession}
+      onClearConversationState={onClearConversationState}
+      onHibernate={onHibernateSession ? () => onHibernateSession(id) : undefined}
+      onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(id) : undefined}
+      onUpdateTags={onUpdateTags}
+      suppressApprovalSubStatus={suppressApprovalSubStatus}
+      visibleColumns={visibleColumns}
+      selectMode={selectMode}
+      isSelected={isSelected}
+      onToggleSelect={onToggleSession ? (e) => onToggleSession(id, e) : undefined}
+    />
+  );
+});
+
 const BASE_STORAGE_KEYS = {
   SEARCH_QUERY: 'stapler-squad-search-query',
   SELECTED_STATUS: 'stapler-squad-selected-status',
@@ -555,6 +646,19 @@ export function SessionList({
     const allSessionIds = new Set(filteredSessions.map(s => s.id));
     setSelectedSessions(allSessionIds);
   }, [filteredSessions]);
+
+  // Stable row-handler callbacks passed to SessionRowWrapper.
+  // These accept (session) or (id) so SessionRowWrapper can be memoized —
+  // the per-session closures are only recreated inside the wrapper when session identity changes.
+  const stableOnSessionClick = useCallback((session: Session) => onSessionClick?.(session), [onSessionClick]);
+  const stableOnSessionOpenInNewPane = useCallback((session: Session) => onSessionOpenInNewPane?.(session), [onSessionOpenInNewPane]);
+  const stableOnDeleteSession = useCallback((id: string) => onDeleteSession?.(id), [onDeleteSession]);
+  const stableOnPauseSession = useCallback((id: string) => onPauseSession?.(id), [onPauseSession]);
+  const stableOnResumeSession = useCallback((session: Session) => onResumeSession?.(session), [onResumeSession]);
+  const stableOnCloneSession = useCallback((id: string) => onCloneSession?.(id), [onCloneSession]);
+  const stableOnNewWorkspaceSession = useCallback((id: string) => onNewWorkspaceSession?.(id), [onNewWorkspaceSession]);
+  const stableOnHibernateSession = useCallback((id: string) => onHibernateSession?.(id), [onHibernateSession]);
+  const stableOnResumeHibernatedSession = useCallback((id: string) => onResumeHibernatedSession?.(id), [onResumeHibernatedSession]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSessions(new Set());
@@ -1126,30 +1230,30 @@ export function SessionList({
                   </div>
                 ) : (
                   <div role="listitem">
-                  <SessionRow
+                  <SessionRowWrapper
                     session={item.session}
-                    onClick={() => onSessionClick?.(item.session)}
-                    onPause={onPauseSession ? () => onPauseSession(item.session.id) : undefined}
-                    onResume={onResumeSession ? () => onResumeSession(item.session) : undefined}
-                    onDelete={onDeleteSession ? () => onDeleteSession(item.session.id) : undefined}
-                    onClone={onCloneSession ? () => onCloneSession(item.session.id) : undefined}
-                    onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(item.session) : undefined}
-                    onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(item.session.id) : undefined}
-                    onRestart={onRestartSession}
+                    onSessionClick={stableOnSessionClick}
+                    onSessionOpenInNewPane={stableOnSessionOpenInNewPane}
+                    onDeleteSession={stableOnDeleteSession}
+                    onPauseSession={stableOnPauseSession}
+                    onResumeSession={stableOnResumeSession}
+                    onCloneSession={stableOnCloneSession}
+                    onNewWorkspaceSession={stableOnNewWorkspaceSession}
+                    onRestartSession={onRestartSession}
                     onCreateCheckpoint={onCreateCheckpoint}
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
                     onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
-                    onHibernate={onHibernateSession ? () => onHibernateSession(item.session.id) : undefined}
-                    onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(item.session.id) : undefined}
+                    onHibernateSession={stableOnHibernateSession}
+                    onResumeHibernatedSession={stableOnResumeHibernatedSession}
                     onUpdateTags={onUpdateTags}
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
                     visibleColumns={visibleColumns}
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
-                    onToggleSelect={(e) => handleToggleSession(item.session.id, e)}
+                    onToggleSession={handleToggleSession}
                   />
                   </div>
                 )}

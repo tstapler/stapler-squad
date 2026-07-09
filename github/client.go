@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -643,8 +644,15 @@ func CheckoutBranch(repoPath, branchName string) error {
 	return nil
 }
 
+// remoteURLCache memoises GetRemoteURL results per repo path.
+// Remote URLs are stable for a repo's lifetime; no TTL needed.
+var remoteURLCache sync.Map // map[string]string
+
 // GetRemoteURL returns the remote URL of a repository (used to determine owner/repo)
 func GetRemoteURL(repoPath string) (string, error) {
+	if v, ok := remoteURLCache.Load(repoPath); ok {
+		return v.(string), nil
+	}
 	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer remoteCancel()
 	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", repoPath, "remote", "get-url", "origin")
@@ -655,8 +663,9 @@ func GetRemoteURL(repoPath string) (string, error) {
 		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
-
-	return strings.TrimSpace(string(output)), nil
+	url := strings.TrimSpace(string(output))
+	remoteURLCache.Store(repoPath, url)
+	return url, nil
 }
 
 // GetOwnerRepoFromRemote returns a RepoRef for a local git repository by

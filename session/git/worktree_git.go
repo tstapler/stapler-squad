@@ -3,10 +3,11 @@ package git
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os/exec"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // runGitCommand executes a git command and returns any error.
@@ -127,24 +128,30 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 // Use this to stagger per-session cache expiry so sessions added to the poller
 // within a short window don't all expire simultaneously and burst-launch git subprocesses.
 func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
-	g.isDirtyCacheMu.Lock()
-	g.isDirtyCacheTime = t
-	g.isDirtyCacheMu.Unlock()
+	g.isDirtyCache.Store(dirtyCacheState{dirty: false, time: t})
 }
 
 // InvalidateDirtyCache clears the IsDirty cache so the next call re-runs git status.
 // Call this whenever worktree state changes outside of Claude's control (e.g. after a
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
-	g.isDirtyCacheMu.Lock()
-	g.isDirtyCacheTime = time.Time{}
-	g.isDirtyCacheMu.Unlock()
+	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
-// Results are cached for IsDirtyCacheTTL (15 s) to avoid spawning a subprocess on every call.
+// Results are cached for IsDirtyCacheTTL (dirty) or IsDirtyCleanCacheTTL (clean).
 func (g *GitWorktree) IsDirty() (bool, error) {
 	return g.IsDirtyWithHint(false)
+}
+
+// isDirtyCacheTTL returns the TTL to apply based on the current cached dirty state.
+// Clean worktrees use a longer TTL because they won't change while the session is idle,
+// and InvalidateDirtyCache() fires on every code path that could make them dirty.
+func isDirtyCacheTTL(dirty bool) time.Duration {
+	if dirty {
+		return IsDirtyCacheTTL
+	}
+	return IsDirtyCleanCacheTTL
 }
 
 // IsDirtyWithHint checks if the worktree has uncommitted changes.
@@ -152,15 +159,16 @@ func (g *GitWorktree) IsDirty() (bool, error) {
 // (or false if no cached value is available yet), because Claude never modifies worktree state
 // while it is actively generating output.
 func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
-	// Fast path: hold read lock and check whether the cache is still fresh.
-	g.isDirtyCacheMu.RLock()
-	cacheValid := !g.isDirtyCacheTime.IsZero() && time.Since(g.isDirtyCacheTime) < IsDirtyCacheTTL
-	if cacheValid || claudeActive {
-		cached := g.isDirtyCache
-		g.isDirtyCacheMu.RUnlock()
-		return cached, nil
+	// Fast path: lock-free atomic load; TTL varies by dirty state.
+	// dirty → IsDirtyCacheTTL (30s); clean → IsDirtyCleanCacheTTL (5min).
+	if v := g.isDirtyCache.Load(); v != nil {
+		state := v.(dirtyCacheState)
+		if claudeActive || (!state.time.IsZero() && time.Since(state.time) < isDirtyCacheTTL(state.dirty)) {
+			return state.dirty, nil
+		}
+	} else if claudeActive {
+		return false, nil
 	}
-	g.isDirtyCacheMu.RUnlock()
 
 	// Slow path: run git status --porcelain via subprocess, wrapped in singleflight
 	// so concurrent callers coalesce onto a single status check rather than each
@@ -179,15 +187,10 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	}
 	dirty := res.dirty
 
-	// Write lock only to store the result.  Return our own observation (`dirty`),
-	// not the cache slot: re-reading the slot after a lost write race could return
-	// a different goroutine's observation, which may be stale relative to ours.
-	g.isDirtyCacheMu.Lock()
-	if g.isDirtyCacheTime.IsZero() || time.Since(g.isDirtyCacheTime) >= IsDirtyCacheTTL {
-		g.isDirtyCache = dirty
-		g.isDirtyCacheTime = time.Now()
-	}
-	g.isDirtyCacheMu.Unlock()
+	// Store the result. Return our own observation (`dirty`), not a re-read of
+	// the slot: a lost write race (InvalidateDirtyCache after singleflight started)
+	// is harmless — the next call will re-run git status when TTL expires.
+	g.isDirtyCache.Store(dirtyCacheState{dirty: dirty, time: time.Now()})
 	return dirty, nil
 }
 

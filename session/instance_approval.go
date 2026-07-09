@@ -73,8 +73,9 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title)
-	i.snapshot.Store(buildSnapshot(i))
+	if i.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title) {
+		i.snapshot.Store(buildSnapshot(i))
+	}
 }
 
 // GetTimeSinceLastMeaningfulOutput returns how long ago meaningful output was recorded.

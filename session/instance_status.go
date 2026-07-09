@@ -1,9 +1,9 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"fmt"
+
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
@@ -22,58 +22,46 @@ type InstanceStatusInfo struct {
 
 // InstanceStatusManager manages status information for instances.
 type InstanceStatusManager struct {
-	controllers map[string]*ClaudeController // Map of instance title to controller
-	mu          deadlock.RWMutex
+	// ponytail: xsync.MapOf replaces map+RWMutex — lock-free reads on the hot GetStatus path
+	controllers *xsync.MapOf[string, *ClaudeController]
 }
 
 // NewInstanceStatusManager creates a new status manager.
 func NewInstanceStatusManager() *InstanceStatusManager {
 	return &InstanceStatusManager{
-		controllers: make(map[string]*ClaudeController),
+		controllers: xsync.NewMapOf[string, *ClaudeController](),
 	}
 }
 
 // RegisterController registers a controller for an instance.
 func (ism *InstanceStatusManager) RegisterController(instanceTitle string, controller *ClaudeController) {
-	ism.mu.Lock()
-	defer ism.mu.Unlock()
-	ism.controllers[instanceTitle] = controller
-	log.Debug("registered controller", "session", instanceTitle, "count", len(ism.controllers))
+	ism.controllers.Store(instanceTitle, controller)
+	log.Debug("registered controller", "session", instanceTitle, "count", ism.controllers.Size())
 }
 
 // UnregisterController removes a controller for an instance.
 func (ism *InstanceStatusManager) UnregisterController(instanceTitle string) {
-	ism.mu.Lock()
-	defer ism.mu.Unlock()
-	delete(ism.controllers, instanceTitle)
+	ism.controllers.Delete(instanceTitle)
 }
 
 // GetController retrieves a controller for an instance.
 func (ism *InstanceStatusManager) GetController(instanceTitle string) (*ClaudeController, bool) {
-	ism.mu.RLock()
-	defer ism.mu.RUnlock()
-	controller, exists := ism.controllers[instanceTitle]
-	return controller, exists
+	return ism.controllers.Load(instanceTitle)
 }
 
 // GetAllControllers returns all registered controllers.
 func (ism *InstanceStatusManager) GetAllControllers() map[string]*ClaudeController {
-	ism.mu.RLock()
-	defer ism.mu.RUnlock()
-
-	// Return a copy to prevent concurrent modification
-	controllers := make(map[string]*ClaudeController, len(ism.controllers))
-	for k, v := range ism.controllers {
-		controllers[k] = v
-	}
-	return controllers
+	out := make(map[string]*ClaudeController, ism.controllers.Size())
+	ism.controllers.Range(func(k string, v *ClaudeController) bool {
+		out[k] = v
+		return true
+	})
+	return out
 }
 
 // GetStatus retrieves comprehensive status for an instance.
 func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusInfo {
-	ism.mu.RLock()
-	controller, exists := ism.controllers[instance.Title]
-	ism.mu.RUnlock()
+	controller, exists := ism.controllers.Load(instance.Title)
 
 	info := InstanceStatusInfo{
 		BasicStatus:        instance.Status,
@@ -81,23 +69,18 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 	}
 
 	if info.IsControllerActive {
-		// Get Claude status with context (includes error details, matched patterns, etc.)
-		claudeStatus, statusContext := controller.GetCurrentStatus()
+		// Combined call: one hash + one cache read covers both status and idle state.
+		claudeStatus, statusContext, idleInfo := controller.GetStatusAndIdleInfo()
 		info.ClaudeStatus = claudeStatus
 		info.StatusContext = statusContext
+		info.IdleState = idleInfo
 
-		// Get queued commands count
-		commands := controller.GetQueuedCommands()
-		info.QueuedCommands = len(commands)
+		info.QueuedCommands = controller.GetQueuedCommandsCount()
 
-		// Get current command if any
 		currentCmd := controller.GetCurrentCommand()
 		if currentCmd != nil {
-			info.LastCommandStatus = fmt.Sprintf("Executing: %s", currentCmd.Text)
+			info.LastCommandStatus = "Executing: " + currentCmd.Text
 		}
-
-		// Get idle state information
-		info.IdleState = controller.GetIdleStateInfo()
 	}
 
 	return info

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, memo } from "react";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
@@ -66,6 +66,9 @@ interface SessionRowProps {
   onToggleSelect?: (e: React.MouseEvent) => void;
 }
 
+// Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
+const BIGINT_ZERO = BigInt(0);
+
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
     case SessionStatus.ACTIVE:  // includes legacy RUNNING (same wire value = 1)
@@ -103,7 +106,7 @@ function getStatusDotLabel(dotValue: string): string {
 }
 
 function formatElapsed(ts?: { seconds: bigint; nanos: number }): string {
-  if (!ts || ts.seconds === BigInt(0)) return "";
+  if (!ts || ts.seconds === BIGINT_ZERO) return "";
   const now = Date.now();
   const date = new Date(Number(ts.seconds) * 1000);
   const seconds = Math.floor((now - date.getTime()) / 1000);
@@ -131,13 +134,13 @@ function abbreviatePath(p: string): string {
 }
 
 function getLastActivity(session: Session): { seconds: bigint; nanos: number } | undefined {
-  const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
-  const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
-  if (moSecs === BigInt(0) && tuSecs === BigInt(0)) return undefined;
+  const moSecs = session.lastMeaningfulOutput?.seconds ?? BIGINT_ZERO;
+  const tuSecs = session.lastTerminalUpdate?.seconds ?? BIGINT_ZERO;
+  if (moSecs === BIGINT_ZERO && tuSecs === BIGINT_ZERO) return undefined;
   return moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
 }
 
-export function SessionRow({
+function SessionRowInner({
   session, onClick,
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
@@ -405,3 +408,5 @@ export function SessionRow({
     </div>
   );
 }
+
+export const SessionRow = memo(SessionRowInner);

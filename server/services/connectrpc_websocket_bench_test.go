@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 // ---------------------------------------------------------------------------
@@ -96,14 +98,14 @@ func BenchmarkWaitForQuiescence_BurstThenQuiet(b *testing.B) {
 // this post-run.
 func BenchmarkSnapshotCacheHit(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: make(map[string]sessionSnapshot),
+		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
 	}
 	cachedContent := strings.Repeat("x", 4096) // ~4 KB: typical terminal screen
-	h.snapshotCache["bench-session"] = sessionSnapshot{
+	h.snapshotCache.Store("bench-session", sessionSnapshot{
 		content:    cachedContent,
 		capturedAt: time.Now(),
 		dirty:      false,
-	}
+	})
 
 	captureCallCount := 0
 	captureFn := func() (string, error) {
@@ -133,7 +135,7 @@ func BenchmarkSnapshotCacheHit(b *testing.B) {
 // the real tmux exec cost (which is 20–80 ms and dominates in production).
 func BenchmarkSnapshotCacheMiss(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: make(map[string]sessionSnapshot),
+		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
 	}
 	freshContent := strings.Repeat("x", 4096)
 	captureFn := func() (string, error) {
@@ -146,9 +148,7 @@ func BenchmarkSnapshotCacheMiss(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		// Force a miss on every iteration by marking dirty before the call.
-		h.snapshotCacheMu.Lock()
-		h.snapshotCache["bench-session"] = sessionSnapshot{dirty: true}
-		h.snapshotCacheMu.Unlock()
+		h.snapshotCache.Store("bench-session", sessionSnapshot{dirty: true})
 
 		content, err := h.getOrRefreshSnapshot("bench-session", captureFn)
 		if err != nil || len(content) == 0 {
@@ -162,13 +162,13 @@ func BenchmarkSnapshotCacheMiss(b *testing.B) {
 // many events per second during Claude TUI repaints, so this must be cheap.
 func BenchmarkMarkSnapshotDirty(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: make(map[string]sessionSnapshot),
+		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
 	}
-	h.snapshotCache["bench-session"] = sessionSnapshot{
+	h.snapshotCache.Store("bench-session", sessionSnapshot{
 		content:    strings.Repeat("x", 4096),
 		capturedAt: time.Now(),
 		dirty:      false,
-	}
+	})
 
 	b.ReportAllocs()
 	runtime.GC()
@@ -185,15 +185,15 @@ func BenchmarkMarkSnapshotDirty(b *testing.B) {
 func BenchmarkMarkSnapshotDirty_Concurrent(b *testing.B) {
 	const numSessions = 8 // typical pool size
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: make(map[string]sessionSnapshot),
+		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
 	}
 	for i := 0; i < numSessions; i++ {
 		sessionID := fmt.Sprintf("bench-session-%02d", i)
-		h.snapshotCache[sessionID] = sessionSnapshot{
+		h.snapshotCache.Store(sessionID, sessionSnapshot{
 			content:    strings.Repeat("x", 4096),
 			capturedAt: time.Now(),
 			dirty:      false,
-		}
+		})
 	}
 
 	b.ReportAllocs()

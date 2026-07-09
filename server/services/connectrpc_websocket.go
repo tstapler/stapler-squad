@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -28,6 +30,38 @@ import (
 // per-frame heap allocations. Reset via proto.Reset before putting back.
 var terminalDataPool = sync.Pool{
 	New: func() any { return &sessionv1.TerminalData{} },
+}
+
+// envelopeBufPool reuses wire-send buffers: [5-byte ConnectRPC header][serialized proto].
+// gorilla/websocket.WriteMessage copies to the network before returning, so the buffer
+// is safe to return to the pool immediately after the call.
+var envelopeBufPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
+
+// coalesceBufPool reuses coalesce buffers in the control-mode streaming loop.
+// data from updateChan shares a broadcast backing array; we must copy before appending.
+// marshalProtoEnvelope copies out of the coalesce buf before returning, so the buf
+// is safe to return to the pool immediately after sendData returns.
+var coalesceBufPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
+
+// marshalProtoEnvelope serializes msg into a pooled buffer pre-padded with a 5-byte
+// ConnectRPC envelope header, then writes it to stream in one call.
+// Eliminates the separate proto.Marshal alloc and protocol.CreateEnvelope alloc on each frame.
+func marshalProtoEnvelope(stream *connectWebSocketStream, flags byte, msg proto.Message) error {
+	bp := envelopeBufPool.Get().(*[]byte)
+	buf := append((*bp)[:0], 0, 0, 0, 0, 0) // reserve 5-byte header
+	var err error
+	buf, err = (proto.MarshalOptions{}).MarshalAppend(buf, msg)
+	if err != nil {
+		*bp = buf[:0]
+		envelopeBufPool.Put(bp)
+		return err
+	}
+	buf[0] = flags
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(buf)-5))
+	wsErr := stream.WriteMessage(websocket.BinaryMessage, buf)
+	*bp = buf[:0]
+	envelopeBufPool.Put(bp)
+	return wsErr
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -157,9 +191,8 @@ type ConnectRPCWebSocketHandler struct {
 	externalDiscovery   *session.ExternalSessionDiscovery
 	tmuxStreamerManager *session.ExternalTmuxStreamerManager
 
-	// Snapshot cache for cold-start terminal content
-	snapshotCache   map[string]sessionSnapshot
-	snapshotCacheMu sync.RWMutex
+	// ponytail: xsync.MapOf replaces map+RWMutex — markSnapshotDirty called per terminal frame
+	snapshotCache *xsync.MapOf[string, sessionSnapshot]
 }
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
@@ -175,7 +208,7 @@ func NewConnectRPCWebSocketHandler(sessionService *SessionService, scrollbackMan
 		scrollbackManager:   scrollbackManager,
 		tmuxStreamerManager: tmuxStreamerManager,
 		streamingMode:       streamingMode,
-		snapshotCache:       make(map[string]sessionSnapshot),
+		snapshotCache:       xsync.NewMapOf[string, sessionSnapshot](),
 	}
 }
 
@@ -207,13 +240,15 @@ func waitForQuiescence(updates <-chan struct{}, timeout, quietFor time.Duration)
 }
 
 // markSnapshotDirty marks a session's snapshot as dirty so the next connect captures fresh content.
+// Called on every terminal frame; xsync.MapOf.Compute is lock-free on the read path.
 func (h *ConnectRPCWebSocketHandler) markSnapshotDirty(sessionID string) {
-	h.snapshotCacheMu.Lock()
-	defer h.snapshotCacheMu.Unlock()
-	if snap, ok := h.snapshotCache[sessionID]; ok {
+	h.snapshotCache.Compute(sessionID, func(snap sessionSnapshot, loaded bool) (sessionSnapshot, xsync.ComputeOp) {
+		if !loaded {
+			return snap, xsync.CancelOp
+		}
 		snap.dirty = true
-		h.snapshotCache[sessionID] = snap
-	}
+		return snap, xsync.UpdateOp
+	})
 }
 
 // getOrRefreshSnapshot returns a cached snapshot if clean, otherwise calls captureFn to refresh.
@@ -221,11 +256,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 	sessionID string,
 	captureFn func() (string, error),
 ) (string, error) {
-	h.snapshotCacheMu.RLock()
-	snap, ok := h.snapshotCache[sessionID]
-	h.snapshotCacheMu.RUnlock()
-
-	if ok && !snap.dirty {
+	if snap, ok := h.snapshotCache.Load(sessionID); ok && !snap.dirty {
 		log.Info("[SnapshotCache] serving cached snapshot", "session", sessionID, "bytes", len(snap.content), "age", time.Since(snap.capturedAt).Round(time.Millisecond))
 		return snap.content, nil
 	}
@@ -235,13 +266,11 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 		return "", err
 	}
 
-	h.snapshotCacheMu.Lock()
-	h.snapshotCache[sessionID] = sessionSnapshot{
+	h.snapshotCache.Store(sessionID, sessionSnapshot{
 		content:    content,
 		capturedAt: time.Now(),
 		dirty:      false,
-	}
-	h.snapshotCacheMu.Unlock()
+	})
 
 	log.Info("[SnapshotCache] refreshed snapshot", "session", sessionID, "bytes", len(content))
 	return content, nil
@@ -695,20 +724,18 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 		log.Info("[streamViaControlMode] output goroutine started", "session", sessionID)
 
-		// sendData marshals and writes a terminal output message, using a pooled proto.
+		// sendData marshals and writes a terminal output message.
+		// Uses pooled proto + pooled envelope buffer: 0 allocs per frame on the hot path.
 		sendData := func(data []byte) error {
 			msg := terminalDataPool.Get().(*sessionv1.TerminalData)
 			msg.SessionId = sessionID
 			msg.Data = &sessionv1.TerminalData_Output{
 				Output: &sessionv1.TerminalOutput{Data: data},
 			}
-			dataBytes, err := proto.Marshal(msg)
+			err := marshalProtoEnvelope(stream, 0, msg)
 			proto.Reset(msg)
 			terminalDataPool.Put(msg)
-			if err != nil {
-				return fmt.Errorf("failed to marshal output: %w", err)
-			}
-			return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes))
+			return err
 		}
 
 		// escapeParser is fetched once; may be nil if no controller is running.
@@ -740,10 +767,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				h.markSnapshotDirty(sessionID)
 
 				// Coalesce: drain any immediately available frames into a single write.
-				// Copy data into a fresh buffer — data is broadcast to all subscribers
-				// and shares a backing array; appending into it would corrupt other readers.
+				// data shares a broadcast backing array; copy into a pooled buf before appending.
 				// The batch cap of 32 bounds worst-case latency: at 10K fps that is ~3 ms.
-				buf := append([]byte(nil), data...)
+				// marshalProtoEnvelope copies the payload before returning, so buf is safe to
+				// return to coalesceBufPool after sendData.
+				cbp := coalesceBufPool.Get().(*[]byte)
+				buf := append((*cbp)[:0], data...)
 				const maxBatchFrames = 32
 				framesInBatch := 1
 			coalesce:
@@ -780,9 +809,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten()-int64(len(buf)))
 				}
 
-				if err := sendData(buf); err != nil {
-					log.Error("[streamViaControlMode] failed to send output", "err", err)
-					errChan <- fmt.Errorf("failed to send output: %w", err)
+				sendErr := sendData(buf)
+				*cbp = buf[:0]
+				coalesceBufPool.Put(cbp)
+				if sendErr != nil {
+					log.Error("[streamViaControlMode] failed to send output", "err", sendErr)
+					errChan <- fmt.Errorf("failed to send output: %w", sendErr)
 					return
 				}
 				// Signal quiescence detector: output is still flowing (resets the quiescence timer).
@@ -1183,26 +1215,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// Since tmux capture-pane returns full snapshots, we need to clear first
 				fullContent := clearAndHome + content
 
-				terminalData := &sessionv1.TerminalData{
-					SessionId: sessionID,
-					Data: &sessionv1.TerminalData_Output{
-						Output: &sessionv1.TerminalOutput{
-							Data: []byte(fullContent),
-						},
-					},
+				terminalData := terminalDataPool.Get().(*sessionv1.TerminalData)
+				terminalData.SessionId = sessionID
+				terminalData.Data = &sessionv1.TerminalData_Output{
+					Output: &sessionv1.TerminalOutput{Data: []byte(fullContent)},
 				}
-
-				dataBytes, err := proto.Marshal(terminalData)
-				if err != nil {
-					log.Error("[streamViaTmuxCapture] failed to marshal output", "err", err)
-					errChan <- fmt.Errorf("failed to marshal output: %w", err)
-					return
-				}
-
-				envelope := protocol.CreateEnvelope(0, dataBytes)
-				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-					log.Error("[streamViaTmuxCapture] failed to send output", "err", err)
-					errChan <- fmt.Errorf("failed to send output: %w", err)
+				sendErr := marshalProtoEnvelope(stream, 0, terminalData)
+				proto.Reset(terminalData)
+				terminalDataPool.Put(terminalData)
+				if sendErr != nil {
+					log.Error("[streamViaTmuxCapture] failed to send output", "err", sendErr)
+					errChan <- sendErr
 					return
 				}
 			}

@@ -5,7 +5,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
@@ -44,19 +45,17 @@ type BinaryDetector = dtypes.BinaryDetector
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.
 type StatusDetector struct {
-	patternSet   *PatternSet
-	patternSetMu sync.RWMutex
-	sink         DetectionEventSink
-	normalizer   PTYNormalizer
+	patternSet atomic.Pointer[PatternSet]
+	sink       DetectionEventSink
+	normalizer PTYNormalizer
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
 func NewStatusDetector() *StatusDetector {
 	ps, _ := NewPatternSet(getDefaultPatterns())
-	return &StatusDetector{
-		patternSet: ps,
-		normalizer: PTYNormalizer{},
-	}
+	sd := &StatusDetector{normalizer: PTYNormalizer{}}
+	sd.patternSet.Store(ps)
+	return sd
 }
 
 // validatePatternFilePath rejects paths containing ".." to prevent path traversal.
@@ -86,11 +85,8 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	if err != nil {
 		return nil, err
 	}
-	sd := &StatusDetector{
-		patternSet: ps,
-		normalizer: PTYNormalizer{},
-	}
-
+	sd := &StatusDetector{normalizer: PTYNormalizer{}}
+	sd.patternSet.Store(ps)
 	return sd, nil
 }
 
@@ -113,9 +109,7 @@ func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err != nil {
 		return err
 	}
-	sd.patternSetMu.Lock()
-	sd.patternSet = newSet
-	sd.patternSetMu.Unlock()
+	sd.patternSet.Store(newSet)
 	return nil
 }
 
@@ -198,11 +192,10 @@ func HasClaudeSpinnerActivity(tail string) bool {
 // or an ANSI cursor-up escape sequence.
 // Must be called on the raw output before collapseCarriageReturns() discards this information.
 func hasScreenOverwrite(raw []byte) bool {
-	s := string(raw)
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\r' {
+	for i, b := range raw {
+		if b == '\r' {
 			// \r\n is a Windows newline — not a screen overwrite
-			if i+1 < len(s) && s[i+1] == '\n' {
+			if i+1 < len(raw) && raw[i+1] == '\n' {
 				continue
 			}
 			return true
@@ -215,6 +208,10 @@ func hasScreenOverwrite(raw []byte) bool {
 // keeping only the final write. "foo\rbar" → "bar"; "\r\n" (Windows newline)
 // is treated as a newline boundary and preserved.
 func collapseCarriageReturns(s string) string {
+	// Fast path: no \r means nothing to collapse — skip Split+Join entirely.
+	if strings.IndexByte(s, '\r') < 0 {
+		return s
+	}
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
 		// A trailing \r on a line segment is from a \r\n Windows newline; preserve it
@@ -223,7 +220,7 @@ func collapseCarriageReturns(s string) string {
 		if trailingCR {
 			line = line[:len(line)-1]
 		}
-		if strings.ContainsRune(line, '\r') {
+		if strings.IndexByte(line, '\r') >= 0 {
 			segments := strings.Split(line, "\r")
 			line = segments[len(segments)-1]
 		}
@@ -246,9 +243,7 @@ const StatusDetectionTailBytes = 4096
 //
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
 func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
-	sd.patternSetMu.RLock()
-	ps := sd.patternSet
-	sd.patternSetMu.RUnlock()
+	ps := sd.patternSet.Load()
 	return ps.MatchLines(text, rawPTY)
 }
 
@@ -283,6 +278,20 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := sd.normalizer.Normalize(string(output))
 	status, patternName, context := sd.detectFromText(text, output)
+	sd.appendDetectionEvent(status, patternName, text)
+	return status, context
+}
+
+// detectWithContextFromString is the string-accepting variant of DetectWithContext.
+// Avoids the string→[]byte→string round-trip in detectFromLines by aliasing the
+// string data via unsafe.Slice for the rawPTY argument (read-only use in hasScreenOverwrite).
+func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string) {
+	text := sd.normalizer.Normalize(line)
+	var rawPTY []byte
+	if len(line) > 0 {
+		rawPTY = unsafe.Slice(unsafe.StringData(line), len(line))
+	}
+	status, patternName, context := sd.detectFromText(text, rawPTY)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status, context
 }
@@ -663,7 +672,7 @@ func (sd *StatusDetector) ExportPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
 	}
-	p := sd.patternSet.Patterns()
+	p := sd.patternSet.Load().Patterns()
 	data, err := yaml.Marshal(&p)
 	if err != nil {
 		return fmt.Errorf("failed to marshal status patterns: %w", err)
@@ -678,7 +687,7 @@ func (sd *StatusDetector) ExportPatterns(path string) error {
 
 // GetPatternNames returns the names of all loaded patterns for a given status.
 func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
-	p := sd.patternSet.Patterns()
+	p := sd.patternSet.Load().Patterns()
 	var patterns []StatusPattern
 	switch status {
 	case StatusReady:
@@ -725,7 +734,9 @@ var builtBinaryDetectors = func() map[string]*StatusDetector {
 	for _, name := range reg.Names() {
 		bd, _ := reg.Lookup(name)
 		ps, _ := NewPatternSet(bd.Patterns()) // patterns are from code, always valid
-		m[name] = &StatusDetector{patternSet: ps}
+		bsd := &StatusDetector{}
+		bsd.patternSet.Store(ps)
+		m[name] = bsd
 	}
 	return m
 }()
@@ -763,7 +774,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 				if strings.TrimSpace(segs[j]) == "" {
 					continue
 				}
-				s, desc := sd.DetectWithContext([]byte(segs[j]))
+				s, desc := sd.detectWithContextFromString(segs[j])
 				if s == StatusUnknown {
 					continue
 				}
@@ -790,7 +801,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 			continue // all segments of this CR line handled above
 		}
 
-		s, desc := sd.DetectWithContext([]byte(lines[i]))
+		s, desc := sd.detectWithContextFromString(lines[i])
 		if s == StatusUnknown {
 			continue
 		}

@@ -40,16 +40,17 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr           string
-	httpServer     *http.Server
-	mux            *http.ServeMux
-	tlsConfig      *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL       string                          // set when remote access is enabled
-	hostnames      []string                        // detected LAN hostnames
-	origins        []string                        // allowed CORS origins
-	shutdownHooks  []func()                        // called before HTTP server stops
-	connCtxCancel  context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	addr              string
+	httpServer        *http.Server
+	mux               *http.ServeMux
+	tlsConfig         *tls.Config                     // non-nil when TLS is enabled
+	authMiddleware    func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL          string                          // set when remote access is enabled
+	hostnames         []string                        // detected LAN hostnames
+	origins           []string                        // allowed CORS origins
+	shutdownHooks     []func()                        // called before HTTP server stops
+	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	availablePrograms []string                        // cached once at startup; programs change only on system changes
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -600,6 +601,10 @@ func registerStaticRoutes(srv *Server) {
 	srv.mux.HandleFunc("/api/upload/file", fileHandler.HandleUpload)
 	log.Info("Registered file upload handler at /api/upload/file", "dir", pasteDir)
 
+	// Detect available programs once at startup so /api/server-info never runs
+	// shell subprocesses on a live request (each detection spawns 5 shells).
+	srv.availablePrograms = config.GetAvailablePrograms()
+
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
 	log.Info("Registered server-info handler at /api/server-info")
@@ -788,7 +793,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
-			Programs:   config.GetAvailablePrograms(),
+			Programs:   s.availablePrograms,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
