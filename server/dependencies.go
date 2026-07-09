@@ -556,7 +556,19 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// row but the server restarted before the live in-memory instance was
 		// available to call Destroy(). Must run after 6/6b so re-adopted sessions
 		// are already registered and won't be mistaken for orphans.
-		session.ReconcileOrphanedTmuxSessions(instances)
+		//
+		// SKIP in test mode: ReconcileOrphanedTmuxSessions calls plain `tmux
+		// list-sessions` with no socket isolation -- it always targets the shared
+		// default tmux socket, regardless of the test's own (test-isolated) DB/config
+		// directory. A test's `instances` list only ever contains that test's own
+		// handful of sessions, so every real session on the machine's shared tmux
+		// server -- including production sessions from an entirely separate
+		// stapler-squad process -- looks like an orphan and gets killed. This was the
+		// root cause of production sessions dying in tight clusters whenever any
+		// integration test called BuildDependencies() on the same machine.
+		if !config.IsTestMode() {
+			session.ReconcileOrphanedTmuxSessions(instances)
+		}
 
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)
 		if len(instances) > 0 {

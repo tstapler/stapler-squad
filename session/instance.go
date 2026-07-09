@@ -757,6 +757,21 @@ func NewInstanceWithCleanup(opts InstanceOptions) (*Instance, tmux.CleanupFunc, 
 // which would be a self-sendSync deadlock.
 func instanceOnExitCallback(i *Instance) func(string) {
 	return func(reason string) {
+		// Read the wrapped program's actual exit code/signal before anything else
+		// (including SessionDriver's auto-restart, triggered by the EventExited fire
+		// below) has a chance to kill-session/respawn-pane the dead pane out from
+		// under us. Without this, "the process exited" was previously a dead end --
+		// remain-on-exit keeps tmux showing "[exited]" in the pane, but nothing ever
+		// read *why*.
+		if tb, ok := i.pm().(*TmuxBackend); ok {
+			if tm := tb.TmuxManager(); tm != nil {
+				if sess := tm.Session(); sess != nil {
+					if code, signal, ok := sess.ExitStatus(); ok {
+						log.Warn("session exited", "session", i.Title, "reason", reason, "exitCode", code, "signal", signal)
+					}
+				}
+			}
+		}
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
 		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
 		i.send(func(s *instanceState) {

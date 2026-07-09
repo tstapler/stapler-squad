@@ -2121,3 +2121,33 @@ func (t *TmuxSession) GetPanePID() (int32, error) {
 
 	return int32(pid), nil
 }
+
+// ExitStatus reports the wrapped program's exit code and signal for a dead pane,
+// via tmux's #{pane_dead_status}/#{pane_dead_signal} (populated by remain-on-exit).
+// Returns ok=false if the pane is still alive, the session is already gone, or the
+// pane never went through a dead state (nothing to report). Callers should read this
+// as early as possible after detecting an exit -- the pane is destroyed the moment
+// anything issues kill-session/respawn-pane against it, and this data goes with it.
+func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
+	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
+		"#{pane_dead_status}\t#{pane_dead_signal}")
+	output, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, "", false
+	}
+	parts := strings.SplitN(strings.TrimRight(string(output), "\n"), "\t", 2)
+	statusStr := strings.TrimSpace(parts[0])
+	if statusStr == "" {
+		// Empty means the pane is still alive (or the format variables aren't
+		// supported by this tmux version).
+		return 0, "", false
+	}
+	code, err = strconv.Atoi(statusStr)
+	if err != nil {
+		return 0, "", false
+	}
+	if len(parts) > 1 {
+		signal = strings.TrimSpace(parts[1])
+	}
+	return code, signal, true
+}
