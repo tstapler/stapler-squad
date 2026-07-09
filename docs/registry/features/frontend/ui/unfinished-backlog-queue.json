@@ -1,0 +1,14 @@
+{
+  "id": "unfinished-backlog-queue",
+  "type": "frontend",
+  "component": "BacklogQueueSection",
+  "path": "web-app/src/components/unfinished/BacklogQueueSection.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "BacklogQueueSection — loads and renders queued backlog items on mount",
+    "BacklogQueueSection — does not mount the GitHub issue picker until the import affordance is opened",
+    "BacklogQueueSection — shows an empty state when there are no queued items"
+  ],
+  "lastModified": "2026-07-08T00:00:00Z"
+}

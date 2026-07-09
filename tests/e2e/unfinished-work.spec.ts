@@ -109,7 +109,7 @@ test.describe('unfinished-work', () => {
   test('unfinished-work > page loads with title and filter controls', async ({ page }) => {
     await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-    await expect(page.getByRole('heading', { name: 'Unfinished Work' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Up Next' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Filter worktrees' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Refresh/i })).toBeVisible();
   });
@@ -240,7 +240,7 @@ test.describe('unfinished-work', () => {
   test('unfinished-work > nav badge links to unfinished page', async ({ page }) => {
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-    const unfinishedLink = page.getByRole('link', { name: /Unfinished/i }).first();
+    const unfinishedLink = page.getByRole('link', { name: /Up Next/i }).first();
     await expect(unfinishedLink).toBeVisible({ timeout: 10000 });
     await unfinishedLink.click();
     await expect(page).toHaveURL(/\/unfinished/, { timeout: 5000 });
