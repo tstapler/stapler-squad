@@ -5,13 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
-	"hash/fnv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -254,9 +254,9 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 		record.PayloadHash = hex.EncodeToString(h[:])[:16]
 		record.RawBytes = code.RawBytes
 	case "summary":
-		h := fnv.New64a()
-		h.Write(code.RawBytes)
-		record.PayloadHash = fmt.Sprintf("%016x", h.Sum64())
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], murmur3.Sum64(code.RawBytes))
+		record.PayloadHash = hex.EncodeToString(buf[:])
 	}
 
 	// Apply OSC redaction
