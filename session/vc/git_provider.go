@@ -6,15 +6,22 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
+type branchCacheEntry struct {
+	branch string
+	expiry int64 // unix nanoseconds
+}
+
 // GitProvider implements VCSProvider for Git repositories
 type GitProvider struct {
-	workDir  string
-	repoRoot string
+	workDir     string
+	repoRoot    string
+	branchCache atomic.Pointer[branchCacheEntry]
 }
 
 // NewGitProvider creates a new Git provider for the given directory
@@ -121,7 +128,13 @@ func (g *GitProvider) GetStatus() (*VCSStatus, error) {
 	return status, nil
 }
 
+const branchCacheTTL = 30 * time.Second
+
 func (g *GitProvider) GetBranch() (string, error) {
+	// ponytail: cache hit is lock-free; branch changes are rare relative to RPC call rate
+	if e := g.branchCache.Load(); e != nil && time.Now().UnixNano() < e.expiry {
+		return e.branch, nil
+	}
 	output, err := g.runGit("branch", "--show-current")
 	if err != nil {
 		// Might be in detached HEAD state
@@ -133,9 +146,12 @@ func (g *GitProvider) GetBranch() (string, error) {
 	if output == "" {
 		// Detached HEAD
 		if output, err := g.runGit("rev-parse", "--short", "HEAD"); err == nil {
-			return "(detached: " + output + ")", nil
+			output = "(detached: " + output + ")"
+			g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
+			return output, nil
 		}
 	}
+	g.branchCache.Store(&branchCacheEntry{output, time.Now().Add(branchCacheTTL).UnixNano()})
 	return output, nil
 }
 
