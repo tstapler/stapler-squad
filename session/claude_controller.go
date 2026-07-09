@@ -811,17 +811,10 @@ func (cc *ClaudeController) GetRecentOutput(bytes int) []byte {
 	if pa == nil {
 		return nil
 	}
-
 	if bytes <= 0 {
 		return pa.GetBuffer()
 	}
-
-	buffer := pa.GetBuffer()
-	if len(buffer) <= bytes {
-		return buffer
-	}
-
-	return buffer[len(buffer)-bytes:]
+	return pa.GetRecentOutput(bytes)
 }
 
 // IsStarted returns whether the controller is currently started.
