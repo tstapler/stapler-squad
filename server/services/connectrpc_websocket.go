@@ -434,6 +434,24 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
+	// A hibernated session has no tmux session at all -- Hibernate() explicitly kills
+	// it. Without this check, the code below finds no tmux session and silently
+	// creates a bare replacement (RestoreWithWorkDir's "doesn't exist, create new"
+	// fallback), bypassing ResumeFromHibernation entirely: the controller and session
+	// driver never restart, and Status is left stuck at Hibernated. Since Preview()
+	// short-circuits for Hibernated instances, the session then looks permanently dead
+	// even though a live tmux session now exists underneath it. Route through the
+	// proper resume path instead, which restarts the controller and flips Status back
+	// to Active. The brief race between this call returning and the resumed tmux
+	// session actually existing is absorbed by the retry/backoff already in
+	// RestoreWithWorkDir (~1.5s total) that the streaming paths below go through.
+	if instance.IsHibernated() {
+		log.Info("[WebSocket] resuming hibernated session before streaming", "session", sessionID)
+		if err := instance.ResumeFromHibernation(context.Background()); err != nil {
+			return fmt.Errorf("failed to resume hibernated session %q: %w", sessionID, err)
+		}
+	}
+
 	// Check for control mode feature flag (real-time streaming) - DEFAULT TO ENABLED
 	// Control mode uses tmux's native -C flag for structured real-time notifications
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling

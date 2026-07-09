@@ -321,6 +321,18 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 		return TmuxServerReady{}, fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
 	}
 	log.Info("[tmux] server started successfully")
+
+	// Set the server-wide default so every session created on this server -- including
+	// any path that doesn't explicitly set it per-session -- keeps its pane around when
+	// the wrapped program exits instead of tmux silently destroying the whole session.
+	remainArgs := prependSocket(serverSocket, []string{"set-option", "-g", "remain-on-exit", "on"})
+	remainCtx, remainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer remainCancel()
+	remainCmd := safeexec.CommandContext(remainCtx, Binary(), remainArgs...)
+	if out, err := remainCmd.CombinedOutput(); err != nil {
+		log.Warn("[tmux] failed to set global remain-on-exit default", "err", err, "output", string(out))
+	}
+
 	return TmuxServerReady{}, nil
 }
 
@@ -656,6 +668,19 @@ func (t *TmuxSession) StartWithCleanup(workDir string) (CleanupFunc, error) {
 	return cleanup, nil
 }
 
+// setRemainOnExit keeps the pane around when its program exits instead of tmux's
+// default of destroying the whole session. Without this, an unexpected exit of the
+// wrapped program (OS-killed, crashed, or otherwise) silently erases the session --
+// including any output that would explain why it exited -- and the only trace left
+// behind is "session doesn't exist" on the next check. Called after every path that
+// creates a session (fresh start, and the "recreate after not found" restore fallback).
+func (t *TmuxSession) setRemainOnExit() {
+	remainCmd := t.buildTmuxCommand("set-option", "-t", t.sanitizedName, "remain-on-exit", "on")
+	if err := t.cmdExec.Run(remainCmd); err != nil {
+		log.Warn("failed to set remain-on-exit for session", "session", t.sanitizedName, "err", err)
+	}
+}
+
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
 	// Use a no-cache check here to detect stale sessions from previous server runs.
@@ -778,6 +803,8 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		log.Warn("failed to set history-limit for session", "session", t.sanitizedName, "err", err)
 	}
 
+	t.setRemainOnExit()
+
 	// Set up monitoring for session status tracking
 	t.monitor = newStatusMonitor()
 
@@ -877,6 +904,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 				if r, ok := t.cmdExec.(executor.Resettable); ok {
 					r.Reset()
 				}
+				t.setRemainOnExit()
 			}
 		}
 	} else {
@@ -1766,7 +1794,12 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 		// waiting for the 5-second TTL. This prevents repeated ERROR-level subprocess
 		// failures when a session has died and the registry hasn't caught up yet.
 		t.invalidateExistsCache()
-		log.Warn("failed to capture pane content for session", "session", t.sanitizedName, "err", err)
+		logArgs := []any{"session", t.sanitizedName, "err", err}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			logArgs = append(logArgs, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		log.Warn("failed to capture pane content for session", logArgs...)
 		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil

@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"time"
 )
 
 // SessionHealthChecker manages session health validation and recovery
 type SessionHealthChecker struct {
-	storage *Storage
+	storage    *Storage
+	tmuxSocket TmuxSocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
 
 	// failureCounts tracks consecutive health-check failures per session title.
 	// Recovery is only attempted after failureThreshold consecutive failures,
@@ -28,6 +28,7 @@ const failureThreshold = 2
 func NewSessionHealthChecker(storage *Storage) *SessionHealthChecker {
 	return &SessionHealthChecker{
 		storage:       storage,
+		tmuxSocket:    realTmuxSocketQuerier{},
 		failureCounts: make(map[string]int),
 	}
 }
@@ -48,28 +49,40 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load instances for health check: %w", err)
 	}
+	return h.checkInstances(instances), nil
+}
 
-	// Derive the server socket from the first instance that has one set.
-	// In practice all instances in a deployment share the same socket (or "" for default).
-	serverSocket := ""
-	for _, inst := range instances {
-		if inst.TmuxServerSocket != "" {
-			serverSocket = inst.TmuxServerSocket
-			break
-		}
-	}
-
-	// Guard: if the tmux server is completely down, all sessions will look dead.
-	// Attempting to recover them all at once would be destructive and incorrect.
-	// Skip health checks until the server is back up.
-	if tmux.IsServerDown(serverSocket) {
-		log.Warn("health check: tmux server is down, skipping session checks", "socket", serverSocket)
-		return nil, nil
-	}
+// checkInstances runs a health check on the given instances, split out from
+// CheckAllSessions so the socket-scoping logic below is unit-testable with a plain
+// []*Instance and a fake TmuxSocketQuerier, without real Storage/DB wiring.
+//
+// Instances can be spread across multiple tmux server sockets (the default socket
+// for ordinary sessions, isolated sockets for some worktree/test scenarios).
+// Deriving a single socket from the first instance and applying its down/up state
+// to every instance would either skip healthy instances on other sockets (false
+// "server is down") or run destructive recovery against instances whose own socket
+// is genuinely down (false "server is up"). So each instance's down-check is scoped
+// to its own socket, memoized per socket to avoid redundant queries.
+func (h *SessionHealthChecker) checkInstances(instances []*Instance) []HealthCheckResult {
+	downSockets := make(map[string]bool)
 
 	results := make([]HealthCheckResult, 0, len(instances))
 
 	for _, instance := range instances {
+		socket := instance.TmuxServerSocket
+		down, checked := downSockets[socket]
+		if !checked {
+			down = h.tmuxSocket.IsServerDown(socket)
+			downSockets[socket] = down
+		}
+		// Guard: if this instance's tmux server is completely down, its session
+		// will look dead. Attempting to recover it would be destructive and
+		// incorrect. Skip until that socket's server is back up.
+		if down {
+			log.Warn("health check: tmux server is down, skipping session check", "session", instance.Title, "socket", socket)
+			continue
+		}
+
 		result := h.checkSingleSession(instance)
 		results = append(results, result)
 
@@ -86,7 +99,7 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 		}
 	}
 
-	return results, nil
+	return results
 }
 
 // checkSingleSession performs a health check on a single session

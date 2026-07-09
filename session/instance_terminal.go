@@ -105,7 +105,7 @@ func (i *Instance) combineErrors(errs []error) error {
 // Preview returns the current visible terminal content.
 // Prefers the in-memory PTY buffer from ClaudeController; falls back to capture-pane.
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped {
+	if !i.started || i.Status == Paused || i.Status == Stopped || i.Status == Hibernated {
 		return "", nil
 	}
 
@@ -128,7 +128,7 @@ func (i *Instance) Preview() (string, error) {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped {
+	if !i.started || i.Status == Paused || i.Status == Stopped || i.Status == Hibernated {
 		return "", nil
 	}
 

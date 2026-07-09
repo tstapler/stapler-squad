@@ -79,6 +79,7 @@ type ReviewQueuePoller struct {
 	approvalProvider ApprovalMetadataProvider   // Optional: enriches approval items with hook metadata
 	contentProvider  ContentProvider            // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
+	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -146,6 +147,7 @@ func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager StatusProv
 		statusDetector:   detection.NewStatusDetector(),
 		contentProvider:  NewPollerContentProvider(),
 		statusDeterminer: NewDefaultStatusDeterminer(config),
+		tmuxSocket:       realTmuxSocketQuerier{},
 	}
 }
 
@@ -406,66 +408,88 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 		return
 	}
 
-	// Determine the server socket from the first managed instance (all share the same socket).
-	serverSocket := ""
-	for _, inst := range instances {
-		if inst.IsManaged && inst.TmuxServerSocket != "" {
-			serverSocket = inst.TmuxServerSocket
-			break
-		}
-	}
+	// Group instances by their own tmux server socket -- see groupInstancesBySocket
+	// for why querying a single assumed-shared socket is wrong. Unmanaged instances
+	// are skipped inside the per-socket loop below, same as before.
+	bySocket := groupInstancesBySocket(instances)
 
-	liveSessions, err := tmux.ListAllSessions(serverSocket)
-	if err != nil {
-		if err == tmux.ErrServerDown {
-			log.Warn("reconcileSessions: tmux server is down, skipping reconciliation")
-		} else {
-			log.Warn("reconcileSessions: ListAllSessions error", "err", err)
-		}
-		return
-	}
-
-	for _, inst := range instances {
-		if !inst.IsManaged {
-			continue
-		}
-		sessionName := inst.GetTmuxSessionName()
-		if sessionName == "" {
-			continue
-		}
-
-		switch inst.Status {
-		case Active:
-			// Active but tmux session gone — mark Stopped.
-			if !liveSessions[sessionName] {
-				log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName)
-				ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-					if s.inst.Status == Active {
-						if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
-							log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-							s.inst.loadStatus(Stopped)
-						}
-					}
-				})
-				cancel()
-				rqp.queue.Remove(inst.Title)
-				inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
+	for serverSocket, socketInstances := range bySocket {
+		liveSessions, err := rqp.tmuxSocket.ListSessions(serverSocket)
+		if err != nil {
+			if err == tmux.ErrServerDown {
+				log.Warn("reconcileSessions: tmux server is down, skipping reconciliation", "socket", serverSocket)
+			} else {
+				log.Warn("reconcileSessions: ListAllSessions error", "socket", serverSocket, "err", err)
 			}
-		case Stopped:
-			// Stopped but tmux session is alive — revive to Active.
-			if liveSessions[sessionName] {
-				log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName)
-				ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-					if s.inst.Status == Stopped {
-						if err := transitionToLocked(s, context.Background(), Active); err != nil {
-							log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+			continue
+		}
+
+		for _, inst := range socketInstances {
+			if !inst.IsManaged {
+				continue
+			}
+			sessionName := inst.GetTmuxSessionName()
+			if sessionName == "" {
+				continue
+			}
+
+			switch inst.Status {
+			case Active:
+				// Active but tmux session gone — mark Stopped.
+				if !liveSessions[sessionName] {
+					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Active {
+							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
+								s.inst.loadStatus(Stopped)
+							}
 						}
-					}
-				})
-				cancel()
-				inst.fireLifecycleEvent(EventStarted, "reconcile-session-revived")
+					})
+					cancel()
+					rqp.queue.Remove(inst.Title)
+					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
+				}
+			case Stopped:
+				// Stopped but tmux session is alive — revive to Active.
+				if liveSessions[sessionName] {
+					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Stopped {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-revived")
+				}
+			case Hibernated:
+				// Hibernated sessions intentionally have no tmux session (Hibernate()
+				// explicitly kills it) -- that's the expected steady state, so do
+				// nothing when the tmux session is also gone. But if one is found
+				// alive anyway (e.g. a code path resurrected it without checking
+				// IsHibernated() first), bring the instance back in sync via the same
+				// transition streamTerminal's hibernation guard uses deliberately:
+				// this restarts the controller/session driver, instead of leaving
+				// Status stuck at Hibernated forever while a real tmux session runs
+				// unmanaged underneath it (Preview() short-circuits for Hibernated,
+				// so such a session would otherwise look permanently dead).
+				if liveSessions[sessionName] {
+					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Hibernated {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+				}
 			}
 		}
 	}
@@ -547,6 +571,13 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 				if !currentActivity.IsZero() && currentActivity.Equal(lastSeenPane) {
 					return cached
 				}
+			} else if !lastCall.IsZero() && time.Since(lastCall) < previewCacheTTL {
+				// The session's pane is absent from the batch snapshot entirely (its
+				// tmux session has died or never existed). Without this fallback, a
+				// dead session's capture-pane gets retried on every single poll cycle
+				// forever instead of backing off -- observed as thousands of failed
+				// subprocess spawns per hour for a handful of orphaned sessions.
+				return cached
 			}
 		} else if !lastCall.IsZero() && time.Since(lastCall) < previewCacheTTL {
 			return cached
@@ -558,6 +589,11 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 		log.Debug("Preview() error", "session", inst.Title, "err", err)
 		p.cacheMu.Lock()
 		cached := p.cachedContent[inst.Title]
+		// Record the attempt even on failure. Without this, lastPreviewTime stays
+		// at its zero value forever for a session whose Preview() never succeeds,
+		// which defeats the previewCacheTTL backoff above and re-triggers a fresh
+		// capture-pane subprocess on every single poll cycle indefinitely.
+		p.lastPreviewTime[inst.Title] = time.Now()
 		p.cacheMu.Unlock()
 		return cached
 	}
