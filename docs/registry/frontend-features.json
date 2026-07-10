@@ -1,0 +1,785 @@
+{
+  "version": "1",
+  "features": [
+    {
+      "id": "pane-resize-handle",
+      "type": "frontend",
+      "frontend": {
+        "component": "ResizeHandle",
+        "path": "web-app/src/components/pane/ResizeHandle.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "ResizeHandle_should_callSetPointerCapture_When_pointerDown",
+        "ResizeHandle_should_callReleasePointerCapture_When_pointerUp",
+        "ResizeHandle_should_callOnResizeWithClampedRatio_When_pointerMoveAfterDown",
+        "ResizeHandle_should_notCallOnResize_When_pointerMoveWithoutDown",
+        "ResizeHandle_should_callSetPointerCapture_When_touchPointerDown",
+        "ResizeHandle_should_handleTouchPointerMove_When_pointerTypeIsTouch",
+        "ResizeHandle_should_callReleasePointerCapture_When_pointerCancel"
+      ],
+      "lastModified": "2026-05-07T00:00:00Z"
+    },
+    {
+      "id": "pane-tiling-engine",
+      "type": "frontend",
+      "frontend": {
+        "component": "PaneTilingContainer",
+        "path": "web-app/src/components/pane/PaneTilingContainer.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "paneReducer_should_replaceLeafWithSplit_When_splitVertical",
+        "paneReducer_should_replaceLeafWithSplit_When_splitHorizontal",
+        "paneReducer_should_setDefaultRatio_When_splitCreated",
+        "paneReducer_should_collapseParentWithSibling_When_closingLeaf",
+        "paneReducer_should_focusSibling_When_closingFocusedPane",
+        "paneReducer_should_resetToInitialState_When_closingLastRootLeaf",
+        "paneReducer_should_updateRatio_When_resizePaneDispatched",
+        "paneReducer_should_updateFocusedPaneId_When_focusPaneDispatched",
+        "paneReducer_should_setSessionId_When_assignSessionDispatched",
+        "paneReducer_should_returnInitialSingleEmptyLeaf_When_resetLayout",
+        "paneReducer_should_setZoomedPaneId_When_zoomPaneDispatched",
+        "paneReducer_should_toggleZoomOff_When_sameZoomedPaneIdDispatched",
+        "paneReducer_should_neverProduceStateWithMissingFocusedPaneId_When_$type",
+        "paneReducer_should_keepRatioWithinBounds_When_resizeApplied"
+      ],
+      "lastModified": "2026-05-07T00:00:00Z"
+    },
+    {
+      "id": "analytics-drill-down",
+      "type": "frontend",
+      "frontend": {
+        "component": "ProgramDetailPanel",
+        "path": "web-app/src/components/sessions/ProgramDetailPanel.tsx",
+        "markerLine": 1
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-20T00:00:00Z"
+    },
+    {
+      "id": "approval-enter-detection",
+      "type": "frontend",
+      "frontend": {
+        "component": "ApprovalsContext",
+        "path": "web-app/src/lib/contexts/ApprovalsContext.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "T-UNIT-TS-001",
+        "T-UNIT-TS-002",
+        "T-UNIT-TS-003",
+        "T-UNIT-TS-007",
+        "T-UNIT-TS-008",
+        "T-UNIT-TS-009",
+        "T-UNIT-TS-010",
+        "T-UNIT-TS-011",
+        "T-UNIT-TS-012",
+        "T-UNIT-TS-013",
+        "T-UNIT-TS-014",
+        "T-UNIT-TS-015",
+        "T-UNIT-TS-016",
+        "T-UNIT-TS-017",
+        "T-UNIT-TS-018",
+        "T-UNIT-TS-019",
+        "T-UNIT-TS-020",
+        "T-UNIT-TS-021",
+        "T-UNIT-TS-022"
+      ],
+      "lastModified": "2026-06-01T00:00:00Z"
+    },
+    {
+      "id": "approval-rules",
+      "type": "frontend",
+      "frontend": {
+        "component": "RulesPage",
+        "path": "web-app/src/app/rules/page.tsx",
+        "markerLine": 2
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-04-18T17:28:17.610Z"
+    },
+    {
+      "id": "backlog-board",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogBoard",
+        "path": "web-app/src/components/backlog/BacklogBoard.tsx",
+        "markerLine": 0
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-12T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-card",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogItemCard",
+        "path": "web-app/src/components/backlog/BacklogItemCard.tsx",
+        "markerLine": 0
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-12T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-detail",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogItemDetail",
+        "path": "web-app/src/components/backlog/BacklogItemDetail.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogItemDetail \u2014 background refresh must not unmount the view"
+      ],
+      "lastModified": "2026-07-01T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-form",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogItemForm",
+        "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogItemForm \u2014 Repository Path help",
+        "BacklogItemForm \u2014 checkbox help text",
+        "BacklogItemForm \u2014 cloning busy state"
+      ],
+      "lastModified": "2026-07-01T00:00:00Z"
+    },
+    {
+      "id": "backlog-list-page",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogPage",
+        "path": "web-app/src/app/backlog/page.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "e2e:backlog-tour-first-visit",
+        "e2e:backlog-tour-reopen-button"
+      ],
+      "lastModified": "2026-07-01T00:00:00Z"
+    },
+    {
+      "id": "backlog-tour",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogTourModal",
+        "path": "web-app/src/components/backlog/BacklogTourModal.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogTourModal \u2014 visibility",
+        "BacklogTourModal \u2014 navigation",
+        "BacklogTourModal \u2014 dismissal",
+        "e2e:backlog-tour-first-visit",
+        "e2e:backlog-tour-reopen-button"
+      ],
+      "lastModified": "2026-07-01T00:00:00Z"
+    },
+    {
+      "id": "bottom-nav",
+      "type": "frontend",
+      "frontend": {
+        "component": "BottomNav",
+        "path": "web-app/src/components/layout/BottomNav.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/navigation.spec.ts"
+      ],
+      "lastModified": "2026-04-27T00:00:00Z"
+    },
+    {
+      "id": "browser-passthrough",
+      "type": "frontend",
+      "frontend": {
+        "component": "BrowserTab",
+        "path": "web-app/src/components/sessions/BrowserTab.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "browser-passthrough > shows browser tab when cdp available",
+        "browser-passthrough > shows loading state when cdp not connected"
+      ],
+      "lastModified": "2026-05-18T00:00:00Z"
+    },
+    {
+      "id": "config-management",
+      "type": "frontend",
+      "frontend": {
+        "component": "ConfigEditorPage",
+        "path": "web-app/src/app/config/page.tsx",
+        "markerLine": 2
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-04-18T17:28:17.611Z"
+    },
+    {
+      "id": "header-nav",
+      "type": "frontend",
+      "frontend": {
+        "component": "Header",
+        "path": "web-app/src/components/layout/Header.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/navigation.spec.ts"
+      ],
+      "lastModified": "2026-04-27T00:00:00Z"
+    },
+    {
+      "id": "history-search",
+      "type": "frontend",
+      "frontend": {
+        "component": "HistoryBrowserPage",
+        "path": "web-app/src/app/history/page.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "History Search > e2e:history-search - History search UI is accessible",
+        "useSessionSearch > returns [] for empty query",
+        "useSessionSearch > title match ranks above path-only match for the same query",
+        "useSessionSearch > caps results at 8 even when more sessions match"
+      ],
+      "lastModified": "2026-05-03T00:32:00Z"
+    },
+    {
+      "id": "insights-dashboard",
+      "type": "frontend",
+      "frontend": {
+        "component": "InsightsDashboard",
+        "path": "web-app/src/app/insights/InsightsDashboard.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "insights-dashboard > insights-dashboard_should_renderPage_When_navigatedTo",
+        "insights-dashboard > insights-dashboard_should_showHeading_When_pageLoads",
+        "insights-dashboard > insights-dashboard_should_showSubtitle_When_pageLoads",
+        "insights-dashboard > insights-dashboard_should_reachableFromNav_When_hamburgerOpened",
+        "insights-dashboard > insights-dashboard_should_showLoadingOrData_When_apiAvailable",
+        "TokenBadge > TokenBadge_should_renderZero_When_costIsZero",
+        "TokenBadge > TokenBadge_should_render4Decimals_When_costIsVerySmall",
+        "TokenBadge > TokenBadge_should_render3Decimals_When_costIsSmall",
+        "TokenBadge > TokenBadge_should_render2Decimals_When_costIsDollarRange",
+        "TokenBadge > TokenBadge_should_includeFullPrecisionInTitle_When_rendered",
+        "TokenBadge > TokenBadge_should_applyNormalVariant_When_belowAllThresholds",
+        "TokenBadge > TokenBadge_should_applyWarningVariant_When_atWarnThreshold",
+        "TokenBadge > TokenBadge_should_applyAlertVariant_When_atAlertThreshold",
+        "TokenBadge > TokenBadge_should_applyAlertVariant_When_aboveAlertThreshold",
+        "TokenBadge > TokenBadge_should_renderNormally_When_noThresholdsProvided",
+        "useTopSessions > useTopSessions_should_sortByCostDesc_When_calledWithSessions",
+        "useTopSessions > useTopSessions_should_respectLimit_When_limitIsSmaller",
+        "useTopSessions > useTopSessions_should_returnEmpty_When_inputIsEmpty",
+        "useTopSessions > useTopSessions_should_returnAll_When_limitExceedsCount",
+        "useTopSessions > useTopSessions_should_notMutateInput_When_sorting",
+        "useTopSessions > useTopSessions_should_defaultTo10_When_noLimitGiven"
+      ],
+      "lastModified": "2026-05-15T00:00:00Z"
+    },
+    {
+      "id": "log-viewer",
+      "type": "frontend",
+      "frontend": {
+        "component": "LogViewer",
+        "path": "web-app/src/components/logs/LogViewer.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "log-viewer > log-viewer_should_autoScrollToBottom_When_liveTailEnabled",
+        "log-viewer > log-viewer_should_showJumpToLatest_When_userScrollsUp",
+        "log-viewer > log-viewer_should_showSearchInput_When_searchExpanded",
+        "log-viewer > log-viewer_should_highlightMatches_When_searchQueryEntered",
+        "log-viewer > log-viewer_should_filterToErrorOnly_When_errorChipSelected",
+        "log-viewer > log-viewer_should_expandRow_When_rowClicked",
+        "log-viewer > log-viewer_should_showSearchAsExpandable_When_mobileViewport"
+      ],
+      "lastModified": "2026-05-14T00:00:00Z"
+    },
+    {
+      "id": "new-shell-dialog",
+      "type": "frontend",
+      "frontend": {
+        "component": "NewShellDialog",
+        "path": "web-app/src/components/sessions/NewShellDialog.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "NewShellDialog > renders_all_form_fields > NewShellDialog_should_renderNameCommandWorkingDirFields_When_mounted",
+        "NewShellDialog > submits_with_correct_params_When_formFilled > NewShellDialog_should_callOnSubmitWithCorrectArgs_When_formFilled",
+        "NewShellDialog > submit_disabled_When_spawning > NewShellDialog_should_disableSubmitButton_When_submitting",
+        "NewShellDialog > closes_When_escapePressed > NewShellDialog_should_callOnCancel_When_escapeKeyPressed",
+        "NewShellDialog > closes_When_backdropClicked > NewShellDialog_should_callOnCancel_When_overlayClicked",
+        "NewShellDialog > shows_error_When_spawnFails > NewShellDialog_should_showErrorMessage_When_onSubmitRejects"
+      ],
+      "lastModified": "2026-05-30T00:00:00Z"
+    },
+    {
+      "id": "paused-session-card-distinction",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionCard",
+        "path": "web-app/src/components/sessions/SessionCard.tsx",
+        "markerLine": 0
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-28T00:00:00Z"
+    },
+    {
+      "id": "paused-session-overlay",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionDetailView (pausedOverlay)",
+        "path": "web-app/src/components/sessions/SessionDetailView.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "paused-session-ux > paused-session-ux_should_showOverlay_When_pausedSessionOpened",
+        "paused-session-ux > paused-session-ux_should_resumeSession_When_overlayResumeClicked"
+      ],
+      "lastModified": "2026-05-28T00:00:00Z"
+    },
+    {
+      "id": "paused-session-row-distinction",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionRow",
+        "path": "web-app/src/components/sessions/SessionRow.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "paused-session-ux > paused-session-ux_should_dimRow_When_sessionIsPaused",
+        "paused-session-ux > paused-session-ux_should_showResumeButton_When_rowIsPaused"
+      ],
+      "lastModified": "2026-05-28T00:00:00Z"
+    },
+    {
+      "id": "project-grouping",
+      "type": "frontend",
+      "frontend": {
+        "component": "BulkActions",
+        "path": "web-app/src/components/sessions/BulkActions.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/project-grouping.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "review-queue-pr-creation",
+      "type": "frontend",
+      "frontend": {
+        "component": "ReviewQueuePanel",
+        "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/src/components/sessions/__tests__/ReviewQueuePanel.test.tsx"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "review-queue",
+      "type": "frontend",
+      "frontend": {
+        "component": "ReviewQueuePage",
+        "path": "web-app/src/app/review-queue/page.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "Review Queue Smoke Tests > review queue page loads successfully",
+        "Review Queue Smoke Tests > review queue badge is visible",
+        "Review Queue Smoke Tests > review queue panel renders without errors",
+        "Review Queue Acknowledge Flow \u2014 UI Contract > review-queue-loaded sentinel is present after page renders",
+        "ReviewQueuePanel \u2014 empty state > renders without crashing when queue is empty",
+        "ReviewQueuePanel \u2014 Create PR button > shows Create PR button for TASK_COMPLETE item with no existing PR URL",
+        "reviewQueueSlice > setReviewQueue > stores the queue and syncs totalItems into stats",
+        "useReviewQueue \u2014 acknowledgeSession > removes item from Redux store synchronously before API call resolves"
+      ],
+      "lastModified": "2026-05-03T00:32:00Z"
+    },
+    {
+      "id": "session-artifacts",
+      "type": "frontend",
+      "frontend": {
+        "component": "ArtifactsTab",
+        "path": "web-app/src/components/sessions/ArtifactsTab.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "ArtifactsTab > ArtifactsTab_should_showEmptyState_When_artifactsIsNull",
+        "ArtifactsTab > ArtifactsTab_should_showNoArtifacts_When_artifactsIsEmptyArrays",
+        "ArtifactsTab > ArtifactsTab_should_renderPRLinks_When_artifactsHasPRURLs",
+        "ArtifactsTab > ArtifactsTab_should_truncateURLs_When_URLExceeds60Chars",
+        "ArtifactsTab > ArtifactsTab_should_renderCommitSHAs_When_artifactsHasCommits",
+        "session-artifacts > T-E2E-ARTIFACTS-001 Artifacts tab visible in session detail"
+      ],
+      "lastModified": "2026-06-22T00:00:00Z"
+    },
+    {
+      "id": "session-bulk-select",
+      "type": "frontend",
+      "frontend": {
+        "component": "BulkActions",
+        "path": "web-app/src/components/sessions/BulkActions.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/project-grouping.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "session-clear-conversation",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionCard",
+        "path": "web-app/src/components/sessions/SessionCard.tsx",
+        "markerLine": 0
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-03T00:32:00Z"
+    },
+    {
+      "id": "session-create-directory",
+      "type": "frontend",
+      "frontend": {
+        "component": "OmnibarCreationPanel",
+        "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "directory session creation > directory type is selectable",
+        "directory session creation > hides branch controls when directory is selected",
+        "directory session creation > shows working directory field for directory mode",
+        "directory session creation > submit is disabled without a path",
+        "directory session creation > sends directory session type in payload"
+      ],
+      "lastModified": "2026-05-01T00:00:00Z"
+    },
+    {
+      "id": "session-create-existing-worktree",
+      "type": "frontend",
+      "frontend": {
+        "component": "OmnibarCreationPanel",
+        "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "existing worktree session creation > existing worktree option is selectable",
+        "existing worktree session creation > shows worktree path input when existing worktree is selected",
+        "existing worktree session creation > hides branch controls when existing worktree is selected",
+        "existing worktree session creation > shows working directory field for existing worktree mode",
+        "existing worktree session creation > submit is disabled when worktree path is empty",
+        "existing worktree session creation > sends existing worktree type with worktree path in payload"
+      ],
+      "lastModified": "2026-05-01T00:00:00Z"
+    },
+    {
+      "id": "session-create-github-url",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionWizard",
+        "path": "web-app/src/components/sessions/SessionWizard.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/session-create-github-url.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "session-create-new-worktree",
+      "type": "frontend",
+      "frontend": {
+        "component": "OmnibarCreationPanel",
+        "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "new worktree session creation > new worktree is the default selection",
+        "new worktree session creation > shows use-title-as-branch checkbox for new worktree mode",
+        "new worktree session creation > branch field is read-only while use-title-as-branch is checked",
+        "new worktree session creation > branch field becomes editable when use-title-as-branch is unchecked",
+        "new worktree session creation > sends new worktree type with branch in payload"
+      ],
+      "lastModified": "2026-05-01T00:00:00Z"
+    },
+    {
+      "id": "session-create-omnibar",
+      "type": "frontend",
+      "frontend": {
+        "component": "Omnibar",
+        "path": "web-app/src/components/sessions/Omnibar.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/session-create-omnibar.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "session-create-one-off",
+      "type": "frontend",
+      "frontend": {
+        "component": "OmnibarCreationPanel",
+        "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "one-off session creation > creation panel stays visible while typing session name",
+        "one-off session creation > hides path input when one-off is selected",
+        "one-off session creation > creates session with one_off flag"
+      ],
+      "lastModified": "2026-05-01T00:00:00Z"
+    },
+    {
+      "id": "session-create-wizard",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionWizard",
+        "path": "web-app/src/components/sessions/SessionWizard.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/session-create-wizard.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "session-image-attach",
+      "type": "frontend",
+      "frontend": {
+        "component": "OmnibarCreationPanel",
+        "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "FT3-01: renders 'Attach image' button in creation panel",
+        "FT3-02: clicking attach button triggers hidden file input",
+        "FT3-03: successful upload shows thumbnail preview",
+        "FT3-04: maximum 3 images enforced \u2014 attach button disabled at limit",
+        "FT3-05: selecting 4 files silently truncates to 3",
+        "FT3-06: removing an attachment revokes its object URL",
+        "FT3-07: upload failure shows error message",
+        "FT3-08: onAttachedImagesChange called with correct paths after attach",
+        "FT3-09: onAttachedImagesChange called with empty array after removal"
+      ],
+      "lastModified": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "session-list",
+      "type": "frontend",
+      "frontend": {
+        "component": "Home",
+        "path": "web-app/src/app/page.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "Session Lifecycle > e2e:session-create - Session create UI is accessible",
+        "Session Lifecycle > e2e:session-pause - Pre-seeded paused sessions are visible",
+        "Session Lifecycle > e2e:session-resume - Session status filter works",
+        "Session Lifecycle > e2e:session-delete - Session management page loads",
+        "sessionsSlice > setSessions > replaces all sessions (setAll semantics)",
+        "sessionsSlice > upsertSession > inserts a new session when id is not present",
+        "sessionsSlice > removeSession > removes the session with the matching id"
+      ],
+      "lastModified": "2026-05-03T00:32:00Z"
+    },
+    {
+      "id": "session-title-autogen",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionWizard",
+        "path": "web-app/src/components/sessions/SessionWizard.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/tests/e2e/session-title-autogen.spec.ts"
+      ],
+      "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "settings-backlog-sources",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogSourcesSettings",
+        "path": "web-app/src/components/settings/BacklogSourcesSettings.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogSourcesSettings renders source list after load",
+        "BacklogSourcesSettings shows empty state when no sources",
+        "BacklogSourcesSettings add button is disabled until required fields are filled",
+        "BacklogSourcesSettings calls createItemSource with the correct payload on submit",
+        "BacklogSourcesSettings toggles enabled state via updateItemSource",
+        "BacklogSourcesSettings shows an error message when createItemSource fails",
+        "BacklogSourcesSettings calls deleteItemSource when remove is clicked",
+        "BacklogSourcesSettings calls triggerSync when Sync now is clicked",
+        "BacklogSourcesSettings fetches and renders sync history on View history click"
+      ],
+      "lastModified": "2026-07-02T00:00:00Z"
+    },
+    {
+      "id": "shell-tabs",
+      "type": "frontend",
+      "frontend": {
+        "component": "ShellTabLabel",
+        "path": "web-app/src/components/sessions/ShellTab.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "useShells > spawnShell_should_callRpc_With_correctParams > useShells_should_callSpawnShellRpc_When_spawnShellCalledWithParams",
+        "useShells > spawnShell_should_callRpc_With_correctParams > useShells_should_passEmptyStrings_When_optionalParamsOmitted",
+        "useShells > spawnShell_should_refetchShells_After_success > useShells_should_addShellToList_When_spawnShellSucceeds",
+        "useShells > stopShell_should_callRpc_With_shellId > useShells_should_callStopShellRpc_When_stopShellCalled",
+        "useShells > stopShell_should_callRpc_With_shellId > useShells_should_returnTrue_When_stopShellSucceeds",
+        "useShells > deleteShell_should_callRpc_With_shellId > useShells_should_callDeleteShellRpc_When_deleteShellCalled",
+        "useShells > deleteShell_should_callRpc_With_shellId > useShells_should_removeShellFromList_When_deleteShellSucceeds"
+      ],
+      "lastModified": "2026-05-30T00:00:00Z"
+    },
+    {
+      "id": "terminal-browser-log-stream",
+      "type": "frontend",
+      "frontend": {
+        "component": "TerminalOutput",
+        "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "UT-UI-01: renders_log_stream_button_in_expanded_toolbar",
+        "UT-UI-02: log_stream_button_has_devOnly_class",
+        "UT-UI-03: toggle_on_calls_localStorage_setItem_with_correct_key",
+        "UT-UI-04: toggle_off_calls_localStorage_removeItem",
+        "UT-UI-05: default_state_is_off_when_localStorage_empty",
+        "UT-UI-06: active_state_shows_ON_label_and_green_style",
+        "UT-UI-07: hook_called_with_sessionId_prop",
+        "UT-UI-08: initializes_from_localStorage_true"
+      ],
+      "lastModified": "2026-05-02T00:00:00.000Z"
+    },
+    {
+      "id": "terminal-image-upload",
+      "type": "frontend",
+      "frontend": {
+        "component": "TerminalOutput",
+        "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "FT2-01: renders upload button in terminal toolbar",
+        "FT2-02: clicking upload button triggers hidden file input synchronously",
+        "FT2-03: successful upload inserts path into terminal with trailing space",
+        "FT2-04: 413 response shows file-too-large error",
+        "FT2-05: 400/415 response shows invalid-image-type error",
+        "FT2-06: network error shows error message",
+        "FT2-07: error message auto-clears after 3 seconds",
+        "FT2-08: button is disabled while upload is in progress",
+        "FT2-09: selecting the same file twice fires onChange both times"
+      ],
+      "lastModified": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "terminal-mobile-overflow-menu",
+      "type": "frontend",
+      "frontend": {
+        "component": "TerminalOutput",
+        "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "mobile toolbar overflow > More button is visible on mobile viewport",
+        "mobile toolbar overflow > primary buttons are visible without opening overflow",
+        "mobile toolbar overflow > clicking More reveals overflow row with secondary buttons",
+        "mobile toolbar overflow > clicking Less hides the overflow row",
+        "mobile toolbar overflow > secondary buttons are hidden in toolbar on mobile",
+        "mobile toolbar overflow > overflow row is hidden on desktop viewport"
+      ],
+      "lastModified": "2026-05-02T00:00:00Z"
+    },
+    {
+      "id": "unfinished-work",
+      "type": "frontend",
+      "frontend": {
+        "component": "UnfinishedTab",
+        "path": "web-app/src/app/unfinished/page.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "unfinished-work > page loads with title and filter controls",
+        "unfinished-work > shows empty state when no worktrees found",
+        "unfinished-work > filter chips toggle between All Uncommitted Ahead Behind",
+        "unfinished-work > Refresh button triggers a scan RPC",
+        "unfinished-work > item card expands to show detail panel on click",
+        "unfinished-work > Open Session button navigates to home with worktree prefill params",
+        "unfinished-work > Reattach Session button navigates to session detail",
+        "unfinished-work > Commit & Push button opens commit modal",
+        "unfinished-work > Dismiss button calls DismissWorktree RPC",
+        "unfinished-work > scan completed event updates last-scanned timestamp",
+        "unfinished-work > nav badge links to unfinished page"
+      ],
+      "lastModified": "2026-04-28T00:00:00Z"
+    },
+    {
+      "id": "use-backlog-service",
+      "type": "frontend",
+      "frontend": {
+        "component": "useBacklogService",
+        "path": "web-app/src/lib/hooks/useBacklogService.ts",
+        "markerLine": 0
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-05-12T00:00:00Z"
+    }
+  ]
+}
