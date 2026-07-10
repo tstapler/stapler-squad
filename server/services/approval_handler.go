@@ -650,14 +650,23 @@ type hookMatcherGroup struct {
 }
 
 const (
-	hookApprovalURL = "http://localhost:8543/api/hooks/permission-request"
-	hookTimeout     = 300 // seconds — must be ≤ Claude Code's 5-minute hook timeout
+	hookTimeout = 300 // seconds — must be ≤ Claude Code's 5-minute hook timeout
 )
+
+// hookApprovalURL returns the current PermissionRequest hook callback URL. It delegates to
+// hook_injector.go's hookEndpoints(hookBaseURLFn) — the single source of truth for hook URLs,
+// shared with InjectHooksConfig — rather than maintaining a second, parallel lazy-base-URL
+// mechanism. Resolved fresh on every call (never cached), so all usage sites in
+// InjectHookConfig below reflect whatever base URL is current at their point of use rather
+// than a value baked in at server- or package-construction time.
+func hookApprovalURL() string {
+	return hookEndpoints(hookBaseURLFn)[HookPermissionApproval]
+}
 
 // InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
 // into <rootDir>/.claude/settings.local.json.
 //
-// If the file already contains a hook pointing to hookApprovalURL, it is left unchanged.
+// If the file already contains a hook pointing to hookApprovalURL(), it is left unchanged.
 // If the file exists but lacks our hook, the hook is prepended to PermissionRequest.
 // If the file does not exist, it is created with just our hook config.
 func InjectHookConfig(rootDir, sessionTitle string) error {
@@ -668,7 +677,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	// settings.local.json only supports "command" type hooks; use curl to POST to the approval URL.
 	curlCmd := fmt.Sprintf(
 		"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
-		hookTimeout, hookApprovalURL, sessionTitle,
+		hookTimeout, hookApprovalURL(), sessionTitle,
 	)
 	entry := hookEntry{
 		Type:    "command",
@@ -707,7 +716,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 				if err := json.Unmarshal(prRaw, &groups); err == nil {
 					for _, g := range groups {
 						for _, h := range g.Hooks {
-							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL) {
+							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL()) {
 								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
 								return nil
 							}
@@ -731,7 +740,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 						// Strip out any old http-type hooks pointing to our URL.
 						filtered := g.Hooks[:0]
 						for _, h := range g.Hooks {
-							if h.URL != hookApprovalURL {
+							if h.URL != hookApprovalURL() {
 								filtered = append(filtered, h)
 							}
 						}

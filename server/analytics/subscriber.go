@@ -99,7 +99,10 @@ func (s *analyticsSubscriber) recordFromEvent(ctx context.Context, event *events
 		}
 		sess := event.Session
 		sessionID := sess.GetStableID()
-		newStatus := sess.Status
+		// Read via the locked accessor, not the raw field: Status is written
+		// under Instance.stateMutex from the instance's own goroutine,
+		// concurrently with this EventBus subscriber goroutine.
+		newStatus := session.Status(sess.GetStatus())
 
 		s.mu.Lock()
 		oldStatus, seen := s.lastStatusByID[sessionID]

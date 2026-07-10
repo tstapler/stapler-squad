@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -40,7 +41,11 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr              string
+	// addr holds the listen address. It starts as the requested address (e.g.
+	// "localhost:0") and is overwritten with the real OS-assigned address once
+	// Start()'s listener goroutine binds — read via GetAddr() from other
+	// goroutines (lazy hook/MCP URL closures, tests), so it must be atomic.
+	addr              atomic.Pointer[string]
 	httpServer        *http.Server
 	mux               *http.ServeMux
 	tlsConfig         *tls.Config                     // non-nil when TLS is enabled
@@ -60,7 +65,6 @@ func newServerBase(addr string) (*Server, context.Context) {
 	mux := http.NewServeMux()
 	connCtx, connCtxCancel := context.WithCancel(context.Background())
 	srv := &Server{
-		addr:          addr,
 		mux:           mux,
 		connCtxCancel: connCtxCancel,
 		httpServer: &http.Server{
@@ -75,6 +79,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 			BaseContext: func(_ net.Listener) context.Context { return connCtx },
 		},
 	}
+	srv.addr.Store(&addr)
 	return srv, connCtx
 }
 
@@ -156,13 +161,6 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.WorktreePRPoller != nil {
 		deps.WorktreePRPoller.Start(serverCtx)
 		log.Info("WorktreePRPoller started")
-	}
-
-	// Start UserPRCache: background refresh of all open PRs authored by the
-	// authenticated GitHub user (used by the GitHub Work Continuity feature).
-	if deps.UserPRCache != nil {
-		deps.UserPRCache.Start(serverCtx)
-		log.Info("UserPRCache started")
 	}
 
 	// Register shutdown hook: capture pane working dirs and persist instance
@@ -434,12 +432,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/external/approvals/respond", externalWsHandler.HandleApprovalResponse)
 	log.Info("Registered External Session approval handlers at /api/external/approvals/*")
 
+	// Shared lazy base-URL resolver for Claude Code hook callbacks (Epic 1.3, Story 1.3.1).
+	// Read at the moment a hook URL is actually needed (per-session, at hook-injection time),
+	// never snapshotted before Start() binds the real listen address -- so hook URLs resolve
+	// correctly even when PORT=0 assigns an OS-chosen port. Mirrors the mcpURL lazy-read
+	// pattern below (srv.GetAddr(), Task 1.1.1c).
+	hookBaseURLFn := func() string { return "http://" + srv.GetAddr() }
+
 	// Register Claude Code HTTP hook approval endpoint
 	approvalHandler := services.NewApprovalHandler(
 		deps.SessionService.GetApprovalStore(),
 		deps.Storage,
 		deps.EventBus,
 	)
+	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
+	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
+	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
+	services.SetHookBaseURLFn(hookBaseURLFn)
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -486,9 +495,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	})
 	srv.mux.Handle("/mcp", mcpWithUUID)
 	srv.mux.Handle("/mcp/", mcpWithUUID)
-	mcpURL := "http://" + srv.addr + "/mcp"
-	deps.SessionService.SetMCPServerURL(mcpURL)
-	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)
+	deps.SessionService.SetMCPServerURL(func() string { return "http://" + srv.GetAddr() + "/mcp" })
+	log.Info("Registered MCP HTTP handler at /mcp", "url", "http://"+srv.GetAddr()+"/mcp (resolved lazily at session-creation time)")
 
 	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
 	deps.SessionService.SetLifecycleContext(serverCtx)
@@ -625,7 +633,7 @@ func registerStaticRoutes(srv *Server) {
 func (s *Server) SetupTLS(cfg *tls.Config) {
 	s.tlsConfig = cfg
 	s.httpServer.TLSConfig = cfg
-	log.Info("TLS enabled", "addr", s.addr)
+	log.Info("TLS enabled", "addr", s.GetAddr())
 }
 
 // SetupAuth installs authentication middleware.  Must be called before Start().
@@ -675,18 +683,31 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.tlsConfig != nil {
 		scheme = "https"
 	}
-	log.Info("Starting server", "scheme", scheme, "addr", s.addr)
-	log.Info("Web UI", "url", scheme+"://"+s.addr)
-	log.Info("Health check", "url", scheme+"://"+s.addr+"/health")
 
 	errCh := make(chan error, 1)
 	go func() {
 		var err error
 		if s.tlsConfig != nil {
-			// TLS mode: cert/key are already in TLSConfig.Certificates
+			// TLS mode: cert/key are already in TLSConfig.Certificates; the
+			// configured address is never rewritten, so it's safe to log now.
+			log.Info("Starting server", "scheme", scheme, "addr", s.GetAddr())
+			log.Info("Web UI", "url", scheme+"://"+s.GetAddr())
+			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
 			err = s.httpServer.ListenAndServeTLS("", "")
 		} else {
-			err = s.httpServer.ListenAndServe()
+			ln, lerr := net.Listen("tcp", s.GetAddr())
+			if lerr != nil {
+				errCh <- lerr
+				return
+			}
+			resolvedAddr := ln.Addr().String()
+			s.addr.Store(&resolvedAddr)
+			// Log the real, OS-assigned address (never the pre-bind ":0"
+			// request) now that the listener has actually bound.
+			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
+			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
+			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
+			err = s.httpServer.Serve(ln)
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -731,7 +752,10 @@ func (s *Server) Shutdown() error {
 
 // GetAddr returns the server address.
 func (s *Server) GetAddr() string {
-	return s.addr
+	if p := s.addr.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // Mux returns the HTTP request multiplexer so callers can register additional

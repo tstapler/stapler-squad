@@ -56,7 +56,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules ensure-tmux-configure test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules ensure-tmux-configure test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
 
 # Default target
 help: ## Show this help message
@@ -390,6 +390,25 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	STAPLER_SQUAD_INSTANCE=$(PREVIEW_INSTANCE) \
 	STAPLER_SQUAD_USE_CONTROL_MODE=false \
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
+
+# Isolated backend + next-dev DevStack for manual testing (Epic 3.2,
+# scripts/dev-stack/launch.ts). Distinct from `make preview` (which runs the
+# built Go binary alone against the static-exported web UI) — this spins up
+# BOTH a backend and a real `next dev` on separately allocated ports, wired
+# together via STAPLER_SQUAD_EXTRA_ORIGINS/NEXT_PUBLIC_API_URL, and tears
+# both down (plus any orphaned grandchildren) on Ctrl-C.
+#
+# Usage:
+#   make dev-stack NAME=my-feature-test
+DEV_STACK_TS_NODE := web-app/node_modules/.bin/ts-node
+DEV_STACK_TSC_OPTS := {"module":"commonjs","moduleResolution":"node","esModuleInterop":true}
+
+dev-stack: build ## Start an isolated backend+next-dev DevStack: make dev-stack NAME=my-feature-test
+	@if [ -z "$(NAME)" ]; then \
+		echo "Usage: make dev-stack NAME=<instance-name>"; \
+		exit 1; \
+	fi
+	$(DEV_STACK_TS_NODE) --compiler-options '$(DEV_STACK_TSC_OPTS)' scripts/dev-stack/launch.ts $(NAME)
 
 # Protocol Buffer code generation
 proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and TypeScript code from proto files

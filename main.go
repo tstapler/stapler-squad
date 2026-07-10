@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -182,7 +183,7 @@ var (
 			}
 			defer stopProfiling()
 
-			// Determine listen address: flag > config > PORT env > default
+			// Determine listen address: flag > PORT env > config > default
 			address := cfg.ListenAddress
 			if address == "" {
 				address = "localhost:8543"
@@ -282,6 +283,21 @@ var (
 
 				localOrigin := fmt.Sprintf("http://%s", address)
 				srv.SetOrigins([]string{localOrigin})
+
+				// STAPLER_SQUAD_EXTRA_ORIGINS lets an isolated DevStack's next-dev frontend past
+				// CORS. Only honored when STAPLER_SQUAD_INSTANCE is also explicitly set — the
+				// default/systemd instance never sets a custom instance name, so this env var is
+				// a structural no-op there regardless of its value (ADR-001 §2, pre-mortem.md
+				// Failure #3). Each entry must be an exact http(s)://localhost:<port> or
+				// http(s)://127.0.0.1:<port> origin — anything else is rejected and logged, never
+				// silently trusted.
+				if os.Getenv("STAPLER_SQUAD_INSTANCE") != "" {
+					if extraOriginsRaw := os.Getenv("STAPLER_SQUAD_EXTRA_ORIGINS"); extraOriginsRaw != "" {
+						validExtraOrigins, _ := parseExtraOrigins(extraOriginsRaw)
+						srv.SetOrigins(append(srv.GetOrigins(), validExtraOrigins...))
+					}
+					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
+				}
 
 				// Start a second HTTPS server with passkey auth for remote access.
 				if remoteAccessFlag || cfg.PasskeyEnabled {
@@ -659,6 +675,30 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
 	rootCmd.AddCommand(commands.GetSessionCmd)
+}
+
+// extraOriginPattern matches an exact http(s)://localhost:<port> or
+// http(s)://127.0.0.1:<port> origin — no path, query, wildcard, or other host.
+var extraOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1):\d+$`)
+
+// parseExtraOrigins splits raw on commas and strings.TrimSpace's each entry,
+// validating it against extraOriginPattern. Entries that pass are returned in
+// valid; entries that fail are logged via log.Warn (naming the offending entry)
+// and returned in rejected — they are never silently included in valid.
+func parseExtraOrigins(raw string) (valid []string, rejected []string) {
+	for _, entry := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if extraOriginPattern.MatchString(trimmed) {
+			valid = append(valid, trimmed)
+		} else {
+			log.Warn("Rejected invalid STAPLER_SQUAD_EXTRA_ORIGINS entry", "entry", trimmed)
+			rejected = append(rejected, trimmed)
+		}
+	}
+	return valid, rejected
 }
 
 // resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID

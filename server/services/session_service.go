@@ -121,9 +121,13 @@ type SessionService struct {
 	// for checkpoint creation. May be nil if not wired (seq defaults to 0).
 	scrollbackMgr ScrollbackSequencer
 
-	// mcpServerURL is the URL of the stapler-squad HTTP MCP endpoint.
-	// When non-empty, passed to new sessions via InstanceOptions.MCPServerURL.
-	mcpServerURL string
+	// mcpServerURLFn lazily resolves the URL of the stapler-squad HTTP MCP
+	// endpoint. It is invoked (not read as a stored string) at the point of
+	// use so it always reflects the server's real bound address, even when
+	// the listener was constructed before Start() resolved an OS-assigned
+	// port (PORT=0). When non-nil, its result is passed to new sessions via
+	// InstanceOptions.MCPServerURL.
+	mcpServerURLFn func() string
 
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
@@ -398,8 +402,8 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		// wired up. Without this, buildLaunchCommand omits --mcp-config entirely and
 		// the Claude process restarts without a session UUID or MCP connection.
 		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
-		if inst.MCPServerURL == "" && s.mcpServerURL != "" {
-			inst.SetMCPServerURL(s.mcpServerURL)
+		if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
+			inst.MCPServerURL = mcpURL
 		}
 	}
 
@@ -664,10 +668,23 @@ func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
 	s.reviewQueueSvc.SetReactiveQueueManager(mgr)
 }
 
-// SetMCPServerURL configures the HTTP MCP endpoint URL passed to new sessions.
-// Call this during server startup after the listen address is known.
-func (s *SessionService) SetMCPServerURL(url string) {
-	s.mcpServerURL = url
+// SetMCPServerURL configures a lazily-invoked provider for the HTTP MCP
+// endpoint URL passed to new sessions. Unlike a stored string, fn is called
+// fresh at each point of use, so it can be wired up during server
+// construction (before the listener has bound a real address) and still
+// always observe the real bound address once Start() has resolved it, even
+// under PORT=0.
+func (s *SessionService) SetMCPServerURL(fn func() string) {
+	s.mcpServerURLFn = fn
+}
+
+// resolveMCPServerURL invokes the lazily-configured MCP URL provider, if any,
+// returning "" if it has not yet been configured.
+func (s *SessionService) resolveMCPServerURL() string {
+	if s.mcpServerURLFn == nil {
+		return ""
+	}
+	return s.mcpServerURLFn()
 }
 
 // SetRegistry wires the Registry into this service. Called during server startup after
@@ -690,8 +707,8 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 	s.wireClaudeSessionIDCallback(inst.Instance)
 	s.wireAutoArchiveCallback(inst.Instance)
 	s.wireSessionExitedPublisher(inst.Instance)
-	if inst.MCPServerURL == "" && s.mcpServerURL != "" {
-		inst.SetMCPServerURL(s.mcpServerURL)
+	if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
+		inst.SetMCPServerURL(mcpURL)
 	}
 }
 
@@ -725,7 +742,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		Tags:            tags,
 		OneShot:         oneShot,
 		Hidden:          hidden,
-		MCPServerURL:    s.mcpServerURL,
+		MCPServerURL:    s.resolveMCPServerURL(),
 		CreateIfMissing: true,
 	}
 	instance, err := session.NewInstance(opts)
@@ -1238,7 +1255,7 @@ func (s *SessionService) CreateSession(
 		ResumeId:         req.Msg.ResumeId,
 		OneShot:          req.Msg.OneShot,
 		ProjectID:        req.Msg.ProjectId,
-		MCPServerURL:     s.mcpServerURL,
+		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  req.Msg.CreateIfMissing,
 		AllowedTools:     req.Msg.AllowedTools,
 		PermissionMode:   req.Msg.PermissionMode,

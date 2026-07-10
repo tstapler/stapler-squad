@@ -1087,3 +1087,45 @@ func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resp.Msg.Success)
 }
+
+// --------------------------------------------------------------------------
+// SetMCPServerURL / resolveMCPServerURL (Task 1.1.1c)
+// --------------------------------------------------------------------------
+
+// SessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfterAddrChanges
+// verifies that mcpServerURLFn is invoked lazily at each point of use rather
+// than snapshotted once at SetMCPServerURL time. This is the regression test
+// for the early-binding bug where "http://"+srv.addr+"/mcp" was baked into a
+// plain string field at server-construction time — before Start() resolved a
+// PORT=0 listener's real address — permanently freezing the MCP URL at
+// http://localhost:0/mcp.
+func TestSessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfterAddrChanges(t *testing.T) {
+	svc := &SessionService{}
+
+	// Simulate the server's address being resolved lazily, e.g. after
+	// net.Listen reassigns s.addr post-bind (Task 1.1.1a).
+	addr := "localhost:0"
+	svc.SetMCPServerURL(func() string { return "http://" + addr + "/mcp" })
+
+	require.Equal(t, "http://localhost:0/mcp", svc.resolveMCPServerURL(),
+		"expected the fn to reflect the pre-bind value before addr changes")
+
+	// Mutate the captured address, simulating Start() reassigning s.addr to
+	// the real OS-assigned port after PORT=0 was requested.
+	addr = "localhost:54211"
+
+	assert.Equal(t, "http://localhost:54211/mcp", svc.resolveMCPServerURL(),
+		"expected the fn to be re-invoked and reflect the updated address, not a construction-time snapshot")
+}
+
+// SessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfigured
+// verifies that reading the MCP server URL before SetMCPServerURL has been
+// called returns a safe empty string instead of a nil-pointer panic.
+func TestSessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfigured(t *testing.T) {
+	svc := &SessionService{}
+
+	assert.NotPanics(t, func() {
+		got := svc.resolveMCPServerURL()
+		assert.Equal(t, "", got)
+	})
+}
