@@ -20,12 +20,28 @@ import { ReviewQueuePanel } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
+afterEach(() => {
+  mockSearchParams = new URLSearchParams();
+});
+
 // ---------------------------------------------------------------------------
 // Mock context hooks — ReviewQueuePanel depends on three context providers
 // ---------------------------------------------------------------------------
 
 const mockRefresh = jest.fn();
 const mockAcknowledge = jest.fn().mockResolvedValue(undefined);
+
+// Overrides the global next/navigation stub (jest.setup.js) so URL-persisted filter
+// state (useFilterState) can be seeded and asserted on.
+let mockSearchParams = new URLSearchParams();
+const mockReplace = jest.fn();
+
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => mockSearchParams,
+  useParams: () => ({}),
+}));
 
 jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: jest.fn(),
@@ -499,7 +515,7 @@ describe("ReviewQueuePanel — combinable filters", () => {
   });
 
   function openFilters() {
-    fireEvent.click(screen.getByRole("button", { name: /filter/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
   }
 
   it("keeps priority and reason filters active simultaneously (combinable, not exclusive)", () => {
@@ -604,5 +620,75 @@ describe("ReviewQueuePanel — combinable filters", () => {
 
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group by (reuses groupSessions()) + URL-persisted filter state (reuses useFilterState)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — group by", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("groups items under group headers when a Group by strategy is selected", () => {
+    const claude = makeReviewItem({ sessionId: "s1", sessionName: "First Item", program: "claude" });
+    const aider = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", program: "aider" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([claude, aider]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+
+    expect(screen.getByTestId("review-group-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("falls back to a flat list when Group by is left at the default (None)", () => {
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId(/^review-group-/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+  });
+});
+
+describe("ReviewQueuePanel — URL-persisted filter state", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("hydrates active filters from the URL on mount", () => {
+    mockSearchParams = new URLSearchParams({ priority: String(Priority.URGENT), q: "login" });
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-queue-search")).toHaveValue("login");
+  });
+
+  it("writes filter changes through to the URL via useFilterState", () => {
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`priority=${Priority.URGENT}`),
+      expect.objectContaining({ scroll: false })
+    );
   });
 });

@@ -597,6 +597,24 @@ export const sortSelect = style({
   },
 });
 
+export const groupSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
+  marginBottom: vars.space["4"],
+});
+
+export const groupHeading = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.textSecondary,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  paddingBottom: vars.space["1"],
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
 export const divergedBadge = style({
   fontSize: vars.fontSize.xs,
   padding: `2px 6px`,
