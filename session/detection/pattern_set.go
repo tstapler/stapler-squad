@@ -11,6 +11,7 @@ type PatternSet struct {
 	patterns StatusPatterns
 
 	readyRegexes           []*regexp.Regexp
+	readyCatchAll          []bool // readyCatchAll[i] is true when patterns.Ready[i] is the universal `.*` catch-all
 	processingRegexes      []*regexp.Regexp
 	needsApprovalRegexes   []*regexp.Regexp
 	inputRequiredRegexes   []*regexp.Regexp
@@ -61,6 +62,19 @@ func (ps *PatternSet) compile() error {
 		}
 		*g.out = compiled
 	}
+
+	// Precompute which entries in the Ready bucket are the universal `.*` catch-all
+	// (e.g. "claude_prompt") versus explicit named ready patterns (e.g. "gemini_ready").
+	// The catch-all matches every string, so it must be checked last and separately —
+	// otherwise it would shadow explicit ready patterns in the same slice.
+	// See project_plans/session-status-unification/implementation/adversarial-review.md
+	// Issue 4: StatusReady keeps a distinct definition; StatusUnknown is the `.*` catch-all.
+	catchAll := make([]bool, len(ps.patterns.Ready))
+	for i, pat := range ps.patterns.Ready {
+		catchAll[i] = pat.Pattern == ".*"
+	}
+	ps.readyCatchAll = catchAll
+
 	return nil
 }
 
@@ -131,8 +145,22 @@ func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, st
 			return StatusIdle, ps.patterns.Idle[i].Name, ps.patterns.Idle[i].Description
 		}
 	}
-	// Ready (catch-all — must be last; returns StatusUnknown so the .* pattern renders no badge)
+	// Ready — explicit named patterns (e.g. gemini_ready) are checked first and return
+	// StatusReady. These are distinct from the universal `.*` catch-all in the same
+	// bucket and must be checked before it, or the catch-all would always win.
 	for i, regex := range ps.readyRegexes {
+		if ps.readyCatchAll[i] {
+			continue
+		}
+		if regex.MatchString(text) {
+			return StatusReady, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description
+		}
+	}
+	// Ready catch-all (must be last; returns StatusUnknown so the .* pattern renders no badge)
+	for i, regex := range ps.readyRegexes {
+		if !ps.readyCatchAll[i] {
+			continue
+		}
 		if regex.MatchString(text) {
 			return StatusUnknown, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description
 		}

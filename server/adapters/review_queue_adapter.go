@@ -9,30 +9,10 @@ import (
 
 // subStatusFromItem derives the proto SubStatus for a ReviewItem from its ClaudeStatus.
 // This is the fine-grained activity state used by the frontend deriveWorkingState() utility.
+// DetectedStatus → SubStatus mapping lives in detection.DetectedStatusToSubStatus; do not
+// duplicate the switch here (see its doc comment).
 func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
-	switch item.ClaudeStatus {
-	case detection.StatusWaitingForAgent:
-		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
-	case detection.StatusProcessing, detection.StatusExecuting:
-		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
-	case detection.StatusNeedsApproval:
-		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
-	case detection.StatusInputRequired:
-		return sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED
-	case detection.StatusError:
-		return sessionv1.SubStatus_SUB_STATUS_ERROR
-	case detection.StatusTestsFailing:
-		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
-	case detection.StatusReady:
-		return sessionv1.SubStatus_SUB_STATUS_READY
-	case detection.StatusIdle:
-		return sessionv1.SubStatus_SUB_STATUS_IDLE
-	case detection.StatusSuccess:
-		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
-	case detection.StatusUnknown:
-		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
-	}
-	return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
+	return detection.DetectedStatusToSubStatus(item.ClaudeStatus)
 }
 
 // ReviewItemToProto converts session.ReviewItem to proto ReviewItem.

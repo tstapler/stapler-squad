@@ -244,7 +244,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			//
 			// Do NOT use st == Ready (which equals st == Active — a deprecated alias
 			// that fires the moment the session starts, long before readline is ready).
-			// StatusReady is a `.*` catch-all; StatusIdle is the precise signal.
+			// detection.StatusUnknown is the `.*` catch-all; detection.StatusReady is an
+			// explicit prompt match (e.g. gemini_ready). detection.StatusIdle remains the
+			// precise signal used here.
 			claudeAtPrompt := detectedSt == detection.StatusIdle
 			timedOut := time.Now().After(readyDeadline)
 

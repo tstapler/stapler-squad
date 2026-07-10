@@ -9,8 +9,11 @@ import { getApiBaseUrl } from "@/lib/config";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-// Maps the DetectedStatus int value (from proto result_status) to the Go constant name.
-// Mirrors the iota order in session/detection/detector.go.
+// Maps the DetectedStatus int value (from proto result_status, a raw int32 — see
+// DetectionEventProto.resultStatus in @/gen/session/v1/session_pb) to the Go
+// constant name. Mirrors the `DetectedStatus` iota block in
+// session/detection/detector.go exactly; when that const block changes, update
+// this table to match (index = iota value, keys 0-10).
 const STATUS_INT_TO_GO: Record<number, string> = {
   0: "StatusUnknown",
   1: "StatusReady",
@@ -22,6 +25,7 @@ const STATUS_INT_TO_GO: Record<number, string> = {
   7: "StatusIdle",
   8: "StatusExecuting",
   9: "StatusSuccess",
+  10: "StatusWaitingForAgent",
 };
 
 interface CaptureResult {

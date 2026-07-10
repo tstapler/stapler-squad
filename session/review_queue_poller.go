@@ -111,15 +111,15 @@ type contentCacheEntry struct {
 // content caching state. It is created by NewReviewQueuePoller and can be replaced
 // in tests with a fake implementation.
 type pollerContentProvider struct {
-	// ponytail: xsync.MapOf replaces 4 map[string]* + RWMutex — lock-free reads across sessions
-	cache *xsync.MapOf[string, contentCacheEntry]
+	// ponytail: xsync.Map replaces 4 map[string]* + RWMutex — lock-free reads across sessions
+	cache *xsync.Map[string, contentCacheEntry]
 }
 
 // NewPollerContentProvider creates a new pollerContentProvider.
 // It is exported so server/dependencies.go can pass it to NewStartupScanner.
 func NewPollerContentProvider() ContentProvider {
 	return &pollerContentProvider{
-		cache: xsync.NewMapOf[string, contentCacheEntry](),
+		cache: xsync.NewMap[string, contentCacheEntry](),
 	}
 }
 

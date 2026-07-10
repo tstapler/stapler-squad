@@ -13,6 +13,92 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// dedupWindow is the time window within which a duplicate notification tag is
+// suppressed. Also used as the retention window for lastSent sweeping (see
+// sweepExpiredSent) so stale dedup entries don't accumulate forever.
+const dedupWindow = 2 * time.Second
+
+// statusSweepInterval controls how often the delivery subscriber prunes
+// lastSent entries older than dedupWindow and lastStatus entries older than
+// statusEntryTTL, bounding both maps' memory growth over the lifetime of a
+// long-running server process.
+const statusSweepInterval = 1 * time.Minute
+
+// statusEntryTTL bounds how long a session's last-known status is retained in
+// lastStatus after its last update. EventSessionDeleted only fires on hard
+// delete; sessions that are archived instead (the more common path) never
+// emit it, so without this TTL sweep the map would grow unbounded for the
+// life of the process — mirrors server/analytics/subscriber.go's
+// statusEntryTTL for its analogous lastStatusByID map.
+const statusEntryTTL = 24 * time.Hour
+
+// statusEntry pairs a session's last-known status with the time it was last
+// observed, so stale entries can be evicted by the periodic sweep.
+type statusEntry struct {
+	status   session.Status
+	lastSeen time.Time
+}
+
+// deliveryState holds the delivery subscriber's mutable, shared-across-events
+// state: the dedup window's lastSent timestamps and the last observed status
+// per session. lastStatus exists because EventSessionUpdated carries no
+// old/new status pair now that the dedicated SessionStatusChangedEvent was
+// merged into it — without tracking the previous status ourselves, any
+// unrelated update to an already-Stopped session (e.g. a rename, or PR URL
+// discovery) would look identical to a genuine Active→Stopped transition and
+// spuriously re-fire the "Session Completed" notification.
+type deliveryState struct {
+	mu         sync.Mutex
+	lastSent   map[string]time.Time
+	lastStatus map[string]statusEntry
+}
+
+func newDeliveryState() *deliveryState {
+	return &deliveryState{
+		lastSent:   make(map[string]time.Time),
+		lastStatus: make(map[string]statusEntry),
+	}
+}
+
+// forgetSession clears any tracked status for sessionID. Called on
+// EventSessionDeleted so the map doesn't retain entries for sessions that no
+// longer exist, mirroring the cleanup server/analytics/subscriber.go performs
+// on its analogous lastStatusByID map.
+func (s *deliveryState) forgetSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.lastStatus, sessionID)
+	s.mu.Unlock()
+}
+
+// sweepExpiredSent deletes lastSent entries whose dedup window has already
+// elapsed as of now. Extracted as a pure function (operating on a plain map)
+// so it can be exercised in tests deterministically, independent of the
+// ticker's real-time interval.
+func sweepExpiredSent(lastSent map[string]time.Time, now time.Time, window time.Duration) {
+	for tag, sentAt := range lastSent {
+		if now.Sub(sentAt) >= window {
+			delete(lastSent, tag)
+		}
+	}
+}
+
+// sweepStaleLastStatus deletes lastStatus entries whose lastSeen is older
+// than ttl. This bounds map growth for sessions that are archived (rather
+// than hard-deleted) and therefore never publish EventSessionDeleted.
+// Extracted as a pure function so it can be exercised in tests
+// deterministically, independent of the ticker's real-time interval.
+func sweepStaleLastStatus(lastStatus map[string]statusEntry, now time.Time, ttl time.Duration) {
+	cutoff := now.Add(-ttl)
+	for id, entry := range lastStatus {
+		if entry.lastSeen.Before(cutoff) {
+			delete(lastStatus, id)
+		}
+	}
+}
+
 // StartDeliverySubscriber subscribes to the EventBus and fans push notifications
 // out to all provided Notifiers. It exits when ctx is cancelled.
 // A single failing Notifier does not prevent delivery to the others.
@@ -32,9 +118,10 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 		log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
 		defer log.Info("DeliverySubscriber stopped")
 
-		var mu sync.Mutex
-		lastSent := make(map[string]time.Time)
-		const dedupWindow = 2 * time.Second
+		state := newDeliveryState()
+
+		sweepTicker := time.NewTicker(statusSweepInterval)
+		defer sweepTicker.Stop()
 
 		for {
 			select {
@@ -46,21 +133,33 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 					continue
 				}
 
-				dn, ok := buildDeliveryNotification(event)
+				if event.Type == events.EventSessionDeleted {
+					state.forgetSession(event.SessionID)
+					continue
+				}
+
+				dn, ok := state.buildDeliveryNotification(event)
 				if !ok {
 					continue
 				}
 
 				// Dedup: skip if the same tag was sent within the dedup window.
-				mu.Lock()
-				if last, seen := lastSent[dn.Tag]; seen && time.Since(last) < dedupWindow {
-					mu.Unlock()
+				state.mu.Lock()
+				if last, seen := state.lastSent[dn.Tag]; seen && time.Since(last) < dedupWindow {
+					state.mu.Unlock()
 					continue
 				}
-				lastSent[dn.Tag] = time.Now()
-				mu.Unlock()
+				state.lastSent[dn.Tag] = time.Now()
+				state.mu.Unlock()
 
 				fanout(ctx, notifiers, dn)
+
+			case <-sweepTicker.C:
+				state.mu.Lock()
+				now := time.Now()
+				sweepExpiredSent(state.lastSent, now, dedupWindow)
+				sweepStaleLastStatus(state.lastStatus, now, statusEntryTTL)
+				state.mu.Unlock()
 
 			case <-ctx.Done():
 				return
@@ -106,10 +205,10 @@ func shouldNotify(
 
 // buildDeliveryNotification converts a raw Event into a DeliveryNotification.
 // Returns (dn, true) when the event should be delivered; (zero, false) otherwise.
-func buildDeliveryNotification(event *events.Event) (DeliveryNotification, bool) {
+func (s *deliveryState) buildDeliveryNotification(event *events.Event) (DeliveryNotification, bool) {
 	switch event.Type {
 	case events.EventSessionUpdated:
-		return buildStatusChangeNotification(event)
+		return s.buildStatusChangeNotification(event)
 	case events.EventNotification:
 		return buildInlineNotification(event)
 	default:
@@ -117,21 +216,43 @@ func buildDeliveryNotification(event *events.Event) (DeliveryNotification, bool)
 	}
 }
 
-func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, bool) {
+// buildStatusChangeNotification builds the "Session Completed" notification,
+// but only when the session's status has just transitioned TO Stopped. It
+// records the session's current status in s.lastStatus on every call so a
+// later, unrelated EventSessionUpdated for the same already-Stopped session
+// (e.g. a title rename, or RunOneShot republishing after discovering a
+// github_pr_url) is recognized as a non-transition and does not re-fire the
+// notification.
+func (s *deliveryState) buildStatusChangeNotification(event *events.Event) (DeliveryNotification, bool) {
 	sess := event.Session
 	if sess == nil {
 		return DeliveryNotification{}, false
 	}
+	id := stableID(sess)
 	// Read via the locked accessor, not the raw field: Status is written under
 	// Instance.stateMutex (see transitionTo), and this runs on the EventBus
 	// subscriber goroutine, concurrently with the instance's own goroutine.
-	if session.Status(sess.GetStatus()) != session.Stopped {
+	newStatus := session.Status(sess.GetStatus())
+
+	s.mu.Lock()
+	prev, seen := s.lastStatus[id]
+	oldStatus := prev.status
+	s.lastStatus[id] = statusEntry{status: newStatus, lastSeen: time.Now()}
+	s.mu.Unlock()
+
+	if newStatus != session.Stopped {
+		return DeliveryNotification{}, false
+	}
+	if seen && oldStatus == session.Stopped {
+		// Already recorded as Stopped — this event didn't carry a genuine
+		// Active→Stopped transition, so don't re-notify.
 		return DeliveryNotification{}, false
 	}
 
 	title := "Session Completed"
+	// Read via the locked accessor for the same race-safety reason as Status above.
 	body := fmt.Sprintf("Session '%s' has completed", sess.GetTitle())
-	tag := "session-completed-" + stableID(sess)
+	tag := "session-completed-" + id
 	data := buildDataMap(sess, "SESSION_COMPLETE", false)
 
 	return DeliveryNotification{

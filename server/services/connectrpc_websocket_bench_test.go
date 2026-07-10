@@ -98,7 +98,7 @@ func BenchmarkWaitForQuiescence_BurstThenQuiet(b *testing.B) {
 // this post-run.
 func BenchmarkSnapshotCacheHit(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
+		snapshotCache: xsync.NewMap[string, sessionSnapshot](),
 	}
 	cachedContent := strings.Repeat("x", 4096) // ~4 KB: typical terminal screen
 	h.snapshotCache.Store("bench-session", sessionSnapshot{
@@ -135,7 +135,7 @@ func BenchmarkSnapshotCacheHit(b *testing.B) {
 // the real tmux exec cost (which is 20–80 ms and dominates in production).
 func BenchmarkSnapshotCacheMiss(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
+		snapshotCache: xsync.NewMap[string, sessionSnapshot](),
 	}
 	freshContent := strings.Repeat("x", 4096)
 	captureFn := func() (string, error) {
@@ -162,7 +162,7 @@ func BenchmarkSnapshotCacheMiss(b *testing.B) {
 // many events per second during Claude TUI repaints, so this must be cheap.
 func BenchmarkMarkSnapshotDirty(b *testing.B) {
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
+		snapshotCache: xsync.NewMap[string, sessionSnapshot](),
 	}
 	h.snapshotCache.Store("bench-session", sessionSnapshot{
 		content:    strings.Repeat("x", 4096),
@@ -185,7 +185,7 @@ func BenchmarkMarkSnapshotDirty(b *testing.B) {
 func BenchmarkMarkSnapshotDirty_Concurrent(b *testing.B) {
 	const numSessions = 8 // typical pool size
 	h := &ConnectRPCWebSocketHandler{
-		snapshotCache: xsync.NewMapOf[string, sessionSnapshot](),
+		snapshotCache: xsync.NewMap[string, sessionSnapshot](),
 	}
 	for i := 0; i < numSessions; i++ {
 		sessionID := fmt.Sprintf("bench-session-%02d", i)

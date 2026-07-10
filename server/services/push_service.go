@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
@@ -77,8 +77,13 @@ func (ps *PushService) generateVapidKeys() error {
 	publicKeyBytes := elliptic.Marshal(publicKey.Curve, publicKey.X, publicKey.Y) //nolint:staticcheck
 	ps.vapidPublicKey = base64.RawURLEncoding.EncodeToString(publicKeyBytes)
 
+	privateKeyBytes, err := privateKey.Bytes()
+	if err != nil {
+		return fmt.Errorf("failed to encode VAPID private key: %w", err)
+	}
+
 	vapidData := map[string]string{
-		"privateKey": base64.RawURLEncoding.EncodeToString(privateKey.D.Bytes()),
+		"privateKey": base64.RawURLEncoding.EncodeToString(privateKeyBytes),
 		"publicKey":  ps.vapidPublicKey,
 	}
 
@@ -116,16 +121,24 @@ func (ps *PushService) loadVapidKeys() error {
 		return err
 	}
 
-	privateKey := &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-		},
-		D: new(big.Int),
+	// ParseRawPrivateKey requires a fixed-length big-endian scalar (32 bytes for
+	// P256). Keys written before the switch to PrivateKey.Bytes() were encoded
+	// via the variable-length big.Int.Bytes(), which omits leading zero bytes,
+	// so left-pad before parsing to stay compatible with already-persisted keys.
+	const p256ScalarLen = 32
+	if len(privateKeyBytes) < p256ScalarLen {
+		padded := make([]byte, p256ScalarLen)
+		copy(padded[p256ScalarLen-len(privateKeyBytes):], privateKeyBytes)
+		privateKeyBytes = padded
 	}
 
-	privateKey.D.SetBytes(privateKeyBytes)
-	privateKey.PublicKey.X, privateKey.PublicKey.Y = elliptic.Unmarshal(elliptic.P256(), publicKeyBytes) //nolint:staticcheck
-	if privateKey.PublicKey.X == nil {                                                                   //nolint:staticcheck
+	privateKey, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), privateKeyBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse VAPID private key: %w", err)
+	}
+
+	expectedPublicKeyBytes := elliptic.Marshal(privateKey.PublicKey.Curve, privateKey.PublicKey.X, privateKey.PublicKey.Y) //nolint:staticcheck
+	if !bytes.Equal(expectedPublicKeyBytes, publicKeyBytes) {
 		return fmt.Errorf("invalid public key")
 	}
 
@@ -262,7 +275,11 @@ func (ps *PushService) getPrivateKeyPEM() (string, error) {
 	if ps.vapidPrivateKey == nil {
 		return "", fmt.Errorf("VAPID private key not initialized")
 	}
-	return base64.RawURLEncoding.EncodeToString(ps.vapidPrivateKey.D.Bytes()), nil
+	privateKeyBytes, err := ps.vapidPrivateKey.Bytes()
+	if err != nil {
+		return "", fmt.Errorf("failed to encode VAPID private key: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(privateKeyBytes), nil
 }
 
 func (ps *PushService) loadSubscriptions() error {

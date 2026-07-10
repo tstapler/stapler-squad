@@ -22,14 +22,14 @@ type InstanceStatusInfo struct {
 
 // InstanceStatusManager manages status information for instances.
 type InstanceStatusManager struct {
-	// ponytail: xsync.MapOf replaces map+RWMutex — lock-free reads on the hot GetStatus path
-	controllers *xsync.MapOf[string, *ClaudeController]
+	// ponytail: xsync.Map replaces map+RWMutex — lock-free reads on the hot GetStatus path
+	controllers *xsync.Map[string, *ClaudeController]
 }
 
 // NewInstanceStatusManager creates a new status manager.
 func NewInstanceStatusManager() *InstanceStatusManager {
 	return &InstanceStatusManager{
-		controllers: xsync.NewMapOf[string, *ClaudeController](),
+		controllers: xsync.NewMap[string, *ClaudeController](),
 	}
 }
 

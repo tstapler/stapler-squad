@@ -21,11 +21,13 @@ import type { Session } from "@/gen/session/v1/types_pb";
 
 // --- Component mocks ---
 
-jest.mock("next/dynamic", () => (loader: () => Promise<{ default: React.ComponentType }>) => {
-  return function DynamicStub() {
-    return <div data-testid="terminal-output" />;
-  };
-});
+// SessionDetail lazy-loads SessionDetailView via next/dynamic (and SessionDetailView
+// itself lazy-loads TerminalOutput the same way), so the tab/header DOM structure
+// these tests assert on only exists once the dynamic import(s) resolve. next/dynamic
+// in the App Router is React.lazy()+Suspense under the hood with no synchronous
+// escape hatch, so rather than fight it with a mock, these tests await the first
+// element that only appears post-resolution (via findBy*/waitFor) before making
+// further assertions — see below.
 
 jest.mock("../DiffViewer", () => ({ DiffViewer: () => <div data-testid="diff-viewer" /> }));
 jest.mock("../VcsPanel", () => ({ VcsPanel: () => <div data-testid="vcs-panel" /> }));
@@ -101,31 +103,35 @@ const makeSession = (): Session =>
 // Bug 4: embedded prop suppresses header + tabs
 // ─────────────────────────────────────────────
 describe("SessionDetail — embedded mode (Bug 4)", () => {
-  it("does NOT render the title header when embedded=true", () => {
+  it("does NOT render the title header when embedded=true", async () => {
     render(
       <SessionDetail session={makeSession()} embedded onClose={jest.fn()} />
     );
+    // Wait for the lazy-loaded SessionDetailView to resolve via a marker that's
+    // always present (tab content), then assert the header is absent.
+    await screen.findAllByRole("tabpanel", { hidden: true });
     expect(screen.queryByTestId("session-header")).not.toBeInTheDocument();
   });
 
-  it("does NOT render the tab strip when embedded=true", () => {
+  it("does NOT render the tab strip when embedded=true", async () => {
     render(
       <SessionDetail session={makeSession()} embedded onClose={jest.fn()} />
     );
+    await screen.findAllByRole("tabpanel", { hidden: true });
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
   });
 
-  it("renders the title header when embedded is not set", () => {
+  it("renders the title header when embedded is not set", async () => {
     render(<SessionDetail session={makeSession()} onClose={jest.fn()} />);
-    expect(screen.getByTestId("session-header")).toBeInTheDocument();
+    expect(await screen.findByTestId("session-header")).toBeInTheDocument();
   });
 
-  it("renders the tab strip when embedded is not set", () => {
+  it("renders the tab strip when embedded is not set", async () => {
     render(<SessionDetail session={makeSession()} onClose={jest.fn()} />);
-    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    expect(await screen.findByRole("tablist")).toBeInTheDocument();
   });
 
-  it("still renders tab content when embedded=true", () => {
+  it("still renders tab content when embedded=true", async () => {
     render(
       <SessionDetail
         session={makeSession()}
@@ -136,7 +142,7 @@ describe("SessionDetail — embedded mode (Bug 4)", () => {
     );
     // Content area must still exist even without the chrome
     // Multiple tabpanels are always mounted (terminal + browser use keep-alive pattern)
-    const panels = screen.getAllByRole("tabpanel", { hidden: true });
+    const panels = await screen.findAllByRole("tabpanel", { hidden: true });
     expect(panels.length).toBeGreaterThan(0);
   });
 });
@@ -145,7 +151,7 @@ describe("SessionDetail — embedded mode (Bug 4)", () => {
 // Bug 3: initialTab prop changes must sync to displayed content
 // ─────────────────────────────────────────────────────────────────────────
 describe("SessionDetail — initialTab sync (Bug 3)", () => {
-  it("starts on the given initialTab", () => {
+  it("starts on the given initialTab", async () => {
     render(
       <SessionDetail
         session={makeSession()}
@@ -154,12 +160,15 @@ describe("SessionDetail — initialTab sync (Bug 3)", () => {
         initialTab="info"
       />
     );
+    // Wait for the lazy-loaded SessionDetailView to resolve before querying its
+    // DOM directly (document.querySelector has no async/waiting variant).
+    await screen.findAllByRole("tabpanel", { hidden: true });
     // Terminal panel should be hidden when starting on "info"
     const terminalPanel = document.querySelector('[aria-labelledby="tab-terminal"]');
     expect(terminalPanel).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("switches displayed content when initialTab prop changes", () => {
+  it("switches displayed content when initialTab prop changes", async () => {
     const { rerender } = render(
       <SessionDetail
         session={makeSession()}
@@ -168,6 +177,7 @@ describe("SessionDetail — initialTab sync (Bug 3)", () => {
         initialTab="info"
       />
     );
+    await screen.findAllByRole("tabpanel", { hidden: true });
 
     // Verify we're on info tab: terminal panel is hidden
     const terminalPanel = document.querySelector('[aria-labelledby="tab-terminal"]');
@@ -188,7 +198,7 @@ describe("SessionDetail — initialTab sync (Bug 3)", () => {
     expect(terminalPanel).not.toHaveAttribute("aria-hidden", "true");
   });
 
-  it("switches back when initialTab reverts to original value", () => {
+  it("switches back when initialTab reverts to original value", async () => {
     const { rerender } = render(
       <SessionDetail
         session={makeSession()}
@@ -197,6 +207,7 @@ describe("SessionDetail — initialTab sync (Bug 3)", () => {
         initialTab="terminal"
       />
     );
+    await screen.findAllByRole("tabpanel", { hidden: true });
 
     const terminalPanel = document.querySelector('[aria-labelledby="tab-terminal"]');
     expect(terminalPanel).not.toHaveAttribute("aria-hidden", "true");

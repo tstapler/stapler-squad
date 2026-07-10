@@ -3,24 +3,62 @@ package analytics
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 )
 
+const (
+	// statusEntryTTL bounds how long a session's last-known status is retained
+	// in lastStatusByID after its last update. EventSessionDeleted only fires on
+	// hard delete (DeleteSession RPC); sessions that are archived instead (the
+	// more common path, e.g. ArchiveSession/UnarchiveSession/maybeAutoArchive)
+	// never emit that event, so without this TTL sweep the map would grow
+	// unbounded for the life of the process. 24h comfortably exceeds how long
+	// this subscriber needs to remember a session's last status for transition
+	// detection.
+	statusEntryTTL = 24 * time.Hour
+
+	// statusSweepInterval is how often the stale-entry sweep runs.
+	statusSweepInterval = 10 * time.Minute
+)
+
+// statusEntry pairs a session's last-known status with the time it was last
+// observed, so stale entries can be evicted by the periodic sweep.
+type statusEntry struct {
+	status   session.Status
+	lastSeen time.Time
+}
+
 // analyticsSubscriber holds subscriber state including per-session last-known status
 // for detecting transitions from EventSessionUpdated (which has no old_status field).
 type analyticsSubscriber struct {
 	provider       AnalyticsProvider
 	mu             sync.Mutex
-	lastStatusByID map[string]session.Status
+	lastStatusByID map[string]statusEntry
 }
 
 func newAnalyticsSubscriber(provider AnalyticsProvider) *analyticsSubscriber {
 	return &analyticsSubscriber{
 		provider:       provider,
-		lastStatusByID: make(map[string]session.Status),
+		lastStatusByID: make(map[string]statusEntry),
+	}
+}
+
+// sweepStaleStatusEntries deletes lastStatusByID entries whose lastSeen is
+// older than statusEntryTTL. This bounds map growth for sessions that are
+// archived (rather than hard-deleted) and therefore never publish
+// EventSessionDeleted.
+func (s *analyticsSubscriber) sweepStaleStatusEntries() {
+	cutoff := time.Now().Add(-statusEntryTTL)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, entry := range s.lastStatusByID {
+		if entry.lastSeen.Before(cutoff) {
+			delete(s.lastStatusByID, id)
+		}
 	}
 }
 
@@ -43,9 +81,12 @@ func StartAnalyticsSubscriber(ctx context.Context, bus *events.EventBus, provide
 	sub := newAnalyticsSubscriber(provider)
 	ch, _ := bus.Subscribe(ctx)
 
+	sweepTicker := time.NewTicker(statusSweepInterval)
+
 	go func() {
 		log.Info("analytics/subscriber started listening for session events")
 		defer log.Info("analytics/subscriber stopped")
+		defer sweepTicker.Stop()
 		for {
 			select {
 			case event, ok := <-ch:
@@ -56,6 +97,9 @@ func StartAnalyticsSubscriber(ctx context.Context, bus *events.EventBus, provide
 					continue
 				}
 				sub.recordFromEvent(ctx, event)
+
+			case <-sweepTicker.C:
+				sub.sweepStaleStatusEntries()
 
 			case <-ctx.Done():
 				return
@@ -105,8 +149,9 @@ func (s *analyticsSubscriber) recordFromEvent(ctx context.Context, event *events
 		newStatus := session.Status(sess.GetStatus())
 
 		s.mu.Lock()
-		oldStatus, seen := s.lastStatusByID[sessionID]
-		s.lastStatusByID[sessionID] = newStatus
+		prev, seen := s.lastStatusByID[sessionID]
+		oldStatus := prev.status
+		s.lastStatusByID[sessionID] = statusEntry{status: newStatus, lastSeen: time.Now()}
 		s.mu.Unlock()
 
 		if !seen {

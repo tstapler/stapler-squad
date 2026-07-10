@@ -195,6 +195,7 @@ function SessionCardInner({
       case SessionStatus.LOADING:
         return "Loading";
       case SessionStatus.NEEDS_APPROVAL:
+        // eslint-disable-next-line no-restricted-syntax -- SessionStatus (lifecycle), not DetectedStatus/AttentionReason; overlap is coincidental
         return "Needs Approval";
       case SessionStatus.CREATING:
         return "Starting…";
@@ -203,6 +204,7 @@ function SessionCardInner({
       case SessionStatus.HIBERNATED:
         return "Hibernated";
       default:
+        // eslint-disable-next-line no-restricted-syntax -- SessionStatus fallback, unrelated to DetectedStatus/AttentionReason; overlap is coincidental
         return "Unknown";
     }
   };
@@ -219,6 +221,7 @@ function SessionCardInner({
         return "";
       case RateLimitState.WAITING: {
         const resetStr = formatResetTime(session.rateLimitResetTime);
+        // eslint-disable-next-line no-restricted-syntax -- RateLimitState text, unrelated to DetectedStatus/AttentionReason; overlap is coincidental
         return resetStr ? `Rate limited ${resetStr}` : "Rate Limited";
       }
       case RateLimitState.RECOVERING:

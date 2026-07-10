@@ -243,30 +243,9 @@ func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, in
 	if ratelimit.RateLimitState(rateLimitState) == ratelimit.StateWaiting {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
-	switch info.ClaudeStatus {
-	case detection.StatusWaitingForAgent:
-		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
-	case detection.StatusProcessing, detection.StatusExecuting:
-		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
-	case detection.StatusNeedsApproval:
-		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
-	case detection.StatusInputRequired:
-		return sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED
-	case detection.StatusError:
-		return sessionv1.SubStatus_SUB_STATUS_ERROR
-	case detection.StatusTestsFailing:
-		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
-	case detection.StatusReady:
-		return sessionv1.SubStatus_SUB_STATUS_READY
-	case detection.StatusIdle:
-		return sessionv1.SubStatus_SUB_STATUS_IDLE
-	case detection.StatusSuccess:
-		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
-	case detection.StatusUnknown:
-		// Unknown / undetected — don't show a chip
-		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
-	}
-	return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
+	// DetectedStatus → SubStatus mapping lives in detection.DetectedStatusToSubStatus;
+	// do not duplicate the switch here (see its doc comment).
+	return detection.DetectedStatusToSubStatus(info.ClaudeStatus)
 }
 
 // rateLimitStateToProto converts a ratelimit.RateLimitState to proto RateLimitState enum.

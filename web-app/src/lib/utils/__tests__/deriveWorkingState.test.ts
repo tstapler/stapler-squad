@@ -113,11 +113,64 @@ describe("deriveWorkingState — detectedStatus fallback (SubStatus.UNSPECIFIED)
 });
 
 // ---------------------------------------------------------------------------
+// Defensive handling of a missing subStatus (exhaustiveness fix regression guard)
+// ---------------------------------------------------------------------------
+
+describe("deriveWorkingState — subStatus is undefined at runtime", () => {
+  it("deriveWorkingState_should_behaveLikeUnspecified_When_subStatus_is_undefined", () => {
+    // subStatus is typed as required, but some callers (e.g. partially-typed
+    // test fixtures) construct objects without it. This must fall through to
+    // the detectedStatus-based fallback exactly like SubStatus.UNSPECIFIED,
+    // not throw — see the `case undefined` guard in deriveWorkingState.
+    expect(
+      deriveWorkingState({
+        subStatus: undefined as unknown as SubStatus,
+        detectedStatus: DetectedStatus.EXECUTING,
+      })
+    ).toBe(WorkingState.ACTIVE);
+  });
+
+  it("deriveWorkingState_should_returnUNSPECIFIED_When_subStatus_is_undefined_and_detectedStatus_absent", () => {
+    expect(
+      deriveWorkingState({ subStatus: undefined as unknown as SubStatus })
+    ).toBe(WorkingState.UNSPECIFIED);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Forward-compatible enum values (unrecognized wire values must not throw)
+// ---------------------------------------------------------------------------
+
+describe("deriveWorkingState — unrecognized enum values", () => {
+  it("deriveWorkingState_should_fallThroughToDetectedStatus_When_subStatus_is_unrecognized", () => {
+    // Simulates a newer server sending a SubStatus value this client bundle
+    // doesn't know about yet. Must fall through like UNSPECIFIED, not throw.
+    expect(
+      deriveWorkingState({
+        subStatus: 999 as unknown as SubStatus,
+        detectedStatus: DetectedStatus.EXECUTING,
+      })
+    ).toBe(WorkingState.ACTIVE);
+  });
+
+  it("deriveWorkingState_should_returnUNSPECIFIED_When_detectedStatus_is_unrecognized", () => {
+    // Simulates a newer server sending a DetectedStatus value this client
+    // bundle doesn't know about yet. Must return a safe fallback, not throw.
+    expect(
+      deriveWorkingState({
+        subStatus: SubStatus.UNSPECIFIED,
+        detectedStatus: 999 as unknown as DetectedStatus,
+      })
+    ).toBe(WorkingState.UNSPECIFIED);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SubStatus takes precedence over detectedStatus
 // ---------------------------------------------------------------------------
 
 describe("deriveWorkingState — SubStatus precedence", () => {
-  it("deriveWorkingState_should_ignoreDerectedStatus_When_subStatus_is_set", () => {
+  it("deriveWorkingState_should_ignoreDetectedStatus_When_subStatus_is_set", () => {
     // Even if detectedStatus says EXECUTING, subStatus.IDLE wins
     expect(
       deriveWorkingState({
