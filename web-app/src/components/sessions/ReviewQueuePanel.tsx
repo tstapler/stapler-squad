@@ -69,6 +69,9 @@ import {
   modalContent,
   ruleModalContent,
   divergedBadge,
+  searchInput,
+  sortRow,
+  sortSelect,
 } from "./ReviewQueuePanel.css";
 import { Button } from "@/components/ui";
 
@@ -103,6 +106,31 @@ interface ReviewQueuePanelProps {
  */
 const DEFAULT_PR_PROMPT = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made.";
 
+type SortField = "default" | "priority" | "age" | "diffSize" | "name";
+
+function toggleInSet<T>(set: Set<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}
+
+// Counts distinct non-empty values of `pick(item)` (string or string[]) across items, sorted by frequency desc.
+function countByField(items: ReviewItem[], pick: (item: ReviewItem) => string | string[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const values = pick(item);
+    for (const v of Array.isArray(values) ? values : [values]) {
+      if (!v) continue;
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
 export function ReviewQueuePanel({
   onSessionClick,
   onSkipSession,
@@ -124,12 +152,17 @@ export function ReviewQueuePanel({
   const [activeRuleItemId, setActiveRuleItemId] = useState<string | null>(null);
   const [ruleSaved, setRuleSaved] = useState(false);
   const { suggestions, loading: ruleLoading, error: ruleError, generate: generateRule, clear: clearRule } = useGenerateRule();
-  const [priorityFilter, setPriorityFilter] = useState<Priority | undefined>(
-    undefined
-  );
-  const [reasonFilter, setReasonFilter] = useState<AttentionReason | undefined>(
-    undefined
-  );
+  // Combinable multi-select filters — each dimension is a Set; empty Set = "no filter applied".
+  const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(new Set());
+  const [reasonFilter, setReasonFilter] = useState<Set<AttentionReason>>(new Set());
+  const [programFilter, setProgramFilter] = useState<Set<string>>(new Set());
+  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
+  const [prFilter, setPrFilter] = useState<"all" | "has-pr" | "no-pr">("all");
+  const [divergedOnly, setDivergedOnly] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [sortField, setSortField] = useState<SortField>("default");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   // Track whether queue ever had items so we can show "all done" vs generic empty state
   const [hadItems, setHadItems] = useState(false);
@@ -220,14 +253,78 @@ export function ReviewQueuePanel({
       }
       return true;
     });
-    if (priorityFilter !== undefined) {
-      filtered = filtered.filter((item) => item.priority === priorityFilter);
+    if (priorityFilter.size > 0) {
+      filtered = filtered.filter((item) => priorityFilter.has(item.priority));
     }
-    if (reasonFilter !== undefined) {
-      filtered = filtered.filter((item) => item.reason === reasonFilter);
+    if (reasonFilter.size > 0) {
+      filtered = filtered.filter((item) => reasonFilter.has(item.reason));
     }
+    if (programFilter.size > 0) {
+      filtered = filtered.filter((item) => programFilter.has(item.program));
+    }
+    if (categoryFilter.size > 0) {
+      filtered = filtered.filter((item) => categoryFilter.has(item.category));
+    }
+    if (tagFilter.size > 0) {
+      filtered = filtered.filter((item) => item.tags.some((t) => tagFilter.has(t)));
+    }
+    if (prFilter === "has-pr") {
+      filtered = filtered.filter((item) => !!item.githubPrUrl);
+    } else if (prFilter === "no-pr") {
+      filtered = filtered.filter((item) => !item.githubPrUrl);
+    }
+    if (divergedOnly) {
+      filtered = filtered.filter((item) => item.branchDivergedFromBase);
+    }
+    const search = searchText.trim().toLowerCase();
+    if (search) {
+      filtered = filtered.filter((item) =>
+        [item.sessionName, item.context, item.patternName, item.branch, item.program]
+          .some((field) => field?.toLowerCase().includes(search))
+      );
+    }
+
+    if (sortField !== "default") {
+      const dir = sortDirection === "asc" ? 1 : -1;
+      filtered = [...filtered].sort((a, b) => {
+        switch (sortField) {
+          case "priority":
+            return (a.priority - b.priority) * dir;
+          case "age":
+            return (Number(a.lastActivity?.seconds ?? 0) - Number(b.lastActivity?.seconds ?? 0)) * dir;
+          case "diffSize":
+            return (
+              ((a.diffStats?.added ?? 0) + (a.diffStats?.removed ?? 0)) -
+              ((b.diffStats?.added ?? 0) + (b.diffStats?.removed ?? 0))
+            ) * dir;
+          case "name":
+            return a.sessionName.localeCompare(b.sessionName) * dir;
+          default:
+            return 0;
+        }
+      });
+    }
+
     return filtered;
-  }, [allItems, priorityFilter, reasonFilter]);
+  }, [
+    allItems,
+    priorityFilter,
+    reasonFilter,
+    programFilter,
+    categoryFilter,
+    tagFilter,
+    prFilter,
+    divergedOnly,
+    searchText,
+    sortField,
+    sortDirection,
+  ]);
+
+  // Distinct values available for the Program/Category/Tag multi-select filters,
+  // with counts computed from the full (unfiltered) queue.
+  const availablePrograms = useMemo(() => countByField(allItems, (i) => i.program), [allItems]);
+  const availableCategories = useMemo(() => countByField(allItems, (i) => i.category), [allItems]);
+  const availableTags = useMemo(() => countByField(allItems, (i) => i.tags), [allItems]);
 
   // Items that are in the snapshot (stable ordered list for the main queue)
   const items = useMemo(() => {
@@ -346,15 +443,26 @@ export function ReviewQueuePanel({
     }
   };
 
-  const handleFilterByPriority = (priority: Priority | undefined) => {
-    setPriorityFilter(priority);
-    setReasonFilter(undefined); // Clear reason filter when changing priority
+  const handleFilterByPriority = (priority: Priority) => {
+    setPriorityFilter((prev) => toggleInSet(prev, priority));
   };
 
-  const handleFilterByReason = (reason: AttentionReason | undefined) => {
-    setReasonFilter(reason);
-    setPriorityFilter(undefined); // Clear priority filter when changing reason
+  const handleFilterByReason = (reason: AttentionReason) => {
+    setReasonFilter((prev) => toggleInSet(prev, reason));
   };
+
+  const clearAllFilters = useCallback(() => {
+    setPriorityFilter(new Set());
+    setReasonFilter(new Set());
+    setProgramFilter(new Set());
+    setCategoryFilter(new Set());
+    setTagFilter(new Set());
+    setPrFilter("all");
+    setDivergedOnly(false);
+    setSearchText("");
+    setSortField("default");
+    setSortDirection("asc");
+  }, []);
 
   const summaryCount = useMemo(() => {
     const parts: string[] = [];
@@ -376,13 +484,19 @@ export function ReviewQueuePanel({
     return parts.join(", ");
   }, [byReason]);
 
-  const activeFilterLabel = useMemo(() => {
-    if (priorityFilter !== undefined) return `Filter: ${getPriorityLabel(priorityFilter)}`;
-    if (reasonFilter !== undefined) return `Filter: ${getReasonLabel(reasonFilter)}`;
-    return "Filter";
-  }, [priorityFilter, reasonFilter]);
+  const activeFilterCount =
+    priorityFilter.size +
+    reasonFilter.size +
+    programFilter.size +
+    categoryFilter.size +
+    tagFilter.size +
+    (prFilter !== "all" ? 1 : 0) +
+    (divergedOnly ? 1 : 0) +
+    (searchText.trim() ? 1 : 0);
 
-  const hasActiveFilter = priorityFilter !== undefined || reasonFilter !== undefined;
+  const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
+
+  const hasActiveFilter = activeFilterCount > 0;
 
   if (error) {
     return (
@@ -481,7 +595,7 @@ export function ReviewQueuePanel({
           {hasActiveFilter && (
             <button
               className={filterClear}
-              onClick={() => { setPriorityFilter(undefined); setReasonFilter(undefined); }}
+              onClick={clearAllFilters}
               aria-label="Clear active filter"
             >
               ✕ Clear
@@ -493,25 +607,31 @@ export function ReviewQueuePanel({
       {isFiltersOpen && (
         <div id="review-queue-filters" className={filters}>
           <div className={filterGroup}>
-            <label className={filterLabel}>Priority:</label>
+            <label className={filterLabel} htmlFor="review-queue-search">Search:</label>
+            <input
+              id="review-queue-search"
+              type="text"
+              className={searchInput}
+              placeholder="Search name, context, branch, program…"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              data-testid="review-queue-search"
+            />
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel}>Priority (any):</label>
             <div className={filterButtons}>
-              <button
-                className={`${filterButton} ${priorityFilter === undefined ? filterButtonActive : ""}`}
-                onClick={() => handleFilterByPriority(undefined)}
-                aria-pressed={priorityFilter === undefined}
-              >
-                All ({totalItems})
-              </button>
               {[Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW].map(
                 (priority) => {
                   const priorityCount = byPriority.get(priority) ?? 0;
                   return (
                     <button
                       key={priority}
-                      className={`${filterButton} ${priorityFilter === priority ? filterButtonActive : ""}`}
+                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : ""}`}
                       onClick={() => handleFilterByPriority(priority)}
                       disabled={priorityCount === 0}
-                      aria-pressed={priorityFilter === priority}
+                      aria-pressed={priorityFilter.has(priority)}
                     >
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
@@ -522,15 +642,8 @@ export function ReviewQueuePanel({
           </div>
 
           <div className={filterGroup}>
-            <label className={filterLabel}>Reason:</label>
+            <label className={filterLabel}>Reason (any):</label>
             <div className={filterButtons}>
-              <button
-                className={`${filterButton} ${reasonFilter === undefined ? filterButtonActive : ""}`}
-                onClick={() => handleFilterByReason(undefined)}
-                aria-pressed={reasonFilter === undefined}
-              >
-                All ({totalItems})
-              </button>
               {[
                 AttentionReason.APPROVAL_PENDING,
                 AttentionReason.INPUT_REQUIRED,
@@ -548,15 +661,119 @@ export function ReviewQueuePanel({
                 return (
                   <button
                     key={reason}
-                    className={`${filterButton} ${reasonFilter === reason ? filterButtonActive : ""}`}
+                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : ""}`}
                     onClick={() => handleFilterByReason(reason)}
                     disabled={reasonCount === 0}
-                    aria-pressed={reasonFilter === reason}
+                    aria-pressed={reasonFilter.has(reason)}
                   >
                     {getReasonLabel(reason)} ({reasonCount})
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {availablePrograms.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Program (any):</label>
+              <div className={filterButtons}>
+                {availablePrograms.map(([program, n]) => (
+                  <button
+                    key={program}
+                    className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : ""}`}
+                    onClick={() => setProgramFilter((prev) => toggleInSet(prev, program))}
+                    aria-pressed={programFilter.has(program)}
+                  >
+                    {program} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {availableCategories.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Category (any):</label>
+              <div className={filterButtons}>
+                {availableCategories.map(([category, n]) => (
+                  <button
+                    key={category}
+                    className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : ""}`}
+                    onClick={() => setCategoryFilter((prev) => toggleInSet(prev, category))}
+                    aria-pressed={categoryFilter.has(category)}
+                  >
+                    {category} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {availableTags.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Tags (any):</label>
+              <div className={filterButtons}>
+                {availableTags.map(([t, n]) => (
+                  <button
+                    key={t}
+                    className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : ""}`}
+                    onClick={() => setTagFilter((prev) => toggleInSet(prev, t))}
+                    aria-pressed={tagFilter.has(t)}
+                  >
+                    {t} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className={filterGroup}>
+            <label className={filterLabel}>Pull Request:</label>
+            <div className={filterButtons}>
+              {(["all", "has-pr", "no-pr"] as const).map((v) => (
+                <button
+                  key={v}
+                  className={`${filterButton} ${prFilter === v ? filterButtonActive : ""}`}
+                  onClick={() => setPrFilter(v)}
+                  aria-pressed={prFilter === v}
+                >
+                  {v === "all" ? "All" : v === "has-pr" ? "Has PR" : "No PR"}
+                </button>
+              ))}
+              <button
+                className={`${filterButton} ${divergedOnly ? filterButtonActive : ""}`}
+                onClick={() => setDivergedOnly((v) => !v)}
+                aria-pressed={divergedOnly}
+              >
+                Diverged from base
+              </button>
+            </div>
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel} htmlFor="review-queue-sort">Sort by:</label>
+            <div className={sortRow}>
+              <select
+                id="review-queue-sort"
+                className={sortSelect}
+                value={sortField}
+                onChange={(e) => setSortField(e.target.value as SortField)}
+              >
+                <option value="default">Queue order</option>
+                <option value="priority">Priority</option>
+                <option value="age">Last activity</option>
+                <option value="diffSize">Diff size</option>
+                <option value="name">Name</option>
+              </select>
+              {sortField !== "default" && (
+                <button
+                  className={filterButton}
+                  onClick={() => setSortDirection((d) => (d === "asc" ? "desc" : "asc"))}
+                  aria-label={`Sort direction: ${sortDirection === "asc" ? "ascending" : "descending"}`}
+                >
+                  {sortDirection === "asc" ? "↑ Asc" : "↓ Desc"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -575,7 +792,7 @@ export function ReviewQueuePanel({
               <Button
                 intent="secondary"
                 size="md"
-                onClick={() => { setPriorityFilter(undefined); setReasonFilter(undefined); }}
+                onClick={clearAllFilters}
               >
                 Clear filter
               </Button>
