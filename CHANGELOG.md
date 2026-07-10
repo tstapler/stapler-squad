@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.36.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.35.0...v1.36.0) (2026-07-10)
+
+
+### Features
+
+* **analysis:** add gVisor checklocks + annotate critical mutex-protected fields ([bea8cde](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bea8cde8d627a3aa2bbb6fc2e08114eff52e3819))
+* **tmux:** add Socket value type and tmuxsocketscope lint pass; fix remaining gaps ([5b61c3e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5b61c3e7fb9460ad1167bf3c89ebf0fc0fbb2cc3))
+
+
+### Bug Fixes
+
+* **build:** download tmux configure from release tarball, add ensure-tmux-configure target ([5612c89](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5612c892b91c528542fc842e86e45a3b94b3c196))
+* **server:** stop integration tests from killing production tmux sessions ([bf9e78e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bf9e78e96bc584f45f0c098d6c681d709ba81a02))
+* **session:** resolve tmux multi-socket reconcile bug and hibernation resurrection bug ([666d8ad](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/666d8ad39d1f3b13c474f5bb084595107f353cf4))
+* **tmux:** close remaining gaps in per-process tmux socket isolation ([8885672](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/88856728d2d0f7c5f2b9f27a3e5b9440d90876ec))
+
+
+### Performance Improvements
+
+* **adapter:** compute GetStatus once per InstanceToProto instead of 3x ([4836f7a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/4836f7abfb933f2df2a3babf6a4eebef63ada8a3))
+* **analytics:** drop hex.EncodeToString per parsed escape sequence ([81fc691](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/81fc691c9d05fd4bdb67447bcb13f70c15565177))
+* **analytics:** eliminate string allocs in charset and SGR description paths ([7d463f6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/7d463f6423d3b3eba5037a2a5b7cfe0d8295ee9b))
+* **analytics:** replace fmt.Sprintf string keys with zero-alloc struct keys ([b7f7807](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/b7f7807e5c8fb7707d7b59afdf73103d9a1ee0f5))
+* **analytics:** return ParsedEscapeCode by value to eliminate per-sequence heap alloc ([f350b4c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f350b4c5dea98065f79cdee544917bda77ea32d2))
+* **analytics:** skip all extraction when escape writer is Noop (no DB configured) ([163dbe2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/163dbe21642c4d89f07995c526871be5cafd8fbd))
+* **analytics:** skip escape extraction in Parse when captureLevel is off ([7ebce9f](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/7ebce9fa439447301d50108331626c565ba30510))
+* **analytics:** skip mutex in EscapeCodeStore.Record when store is disabled ([e88d819](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e88d819ee3404d0a54cf97e1aeb90f3b27170bdd))
+* batch tag updates, eliminate bytes.Buffer in decode, strings.Cut on hot path ([3b121f9](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/3b121f9114e4be89c8552c9a8e8d54f08a5e53a5))
+* **buffer:** make TotalBytesWritten lock-free via atomic.Int64 ([a5e8a0d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a5e8a0d09d4941a8dd8e78a1a0a382a80144d304))
+* cache capture-pane/PanePID, lazy-load SessionDetailView, memoize SessionRow ([8d816ea](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/8d816ea806bb15d9eed2f8b700496158e2154abf))
+* cache GetRemoteURL, GH keychain token; increase IsDirtyCacheTTL to 30s ([74e343b](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/74e343b8c0feedf7ef84b4c0be664b153d0bc5ef))
+* cacheMu Mutex→RWMutex in pollerContentProvider for concurrent cache reads ([bb3cb6b](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bb3cb6b7b72b4e0459e011b26cd47e94ebc13196))
+* **cache:** replace 4-map+RWMutex with xsync.MapOf in pollerContentProvider ([13f3230](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/13f32303f492d574a0ebab9fb6ebc5549f28c1a7))
+* **cache:** replace Locked[cacheState] with atomic.Pointer in hot poll path ([0cbcab4](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0cbcab45750b918294a6c9371571e7fd425e4371))
+* **cache:** skip 4KB alloc on status cache hit via GetRecentHash ([79525c6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/79525c60a8cf0a717c6ad8307140a69a435ff1e7))
+* **controller:** add started atomic.Bool + filterTmuxMetadata fast path ([7259e6b](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/7259e6ba987c06480959fd4fa6aa46849b6b6ca7))
+* **controller:** fix GetRecentOutput(n) to read only n bytes, not full 10MB buffer ([f1c6580](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f1c6580a416b523defa3d304d26a2f50b5bc0f2e))
+* **detect:** eliminate string(raw) alloc in hasScreenOverwrite ([5012711](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/50127111c88ef61619e219beba6c21b444d83f5f))
+* **detection:** remove PatternSet mutex — struct is immutable after construction ([54dc79c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/54dc79c14a30b1395c7aecd242c2abbcc736a54b))
+* **detection:** replace patternSet RWMutex with atomic.Pointer ([92e5151](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/92e51515ee1fb8f814408948dfb3ca4e81361159))
+* **detect:** narrow lock scope in DetectStateFromContent/DetectState ([66633e0](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/66633e0cd45089cca222107e1ff9833ac3b534cd))
+* **detect:** scan lastNLines backward to avoid splitting discarded prefix ([e470e15](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e470e15f475ccb6eb1b778433189a85f4fe60ef0))
+* **detect:** skip []byte round-trip in detectFromLines via string variant ([a4d24a9](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a4d24a9bf58b3665e342606a89f1a5823cdadc66))
+* **detect:** use IndexByte instead of ContainsRune for ASCII '\r' scan ([ea572e6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/ea572e6ecacebc90a996883fe78e29458584e4fa))
+* **dirty:** replace sync.RWMutex+2fields with atomic.Value on IsDirty fast path ([2ce0f7e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/2ce0f7e135ecf0df57fffde4db0587a94cf7c947))
+* GetQueuedCommandsCount avoids slice alloc, drop Sprintf on hot status path ([c04db64](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c04db6414a23b7330d3e55f4c22722287472970d))
+* **hash:** avoid []byte copy in ComputePromptSignature via unsafe.StringData ([c286c3e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c286c3e43c78155c4792ca2cc6ec2857d2f072db))
+* **hash:** replace FNV+alloc with murmur3 for status cache keys ([0ea1f63](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0ea1f6305f7e67e9a4e507202884e70f3ee8104a))
+* HasMeaningfulContent strings.Cut iteration, zero alloc vs strings.Split ([50c0256](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/50c0256641a94d9ef600d70c95d14a973c6b68ae))
+* **idle:** replace GetLastActivity RLock with lock-free atomic read ([e319a89](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e319a89bf393f97adf17cf69cd67ad4d14486652))
+* **idle:** skip mutex in RecordActivity via atomic debounce check ([9bc90b3](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9bc90b3168ccf795961d9e2c1b12047fdaa07420))
+* **lock:** replace deadlock.RWMutex with sync.RWMutex on hot paths ([f3e3300](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f3e3300990a2411637b900c14e67a5345b9f653a))
+* **log:** demote hot-path log.Info to log.Debug in checkSession ([43182e8](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/43182e8c39f45faa65e09960a728d65929704713))
+* **pool:** eliminate 4KB alloc on status-cache miss via sync.Pool ([7c21eee](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/7c21eee6250d4779fee01f90661581f6263ca10d))
+* **pty:** remove outer RLock from buffer accessors on immutable field ([346cffe](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/346cffe4aa4ef96be17e68208b0a67f71c2f8f10))
+* replace InfoLog.Printf with log.Debug in hot determiner path ([06b7279](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/06b7279d1307b7cade83185ae872e0cd88409adb))
+* **server:** cache available programs at startup, not on every server-info request ([82b9cec](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/82b9cecf1cf5a8fd8f216cf1f4669622b189db5c))
+* **session:** replace ControllerManager RWMutex with atomic.Pointer ([a1fe6f9](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a1fe6f9208c7ba66aaabeadb75325d01a28ae63a))
+* **session:** replace TmuxProcessManager session RWMutex with atomic.Pointer ([fbe7f3a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/fbe7f3a7a67e7d72e5f6020f17062a7754da81f0))
+* **snapshot:** skip buildSnapshot when terminal timestamps unchanged ([4c52474](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/4c5247411a0b8197748ecf751a48b47eb15c6a3b))
+* **status:** combine GetCurrentStatus+GetIdleState into one hash+cache read ([103e6a4](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/103e6a4d169585825556d3cb502bdbc3e22df85a))
+* **status:** replace InstanceStatusManager map+RWMutex with xsync.MapOf ([c7692fa](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c7692fa5dce141be4e16dc353e4d52f69b0176ca))
+* **stream:** eliminate per-read mutex by reading exitTail from circular buffer ([97b91a1](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/97b91a1742c081df78972bd41d00c4cecb7dac8f))
+* **streamer:** replace byte-at-a-time ringBuffer loop with bulk copy ([2f5e906](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/2f5e9068e080a9ee4fee49e027e27386ee5a1fdd))
+* **stream:** skip ResponseChunk alloc in broadcast when no subscribers ([17669b9](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/17669b9739fc11f82a3f669be948a03114d71ae1))
+* **tmux:** atomic.Value+singleflight for DoesSessionExist; fix lock-held-across-I/O ([ef8d478](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/ef8d4789806b9af267bb60ae0d7afec8de786f4d))
+* **tmux:** eliminate scanner.Text() allocation on %output hot path ([e093c9b](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e093c9bda5a5ce3090491675dcae0db70a8ae2b7))
+* **tmux:** replace strconv.ParseUint with lookup table in decodeControlModeOutput ([88f9f6e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/88f9f6e7c397fe0193f096b7528ba2991a08cd39))
+* **tmux:** use RLock in broadcastControlModeUpdate ([249dd63](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/249dd638c79b7e95fe1667d02390307e500f18f3))
+* variable dirty-cache TTL, eliminate N+1 metadata query, O(1) queue empty check ([dd2f088](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/dd2f0882ab6a7fd07df0ddee0126b173751549fb))
+* **vc:** cache GetBranch result 30s to eliminate per-RPC fork lock contention ([d3441f2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/d3441f20012f5af464608031fe5a590cb604e346))
+* **vcs:** cache VCSStatus per workdir for 15s to eliminate repeated git subprocesses ([33d3c8c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/33d3c8c9afc5aad6e4e7b31fe73e90ff262d10a4))
+* **ws:** pool coalesce buffer to eliminate 1 more alloc/frame ([aea5933](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/aea59338802c9b1d9be9f497fe67ae5c3ff25013))
+* **ws:** pool envelope buffer + marshal direct to avoid 2 allocs/frame ([2327d57](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/2327d57b849ca62ad7e07ca94b2f8e3920005bc3))
+* **ws:** replace snapshotCache map+RWMutex with xsync.MapOf ([e9baedd](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e9baedde5c62955f8379917da69ab2b56f1e1b7c))
+
 ## [1.35.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.34.0...v1.35.0) (2026-07-07)
 
 
