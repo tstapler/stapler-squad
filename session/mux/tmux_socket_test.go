@@ -18,6 +18,7 @@ import (
 func TestListStaplerSquadSessions_UsesIsolatedSocket(t *testing.T) {
 	logPath := installFakeTmuxBinaryForMuxTest(t)
 
+	// The fake binary always exits non-zero; only the recorded argv matters here.
 	_, _ = ListStaplerSquadSessions()
 
 	assertMuxInvocationUsesIsolatedSocket(t, logPath, "list-sessions")
@@ -26,6 +27,7 @@ func TestListStaplerSquadSessions_UsesIsolatedSocket(t *testing.T) {
 func TestListStaplerSquadSessionsWithInfo_UsesIsolatedSocket(t *testing.T) {
 	logPath := installFakeTmuxBinaryForMuxTest(t)
 
+	// The fake binary always exits non-zero; only the recorded argv matters here.
 	_, _ = ListStaplerSquadSessionsWithInfo()
 
 	assertMuxInvocationUsesIsolatedSocket(t, logPath, "list-sessions")
@@ -34,6 +36,7 @@ func TestListStaplerSquadSessionsWithInfo_UsesIsolatedSocket(t *testing.T) {
 func TestScanByUserOptions_UsesIsolatedSocket(t *testing.T) {
 	logPath := installFakeTmuxBinaryForMuxTest(t)
 
+	// The fake binary always exits non-zero; only the recorded argv matters here.
 	_, _ = ScanByUserOptions()
 
 	assertMuxInvocationUsesIsolatedSocket(t, logPath, "list-sessions")

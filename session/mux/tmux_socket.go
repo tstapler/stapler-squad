@@ -12,8 +12,5 @@ import "github.com/tstapler/stapler-squad/session/tmux"
 // this file that enumerates ALL sessions on the default socket must route through
 // this helper.
 func prependIsolatedSocket(args []string) []string {
-	if socket := tmux.ResolveSocket(""); socket != "" {
-		return append([]string{"-L", socket}, args...)
-	}
-	return args
+	return tmux.ResolveSocket("").Args(args...)
 }

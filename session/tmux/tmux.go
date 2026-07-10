@@ -304,6 +304,36 @@ var testSocketOnce = sync.OnceValue(func() string {
 	return fmt.Sprintf("test-isolated-%d", os.Getpid())
 })
 
+// Socket identifies which tmux server a command targets. The zero value ("")
+// means the real, shared default server. The only way to obtain a non-trivial
+// Socket is through ResolveSocket -- holding one proves resolution (including
+// test-mode isolation) already happened, so callers building tmux argv via
+// Args never need to re-derive or re-check isolation themselves.
+//
+// This is a plain newtype, not an opaque struct: many callers legitimately
+// need the socket name as a string too (struct fields for UI display, log
+// lines, equality checks against ""), and forcing a conversion at every one
+// of those sites would fight the pattern instead of guiding it. Args is the
+// one sanctioned way to turn a Socket into a tmux command's argv; see the
+// tmuxsocketscope lint pass for the structural check that every tmux
+// invocation's args flow through it (or ResolveSocket/prependSocket) instead
+// of a hand-rolled "-L" literal.
+type Socket string
+
+// Args prepends "-L <socket>" to args when s is a non-default socket, and
+// returns args unchanged for the default server (matching production
+// behavior: an unscoped call targets the real shared socket, exactly as
+// before this isolation mechanism existed).
+func (s Socket) Args(args ...string) []string {
+	if s == "" {
+		return args
+	}
+	return append([]string{"-L", string(s)}, args...)
+}
+
+// String returns the socket name, or "" for the default server.
+func (s Socket) String() string { return string(s) }
+
 // ResolveSocket is the single choke point between "the socket a caller asked for"
 // and "the socket a tmux command actually targets." An explicit non-empty socket
 // always passes through unchanged (real per-worktree/per-test isolation, or a
@@ -328,12 +358,12 @@ var testSocketOnce = sync.OnceValue(func() string {
 // forgotten at any new call site. Resolving centrally, once, at the boundary where a
 // caller-supplied socket turns into a real tmux invocation means every existing and
 // future caller is isolated automatically, with no per-call-site action required.
-func ResolveSocket(explicit string) string {
+func ResolveSocket(explicit string) Socket {
 	if explicit != "" {
-		return explicit
+		return Socket(explicit)
 	}
 	if config.IsTestMode() {
-		return testSocketOnce()
+		return Socket(testSocketOnce())
 	}
 	return ""
 }
@@ -342,11 +372,7 @@ func ResolveSocket(explicit string) string {
 // ResolveSocket. This lets package-level tmux functions target an isolated server
 // socket (used in tests) without modifying the args slice in place.
 func prependSocket(socket string, args []string) []string {
-	resolved := ResolveSocket(socket)
-	if resolved == "" {
-		return args
-	}
-	return append([]string{"-L", resolved}, args...)
+	return ResolveSocket(socket).Args(args...)
 }
 
 // TmuxServerReady is a zero-size proof token returned by EnsureServerRunning.
@@ -584,7 +610,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 	// serverSocket is isolated automatically inside a test binary regardless of what
 	// the caller passed (see ResolveSocket), so no session-creation call site anywhere
 	// needs to remember to ask for isolation.
-	serverSocket = ResolveSocket(serverSocket)
+	serverSocket = ResolveSocket(serverSocket).String()
 	s := &TmuxSession{
 		sanitizedName:    toStaplerSquadTmuxNameWithPrefix(name, prefix),
 		program:          program,
@@ -1622,12 +1648,7 @@ func recoverFromServerFailure(serverSocket, caller string) {
 // existence checks always work regardless of breaker state.
 // Returns raw combined output and the first error encountered.
 func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
-	var cmdArgs []string
-	if t.serverSocket != "" {
-		cmdArgs = []string{"-L", t.serverSocket, "list-sessions", "-F", "#{session_name}"}
-	} else {
-		cmdArgs = []string{"list-sessions", "-F", "#{session_name}"}
-	}
+	cmdArgs := Socket(t.serverSocket).Args("list-sessions", "-F", "#{session_name}")
 	cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
 	output, err := t.cmdExec.CombinedOutput(cmd)
 	// If the circuit breaker is open, fall back to direct exec.
@@ -1989,15 +2010,18 @@ func CleanupSessions(cmdExec executor.Executor) error {
 // CleanupSessionsOnServer kills all tmux sessions that start with "session-" on a specific server
 // serverSocket: socket name for server isolation, empty string for default server
 func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) error {
+	// Resolve once, here -- not per-command below. Without this, an empty
+	// serverSocket always meant the real, shared default tmux socket
+	// unconditionally, including inside a `go test` binary, letting this
+	// enumerate-and-kill-by-prefix function target sessions belonging to a
+	// separate, currently-running stapler-squad process. See ResolveSocket's
+	// doc comment for the incident history this closes.
+	socket := ResolveSocket(serverSocket)
+
 	// First try to list sessions
 	lsCtx, lsCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer lsCancel()
-	var cmd *exec.Cmd
-	if serverSocket != "" {
-		cmd = safeexec.CommandContext(lsCtx, Binary(), "-L", serverSocket, "ls")
-	} else {
-		cmd = safeexec.CommandContext(lsCtx, Binary(), "ls")
-	}
+	cmd := safeexec.CommandContext(lsCtx, Binary(), socket.Args("ls")...)
 	output, err := cmdExec.Output(cmd)
 
 	// If there's an error and it's because no server is running, that's fine
@@ -2018,12 +2042,7 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 	for _, match := range matches {
 		log.Info("cleaning up session", "session", match)
 		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		var killCmd *exec.Cmd
-		if serverSocket != "" {
-			killCmd = safeexec.CommandContext(killCtx, Binary(), "-L", serverSocket, "kill-session", "-t", match)
-		} else {
-			killCmd = safeexec.CommandContext(killCtx, Binary(), "kill-session", "-t", match)
-		}
+		killCmd := safeexec.CommandContext(killCtx, Binary(), socket.Args("kill-session", "-t", match)...)
 		runErr := cmdExec.Run(killCmd)
 		killCancel()
 		if runErr != nil {

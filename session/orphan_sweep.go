@@ -34,13 +34,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 	// enumerate-and-kill sessions belonging to some other, currently-running
 	// stapler-squad process on the same machine. See tmux.ResolveSocket's doc
 	// comment for the incident history this closes.
-	socket := tmux.ResolveSocket("")
-	socketArgs := func(args ...string) []string {
-		if socket == "" {
-			return args
-		}
-		return append([]string{"-L", socket}, args...)
-	}
+	socketArgs := tmux.ResolveSocket("").Args
 
 	knownUUIDs := make(map[string]struct{}, len(instances))
 	knownTmuxNames := make(map[string]struct{}, len(instances))

@@ -185,7 +185,10 @@ func (s *ExternalTmuxStreamer) ConsumerCount() int {
 // should fall back to polling).
 func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Use s.ctx so the process is killed when the streamer is stopped.
-	//nolint:norawexec long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable
+	// Targets a user-created external session, which by definition lives on the real
+	// ambient tmux socket wherever the user created it -- there is no isolated variant
+	// of an external session to target instead.
+	//nolint:norawexec,tmuxsocketscope long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable; external session has no isolated variant
 	cmd := exec.CommandContext(s.ctx, tmux.Binary(), "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
 
 	stdout, err := cmd.StdoutPipe()
@@ -429,6 +432,7 @@ func (s *ExternalTmuxStreamer) capturePane() (string, error) {
 	// Use -J to join wrapped lines
 	captureCtx, captureCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer captureCancel()
+	//nolint:tmuxsocketscope targets a user-created external session; no isolated variant exists to target
 	cmd := safeexec.CommandContext(captureCtx, tmux.Binary(), "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
 	output, err := cmd.Output()
 	if err != nil {

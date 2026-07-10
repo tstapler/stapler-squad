@@ -483,19 +483,39 @@ func TestPrependSocket(t *testing.T) {
 // through to the real shared default socket.
 func TestResolveSocket(t *testing.T) {
 	t.Run("explicit socket passes through unchanged", func(t *testing.T) {
-		require.Equal(t, "explicit-socket", ResolveSocket("explicit-socket"))
+		require.Equal(t, Socket("explicit-socket"), ResolveSocket("explicit-socket"))
 	})
 
 	t.Run("empty socket resolves to a non-empty isolated value in test mode", func(t *testing.T) {
 		resolved := ResolveSocket("")
-		require.NotEmpty(t, resolved, "empty socket must never resolve to the shared default inside a test binary")
-		require.Contains(t, resolved, "test-isolated-")
+		require.NotEmpty(t, resolved.String(), "empty socket must never resolve to the shared default inside a test binary")
+		require.Contains(t, resolved.String(), "test-isolated-")
 	})
 
 	t.Run("repeated empty-socket calls return the same isolated value", func(t *testing.T) {
 		first := ResolveSocket("")
 		second := ResolveSocket("")
 		require.Equal(t, first, second, "ResolveSocket must be stable across calls within the same process")
+	})
+}
+
+// TestSocket_Args verifies the smart constructor's sole args-building method:
+// the default (zero-value) Socket leaves args untouched, and a non-default
+// Socket prepends "-L <socket>".
+func TestSocket_Args(t *testing.T) {
+	t.Run("default socket returns args unchanged", func(t *testing.T) {
+		var s Socket
+		require.Equal(t, []string{"list-sessions"}, s.Args("list-sessions"))
+	})
+
+	t.Run("non-default socket prepends -L flag", func(t *testing.T) {
+		s := Socket("my-socket")
+		require.Equal(t, []string{"-L", "my-socket", "list-sessions"}, s.Args("list-sessions"))
+	})
+
+	t.Run("String returns the underlying socket name", func(t *testing.T) {
+		require.Equal(t, "my-socket", Socket("my-socket").String())
+		require.Equal(t, "", Socket("").String())
 	})
 }
 

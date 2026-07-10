@@ -596,7 +596,7 @@ lint: ensure-tools proto-gen lint-custom ## Run golangci-lint with comprehensive
 
 LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec) in a single pass
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec, tmuxsocketscope) in a single pass
 	@echo "Running custom lint..."
 	@$(LINTER_BIN) $(shell go list ./... | grep -v "^github.com/tstapler/stapler-squad$$")
 	@echo "custom lint: ok"

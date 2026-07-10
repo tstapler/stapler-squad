@@ -407,7 +407,7 @@ func TestWithSessionLister(t *testing.T) {
 // TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister verifies that when the
 // SessionLister is healthy no exec.Command("tmux","list-sessions") fork occurs.
 // The lister returns two staplersquad_ sessions; because there is no real tmux
-// process the PTY lookup (getPTYInfoFromTmux) will fail and both sessions will
+// process the PTY lookup (getPTYInfoFromTmuxWithSocket) will fail and both sessions will
 // be skipped — but the point is we exercised the lister path without error.
 func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 	lister := &fakeSessionLister{
@@ -424,7 +424,7 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 	// lister without forking tmux list-sessions.
 	result := pd.discoverOrphanedPTYs()
 
-	// In a test environment getPTYInfoFromTmux will fail for every session,
+	// In a test environment getPTYInfoFromTmuxWithSocket will fail for every session,
 	// so the returned slice will be empty — but no exec fork occurred.
 	// We assert nil-safety only; the important invariant is no panic.
 	if result == nil {
