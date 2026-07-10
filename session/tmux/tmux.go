@@ -210,9 +210,15 @@ func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 
 // serverNotRunning returns true if the combined output of a failed tmux command
 // indicates the tmux server process is not running (as opposed to a session not found).
+// "server exited unexpectedly" is produced by tmux when the client connects to a stale
+// socket whose server process is already dead — this is a server-level failure, not a
+// per-session one. recoverFromServerFailure re-verifies with a fresh list-sessions before
+// restarting, so a transient false positive on a single session won't trigger a restart.
 func serverNotRunning(output []byte) bool {
 	s := strings.ToLower(string(output))
-	return strings.Contains(s, "no server running") || strings.Contains(s, "error connecting to")
+	return strings.Contains(s, "no server running") ||
+		strings.Contains(s, "error connecting to") ||
+		strings.Contains(s, "server exited unexpectedly")
 }
 
 // SetOnExitCallback registers a function called when the session exits unexpectedly.

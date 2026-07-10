@@ -144,6 +144,16 @@ func TestServerNotRunning(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "stale socket: server exited unexpectedly",
+			output:   []byte("server exited unexpectedly"),
+			expected: true,
+		},
+		{
+			name:     "stale socket: uppercase variant",
+			output:   []byte("Server Exited Unexpectedly"),
+			expected: true,
+		},
+		{
 			name:     "unrelated error message",
 			output:   []byte("session not found: my-session"),
 			expected: false,
