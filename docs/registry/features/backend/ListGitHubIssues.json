@@ -4,8 +4,7 @@
   "service": "BacklogService",
   "method": "ListGitHubIssues",
   "protoFile": "proto/session/v1/backlog.proto",
-  "markerFound": true,
-  "handlerFile": "server/services/backlog_service.go",
+  "markerFound": false,
   "tested": true,
   "testIds": [
     "TestListGitHubIssues_NilStorage",
@@ -15,5 +14,5 @@
     "TestListGitHubIssues_DefaultState",
     "TestListGitHubIssues_SearchUsesSearchAPI"
   ],
-  "lastModified": "2026-07-09T20:38:16.570495725-07:00"
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
 }
