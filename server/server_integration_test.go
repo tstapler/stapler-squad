@@ -33,6 +33,32 @@ func findFreePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+// installFakeClaudeBinary puts a fake `claude` executable at the front of PATH
+// for the duration of the test (t.Setenv restores the original PATH on cleanup).
+//
+// classifyProgram (session/instance_tmux.go) matches on the literal "claude"
+// basename to decide whether to build the --mcp-config flag these tests assert
+// on, so Program must stay "claude" -- but CI runners don't have the real
+// claude CLI installed. Without a stand-in, the tmux-spawned shell exits
+// instantly ("claude: command not found"), and depending on a startup race for
+// tmux's remain-on-exit default, that can kill the session before Start()'s
+// own readiness check observes it -- CreateSession's async goroutine then
+// returns early on that error, before ever calling InjectHookConfig, so
+// waitForPermissionRequestHookCommand times out no matter how long its budget
+// is (observed: failed at both 30s and 60s). The fake binary only needs to
+// stay alive long enough for the session to be detected as live and for
+// InjectHookConfig to run -- it does nothing else and is never invoked with
+// real Claude Code behavior in mind.
+func installFakeClaudeBinary(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 60\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatalf("installFakeClaudeBinary: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // Server_should_ServeHealthCheck_When_StartedWithPortZero (REQ-1 test #4).
 //
 // Real net.Listen("tcp","localhost:0"), real Serve(ln), real
@@ -253,6 +279,8 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 // threaded into NewApprovalHandler and SetHookBaseURLFn, each re-evaluated lazily against
 // srv.GetAddr() at hook-injection time (never snapshotted before Start() resolves the port).
 func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated(t *testing.T) {
+	installFakeClaudeBinary(t)
+
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -307,7 +335,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// CreateSession starts the instance and injects hook config asynchronously; wait for both.
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
 
 	if strings.Contains(hookCmd, "localhost:0/") {
 		t.Fatalf("expected the PermissionRequest hook command to never contain the unresolved :0 port, got %q", hookCmd)
@@ -343,6 +371,8 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 // http://localhost:<port>/api/hooks/permission-request -- proving Epic 1.3's lazy
 // baseURLFn switch didn't regress the default/production instance.
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
+	installFakeClaudeBinary(t)
+
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -376,7 +406,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
 
 	wantURL := fmt.Sprintf("http://localhost:%d/api/hooks/permission-request", port)
 	if !strings.Contains(hookCmd, wantURL) {
