@@ -442,6 +442,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 						)
 					} else {
 						lastApprovalAnsweredAt = time.Now()
+						log.Info("SessionDriver: approved directory-access prompt",
+							"session", inst.Title,
+						)
 					}
 				}
 			}
@@ -625,11 +628,18 @@ func isStartupDialog(output string) bool {
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
 }
 
+// withinCooldown returns false when detected is true and less than cooldown has
+// elapsed since lastAnsweredAt — the shared double-fire guard used by both the
+// startup-dialog and directory-approval auto-answer paths.
+func withinCooldown(detected bool, lastAnsweredAt time.Time, cooldown time.Duration) bool {
+	return detected && time.Since(lastAnsweredAt) > cooldown
+}
+
 // shouldAnswerStartupDialog returns true when the terminal output shows a startup
 // dialog and the cooldown since the last answer has elapsed. Extracted to make
 // the double-fire guard directly unit-testable.
 func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
-	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
+	return withinCooldown(isStartupDialog(output), lastAnsweredAt, cooldown)
 }
 
 // outputShowsConversationStarted returns true when live terminal content
@@ -790,5 +800,5 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 // without a cooldown the driver resends "1" every driverPollInterval until the
 // dialog visibly clears — the repeated-"1" bug in #165.
 func shouldApprovePromptWithCooldown(output, allowedPath string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
-	return shouldApprovePrompt(output, allowedPath) && time.Since(lastAnsweredAt) > cooldown
+	return withinCooldown(shouldApprovePrompt(output, allowedPath), lastAnsweredAt, cooldown)
 }
