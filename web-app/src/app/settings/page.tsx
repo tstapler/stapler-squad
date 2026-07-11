@@ -14,6 +14,7 @@ import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useOnboardingContext } from "@/lib/contexts/OnboardingContext";
+import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { routes } from "@/lib/routes";
 import Link from "next/link";
 import * as styles from "./settings.css";
@@ -21,6 +22,7 @@ import * as styles from "./settings.css";
 function SettingsPageInner() {
   usePageView();
   const { triggerOnboarding } = useOnboardingContext();
+  const { flags } = useFeatureFlags();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const validTabs = ["general", "config-files", "appearance", "keyboard-shortcuts"];
@@ -61,11 +63,13 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <AliasesManager />
             </section>
-            <section className={styles.section}>
-              <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
-                Backlog Sources (GitHub sync) →
-              </Link>
-            </section>
+            {flags["backlog"] && (
+              <section className={styles.section}>
+                <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
+                  Backlog Sources (GitHub sync) →
+                </Link>
+              </section>
+            )}
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

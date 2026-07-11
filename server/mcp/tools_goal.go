@@ -15,9 +15,10 @@ import (
 
 // goalHandlers implements session goal MCP tools.
 type goalHandlers struct {
-	storage  *session.Storage
-	store    session.InstanceStore
-	eventBus *events.EventBus
+	storage      *session.Storage
+	store        session.InstanceStore
+	eventBus     *events.EventBus
+	enabledCheck func() bool // optional; nil means always-enabled (tests)
 }
 
 // registerGoalTools registers the goal-related MCP tools.
@@ -83,6 +84,9 @@ type SetSessionGoalResult struct {
 }
 
 func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	args := req.GetArguments()
 
 	// Priority: (1) session_id param if provided, (2) callerSessionUUID from context.
@@ -165,6 +169,9 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 // --- get_session_goal ---
 
 func (h *goalHandlers) getSessionGoal(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	args := req.GetArguments()
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {
@@ -199,6 +206,9 @@ type UpdateSessionTaskResult struct {
 }
 
 func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	// Strictly requires callerSessionUUID — agent self-reporting only.
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {

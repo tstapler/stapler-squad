@@ -65,6 +65,10 @@ type ServerDependencies struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag. See RuntimeDeps.BacklogEnabledCheck.
+	BacklogEnabledCheck func() bool
+
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
@@ -118,6 +122,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
 		SyncLoop:                rt.SyncLoop,
+		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
 		VNCDeps:                 rt.VNCDeps,
 		CDPDeps:                 rt.CDPDeps,
@@ -393,6 +398,11 @@ type RuntimeDeps struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 	Config         *config.Config // Used for encryption of sensitive data
+
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
+	// tool calls are gated by the same source of truth as the ConnectRPC interceptor.
+	BacklogEnabledCheck func() bool
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
@@ -985,6 +995,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
 		SyncLoop:                nil, // managed by BacklogController
+		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
 		Config:                  cfg,
 		AnalyticsEntClient:      analyticsClient,
 		VNCDeps:                 vncDeps,

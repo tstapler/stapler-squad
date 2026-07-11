@@ -56,7 +56,18 @@ func validateUUID(id string) error {
 const (
 	ErrPermissionDenied = "PERMISSION_DENIED"
 	ErrItemNotFound     = "ITEM_NOT_FOUND"
+	ErrFeatureDisabled  = "FEATURE_DISABLED"
 )
+
+// featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
+// is set and currently reports false. A nil enabledCheck means always-enabled
+// (used by tests that construct handlers directly without wiring the flag).
+func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
+	if enabledCheck != nil && !enabledCheck() {
+		return errResult(ErrFeatureDisabled, "the backlog feature is disabled", "Enable it via Settings → Features.")
+	}
+	return nil
+}
 
 // ReviewCompletionSignaler allows the MCP handler to stop an AutonomousDriver
 // after submit_review_verdict completes. The stop call is belt-and-suspenders;
@@ -74,11 +85,15 @@ type backlogHandlers struct {
 	store         session.InstanceStore
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 }
 
 // --- get_backlog_item ---
 
 func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	args := req.GetArguments()
 	itemID, ok := args["item_id"].(string)
 	if !ok || itemID == "" {
@@ -176,6 +191,9 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 // --- report_progress ---
 
 func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
@@ -243,6 +261,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 // --- request_review ---
 
 func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -299,6 +320,9 @@ type verdictInput struct {
 }
 
 func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -427,6 +451,9 @@ func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, e
 // --- submit_triage_result ---
 
 func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
