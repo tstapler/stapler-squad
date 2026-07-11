@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.37.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.36.0...v1.37.0) (2026-07-10)
+
+
+### Features
+
+* **detection:** unify session status pipeline with type-safe DetectedStatus enum ([#132](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/132)) ([a5dcd7f](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a5dcd7fa838d673adaf1198cf82c1cf6e4e6a145))
+* **dev-stack:** isolated dev-mode DevStack with ephemeral ports ([#167](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/167)) ([0cd20d1](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0cd20d11972e901f05399dc9c7c62882bb98b409))
+* **ui:** make Info tab text selectable ([573df24](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/573df24d4d0bd0f725cf05433efadc4520f9155e))
+
+
+### Bug Fixes
+
+* **tmux:** detect stale socket via "server exited unexpectedly" ([a5d5315](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a5d5315186be0ab50b2b14542f2c2b6e91876f97))
+
 ## [1.36.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.35.0...v1.36.0) (2026-07-10)
 
 
