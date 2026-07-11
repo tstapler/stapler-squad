@@ -632,7 +632,7 @@ func isStartupDialog(output string) bool {
 // elapsed since lastAnsweredAt — the shared double-fire guard used by both the
 // startup-dialog and directory-approval auto-answer paths.
 func withinCooldown(detected bool, lastAnsweredAt time.Time, cooldown time.Duration) bool {
-	return detected && time.Since(lastAnsweredAt) > cooldown
+	return detected && time.Since(lastAnsweredAt) >= cooldown
 }
 
 // shouldAnswerStartupDialog returns true when the terminal output shows a startup
