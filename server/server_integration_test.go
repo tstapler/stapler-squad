@@ -307,7 +307,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// CreateSession starts the instance and injects hook config asynchronously; wait for both.
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
 
 	if strings.Contains(hookCmd, "localhost:0/") {
 		t.Fatalf("expected the PermissionRequest hook command to never contain the unresolved :0 port, got %q", hookCmd)
@@ -376,7 +376,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
-	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
+	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 60*time.Second)
 
 	wantURL := fmt.Sprintf("http://localhost:%d/api/hooks/permission-request", port)
 	if !strings.Contains(hookCmd, wantURL) {
@@ -424,6 +424,12 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 // waitForPermissionRequestHookCommand polls settingsPath until CreateSession's asynchronous
 // InjectHookConfig call (server/services/approval_handler.go) has written a PermissionRequest
 // command-type hook entry, then returns its command string. Fails the test on timeout.
+//
+// Callers pass 60s, not the ~instant time InjectHookConfig itself takes: the write only
+// happens after instance.Start(true) (real tmux session + process spawn) returns, and on a
+// contended CI runner running the full `-race` suite in parallel that can take much longer
+// than the file write itself. Observed CI flakiness at 30s (this test intermittently timed
+// out waiting on scheduling, not on a real hang) motivated the wider budget.
 func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
