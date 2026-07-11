@@ -58,10 +58,6 @@ func getGHToken(_ context.Context) string {
 // drops below this value, indicating that the token is close to exhaustion.
 const rateLimitWarningThreshold = 500
 
-// maxRetryAfterSleep caps the duration we will sleep in response to a
-// Retry-After header so a misbehaving server cannot block us indefinitely.
-const maxRetryAfterSleep = 60 * time.Second
-
 // checkRateLimitHeaders inspects X-RateLimit-Remaining, Retry-After, and
 // X-GitHub-Sso headers on any GitHub API response. It returns a non-zero
 // duration if the caller should pause before the next request.
