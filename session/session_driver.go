@@ -145,6 +145,10 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var lastDialogAnsweredAt time.Time
 	const dialogCooldown = 5 * time.Second
 
+	// Same guard for directory-access approval prompts (see #165): NeedsApproval
+	// can stay the detected status for several poll ticks after "1\r" is sent.
+	var lastApprovalAnsweredAt time.Time
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -430,12 +434,14 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" && shouldApprovePrompt(output, allowedPath) {
+				if previewErr == nil && output != "" && shouldApprovePromptWithCooldown(output, allowedPath, lastApprovalAnsweredAt, dialogCooldown) {
 					if err := inst.SendKeys("1\r"); err != nil {
 						log.Warn("SessionDriver: failed to approve prompt",
 							"session", inst.Title,
 							"err", err,
 						)
+					} else {
+						lastApprovalAnsweredAt = time.Now()
 					}
 				}
 			}
@@ -776,4 +782,13 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 		return true
 	}
 	return strings.Contains(output, allowedPath)
+}
+
+// shouldApprovePromptWithCooldown adds the same double-fire guard used by
+// shouldAnswerStartupDialog: NeedsApproval can remain the detected status for
+// several poll ticks after "1\r" is sent (the PTY needs time to redraw), so
+// without a cooldown the driver resends "1" every driverPollInterval until the
+// dialog visibly clears — the repeated-"1" bug in #165.
+func shouldApprovePromptWithCooldown(output, allowedPath string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
+	return shouldApprovePrompt(output, allowedPath) && time.Since(lastAnsweredAt) > cooldown
 }
