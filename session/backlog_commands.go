@@ -1,13 +1,14 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -170,7 +171,9 @@ var backlogExcludePatterns = []string{
 // $GIT_DIR/info/exclude so they are invisible to git without touching
 // .gitignore (which would pollute the target repo).
 func addWorktreeExcludes(worktreePath string) {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
 	cmd.Dir = worktreePath
 	out, err := cmd.Output()
 	if err != nil {
