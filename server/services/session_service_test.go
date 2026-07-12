@@ -2,10 +2,13 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -1128,4 +1131,33 @@ func TestSessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfig
 		got := svc.resolveMCPServerURL()
 		assert.Equal(t, "", got)
 	})
+}
+
+// TestSpawnReviewSession_SetsBacklogCategory verifies that review-gate sessions
+// created via SpawnReviewSession get Category == "Backlog" so they group
+// correctly in the session list UI instead of falling into "Uncategorized".
+// This starts a real tmux session (like session/integration_test.go), so it's
+// skipped under -short (see make test vs. make test-integration).
+func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	// Isolate config to this test and use a trivial program so the tmux pane
+	// doesn't need the real "claude" binary to exist.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
+
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnReviewSession(context.Background(), item, "item-session-id", "review this")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
 }

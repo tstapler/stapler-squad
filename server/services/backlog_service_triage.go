@@ -201,6 +201,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
 	}
+	inst.SetCategory(session.CategoryBacklog)
 
 	// Persist the instance (and its Worktree row, with BaseCommitSha) synchronously now
 	// rather than waiting for the next periodic SaveInstances sweep. The review gate looks
@@ -875,6 +876,7 @@ Do not modify the code. Only write the review verdict.
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}
+	inst.SetCategory(session.CategoryBacklog)
 	if useAutonomous {
 		s.autonomousStarter.StartAutonomousDriverWithTimeout(inst, 5*time.Minute)
 	}
