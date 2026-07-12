@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -717,6 +718,98 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	}))
 	require.NoError(t, err, "autonomous spawn must succeed without plan approval")
 	require.Len(t, starter.calls, 1, "autonomous driver start hook must fire")
+}
+
+// createReadyItemForSpawn creates a SkipPlanning backlog item and advances it to
+// "ready", returning its ID. Reduces boilerplate for WIP-limit and spawn tests
+// that don't care about the triage/planning flow.
+func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title string) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    title,
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
+// TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap verifies that a fresh spawn
+// is rejected with CodeResourceExhausted once maxConcurrentBacklogWorkItems items
+// are already in_progress, and that the blocked item is left untouched (still
+// "ready", no session created for it).
+func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the WIP cap with successful spawns.
+	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err, "spawn %d must succeed while under the cap", i)
+	}
+	require.Len(t, creator.calls, maxConcurrentBacklogWorkItems)
+
+	// One more fresh spawn, at cap, must be rejected.
+	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.Error(t, err, "spawn at the WIP cap must be rejected")
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems, "no session should have been spawned for the over-cap item")
+
+	// The rejected item must be untouched — still "ready", not silently advanced.
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: overCapID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", getResp.Msg.Item.Status)
+}
+
+// TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap verifies that a reopen
+// (revision) spawn for an item that's already in_progress is NOT blocked by the
+// WIP limit, since it doesn't add a new concurrent item — it's already counted.
+func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the WIP cap.
+	var reopenTargetID string
+	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		reopenTargetID = id // reopen the last one filled
+	}
+
+	// End the reopen target's work session — the pre-existing "duplicate active work
+	// session" guard would otherwise block the reopen for an unrelated reason.
+	sessions, err := storage.ListItemSessions(t.Context(), reopenTargetID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	// Reopen (isReopen=true, since reopenTargetID is already in_progress) must
+	// succeed even though the cap is reached.
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
+	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
+	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
 }
 
 // ─── AttachSessionToItem ──────────────────────────────────────────────────────
