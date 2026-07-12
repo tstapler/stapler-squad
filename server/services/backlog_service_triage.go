@@ -519,10 +519,15 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 3b. If re-triggering on a "ready" item, move it back to "idea".
+	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
+	// races with this re-triage doesn't drag the item backwards to idea.
 	if item.Status == string(session.BacklogStatusReady) {
+		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
-			session.BacklogStatusIdea, nil); transErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] failed to reset status to idea: %v", transErr)
+			session.BacklogStatusIdea, precondition); transErr != nil {
+			log.WarningLog.Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
 		}
 	}
 

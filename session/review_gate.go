@@ -68,8 +68,16 @@ func (r *ReviewGateRunner) Run(
 	// or fall back to the item's repo path (directory-mode / worktree gone).
 	var diff string
 	var truncated bool
+	var uncommittedWarning string
 	wt, wtErr := r.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 	if wtErr == nil && wt.WorktreePath != "" {
+		// Belt-and-suspenders layer 2: warn if the worktree still has uncommitted changes.
+		// request_review (layer 1) should have caught this, but flag it here too so the
+		// reviewer prompt is aware and the verdict reflects the incomplete state.
+		if dirty, dirtyErr := IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
+			log.InfoLog.Printf("[BacklogLifecycle] review gate: item=%s has uncommitted changes in worktree — diff will be incomplete", item.ID)
+			uncommittedWarning = "[WARNING: worktree has uncommitted changes — the following diff may be incomplete]\n"
+		}
 		var diffErr error
 		diff, truncated, diffErr = GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr != nil {
@@ -85,6 +93,9 @@ func (r *ReviewGateRunner) Run(
 		if diffErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff item=%s: %v", item.ID, diffErr)
 		}
+	}
+	if uncommittedWarning != "" {
+		diff = uncommittedWarning + diff
 	}
 
 	// Security check — block if secrets detected.

@@ -171,7 +171,7 @@ var backlogExcludePatterns = []string{
 // $GIT_DIR/info/exclude so they are invisible to git without touching
 // .gitignore (which would pollute the target repo).
 func addWorktreeExcludes(worktreePath string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
 	cmd.Dir = worktreePath

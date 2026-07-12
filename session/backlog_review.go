@@ -223,6 +223,19 @@ func GetGitHeadSHA(repoPath string) (string, error) {
 	return git.GetHeadCommitSHA(repoPath)
 }
 
+// IsWorktreeDirty returns true if the git worktree at worktreePath has any
+// uncommitted changes (staged or unstaged). Returns false with no error when
+// the worktree is clean or when it cannot be reached.
+func IsWorktreeDirty(ctx context.Context, worktreePath string) (bool, error) {
+	cmd := safeexec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status in %s: %w", worktreePath, err)
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
 // GetGitDiff returns the diff of changes in worktreePath relative to baseSHA
 // (or HEAD~1 if baseSHA is empty). If the diff exceeds MaxDiffSizeReview bytes
 // it is truncated and truncated=true is returned.

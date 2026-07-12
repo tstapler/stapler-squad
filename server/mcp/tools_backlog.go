@@ -275,6 +275,19 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
 	}
 
+	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
+	// The reviewer reads the committed diff; uncommitted work would be invisible and
+	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
+		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
+			return errResult(ErrInvalidArgument,
+				"request_review rejected: the worktree has uncommitted changes. "+
+					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
+				""), nil
+		}
+	}
+
 	// Transition item to review status (from in_progress only).
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
 	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition); transErr != nil {

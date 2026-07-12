@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { BacklogItem, AcCriterion, BacklogItemInput } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useAnalytics } from "@/lib/analytics";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
@@ -47,6 +48,7 @@ function formatDate(iso?: string): string {
 }
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+  const { track } = useAnalytics();
   const {
     getBacklogItem,
     transitionStatus,
@@ -1089,6 +1091,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                           if (s.role === "triage") {
                             await cancelTriage(item.id);
                           } else {
+                            track({ name: "backlog_delete_session", category: "user_action", component: "BacklogItemDetail", labels: { role: s.role } });
                             await deleteSession(s.sessionId, true);
                           }
                           await load();
