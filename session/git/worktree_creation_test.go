@@ -242,6 +242,15 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 	// The worktree path must match the path we passed in.
 	assert.Equal(t, wt.GetWorktreePath(), reopened.GetWorktreePath(), "worktree path must match")
 
+	// Regression guard: the resolved repo root must be the actual main repo, not the
+	// worktree's own directory. findGitRepoRoot (previously used here) misreads a
+	// worktree whose repo.Head() fails as "an uninitialized repo needing a fresh
+	// commit", plants a brand-new disconnected initial commit directly inside the
+	// worktree directory, and returns the worktree path itself as the "repo root" —
+	// severing the worktree from its real branch/history entirely.
+	assert.Equal(t, repoDir, reopened.GetRepoPath(),
+		"repo root must resolve to the main repo, not be conflated with the worktree's own path")
+
 	// Regression guard: the detected base SHA must resolve to a real object. In
 	// production, go-git's repo.Head() read (the previous implementation of
 	// getHeadCommitSHA) was observed returning a syntactically-valid 40-hex-char
