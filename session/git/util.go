@@ -159,17 +159,23 @@ func getCurrentBranchName(path string) (string, error) {
 func GetHeadCommitSHA(path string) (string, error) { return getHeadCommitSHA(path) }
 
 // getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree.
-// Uses go-git to read .git/HEAD directly (no subprocess).
+// Shells out to the real git binary rather than using go-git's repo.Head(): a worktree
+// read immediately after `git worktree add` was observed in production to produce a
+// SHA via go-git that did not correspond to any real object in the repository at all
+// (failed git cat-file -t, absent from git rev-list --all, git reflog show --all, and
+// git fsck --unreachable) — a go-git/git-CLI interop gap, not merely a stale-but-valid
+// value. The git CLI is authoritative here and is also what later consumes this value
+// (GetGitDiff shells out to `git diff <sha>..HEAD`), so producer and consumer now agree.
 func getHeadCommitSHA(path string) (string, error) {
-	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
-	if err != nil {
-		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
-	}
-	ref, err := repo.Head()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd.Dir = path
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-	return ref.Hash().String(), nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // InitializeProjectDirectory creates a directory and initializes it as a git repository.

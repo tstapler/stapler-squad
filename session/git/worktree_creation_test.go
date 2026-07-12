@@ -241,6 +241,21 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 	assert.NotEmpty(t, reopened.GetBaseCommitSHA(), "base commit SHA must be detected for existing worktree")
 	// The worktree path must match the path we passed in.
 	assert.Equal(t, wt.GetWorktreePath(), reopened.GetWorktreePath(), "worktree path must match")
+
+	// Regression guard: the detected base SHA must resolve to a real object. In
+	// production, go-git's repo.Head() read (the previous implementation of
+	// getHeadCommitSHA) was observed returning a syntactically-valid 40-hex-char
+	// SHA that did not correspond to any object in the repository at all — not
+	// even a stale/unreachable one (absent from git cat-file -t, git rev-list
+	// --all, git reflog show --all, and git fsck --unreachable). getHeadCommitSHA
+	// now shells out to `git rev-parse HEAD` instead, which is what GetGitDiff
+	// later uses to actually consume this value, keeping producer and consumer
+	// in agreement.
+	catFileCmd := safeexec.CommandContext(context.Background(), "git", "cat-file", "-t", reopened.GetBaseCommitSHA())
+	catFileCmd.Dir = repoDir
+	out, catErr := catFileCmd.Output()
+	require.NoErrorf(t, catErr, "base commit SHA %q must resolve to a real object", reopened.GetBaseCommitSHA())
+	assert.Equal(t, "commit", strings.TrimSpace(string(out)))
 }
 
 // TestWorktreeSetup_BranchNameSet verifies that GetBranchName() returns the expected
