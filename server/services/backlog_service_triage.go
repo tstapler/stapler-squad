@@ -36,6 +36,17 @@ const (
 // so a human can inspect it rather than spinning indefinitely on a persistent FAIL verdict.
 const maxAutoReworkIterations = 3
 
+// maxConcurrentBacklogWorkItems caps how many distinct backlog items may be
+// "in_progress" (i.e. have a live work session) at the same time. Fresh spawns
+// beyond this cap are rejected with CodeResourceExhausted; reopen/revision
+// spawns for an item that's already in_progress don't count against it, since
+// they don't add a new concurrent item. Adjust this constant directly — it's
+// an operational tuning knob, not a correctness invariant.
+//
+// Added 2026-07-12 after a kernel OOM caused by too many concurrent agent
+// sessions (backlog-spawned and otherwise) exhausting system memory.
+const maxConcurrentBacklogWorkItems = 2
+
 // defaultTriageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes
 // after its headless LLM call returns (persist result, update plan_artifacts_path,
 // transition idea->ready, mark session ended). See BacklogService.triageCleanupTimeout
@@ -119,6 +130,24 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q or %q status to spawn a session, got %q — use TriggerTriage to advance from %q",
 				session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status, item.Status))
+	}
+
+	// 3b. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
+	// item — it's already counted as in_progress). Not bypassed by Autonomous: the
+	// point is to cap total concurrent agent load regardless of how a spawn was
+	// triggered.
+	if !isReopen {
+		inProgress, wipErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+			Statuses: []string{string(session.BacklogStatusInProgress)},
+		})
+		if wipErr != nil {
+			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
+		} else if len(inProgress) >= maxConcurrentBacklogWorkItems {
+			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit blocked spawn item=%s in_progress=%d cap=%d", item.ID, len(inProgress), maxConcurrentBacklogWorkItems)
+			return nil, connect.NewError(connect.CodeResourceExhausted,
+				fmt.Errorf("%d backlog items are already in progress (cap %d) — wait for one to finish or review/ship it first",
+					len(inProgress), maxConcurrentBacklogWorkItems))
+		}
 	}
 
 	// 4. Planning gate (only for fresh spawns; on reopen planning is already approved).

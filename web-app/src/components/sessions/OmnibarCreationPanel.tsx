@@ -24,12 +24,42 @@ import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestio
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
 export const SESSION_TYPES = [
-  { value: "new_worktree", label: "New branch (isolated)" },
-  { value: "directory", label: "Existing folder" },
-  { value: "existing_worktree", label: "Existing branch" },
-  { value: "one_off", label: "Temporary (no git)" },
-  { value: "new_project", label: "New Project" },
-  { value: "autonomous", label: "Fix Autonomously (Beta)" },
+  {
+    value: "new_worktree",
+    label: "New branch (isolated)",
+    description:
+      "Use this when you want to try something risky without touching your main branch — e.g. a refactor, a new feature, or a change you might abandon. Creates an isolated branch and working directory.",
+  },
+  {
+    value: "directory",
+    label: "Existing folder",
+    description:
+      "Use this when you just want to work in a folder as-is — e.g. quick edits to a repo you already have checked out, or a folder with no git history.",
+  },
+  {
+    value: "existing_worktree",
+    label: "Existing branch",
+    description:
+      "Use this when you want to resume work on a branch that's already checked out — e.g. picking up review feedback or continuing a session from earlier.",
+  },
+  {
+    value: "one_off",
+    label: "Temporary (no git)",
+    description:
+      "Use this when you need scratch space for a quick experiment — e.g. testing a snippet or script. No path needed; a temporary directory is created automatically.",
+  },
+  {
+    value: "new_project",
+    label: "New Project",
+    description:
+      "Use this when starting something brand new — e.g. a side project or prototype. Creates a directory, runs git init, and makes an initial commit.",
+  },
+  {
+    value: "autonomous",
+    label: "Fix Autonomously (Beta)",
+    description:
+      "Use this when you want to hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.",
+  },
 ] as const;
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
@@ -466,13 +496,8 @@ export function OmnibarCreationPanel({
             value={sessionType}
             onChange={(v) => setFormField("sessionType", v)}
           />
-          <span className={hint}>
-            {sessionType === "new_worktree" && "Creates an isolated branch and working directory for this session"}
-            {sessionType === "existing_worktree" && "Opens a session in an existing checked-out branch"}
-            {sessionType === "directory" && "Works directly in a folder without branch isolation"}
-            {sessionType === "one_off" && "A fresh temporary directory will be created automatically — no path needed"}
-            {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
-            {sessionType === "autonomous" && "The agent runs fully autonomously — risky tool calls are approved by an LLM reviewer rather than queued for you. You will be notified on completion. To stop it, delete or hibernate the session."}
+          <span className={hint} data-testid="omnibar-session-hint">
+            {SESSION_TYPES.find((t) => t.value === sessionType)?.description}
           </span>
         </div>
 

@@ -247,7 +247,7 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	}
 
 	// Find the repository root from the worktree path
-	repoPath, err := findGitRepoRoot(existingWorktreePath)
+	repoPath, err := findMainRepoPathForWorktree(existingWorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find repository root for worktree '%s': %w", existingWorktreePath, err)
 	}
