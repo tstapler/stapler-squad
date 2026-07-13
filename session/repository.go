@@ -298,6 +298,7 @@ type ItemSessionSummary struct {
 	EstimatedCostUsd      float64
 	TriageResult          string // raw JSON stored in triage_result column
 	TriageResultSummary   string // summary field parsed from TriageResult
+	VerificationNotes     string // freeform verification evidence reported via request_review
 	OverallOutcome        string // from linked review_verdict (empty if none)
 	ReviewVerdict         *ReviewVerdictSummary
 }

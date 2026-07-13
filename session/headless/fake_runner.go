@@ -24,6 +24,12 @@ type FakeRunner struct {
 
 	// Calls records every set of args passed to Run, in order.
 	Calls [][]string
+
+	// Stdins records the full stdin content passed to Run, in order. The user
+	// prompt is passed via stdin (not args) so it doesn't appear in /proc/<pid>/cmdline
+	// — see Pool.call in caller.go — so tests asserting on prompt content must
+	// inspect this rather than Calls/ArgsForCall.
+	Stdins [][]byte
 }
 
 // NewFakeRunner creates a FakeRunner that returns responses in order.
@@ -32,10 +38,9 @@ func NewFakeRunner(responses ...string) *FakeRunner {
 	return &FakeRunner{responses: responses}
 }
 
-// Run returns the next scripted response (or error). It records args in Calls.
-// stdin is accepted to satisfy the ClaudeRunner interface but is not inspected.
-// The stop function is a no-op.
-func (f *FakeRunner) Run(_ context.Context, args []string, _ io.Reader) (io.ReadCloser, func() error, error) {
+// Run returns the next scripted response (or error). It records args in Calls
+// and the full stdin content in Stdins. The stop function is a no-op.
+func (f *FakeRunner) Run(_ context.Context, args []string, stdin io.Reader) (io.ReadCloser, func() error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -43,6 +48,13 @@ func (f *FakeRunner) Run(_ context.Context, args []string, _ io.Reader) (io.Read
 	argsCopy := make([]string, len(args))
 	copy(argsCopy, args)
 	f.Calls = append(f.Calls, argsCopy)
+
+	// Record stdin (the user prompt is passed this way — see caller.go).
+	var stdinBytes []byte
+	if stdin != nil {
+		stdinBytes, _ = io.ReadAll(stdin)
+	}
+	f.Stdins = append(f.Stdins, stdinBytes)
 
 	idx := f.index
 	f.index++
@@ -85,6 +97,17 @@ func (f *FakeRunner) ArgsForCall(n int) []string {
 		return nil
 	}
 	return f.Calls[n]
+}
+
+// StdinForCall returns the stdin content (the user prompt) recorded for the nth
+// call (0-indexed). Returns "" if call n has not happened yet.
+func (f *FakeRunner) StdinForCall(n int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n >= len(f.Stdins) {
+		return ""
+	}
+	return string(f.Stdins[n])
 }
 
 // HasArg returns true if any recorded call contains arg.

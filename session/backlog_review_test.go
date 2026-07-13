@@ -96,7 +96,7 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 	}
 	diff := "diff --git a/auth.go b/auth.go\n+func LoginGoogle() {}"
 
-	prompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, false)
+	prompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, false, "")
 
 	assert.Contains(t, prompt, item.Title)
 	assert.Contains(t, prompt, item.Description)
@@ -114,15 +114,58 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 // TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote verifies truncation marker.
 func TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", true)
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", true, "")
 	assert.Contains(t, prompt, "truncated")
 }
 
 // TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder verifies empty-diff handling.
 func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "", false)
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "")
 	assert.Contains(t, prompt, "no diff available")
+}
+
+// TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection verifies
+// that non-empty verification notes are rendered in a distinctly-labeled section
+// separate from the diff, so the reviewer can tell it apart from code-derived evidence.
+func TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	notes := "ran `go test ./session/...` -> ok (41 tests)"
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, notes)
+
+	assert.Contains(t, prompt, "## Verification Evidence (reported by work session — not visible in the diff)")
+	assert.Contains(t, prompt, notes)
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyVerificationNotes_OmitsSection verifies the
+// section header is not emitted when no verification notes were reported, so the
+// reviewer isn't cued to look for evidence that doesn't exist.
+func TestBuildHeadlessReviewPrompt_EmptyVerificationNotes_OmitsSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "")
+
+	assert.NotContains(t, prompt, "Verification Evidence")
+}
+
+// TestBuildReviewPrompt_VerificationNotes_IncludedInLabeledSection mirrors the
+// headless test for the tool-invocation (non-headless) prompt variant.
+func TestBuildReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	notes := "ran make install-service, confirmed via UI that sessions group under Category=Backlog"
+	prompt := BuildReviewPrompt(item, nil, "diff content", false, uuid.New().String(), notes)
+
+	assert.Contains(t, prompt, "## Verification Evidence (reported by work session — not visible in the diff)")
+	assert.Contains(t, prompt, notes)
+}
+
+// TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars verifies the
+// section is bounded so a runaway self-report can't blow out the prompt budget.
+func TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	notes := strings.Repeat("a", 5000)
+	prompt := BuildReviewPrompt(item, nil, "diff content", false, uuid.New().String(), notes)
+
+	assert.Contains(t, prompt, "[truncated]")
 }
 
 // TestSanitizeDiff_ReplacesTripleBacktick ensures fence injection is neutralised.

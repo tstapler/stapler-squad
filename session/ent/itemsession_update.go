@@ -139,6 +139,26 @@ func (_u *ItemSessionUpdate) ClearTriageResult() *ItemSessionUpdate {
 	return _u
 }
 
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdate) SetVerificationNotes(v string) *ItemSessionUpdate {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableVerificationNotes(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdate) ClearVerificationNotes() *ItemSessionUpdate {
+	_u.mutation.ClearVerificationNotes()
+	return _u
+}
+
 // SetLastCommitSha sets the "last_commit_sha" field.
 func (_u *ItemSessionUpdate) SetLastCommitSha(v string) *ItemSessionUpdate {
 	_u.mutation.SetLastCommitSha(v)
@@ -411,6 +431,12 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
 	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
+	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
 	}
@@ -639,6 +665,26 @@ func (_u *ItemSessionUpdateOne) SetNillableTriageResult(v *string) *ItemSessionU
 // ClearTriageResult clears the value of the "triage_result" field.
 func (_u *ItemSessionUpdateOne) ClearTriageResult() *ItemSessionUpdateOne {
 	_u.mutation.ClearTriageResult()
+	return _u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) SetVerificationNotes(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableVerificationNotes(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) ClearVerificationNotes() *ItemSessionUpdateOne {
+	_u.mutation.ClearVerificationNotes()
 	return _u
 }
 
@@ -943,6 +989,12 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
+	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)

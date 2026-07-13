@@ -32,6 +32,8 @@ type ItemSession struct {
 	AcSnapshot string `json:"ac_snapshot,omitempty"`
 	// JSON triage suggestions
 	TriageResult string `json:"triage_result,omitempty"`
+	// Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff
+	VerificationNotes string `json:"verification_notes,omitempty"`
 	// LastCommitSha holds the value of the "last_commit_sha" field.
 	LastCommitSha string `json:"last_commit_sha,omitempty"`
 	// LastCommitAt holds the value of the "last_commit_at" field.
@@ -97,7 +99,7 @@ func (*ItemSession) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case itemsession.FieldCommitCountSinceSpawn:
 			values[i] = new(sql.NullInt64)
-		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldAcSnapshot, itemsession.FieldTriageResult, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
+		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldAcSnapshot, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
 			values[i] = new(sql.NullString)
 		case itemsession.FieldStartedAt, itemsession.FieldEndedAt, itemsession.FieldLastCommitAt, itemsession.FieldLastFileTouchAt, itemsession.FieldLastProgressAt, itemsession.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -163,6 +165,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field triage_result", values[i])
 			} else if value.Valid {
 				_m.TriageResult = value.String
+			}
+		case itemsession.FieldVerificationNotes:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field verification_notes", values[i])
+			} else if value.Valid {
+				_m.VerificationNotes = value.String
 			}
 		case itemsession.FieldLastCommitSha:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -289,6 +297,9 @@ func (_m *ItemSession) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("triage_result=")
 	builder.WriteString(_m.TriageResult)
+	builder.WriteString(", ")
+	builder.WriteString("verification_notes=")
+	builder.WriteString(_m.VerificationNotes)
 	builder.WriteString(", ")
 	builder.WriteString("last_commit_sha=")
 	builder.WriteString(_m.LastCommitSha)

@@ -94,6 +94,20 @@ func (_c *ItemSessionCreate) SetNillableTriageResult(v *string) *ItemSessionCrea
 	return _c
 }
 
+// SetVerificationNotes sets the "verification_notes" field.
+func (_c *ItemSessionCreate) SetVerificationNotes(v string) *ItemSessionCreate {
+	_c.mutation.SetVerificationNotes(v)
+	return _c
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableVerificationNotes(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetVerificationNotes(*v)
+	}
+	return _c
+}
+
 // SetLastCommitSha sets the "last_commit_sha" field.
 func (_c *ItemSessionCreate) SetLastCommitSha(v string) *ItemSessionCreate {
 	_c.mutation.SetLastCommitSha(v)
@@ -380,6 +394,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 		_node.TriageResult = value
 	}
+	if value, ok := _c.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+		_node.VerificationNotes = value
+	}
 	if value, ok := _c.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
 		_node.LastCommitSha = value
@@ -590,6 +608,24 @@ func (u *ItemSessionUpsert) UpdateTriageResult() *ItemSessionUpsert {
 // ClearTriageResult clears the value of the "triage_result" field.
 func (u *ItemSessionUpsert) ClearTriageResult() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldTriageResult)
+	return u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsert) SetVerificationNotes(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldVerificationNotes, v)
+	return u
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateVerificationNotes() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldVerificationNotes)
+	return u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsert) ClearVerificationNotes() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldVerificationNotes)
 	return u
 }
 
@@ -885,6 +921,27 @@ func (u *ItemSessionUpsertOne) UpdateTriageResult() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearTriageResult() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearTriageResult()
+	})
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsertOne) SetVerificationNotes(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetVerificationNotes(v)
+	})
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateVerificationNotes() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateVerificationNotes()
+	})
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsertOne) ClearVerificationNotes() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearVerificationNotes()
 	})
 }
 
@@ -1369,6 +1426,27 @@ func (u *ItemSessionUpsertBulk) UpdateTriageResult() *ItemSessionUpsertBulk {
 func (u *ItemSessionUpsertBulk) ClearTriageResult() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearTriageResult()
+	})
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsertBulk) SetVerificationNotes(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetVerificationNotes(v)
+	})
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateVerificationNotes() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateVerificationNotes()
+	})
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsertBulk) ClearVerificationNotes() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearVerificationNotes()
 	})
 }
 

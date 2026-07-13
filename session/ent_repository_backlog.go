@@ -83,6 +83,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		EstimatedCostUsd:      is.EstimatedCostUsd,
 		TriageResult:          is.TriageResult,
 		TriageResultSummary:   triageResultSummary,
+		VerificationNotes:     is.VerificationNotes,
 		OverallOutcome:        overallOutcome,
 		ReviewVerdict:         reviewVerdictToSummary(is.Edges.ReviewVerdict),
 	}

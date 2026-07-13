@@ -11139,6 +11139,7 @@ type ItemSessionMutation struct {
 	ended_at                    *time.Time
 	ac_snapshot                 *string
 	triage_result               *string
+	verification_notes          *string
 	last_commit_sha             *string
 	last_commit_at              *time.Time
 	last_commit_message         *string
@@ -11529,6 +11530,55 @@ func (m *ItemSessionMutation) TriageResultCleared() bool {
 func (m *ItemSessionMutation) ResetTriageResult() {
 	m.triage_result = nil
 	delete(m.clearedFields, itemsession.FieldTriageResult)
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (m *ItemSessionMutation) SetVerificationNotes(s string) {
+	m.verification_notes = &s
+}
+
+// VerificationNotes returns the value of the "verification_notes" field in the mutation.
+func (m *ItemSessionMutation) VerificationNotes() (r string, exists bool) {
+	v := m.verification_notes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVerificationNotes returns the old "verification_notes" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldVerificationNotes(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVerificationNotes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVerificationNotes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVerificationNotes: %w", err)
+	}
+	return oldValue.VerificationNotes, nil
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (m *ItemSessionMutation) ClearVerificationNotes() {
+	m.verification_notes = nil
+	m.clearedFields[itemsession.FieldVerificationNotes] = struct{}{}
+}
+
+// VerificationNotesCleared returns if the "verification_notes" field was cleared in this mutation.
+func (m *ItemSessionMutation) VerificationNotesCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldVerificationNotes]
+	return ok
+}
+
+// ResetVerificationNotes resets all changes to the "verification_notes" field.
+func (m *ItemSessionMutation) ResetVerificationNotes() {
+	m.verification_notes = nil
+	delete(m.clearedFields, itemsession.FieldVerificationNotes)
 }
 
 // SetLastCommitSha sets the "last_commit_sha" field.
@@ -12050,7 +12100,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -12068,6 +12118,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	}
 	if m.triage_result != nil {
 		fields = append(fields, itemsession.FieldTriageResult)
+	}
+	if m.verification_notes != nil {
+		fields = append(fields, itemsession.FieldVerificationNotes)
 	}
 	if m.last_commit_sha != nil {
 		fields = append(fields, itemsession.FieldLastCommitSha)
@@ -12113,6 +12166,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.AcSnapshot()
 	case itemsession.FieldTriageResult:
 		return m.TriageResult()
+	case itemsession.FieldVerificationNotes:
+		return m.VerificationNotes()
 	case itemsession.FieldLastCommitSha:
 		return m.LastCommitSha()
 	case itemsession.FieldLastCommitAt:
@@ -12150,6 +12205,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldAcSnapshot(ctx)
 	case itemsession.FieldTriageResult:
 		return m.OldTriageResult(ctx)
+	case itemsession.FieldVerificationNotes:
+		return m.OldVerificationNotes(ctx)
 	case itemsession.FieldLastCommitSha:
 		return m.OldLastCommitSha(ctx)
 	case itemsession.FieldLastCommitAt:
@@ -12216,6 +12273,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTriageResult(v)
+		return nil
+	case itemsession.FieldVerificationNotes:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVerificationNotes(v)
 		return nil
 	case itemsession.FieldLastCommitSha:
 		v, ok := value.(string)
@@ -12342,6 +12406,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldTriageResult) {
 		fields = append(fields, itemsession.FieldTriageResult)
 	}
+	if m.FieldCleared(itemsession.FieldVerificationNotes) {
+		fields = append(fields, itemsession.FieldVerificationNotes)
+	}
 	if m.FieldCleared(itemsession.FieldLastCommitSha) {
 		fields = append(fields, itemsession.FieldLastCommitSha)
 	}
@@ -12386,6 +12453,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 	case itemsession.FieldTriageResult:
 		m.ClearTriageResult()
 		return nil
+	case itemsession.FieldVerificationNotes:
+		m.ClearVerificationNotes()
+		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ClearLastCommitSha()
 		return nil
@@ -12429,6 +12499,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldTriageResult:
 		m.ResetTriageResult()
+		return nil
+	case itemsession.FieldVerificationNotes:
+		m.ResetVerificationNotes()
 		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ResetLastCommitSha()

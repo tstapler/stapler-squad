@@ -792,6 +792,11 @@ func (s *BacklogService) TriggerReReview(
 	// 7. Deserialize AC snapshot (from most recent work session or item AC).
 	acSnapshot := resolveACSnapshot(mostRecentWorkSession, item.AcceptanceCriteria)
 
+	verificationNotes := ""
+	if mostRecentWorkSession != nil {
+		verificationNotes = mostRecentWorkSession.VerificationNotes
+	}
+
 	// 8. Build re-review prompt.
 	acSnapshotJSON, _ := json.Marshal(acSnapshot)
 
@@ -838,7 +843,7 @@ Do not modify the code. Only write the review verdict.
 	// 9. Headless path — preferred when a headless pool is configured.
 	// This avoids needing tmux and runs the review inline via LLM call.
 	if s.headlessPool != nil {
-		headlessPrompt := session.BuildHeadlessReviewPrompt(item, acSnapshot, workSessionDiff, false)
+		headlessPrompt := session.BuildHeadlessReviewPrompt(item, acSnapshot, workSessionDiff, false, verificationNotes)
 		reviewCtx, reviewCancel := context.WithTimeout(ctx, headless.DefaultCallTimeout)
 		defer reviewCancel()
 

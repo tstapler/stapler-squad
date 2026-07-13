@@ -132,7 +132,7 @@ func (r *ReviewGateRunner) Run(
 		acSnapshot, _ = ParseAcCriteria(item.AcceptanceCriteria)
 	}
 
-	prompt := BuildReviewPrompt(item, acSnapshot, diff, truncated, is.ID)
+	prompt := BuildReviewPrompt(item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
 
 	pool := r.getPool()
 	if pool != nil {
@@ -141,7 +141,7 @@ func (r *ReviewGateRunner) Run(
 		reviewCtx, reviewCancel := context.WithTimeout(ctx, headless.DefaultCallTimeout)
 		defer reviewCancel()
 
-		headlessPrompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, truncated)
+		headlessPrompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, truncated, is.VerificationNotes)
 		reviewResult, callCostUSD, callErr := pool.CallBlockingWithCost(reviewCtx, headless.FeatureKeyReview, headless.HeadlessReviewSystemPrompt(), headlessPrompt)
 		if callErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate headless.CallBlocking item=%s: %v", item.ID, callErr)

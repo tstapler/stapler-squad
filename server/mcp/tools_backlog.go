@@ -266,8 +266,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "message must be <= 2000 characters", ""), nil
 	}
 
+	// verification_notes is optional but strongly encouraged: it is the reviewer's
+	// only window into evidence that isn't visible in the diff (test runs, manual
+	// UI checks). See tool description for what makes a claim credible.
+	verificationNotes, _ := args["verification_notes"].(string)
+	if len(verificationNotes) > 4000 {
+		return errResult(ErrInvalidArgument, "verification_notes must be <= 4000 characters", ""), nil
+	}
+
 	// Verify session is linked to item.
-	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr != nil {
 		if errors.Is(linkErr, session.ErrNotFound) {
 			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
@@ -295,7 +303,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q", callerUUID, itemID, message)
+	// Persist verification evidence on the work ItemSession so the review gate can
+	// surface it in the reviewer's prompt (see BuildReviewPrompt). Best-effort: a
+	// failure here should not block the status transition that already succeeded.
+	if verificationNotes != "" {
+		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, verificationNotes); updateErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+		}
+	}
+
+	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q verification_notes_len=%d", callerUUID, itemID, message, len(verificationNotes))
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
@@ -664,7 +681,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("request_review",
-			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done."),
+			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done. "+
+				"The reviewer only sees the committed diff plus what you report here — it CANNOT see command output or UI behavior you observed. "+
+				"If any acceptance criterion describes something that isn't visible in a diff (a test suite passing, `make quick-check` succeeding, a manually-verified UI behavior), you MUST report it in verification_notes or the reviewer will mark that criterion UNVERIFIABLE even if you genuinely did the work."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -672,6 +691,14 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("message",
 				mcpgo.Description("Summary for the reviewer: what was built, how to verify it, any known limitations (max 2000 chars)"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithString("verification_notes",
+				mcpgo.Description("Evidence for any acceptance criteria not verifiable from the diff alone (max 4000 chars). "+
+					"For each command you ran to verify behavior, state the exact command and its outcome, e.g. "+
+					"\"ran `go test ./session/...` -> ok (41 tests)\" or \"ran `make quick-check` -> build/test/lint all passed\". "+
+					"For manually-verified UI behavior, describe exactly what you did and observed, e.g. "+
+					"\"ran make install-service, opened the session list, confirmed the new session appeared under Category=Backlog\". "+
+					"Vague claims like \"I tested it\" or \"verified manually\" with no specifics are not useful evidence — be concrete or omit the claim."),
 			),
 		),
 		h.requestReview,

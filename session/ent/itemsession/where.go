@@ -86,6 +86,11 @@ func TriageResult(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldTriageResult, v))
 }
 
+// VerificationNotes applies equality check predicate on the "verification_notes" field. It's identical to VerificationNotesEQ.
+func VerificationNotes(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldVerificationNotes, v))
+}
+
 // LastCommitSha applies equality check predicate on the "last_commit_sha" field. It's identical to LastCommitShaEQ.
 func LastCommitSha(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldLastCommitSha, v))
@@ -504,6 +509,81 @@ func TriageResultEqualFold(v string) predicate.ItemSession {
 // TriageResultContainsFold applies the ContainsFold predicate on the "triage_result" field.
 func TriageResultContainsFold(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldContainsFold(FieldTriageResult, v))
+}
+
+// VerificationNotesEQ applies the EQ predicate on the "verification_notes" field.
+func VerificationNotesEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldVerificationNotes, v))
+}
+
+// VerificationNotesNEQ applies the NEQ predicate on the "verification_notes" field.
+func VerificationNotesNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldVerificationNotes, v))
+}
+
+// VerificationNotesIn applies the In predicate on the "verification_notes" field.
+func VerificationNotesIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldVerificationNotes, vs...))
+}
+
+// VerificationNotesNotIn applies the NotIn predicate on the "verification_notes" field.
+func VerificationNotesNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldVerificationNotes, vs...))
+}
+
+// VerificationNotesGT applies the GT predicate on the "verification_notes" field.
+func VerificationNotesGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldVerificationNotes, v))
+}
+
+// VerificationNotesGTE applies the GTE predicate on the "verification_notes" field.
+func VerificationNotesGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldVerificationNotes, v))
+}
+
+// VerificationNotesLT applies the LT predicate on the "verification_notes" field.
+func VerificationNotesLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldVerificationNotes, v))
+}
+
+// VerificationNotesLTE applies the LTE predicate on the "verification_notes" field.
+func VerificationNotesLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldVerificationNotes, v))
+}
+
+// VerificationNotesContains applies the Contains predicate on the "verification_notes" field.
+func VerificationNotesContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldVerificationNotes, v))
+}
+
+// VerificationNotesHasPrefix applies the HasPrefix predicate on the "verification_notes" field.
+func VerificationNotesHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldVerificationNotes, v))
+}
+
+// VerificationNotesHasSuffix applies the HasSuffix predicate on the "verification_notes" field.
+func VerificationNotesHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldVerificationNotes, v))
+}
+
+// VerificationNotesIsNil applies the IsNil predicate on the "verification_notes" field.
+func VerificationNotesIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldVerificationNotes))
+}
+
+// VerificationNotesNotNil applies the NotNil predicate on the "verification_notes" field.
+func VerificationNotesNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldVerificationNotes))
+}
+
+// VerificationNotesEqualFold applies the EqualFold predicate on the "verification_notes" field.
+func VerificationNotesEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldVerificationNotes, v))
+}
+
+// VerificationNotesContainsFold applies the ContainsFold predicate on the "verification_notes" field.
+func VerificationNotesContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldVerificationNotes, v))
 }
 
 // LastCommitShaEQ applies the EQ predicate on the "last_commit_sha" field.

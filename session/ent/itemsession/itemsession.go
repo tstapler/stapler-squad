@@ -27,6 +27,8 @@ const (
 	FieldAcSnapshot = "ac_snapshot"
 	// FieldTriageResult holds the string denoting the triage_result field in the database.
 	FieldTriageResult = "triage_result"
+	// FieldVerificationNotes holds the string denoting the verification_notes field in the database.
+	FieldVerificationNotes = "verification_notes"
 	// FieldLastCommitSha holds the string denoting the last_commit_sha field in the database.
 	FieldLastCommitSha = "last_commit_sha"
 	// FieldLastCommitAt holds the string denoting the last_commit_at field in the database.
@@ -74,6 +76,7 @@ var Columns = []string{
 	FieldEndedAt,
 	FieldAcSnapshot,
 	FieldTriageResult,
+	FieldVerificationNotes,
 	FieldLastCommitSha,
 	FieldLastCommitAt,
 	FieldLastCommitMessage,
@@ -152,6 +155,11 @@ func ByAcSnapshot(opts ...sql.OrderTermOption) OrderOption {
 // ByTriageResult orders the results by the triage_result field.
 func ByTriageResult(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriageResult, opts...).ToFunc()
+}
+
+// ByVerificationNotes orders the results by the verification_notes field.
+func ByVerificationNotes(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVerificationNotes, opts...).ToFunc()
 }
 
 // ByLastCommitSha orders the results by the last_commit_sha field.

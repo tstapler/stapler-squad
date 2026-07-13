@@ -14,12 +14,13 @@ import (
 
 // ItemSessionData is the input data for creating a new ItemSession.
 type ItemSessionData struct {
-	ItemID           string // BacklogItem UUID
-	SessionUUID      string
-	SessionRole      string
-	AcSnapshot       AcCriteriaJSON
-	TriageResult     string
-	EstimatedCostUsd float64 // Only set for headless sessions where cost is known at creation time
+	ItemID            string // BacklogItem UUID
+	SessionUUID       string
+	SessionRole       string
+	AcSnapshot        AcCriteriaJSON
+	TriageResult      string
+	VerificationNotes string  // Freeform verification evidence reported via request_review
+	EstimatedCostUsd  float64 // Only set for headless sessions where cost is known at creation time
 }
 
 // ReviewVerdictData is the input data for saving a ReviewVerdict.
@@ -51,7 +52,8 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetSessionRole(data.SessionRole).
 		SetBacklogItemID(parsedItemID).
 		SetNillableAcSnapshot(nilIfEmpty(string(data.AcSnapshot))).
-		SetNillableTriageResult(nilIfEmpty(data.TriageResult))
+		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
+		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes))
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
 	}
@@ -270,6 +272,23 @@ func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id st
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update triage_result on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionVerificationNotes stores the verification evidence reported via
+// request_review (commands run, manual checks performed) on an ItemSession.
+func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, id string, verificationNotes string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetVerificationNotes(verificationNotes).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update verification_notes on item session %s: %w", id, err)
 	}
 	return nil
 }

@@ -76,13 +76,15 @@ const commitMessageSystemPrompt = `You are a commit message expert. Output a sin
 
 // reviewSystemPrompt is the stable role/instruction portion of the review prompt.
 // This is separated from the per-call data payload (item, diff) to enable prefix-caching.
-const reviewSystemPrompt = `You are a code review agent. Your ONLY task is to evaluate the diff against the acceptance criteria and call submit_review_verdict. Do not write any code. Do not modify any files.`
+const reviewSystemPrompt = `You are a code review agent. Your ONLY task is to evaluate the diff against the acceptance criteria and call submit_review_verdict. Do not write any code. Do not modify any files.
+Some acceptance criteria describe things that cannot be observed in a diff at all — a test suite passing, a build succeeding, a manually-verified UI behavior. For these, consult the "## Verification Evidence" section if present: it is evidence self-reported by the work session, not derived from the diff. Treat it as you would a claim from a colleague — specific, checkable claims (an exact command and its result, a specific UI element and what was observed) are credible evidence and may resolve a criterion as PASS. Vague or generic claims ("I tested it", "verified manually", "works as expected") with no specifics are not evidence — do not let them upgrade a verdict. If there is no Verification Evidence section and a criterion is not visible in the diff, mark it UNVERIFIABLE as usual.`
 
 // headlessReviewSystemPrompt is used for headless review calls that have no tool access.
 // Instructs the model to output JSON instead of invoking a tool.
 const headlessReviewSystemPrompt = `You are a code review agent. Evaluate the diff against the acceptance criteria. Output ONLY a single JSON object — no other text before or after it:
 {"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}
-Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Set overall to PASS only when every criterion passes.`
+Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Set overall to PASS only when every criterion passes.
+Some acceptance criteria describe things that cannot be observed in a diff at all — a test suite passing, a build succeeding, a manually-verified UI behavior. For these, consult the "## Verification Evidence" section if present: it is evidence self-reported by the work session, not derived from the diff. Treat it as you would a claim from a colleague — specific, checkable claims (an exact command and its result, a specific UI element and what was observed) are credible evidence and may resolve a criterion as PASS, with the evidence field quoting the specific claim. Vague or generic claims ("I tested it", "verified manually", "works as expected") with no specifics are not evidence — do not let them upgrade a verdict. If there is no Verification Evidence section and a criterion is not visible in the diff, mark it UNVERIFIABLE as usual.`
 
 // ReviewSystemPrompt returns the stable system prompt for review gate calls.
 // Exported so session/backlog_lifecycle.go can use it without embedding the prompt inline.

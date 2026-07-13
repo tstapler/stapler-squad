@@ -36,6 +36,9 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("triage_result").
 			Optional().
 			Comment("JSON triage suggestions"),
+		field.String("verification_notes").
+			Optional().
+			Comment("Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff"),
 		field.String("last_commit_sha").
 			Optional(),
 		field.Time("last_commit_at").

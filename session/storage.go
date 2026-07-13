@@ -807,6 +807,16 @@ func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, 
 	return er.UpdateItemSessionTriageResult(ctx, id, triageResult)
 }
 
+// UpdateItemSessionVerificationNotes stores verification evidence (commands run, manual
+// checks performed) reported via request_review on an ItemSession.
+func (s *Storage) UpdateItemSessionVerificationNotes(ctx context.Context, id string, verificationNotes string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionVerificationNotes(ctx, id, verificationNotes)
+}
+
 // UpdateItemSessionStarted records the start time for an ItemSession.
 func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, startedAt time.Time) error {
 	er, ok := s.repo.(*EntRepository)
