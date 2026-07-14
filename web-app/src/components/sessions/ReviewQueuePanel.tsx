@@ -409,11 +409,24 @@ export function ReviewQueuePanel({
   // highlight the keyboard-nav "current item" at its real index.
   const indexById = useMemo(() => new Map(items.map((it, i) => [it.sessionId, i])), [items]);
 
+  // ReviewItem -> Session conversion cache for grouping, keyed on the stable unfiltered
+  // `allItems` array (only changes on queue refresh) rather than the post-filter/sort `items`
+  // array (changes on every keystroke/filter toggle). Avoids rebuilding protobuf Session
+  // messages for the whole queue on every search keystroke when grouping is enabled.
+  const sessionByItemId = useMemo(() => {
+    const map = new Map<string, Session>();
+    for (const item of allItems) {
+      map.set(item.sessionId, reviewItemToSession(item));
+    }
+    return map;
+  }, [allItems]);
+
   // Reuses groupSessions() (the same grouping engine SessionList uses) by bridging each
   // ReviewItem to a minimal Session — avoids building a parallel grouping implementation.
   const groupedItems = useMemo(() => {
     if (groupingStrategy === GroupingStrategy.None) return null;
-    const groups = groupSessions(items.map(reviewItemToSession), groupingStrategy);
+    const sessions = items.map((it) => sessionByItemId.get(it.sessionId) ?? reviewItemToSession(it));
+    const groups = groupSessions(sessions, groupingStrategy);
     const bySessionId = new Map(items.map((it) => [it.sessionId, it]));
     return groups
       .map((g) => ({
@@ -422,7 +435,7 @@ export function ReviewQueuePanel({
         items: g.sessions.map((s) => bySessionId.get(s.id)).filter((it): it is ReviewItem => !!it),
       }))
       .filter((g) => g.items.length > 0);
-  }, [items, groupingStrategy]);
+  }, [items, groupingStrategy, sessionByItemId]);
 
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
