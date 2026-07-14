@@ -314,7 +314,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 
 	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
 	if !isReopen {
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 		}
 	}
@@ -343,7 +343,7 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 		_ = s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now())
 	}
 	if item.Status == string(session.BacklogStatusReview) {
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
 		}
@@ -452,7 +452,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition); err != nil {
+	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
 	}
 
@@ -474,7 +474,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// Roll back: item should stay in review rather than stranded in in_progress
 		// with no active session. ReconcileStuckItems is an eventual fallback, but
 		// an explicit rollback provides faster recovery.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, nil); rollbackErr != nil {
+		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, nil, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
@@ -521,7 +521,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened for PR fix (CI/review)",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition); err != nil {
+	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
 	}
 
@@ -562,7 +562,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 
 	if spawnErr != nil {
 		// Roll back to pr_pending so the reconciler can retry.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil); rollbackErr != nil {
+		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenForPRFix] rollback to pr_pending failed for item %s: %v", itemID, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
@@ -622,7 +622,7 @@ func (s *BacklogService) TriggerTriage(
 	if item.Status == string(session.BacklogStatusReady) {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
-			session.BacklogStatusIdea, precondition); transErr != nil {
+			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
 			log.WarningLog.Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
@@ -758,7 +758,7 @@ func (s *BacklogService) TriggerTriage(
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID,
-			session.BacklogStatusReady, precondition); transErr != nil {
+			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 		}
 

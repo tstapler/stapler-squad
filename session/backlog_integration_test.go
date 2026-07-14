@@ -31,13 +31,13 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	require.Equal(t, string(BacklogStatusIdea), createdItem.Status)
 
 	// 2. Transition to "ready"
-	readyItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil)
+	readyItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReady), readyItem.Status)
 
 	// 3. Approve plan and transition to "in_progress"
 	readyItem.PlanApproved = true
-	inProgressItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil)
+	inProgressItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusInProgress), inProgressItem.Status)
 
@@ -247,6 +247,69 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	// Notes must contain the exact auto-reconciliation marker written by ReconcileStuckItems.
 	require.Contains(t, fetchedItem.Notes, "[auto]", "ReconcileStuckItems should set notes with [auto] marker")
 	require.Contains(t, fetchedItem.Notes, "review", "ReconcileStuckItems notes should mention transition to review")
+
+	// 6. A BacklogStatusEvent audit row must have been recorded for the auto-transition.
+	require.Len(t, fetchedItem.StatusEvents, 1)
+	require.Equal(t, string(BacklogStatusInProgress), fetchedItem.StatusEvents[0].FromStatus)
+	require.Equal(t, string(BacklogStatusReview), fetchedItem.StatusEvents[0].ToStatus)
+	require.Equal(t, TriggeredBySystem, fetchedItem.StatusEvents[0].TriggeredBy)
+}
+
+// Archiving a backlog item must record a BacklogStatusEvent audit row.
+func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	itemData := BacklogItemData{
+		Title:              "To be archived",
+		AcceptanceCriteria: `[{"index":0,"text":"n/a","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	archived, err := storage.ArchiveBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), archived.Status)
+
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Len(t, fetchedItem.StatusEvents, 1)
+	require.Equal(t, string(BacklogStatusIdea), fetchedItem.StatusEvents[0].FromStatus)
+	require.Equal(t, string(BacklogStatusArchived), fetchedItem.StatusEvents[0].ToStatus)
+	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+}
+
+// TransitionBacklogItemStatus must record the caller-supplied triggeredBy value
+// (user vs. system) on the resulting BacklogStatusEvent row.
+func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	itemData := BacklogItemData{
+		Title:              "Triggered-by check",
+		AcceptanceCriteria: `[{"index":0,"text":"n/a","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	_, err = storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Len(t, fetchedItem.StatusEvents, 2)
+	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, TriggeredBySystem, fetchedItem.StatusEvents[1].TriggeredBy)
 }
 
 // IT-006: Review session exit does NOT transition item (recursion guard)

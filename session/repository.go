@@ -169,7 +169,9 @@ type Repository interface {
 	// DeleteBacklogItem permanently removes an item and all its child records.
 	DeleteBacklogItem(ctx context.Context, id string) error
 	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
-	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
+	// triggeredBy records who/what initiated the transition (TriggeredByUser or TriggeredBySystem)
+	// on the resulting BacklogStatusEvent audit row.
+	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error)
 	// GetAllItemSessionsWithBacklogInfo returns all item sessions joined with their parent backlog item metadata.
 	// Used by the Insights dashboard to annotate sessions with backlog context.
 	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error)

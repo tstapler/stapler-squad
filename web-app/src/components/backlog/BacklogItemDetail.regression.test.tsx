@@ -35,6 +35,13 @@ jest.mock("@/lib/hooks/useSessionService", () => ({
   useSessionService: () => ({ deleteSession: jest.fn() }),
 }));
 
+// BacklogItemDetail also calls useAnalytics() directly (not just via
+// useSessionService) — stub it out too so this test doesn't need a real
+// AnalyticsContextProvider ancestor.
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 const getBacklogItem = jest.fn();
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({

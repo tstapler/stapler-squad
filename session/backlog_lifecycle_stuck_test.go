@@ -459,9 +459,9 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 
 	// 3 in_progress->review round trips.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -491,9 +491,9 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	})
 	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -530,9 +530,9 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	})
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -760,7 +760,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

@@ -307,7 +307,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	// Transition item to review status (from in_progress only).
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition); transErr != nil {
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredBySystem); transErr != nil {
 		log.InfoLog.Printf("[mcp:request_review] transition to review failed: %v", transErr)
 		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
 	}
@@ -434,7 +434,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// If PASS, transition item to done (only from review status).
 	if overallOutcome == session.ReviewVerdictPass {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition); transErr != nil {
+		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition, session.TriggeredBySystem); transErr != nil {
 			log.InfoLog.Printf("[mcp:submit_review_verdict] PASS but transition to done failed: %v", transErr)
 			// Non-fatal — verdict is saved, status transition is best-effort.
 		}

@@ -275,7 +275,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						return
 					}
 					precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-					if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition); transErr != nil {
+					if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil {
 						log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
 					} else {
 						log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)

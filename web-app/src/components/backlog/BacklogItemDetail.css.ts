@@ -475,6 +475,27 @@ export const workflowEventArrow = style({
   flexShrink: 0,
 });
 
+export const workflowEmpty = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: vars.space["4"],
+  textAlign: "center",
+  color: vars.color.textSecondary,
+});
+
+export const workflowEmptyIcon = style({
+  fontSize: "1.5rem",
+  opacity: 0.4,
+});
+
+export const workflowEmptyText = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textMuted,
+  margin: 0,
+});
+
 export const reviewContextBox = style({
   display: "flex",
   alignItems: "flex-start",

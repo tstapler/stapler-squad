@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -457,6 +458,14 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
+	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
+	}
+
 	now := time.Now()
 	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
 		SetArchivedAt(now).
@@ -469,8 +478,30 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		}
 		return nil, fmt.Errorf("failed to archive backlog item %s: %w", id, err)
 	}
+
+	r.recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), TriggeredByUser, "")
+
 	result := backlogItemToData(item)
 	return &result, nil
+}
+
+// recordStatusEvent appends an immutable BacklogStatusEvent audit row for a status
+// transition. client may be r.client.BacklogStatusEvent (non-tx callers) or a
+// tx.BacklogStatusEvent (callers already inside a transaction) — both share the same
+// generated client type. A write failure is logged and otherwise swallowed: the audit
+// trail is best-effort and must never fail the status transition it's recording.
+func (r *EntRepository) recordStatusEvent(ctx context.Context, client *ent.BacklogStatusEventClient, itemID uuid.UUID, fromStatus, toStatus, triggeredBy, note string) {
+	evCreate := client.Create().
+		SetItemID(itemID).
+		SetFromStatus(fromStatus).
+		SetToStatus(toStatus).
+		SetTriggeredBy(triggeredBy)
+	if note != "" {
+		evCreate = evCreate.SetNote(note)
+	}
+	if _, evErr := evCreate.Save(ctx); evErr != nil {
+		log.ErrorLog.Printf("[EntRepository] failed to record status event item=%s from=%s to=%s: %v", itemID, fromStatus, toStatus, evErr)
+	}
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -515,7 +546,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
-func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -551,18 +582,11 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	}
 
 	// Append an immutable audit record for this transition.
-	evCreate := r.client.BacklogStatusEvent.Create().
-		SetItemID(parsedID).
-		SetFromStatus(current.Status).
-		SetToStatus(string(toStatus)).
-		SetTriggeredBy(TriggeredBySystem)
-	if precondition != nil && precondition.Note != "" {
-		evCreate = evCreate.SetNote(precondition.Note)
+	var note string
+	if precondition != nil {
+		note = precondition.Note
 	}
-	if _, evErr := evCreate.Save(ctx); evErr != nil {
-		// Non-fatal: audit log failure should not block the transition itself.
-		_ = evErr
-	}
+	r.recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(toStatus), triggeredBy, note)
 
 	result := backlogItemToData(item)
 	return &result, nil
