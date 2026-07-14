@@ -654,7 +654,9 @@ export function ReviewQueuePanel({
     tagFilter.size +
     (prFilter !== "all" ? 1 : 0) +
     (divergedOnly ? 1 : 0) +
-    (searchText.trim() ? 1 : 0);
+    (searchText.trim() ? 1 : 0) +
+    (sortField !== "default" ? 1 : 0) +
+    (groupingStrategy !== GroupingStrategy.None ? 1 : 0);
 
   const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
 
