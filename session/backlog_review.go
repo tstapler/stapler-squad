@@ -313,6 +313,11 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 		return false, codebaseWorkDir
 	}
 	for _, p := range toolReads {
+		if strings.TrimSpace(p) == "" {
+			// A blank entry cites nothing — treat as unverified/fabricated rather
+			// than letting it resolve to codebaseWorkDir itself below.
+			return false, p
+		}
 		resolved := p
 		if !filepath.IsAbs(resolved) {
 			resolved = filepath.Join(root, resolved)
@@ -327,7 +332,15 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 			// whether the path happens to exist somewhere else on the host.
 			return false, p
 		}
-		if _, err := os.Stat(resolved); err != nil {
+		if rel == "." {
+			// The path resolves to codebaseWorkDir itself (e.g. "" or ".") — the
+			// directory always exists, so this would otherwise trivially satisfy
+			// the check without citing any real evidence. Reject it.
+			return false, p
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || info.IsDir() {
+			// A directory isn't a file citation either — require a regular file.
 			return false, p
 		}
 	}

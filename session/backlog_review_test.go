@@ -504,6 +504,36 @@ func TestVerifyToolReadsExist_RelativePathTraversalEscapesCodebaseWorkDir_Return
 	assert.Equal(t, "../secret.txt", badPath)
 }
 
+// TestVerifyToolReadsExist_BlankOrDotPath_ReturnsFalse verifies a degenerate tool_reads
+// entry ("" or ".") — which resolves to codebaseWorkDir itself, a directory that always
+// exists — is rejected rather than trivially passing containment and existence checks
+// without citing any real file. Security review finding, this repair pass.
+func TestVerifyToolReadsExist_BlankOrDotPath_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0o644))
+
+	ok, badPath := verifyToolReadsExist(dir, []string{""})
+	assert.False(t, ok, "a blank tool_reads entry must not verify")
+	assert.Equal(t, "", badPath)
+
+	ok, badPath = verifyToolReadsExist(dir, []string{"."})
+	assert.False(t, ok, "a \".\" tool_reads entry resolving to codebaseWorkDir must not verify")
+	assert.Equal(t, ".", badPath)
+}
+
+// TestVerifyToolReadsExist_DirectoryPath_ReturnsFalse verifies a tool_reads entry
+// naming a real directory (not a file) under codebaseWorkDir is rejected — citing a
+// directory isn't a real evidence citation, even though os.Stat would report it exists.
+func TestVerifyToolReadsExist_DirectoryPath_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "session")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	ok, badPath := verifyToolReadsExist(dir, []string{"session"})
+	assert.False(t, ok, "a directory citation must not verify")
+	assert.Equal(t, "session", badPath)
+}
+
 // ─── DegradeIfUnverified ────────────────────────────────────────────────────
 
 // TestDegradeIfUnverified_DiffPath_NoOp verifies the diff path (normal review, no
