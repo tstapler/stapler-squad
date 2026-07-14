@@ -22,13 +22,13 @@ import (
 // allowing an AutonomousDriver to complete without needing a real LLM backend.
 type instantDonePool struct{}
 
-func (p *instantDonePool) CallBlockingWithOptions(
+func (p *instantDonePool) CallBlocking(
 	_ context.Context,
 	_ headless.FeatureKey,
 	_, _ string,
 	_ headless.CallOptions,
-) (string, error) {
-	return "DONE: test complete", nil
+) (string, float64, error) {
+	return "DONE: test complete", 0, nil
 }
 
 // addPausedAutonomousInstance inserts a paused session with AutonomousMode=true into storage.

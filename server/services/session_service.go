@@ -3434,7 +3434,7 @@ func (s *SessionService) RunOneShot(
 	if s.headlessPool != nil {
 		// Use headless pool for improved streaming and session reuse.
 		var callErr error
-		outputStr, callErr = s.headlessPool.CallBlockingWithOptions(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
+		outputStr, _, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1

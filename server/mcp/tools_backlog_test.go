@@ -599,3 +599,21 @@ func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
 		assert.Contains(t, tc.Text, "Triage result submitted")
 	})
 }
+
+// TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
+// verifies that the request_review tool description (and its verification_notes
+// field description) instruct the agent to cite an exact file path and
+// function/symbol when claiming an acceptance criterion is already satisfied by
+// existing code, rather than making an unsupported "already implemented" claim.
+func TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement(t *testing.T) {
+	data, err := os.ReadFile("tools_backlog.go")
+	require.NoError(t, err, "read tools_backlog.go")
+
+	content := string(data)
+	assert.Contains(t, content, "already satisfied by existing code",
+		"request_review tool description must instruct agents to flag already-implemented acceptance criteria")
+	assert.Contains(t, content, "cite the exact file path and function/symbol",
+		"request_review tool description must require a file/function citation for already-implemented claims")
+	assert.Contains(t, content, "already implemented",
+		"request_review tool description must call out unsupported \"already implemented\" claims as weak evidence")
+}

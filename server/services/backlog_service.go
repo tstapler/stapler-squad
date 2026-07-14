@@ -81,6 +81,13 @@ type BacklogService struct {
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
 
+	// capabilityCheck gates the first codebase-read call per process lifetime (Story
+	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
+	// ReviewGateRunner so a failure discovered via either call site short-circuits
+	// the other) but is a field — not a hardcoded package-var reference — so tests
+	// can inject a fresh instance instead of fighting the singleton's sync.Once.
+	capabilityCheck *headless.CodebaseReadCapabilitySelfCheck
+
 	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
 	// goroutine. An instance field (not a package var) so tests can override it on
 	// their own *BacklogService without any shared global state or data-race risk
@@ -147,12 +154,21 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		triageSem:            make(chan struct{}, 8),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
 		resolveGitHubInput:   session.ResolveGitHubInput,
+		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
 	}
 }
 
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// SetCapabilityCheck overrides the codebase-read capability self-check instance.
+// Exposed for tests, which need a fresh (non-shared) instance to avoid the
+// package-level singleton's sync.Once making later tests observe an earlier test's
+// cached result. Production callers should rely on the default.
+func (s *BacklogService) SetCapabilityCheck(c *headless.CodebaseReadCapabilitySelfCheck) {
+	s.capabilityCheck = c
 }
 
 // SetTriageCleanupTimeout overrides the default timeout for TriggerTriage's

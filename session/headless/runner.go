@@ -47,14 +47,36 @@ var (
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.
 type ProcessRunner struct {
-	claudeBin string
-	workDir   string // optional working directory; empty = inherit from parent
+	claudeBin      string
+	workDir        string // optional working directory; empty = inherit from parent
+	allowedTools   string // optional --allowedTools value; empty = not passed
+	permissionMode string // optional --permission-mode value; empty = not passed
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
-// directory to workDir. Used by CallBlockingWithOptions for per-call directory override.
+// directory to workDir, preserving any existing allowedTools/permissionMode. Used by
+// CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir}
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode}
+}
+
+// WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode
+// set, preserving any existing workDir.
+func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode string) *ProcessRunner {
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode}
+}
+
+// toolAccessArgs returns the --allowedTools/--permission-mode flag pairs for r's
+// configured values, in that order.
+func (r *ProcessRunner) toolAccessArgs() []string {
+	var extra []string
+	if r.allowedTools != "" {
+		extra = append(extra, "--allowedTools", r.allowedTools)
+	}
+	if r.permissionMode != "" {
+		extra = append(extra, "--permission-mode", r.permissionMode)
+	}
+	return extra
 }
 
 // claudeAllowedEnvPrefixes lists the env-var prefixes that are forwarded to the
@@ -87,6 +109,7 @@ func filteredEnv() []string {
 // /proc/<pid>/cmdline. The stop function terminates the subprocess and must
 // always be called.
 func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader) (io.ReadCloser, func() error, error) {
+	args = append(args, r.toolAccessArgs()...)
 	var stderrBuf bytes.Buffer
 	opts := []executor.ProcessOption{
 		executor.WithNewSession(),

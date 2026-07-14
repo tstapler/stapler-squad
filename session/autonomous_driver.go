@@ -18,7 +18,7 @@ import (
 // HeadlessPoolClient is the narrow interface AutonomousDriver needs from the headless pool.
 // *headless.Pool satisfies this interface directly.
 type HeadlessPoolClient interface {
-	CallBlockingWithOptions(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
 }
 
 // AutonomousDriverOutcome describes how an autonomous driver run concluded.
@@ -137,7 +137,7 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 }
 
 // Stop cancels the driver goroutine.
-// Context cancellation propagates into CallBlockingWithOptions: the headless pool passes ctx
+// Context cancellation propagates into CallBlocking: the headless pool passes ctx
 // to runner.Run (which kills the subprocess) and the stream reader selects on ctx.Done,
 // so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
 func (d *AutonomousDriver) Stop() {
@@ -207,7 +207,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			keyLen = len(sessionID)
 		}
 		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:keyLen])
-		resp, err := d.headlessPool.CallBlockingWithOptions(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
+		resp, _, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
 			break

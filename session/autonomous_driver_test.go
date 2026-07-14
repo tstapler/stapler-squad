@@ -17,13 +17,13 @@ type fakeHeadlessPool struct {
 	capturedKeys []headless.FeatureKey
 }
 
-func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
 	if idx < len(f.responses) {
-		return f.responses[idx], nil
+		return f.responses[idx], 0, nil
 	}
-	return "NEXT_MESSAGE: keep going", nil
+	return "NEXT_MESSAGE: keep going", 0, nil
 }
 
 func TestParseOrchestrationResponse_NextMessage(t *testing.T) {
@@ -359,7 +359,7 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 // panicPool panics on the first call to simulate a driver panic.
 type panicPool struct{}
 
-func (p *panicPool) CallBlockingWithOptions(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	panic("simulated panic in headless pool")
 }
 

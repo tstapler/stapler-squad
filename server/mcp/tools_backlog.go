@@ -699,7 +699,8 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 		mcpgo.NewTool("request_review",
 			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done. "+
 				"The reviewer only sees the committed diff plus what you report here — it CANNOT see command output or UI behavior you observed. "+
-				"If any acceptance criterion describes something that isn't visible in a diff (a test suite passing, `make quick-check` succeeding, a manually-verified UI behavior), you MUST report it in verification_notes or the reviewer will mark that criterion UNVERIFIABLE even if you genuinely did the work."),
+				"If any acceptance criterion describes something that isn't visible in a diff (a test suite passing, `make quick-check` succeeding, a manually-verified UI behavior), you MUST report it in verification_notes or the reviewer will mark that criterion UNVERIFIABLE even if you genuinely did the work. "+
+				"If you concluded an acceptance criterion is already satisfied by existing code and made no change for it, say so explicitly and cite the exact file path and function/symbol that already satisfies it — an unsupported claim like \"already implemented\" or \"already done\" with no citation is weak evidence and is likely to be marked UNVERIFIABLE."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -714,7 +715,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 					"\"ran `go test ./session/...` -> ok (41 tests)\" or \"ran `make quick-check` -> build/test/lint all passed\". "+
 					"For manually-verified UI behavior, describe exactly what you did and observed, e.g. "+
 					"\"ran make install-service, opened the session list, confirmed the new session appeared under Category=Backlog\". "+
-					"Vague claims like \"I tested it\" or \"verified manually\" with no specifics are not useful evidence — be concrete or omit the claim."),
+					"Vague claims like \"I tested it\" or \"verified manually\" with no specifics are not useful evidence — be concrete or omit the claim. "+
+					"If a criterion required no change because it's already implemented, state that explicitly and cite the exact file path and function/symbol that satisfies it, e.g. "+
+					"\"AC 2 already satisfied by ValidateSessionOwnership() in session/backlog_review.go — no change needed\". "+
+					"A citation-free claim of \"already implemented\" is weak evidence for the reviewer."),
 			),
 		),
 		h.requestReview,
