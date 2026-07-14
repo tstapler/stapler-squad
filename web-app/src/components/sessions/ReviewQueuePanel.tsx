@@ -561,10 +561,28 @@ export function ReviewQueuePanel({
     setUrlFilter("diverged", value ? "1" : undefined);
   };
 
+  // Local `searchText` state updates immediately so filtering stays responsive on every
+  // keystroke, but the URL write (which triggers router.replace()) is debounced to avoid
+  // a history/navigation update per character typed.
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleSearchTextChange = (value: string) => {
     setSearchText(value);
-    setUrlFilter("q", value || undefined);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setUrlFilter("q", value || undefined);
+    }, 300);
   };
+
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+    };
+  }, []);
 
   const handleSortFieldChange = (value: SortField) => {
     setSortField(value);
@@ -582,6 +600,10 @@ export function ReviewQueuePanel({
   };
 
   const clearAllFilters = useCallback(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
     setPriorityFilter(new Set());
     setReasonFilter(new Set());
     setProgramFilter(new Set());
