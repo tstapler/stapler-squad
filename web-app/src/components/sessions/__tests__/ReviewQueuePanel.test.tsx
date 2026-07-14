@@ -841,8 +841,22 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
   });
 
   it("hydrates active filters from the URL on mount", () => {
-    mockSearchParams = new URLSearchParams({ priority: String(Priority.URGENT), q: "login" });
-    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    mockSearchParams = new URLSearchParams({
+      priority: String(Priority.URGENT),
+      q: "login",
+      category: "bugfix",
+      tag: "backend",
+      sort: "name",
+      group: "program",
+    });
+    const item = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      priority: Priority.URGENT,
+      category: "bugfix",
+      tags: ["backend"],
+      program: "claude",
+    });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
     renderPanel();
@@ -850,18 +864,53 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
 
     expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("review-queue-search")).toHaveValue("login");
+    expect(screen.getByRole("button", { name: "bugfix (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "backend (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText(/sort by/i)).toHaveValue("name");
+    expect(screen.getByLabelText(/group by/i)).toHaveValue("program");
   });
 
   it("writes filter changes through to the URL via useFilterState", () => {
-    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    const item = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      priority: Priority.URGENT,
+      category: "bugfix",
+      tags: ["backend"],
+      program: "claude",
+    });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
 
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
 
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
     expect(mockReplace).toHaveBeenCalledWith(
       expect.stringContaining(`priority=${Priority.URGENT}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "bugfix (1)" }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("category=bugfix"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "backend (1)" }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("tag=backend"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("sort=name"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("group=program"),
       expect.objectContaining({ scroll: false })
     );
   });
