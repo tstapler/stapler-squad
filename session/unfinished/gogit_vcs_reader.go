@@ -14,9 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/sync/singleflight"
@@ -96,6 +98,20 @@ type cachedRepo struct {
 	repo         *git.Repository
 	mu           sync.Mutex
 	accessedAtNs int64 // atomic UnixNano; updated on every cache hit
+
+	// headTreeHash/headTreeCache cache the name->blob-hash map for the HEAD tree,
+	// valid only while headTreeHash still matches the repo's current HEAD commit.
+	// Both fields are guarded by mu (always held while diffShortstatUncached reads
+	// or repopulates them), so plain reads/writes are safe without atomics.
+	headTreeHash  plumbing.Hash
+	headTreeCache map[string]plumbing.Hash
+
+	// blobCache holds HEAD blob content keyed by its (content-addressed, thus
+	// immutable) hash — never needs invalidation, only population on first read.
+	// ponytail: unbounded but naturally capped by the set of files that have been
+	// in a changed state during this process's lifetime; add an entry-count cap
+	// if a long-lived process against a churny repo ever makes this measurably large.
+	blobCache sync.Map // map[plumbing.Hash][]byte
 }
 
 // pruneRepoCache evicts entries not accessed within repoCacheTTL, then trims
@@ -343,33 +359,44 @@ func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePat
 	// --- staged changes: index vs HEAD (go-git, needs lock) ---
 	headRef, headErr := repo.Head()
 	if headErr == nil {
-		headCommit, cerr := repo.CommitObject(headRef.Hash())
-		if cerr != nil {
-			return nil, false, false, fmt.Errorf("head commit: %w", cerr)
-		}
-		headTree, terr := headCommit.Tree()
-		if terr != nil {
-			return nil, false, false, fmt.Errorf("head tree: %w", terr)
-		}
+		headHash := headRef.Hash()
+		// Shares entry.headTreeCache with diffShortstatUncached — both callers
+		// need the identical name->blob-hash map for the same HEAD commit, and
+		// HEAD moves far less often than either is called.
+		var headHashes map[string]plumbing.Hash
+		if entry.headTreeHash == headHash && entry.headTreeCache != nil {
+			headHashes = entry.headTreeCache
+		} else {
+			headCommit, cerr := repo.CommitObject(headHash)
+			if cerr != nil {
+				return nil, false, false, fmt.Errorf("head commit: %w", cerr)
+			}
+			headTree, terr := headCommit.Tree()
+			if terr != nil {
+				return nil, false, false, fmt.Errorf("head tree: %w", terr)
+			}
 
-		// Walk the tree without loading blob content — only tree-entry hashes are needed.
-		// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
-		// loads only tree objects, which are orders of magnitude smaller.
-		headHashes := make(map[string]plumbing.Hash, len(headTree.Entries))
-		tw := object.NewTreeWalker(headTree, true, nil)
-		defer tw.Close()
-		for {
-			name, te, twErr := tw.Next()
-			if errors.Is(twErr, io.EOF) {
-				break
+			// Walk the tree without loading blob content — only tree-entry hashes are needed.
+			// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
+			// loads only tree objects, which are orders of magnitude smaller.
+			headHashes = make(map[string]plumbing.Hash, len(headTree.Entries))
+			tw := object.NewTreeWalker(headTree, true, nil)
+			defer tw.Close()
+			for {
+				name, te, twErr := tw.Next()
+				if errors.Is(twErr, io.EOF) {
+					break
+				}
+				if twErr != nil {
+					return nil, false, false, fmt.Errorf("walk head tree: %w", twErr)
+				}
+				if te.Mode == filemode.Dir {
+					continue
+				}
+				headHashes[name] = te.Hash
 			}
-			if twErr != nil {
-				return nil, false, false, fmt.Errorf("walk head tree: %w", twErr)
-			}
-			if te.Mode == filemode.Dir {
-				continue
-			}
-			headHashes[name] = te.Hash
+			entry.headTreeHash = headHash
+			entry.headTreeCache = headHashes
 		}
 
 		indexNames := make(map[string]bool, len(idx.Entries))
@@ -726,9 +753,14 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	}
 
 	// Build HEAD tree hash map using TreeWalker — loads only tree objects, not blobs.
+	// Reused across polls via entry.headTreeCache as long as HEAD hasn't moved,
+	// since HEAD only changes on commit/checkout, far less often than the poll cycle.
 	headHashes := make(map[string]plumbing.Hash, len(idx.Entries))
 	if headRef, headErr := repo.Head(); headErr == nil {
-		if headCommit, cerr := repo.CommitObject(headRef.Hash()); cerr == nil {
+		headHash := headRef.Hash()
+		if entry.headTreeHash == headHash && entry.headTreeCache != nil {
+			headHashes = entry.headTreeCache
+		} else if headCommit, cerr := repo.CommitObject(headHash); cerr == nil {
 			if headTree, terr := headCommit.Tree(); terr == nil {
 				var twWalkErr error
 				tw := object.NewTreeWalker(headTree, true, nil)
@@ -751,6 +783,8 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 					entry.mu.Unlock()
 					return DiffStat{}, fmt.Errorf("walk head tree: %w", twWalkErr)
 				}
+				entry.headTreeHash = headHash
+				entry.headTreeCache = headHashes
 			}
 		}
 	}
@@ -796,6 +830,15 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 
 	entry.mu.Unlock() // release before OS operations
 
+	// indexMtime anchors the racy-git window check below: a file is only
+	// "racy" (stat can't prove it's unchanged) if its own mtime is not clearly
+	// before the index was last written — the same test git itself uses,
+	// rather than re-hashing every stat-clean file on every single poll.
+	var indexMtime time.Time
+	if fi, statErr := os.Stat(filepath.Join(worktreeGitDir(worktreePath), "index")); statErr == nil {
+		indexMtime = fi.ModTime()
+	}
+
 	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
 	type changeTarget struct {
 		name      string
@@ -835,10 +878,16 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 
 		// Racy-clean case: size matches the index entry AND the working-tree
 		// mtime (truncated to second) equals the index entry's recorded mtime.
-		// stat alone cannot prove the file is unchanged — a file rewritten with
-		// identical size within the same wall-clock second as the index update
-		// looks clean by stat but may differ in content (the classic "racy git"
-		// problem). Fall back to a content hash comparison, exactly as git does.
+		// stat alone cannot prove the file is unchanged in the racy window —
+		// a file rewritten with identical size within the same wall-clock
+		// second as the index write looks clean by stat but may differ in
+		// content (the classic "racy git" problem). Outside that window
+		// (file mtime clearly predates the index write), stat alone is
+		// sufficient proof of no change, exactly as real git treats it — so
+		// only pay for a content hash when the file could actually be racy.
+		if !fileNeedsContentCheck(info.ModTime(), indexMtime) {
+			continue // stat-clean and outside the racy window: confirmed unchanged
+		}
 		if info.Size() > maxUntrackedFileSize {
 			// Too large to hash within the cap; conservatively treat as changed
 			// rather than reading it into memory, consistent with how large
@@ -874,6 +923,14 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 		if _, already := blobMap[t.headHash]; already {
 			continue
 		}
+		// Blob content is keyed by its content-addressed hash, so a cache hit
+		// is always correct — no invalidation needed, ever. This skips
+		// re-decompressing the same HEAD blob from the packfile on every poll
+		// for a file that stays modified across several consecutive polls.
+		if cached, ok := entry.blobCache.Load(t.headHash); ok {
+			blobMap[t.headHash] = cached.([]byte)
+			continue
+		}
 		blob, berr := entry.repo.BlobObject(t.headHash)
 		if berr != nil {
 			continue
@@ -890,7 +947,9 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(r)
 		_ = r.Close()
-		blobMap[t.headHash] = bytes.Clone(buf.Bytes())
+		data := bytes.Clone(buf.Bytes())
+		blobMap[t.headHash] = data
+		entry.blobCache.Store(t.headHash, data)
 	}
 	entry.mu.Unlock()
 
@@ -923,7 +982,15 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// Untracked files: count lines as pure insertions (no HEAD version).
 	// Limited to maxUntrackedFiles to avoid OOM on repos with large build-artifact trees.
 	// Files over maxUntrackedFileSize are counted but not read for line counting.
-	_ = walkUntracked(worktreePath, indexedNames, func(absPath string) {
+	// gitignore-matched paths (node_modules/, build output, etc.) are skipped
+	// entirely rather than walked and read — this was previously the single
+	// largest allocator in the app (~163GB cum in one profiling session),
+	// since ignored build trees were read just like any other untracked file.
+	var untrackedMatcher gitignore.Matcher
+	if patterns, ignErr := gitignore.ReadPatterns(osfs.New(worktreePath), nil); ignErr == nil {
+		untrackedMatcher = gitignore.NewMatcher(patterns)
+	}
+	_ = walkUntracked(worktreePath, indexedNames, untrackedMatcher, func(absPath string) {
 		d.Files++
 		if data, ok := readFileIfSmall(absPath); ok {
 			d.Insertions += countBytesLines(data)
@@ -931,6 +998,19 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	})
 
 	return d, nil
+}
+
+// fileNeedsContentCheck reports whether a stat-clean file (size and mtime both
+// matching the index entry) still requires a content-hash fallback to rule
+// out the racy-git case. A file is only racy if its own mtime is not clearly
+// before the index was last written — the same window real git uses — so a
+// file whose mtime predates the index write is safe to trust from stat alone.
+// An unknown indexMtime (zero value) is treated conservatively as racy.
+func fileNeedsContentCheck(fileMtime, indexMtime time.Time) bool {
+	if indexMtime.IsZero() {
+		return true
+	}
+	return !fileMtime.Truncate(time.Second).Before(indexMtime.Truncate(time.Second))
 }
 
 // readFileIfSmall reads the file at path only if its size is ≤ maxUntrackedFileSize.
@@ -961,10 +1041,23 @@ func LinesDiff(old, newContent string) (insertions, deletions int) {
 	return len(newLines) - lcs, len(oldLines) - lcs
 }
 
+// maxLCSLines caps the input size to the O(n*m) LCS DP below. A file well
+// under maxUntrackedFileSize in bytes can still contain hundreds of
+// thousands of lines (e.g. mostly-blank or single-character lines), and
+// n×m cells at that scale turns a shortstat poll into minutes of CPU on one
+// goroutine. Beyond this cap, lcsLength/lcsLengthBytes return 0, which the
+// existing len(new)-lcs / len(old)-lcs formulas turn into a "fully replaced"
+// approximation — bounded and cheap instead of exact and unbounded.
+// Declared as var (not const) so tests can lower it without generating huge fixtures.
+var maxLCSLines = 20_000
+
 // lcsLength computes the length of the longest common subsequence of two line slices.
-// Uses O(n*m) DP — acceptable for typical source files.
+// Uses O(n*m) DP — acceptable for typical source files, capped by maxLCSLines.
 func lcsLength(a, b []string) int {
 	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	if len(a) > maxLCSLines || len(b) > maxLCSLines {
 		return 0
 	}
 	// Use two rows to keep memory O(min(n,m)).
@@ -1038,9 +1131,12 @@ func splitLinesBytes(data []byte) [][]byte {
 }
 
 // lcsLengthBytes computes the LCS length of two byte-slice-of-lines sequences.
-// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength.
+// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength, capped by maxLCSLines.
 func lcsLengthBytes(a, b [][]byte) int {
 	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	if len(a) > maxLCSLines || len(b) > maxLCSLines {
 		return 0
 	}
 	if len(a) < len(b) {
@@ -1066,19 +1162,20 @@ func lcsLengthBytes(a, b [][]byte) int {
 	return prev[len(b)]
 }
 
-// walkUntracked calls fn for every file under root that is not in indexed.
-// Skips the .git directory; does not read .gitignore (best-effort for the scanner).
-// Stops after maxUntrackedFiles files to avoid unbounded walks in large build trees.
-func walkUntracked(root string, indexed map[string]struct{}, fn func(absPath string)) error {
+// walkUntracked calls fn for every file under root that is not in indexed and
+// not matched by matcher (pass nil to skip gitignore filtering entirely).
+// Skips the .git directory. Stops after maxUntrackedFiles files to avoid
+// unbounded walks in large build trees.
+func walkUntracked(root string, indexed map[string]struct{}, matcher gitignore.Matcher, fn func(absPath string)) error {
 	count := 0
-	err := walkUntrackedRec(root, root, indexed, &count, fn)
+	err := walkUntrackedRec(root, root, indexed, matcher, &count, fn)
 	if errors.Is(err, errStopWalk) {
 		return nil
 	}
 	return err
 }
 
-func walkUntrackedRec(root, dir string, indexed map[string]struct{}, count *int, fn func(string)) error {
+func walkUntrackedRec(root, dir string, indexed map[string]struct{}, matcher gitignore.Matcher, count *int, fn func(string)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -1094,8 +1191,11 @@ func walkUntrackedRec(root, dir string, indexed map[string]struct{}, count *int,
 			continue
 		}
 		rel = filepath.ToSlash(rel)
+		if matcher != nil && matcher.Match(strings.Split(rel, "/"), de.IsDir()) {
+			continue // gitignored — for a dir this skips the whole subtree
+		}
 		if de.IsDir() {
-			if err := walkUntrackedRec(root, full, indexed, count, fn); err != nil {
+			if err := walkUntrackedRec(root, full, indexed, matcher, count, fn); err != nil {
 				return err
 			}
 		} else if _, tracked := indexed[rel]; !tracked {
@@ -1107,6 +1207,26 @@ func walkUntrackedRec(root, dir string, indexed map[string]struct{}, count *int,
 		}
 	}
 	return nil
+}
+
+// worktreeGitDir returns the path to this worktree's own gitdir — the main
+// .git directory, or a linked worktree's per-worktree gitdir under
+// .git/worktrees/<name>. Unlike gitCommonDir, this is NOT resolved through
+// commondir: files that are per-worktree rather than shared (notably the
+// index) always live here, never in the shared commondir.
+func worktreeGitDir(repoPath string) string {
+	gitPath := filepath.Join(repoPath, ".git")
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		// .git is a directory (or missing).
+		return gitPath
+	}
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir: "
+	if !strings.HasPrefix(line, prefix) {
+		return gitPath
+	}
+	return strings.TrimPrefix(line, prefix)
 }
 
 // gitCommonDir returns the path to the common git directory (the main .git dir),
@@ -1207,7 +1327,19 @@ func resolveRef(repo *git.Repository, name string) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, fmt.Errorf("cannot resolve ref %q", name)
 }
 
-// reachableSet returns the set of all commits reachable from start.
+// reachableSetLimit caps the number of commits reachableSet will walk, the
+// same kind of bound findMergeBase already applies via mergeBaseBFSLimit.
+// The only caller (CommitMessages, via cachedReachableSet) uses the result
+// solely to detect "already merged into base" and stop printing — a partial
+// set beyond this depth means a handful of already-merged commits could
+// appear in the output on a repo with a base branch this deep, a cosmetic
+// imperfection preferable to an unbounded walk over the full history.
+// Declared as var (not const) so tests can lower it without creating
+// thousands of commits.
+var reachableSetLimit = 50_000
+
+// reachableSet returns the set of commits reachable from start, up to
+// reachableSetLimit commits.
 func reachableSet(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]bool, error) {
 	seen := make(map[plumbing.Hash]bool, 64)
 	iter, err := repo.Log(&git.LogOptions{From: start})
@@ -1216,6 +1348,9 @@ func reachableSet(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]
 	}
 	defer iter.Close()
 	if err := iter.ForEach(func(c *object.Commit) error {
+		if len(seen) >= reachableSetLimit {
+			return storer.ErrStop
+		}
 		seen[c.Hash] = true
 		return nil
 	}); err != nil {
