@@ -638,7 +638,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
-        return null;
+        throw err;
       }
     },
     []
@@ -658,7 +658,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
-        return null;
+        throw err;
       }
     },
     []
@@ -687,7 +687,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     } catch (err) {
       console.error("[useBacklogService] cancelTriage:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
-      return false;
+      throw err;
     }
   }, []);
 

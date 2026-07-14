@@ -67,6 +67,14 @@ interface NotificationContextValue {
    * schedule their own dismissal; the toast itself auto-closes via the normal policy).
    */
   showUndoToast: (message: string, onUndo: () => void, durationMs?: number) => string;
+  /**
+   * Show a lightweight success/error toast for a routine action (e.g. a backlog
+   * button click). Bypasses the history panel/audit log — for that, no toast is
+   * the right call. `key` dedupes: a second call with the same key replaces the
+   * existing toast instead of stacking a duplicate; toasts with different keys
+   * (e.g. different items) never collide.
+   */
+  showActionToast: (message: string, type: "success" | "error", key: string) => string;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
@@ -253,6 +261,32 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     []
   );
 
+  const showActionToast = useCallback(
+    (message: string, type: "success" | "error", key: string): string => {
+      const id = `notification-${Date.now()}-${Math.random()}`;
+      const newNotification: NotificationData = {
+        id,
+        sessionId: "",
+        sessionName: "",
+        message,
+        timestamp: Date.now(),
+        notificationType: type === "success" ? "task_complete" : "error",
+        metadata: { actionToastKey: key },
+      };
+      const durationMs = type === "success" ? 5000 : 10000;
+      // Replace any existing toast for this key instead of stacking a duplicate.
+      setNotifications((prev) => [
+        ...prev.filter((n) => n.metadata?.actionToastKey !== key),
+        newNotification,
+      ]);
+      setTimeout(() => {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      }, durationMs);
+      return id;
+    },
+    []
+  );
+
   // Remove stale toasts every minute.
   // Non-actionable: removed after TOAST_STALE_MS (5 min).
   // Actionable (approval_needed, question): removed after ACTIONABLE_TOAST_STALE_MS (6 min).
@@ -413,6 +447,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         loadMoreHistory: history.loadMore,
         refreshHistory: history.refresh,
         showUndoToast,
+        showActionToast,
       }}
     >
       {children}
@@ -458,6 +493,7 @@ export function useNotifications() {
       showSessionNotification: noop,
       togglePanel: noop,
       markAsRead: noop,
+      showActionToast: () => "",
     } as unknown as NonNullable<typeof context>;
   }
   return context;

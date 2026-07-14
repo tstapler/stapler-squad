@@ -1,5 +1,22 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+
+const spinKeyframes = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+export const buttonSpinner = style({
+  display: "inline-block",
+  width: 12,
+  height: 12,
+  border: `2px solid currentColor`,
+  borderTopColor: "transparent",
+  borderRadius: vars.radii.full,
+  animation: `${spinKeyframes} 0.7s linear infinite`,
+  opacity: 0.7,
+  flexShrink: 0,
+});
 
 export const container = style({
   display: "flex",

@@ -1,10 +1,11 @@
 "use client";
 // +feature: backlog:item-detail
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
@@ -39,6 +40,34 @@ const STATUS_CLASS: Record<string, string> = {
 const getStatusClass = (s: string): string => STATUS_CLASS[s] ?? styles.statusArchived;
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
+
+const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
+  mark_ready: "Marked ready.",
+  trigger_triage: "Triage started.",
+  spawn_session: "Session started.",
+  spawn_session_autonomous: "Autonomous session started.",
+  restart_session: "Session restarted.",
+  approve_plan: "Plan approved.",
+  mark_done: "Marked done.",
+  override_done: "Overridden to done.",
+  re_review: "Re-review triggered.",
+  archive: "Archived.",
+  reopen: "Reopened for review.",
+  send_back_idea: "Sent back to triage.",
+  send_back_refining: "Sent back to refining.",
+  send_back_ready: "Sent back to ready.",
+};
+
+/** Renders a button's label, swapping in a spinner + "Running…" while `pending`. */
+function ActionButtonLabel({ pending, label }: { pending: boolean; label: string }) {
+  if (!pending) return <>{label}</>;
+  return (
+    <>
+      <span className={styles.buttonSpinner} aria-hidden="true" />
+      Running…
+    </>
+  );
+}
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";
@@ -107,10 +136,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     lastError,
   } = useBacklogService();
   const { deleteSession } = useSessionService();
+  const { showActionToast } = useNotifications();
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
+  /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
@@ -120,6 +151,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // degrades every session's "Pipeline" group to the unrecognized-mode
   // fallback rather than blocking the rest of the item detail view.
   const [pipelineModes, setPipelineModes] = useState<PipelineMode[]>([]);
+
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
@@ -159,6 +199,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     setError(null);
     try {
       const result = await getBacklogItem(itemId);
+      if (!mountedRef.current) return;
       if (!result) {
         setError("Item not found.");
       } else {
@@ -166,9 +207,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         setNotesValue(result.notes ?? "");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load item.");
+      if (mountedRef.current) setError(e instanceof Error ? e.message : "Failed to load item.");
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, [itemId, getBacklogItem]);
 
@@ -226,7 +267,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const handleAction = useCallback(
     async (action: string) => {
       if (!item) return;
-      setActionLoading(true);
+      setActionLoading(action);
+      const toastKey = `${item.id}:${action}`;
       try {
         switch (action) {
           case "mark_ready":
@@ -255,7 +297,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             if (reviewSession) {
               await overrideVerdict(reviewSession.entityId, "Manual override to done", "done");
             } else {
-              setError("No review session found — cannot override verdict.");
+              if (mountedRef.current) setError("No review session found — cannot override verdict.");
               return;
             }
             break;
@@ -287,16 +329,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             await transitionStatus(item.id, "ready");
             break;
           default:
-            break;
+            return;
         }
+        showActionToast(ACTION_SUCCESS_MESSAGES[action] ?? "Done.", "success", toastKey);
         await load();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Action failed.");
+        const msg = e instanceof Error ? e.message : "Action failed.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", toastKey);
       } finally {
-        setActionLoading(false);
+        if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, submitManualReview, archiveBacklogItem, deleteBacklogItem, onClose, load]
+    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
@@ -316,13 +361,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   const handleSaveNotes = useCallback(async () => {
     if (!item) return;
-    setActionLoading(true);
+    setActionLoading("save_notes");
     try {
       const updated = await updateBacklogItem(item.id, { ...currentFlags(), notes: notesValue });
+      if (!mountedRef.current) return;
       if (updated) setItem(updated);
       setEditingNotes(false);
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
   }, [item, notesValue, updateBacklogItem, currentFlags]);
 
@@ -341,30 +387,38 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   const handleCancelTriage = useCallback(async () => {
     if (!item) return;
-    setActionLoading(true);
+    const toastKey = `${item.id}:cancel_triage`;
+    setActionLoading("cancel_triage");
     try {
       await cancelTriage(item.id);
+      showActionToast("Triage cancelled.", "success", toastKey);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Cancel failed.");
+      const msg = e instanceof Error ? e.message : "Cancel failed.";
+      if (mountedRef.current) setError(msg);
+      showActionToast(msg, "error", toastKey);
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, cancelTriage, load]);
+  }, [item, cancelTriage, load, showActionToast]);
 
   const handleRetriggerTriage = useCallback(async () => {
     if (!item) return;
-    setActionLoading(true);
+    const toastKey = `${item.id}:retrigger_triage`;
+    setActionLoading("retrigger_triage");
     try {
       await triggerTriage(item.id);
+      showActionToast("Triage re-triggered.", "success", toastKey);
       await load();
     } catch (e) {
       console.error("[BacklogItemDetail] retrigger triage failed", e);
-      setError(e instanceof Error ? e.message : "Triage re-trigger failed.");
+      const msg = e instanceof Error ? e.message : "Triage re-trigger failed.";
+      if (mountedRef.current) setError(msg);
+      showActionToast(msg, "error", toastKey);
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, triggerTriage, load]);
+  }, [item, triggerTriage, load, showActionToast]);
 
   const handleRefineTriage = useCallback(
     async (feedback: string) => {
@@ -404,36 +458,57 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const handleUndoTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
       if (!item) return;
-      // Revert AC to the pre-apply snapshot
-      const updated = await updateBacklogItem(item.id, { ...currentFlags(), acCriteria: preApplyCriteria });
-      if (!updated) {
-        throw new Error("Failed to undo — item may have been modified. Reload and try again.");
+      // Called via `void onUndoApply(...)` from TriageReviewPanel — nothing upstream
+      // awaits this, so failures must be caught and surfaced here, not thrown.
+      try {
+        // Revert AC to the pre-apply snapshot
+        const updated = await updateBacklogItem(item.id, { ...currentFlags(), acCriteria: preApplyCriteria });
+        if (!updated) {
+          throw new Error("Failed to undo — item may have been modified. Reload and try again.");
+        }
+        // Revert status back to idea
+        await transitionStatus(item.id, "idea");
+        showActionToast("Undo applied.", "success", `${item.id}:undo_triage_apply`);
+        await load();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Undo failed.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", `${item.id}:undo_triage_apply`);
       }
-      // Revert status back to idea
-      await transitionStatus(item.id, "idea");
-      await load();
     },
-    [item, updateBacklogItem, transitionStatus, load, currentFlags]
+    [item, updateBacklogItem, transitionStatus, load, currentFlags, showActionToast]
   );
 
+  // The four handlers below are called from GateVerdictBox, which already wraps each
+  // call in its own try/catch and shows a local InlineError on failure. We add a toast
+  // here too (rethrowing so GateVerdictBox's own handling still runs) since the inline
+  // banner there is easy to miss.
   const handleGateApprove = useCallback(async () => {
     if (!item) return;
-    setActionLoading(true);
+    const toastKey = `${item.id}:gate_approve`;
+    setActionLoading("gate_approve");
     try {
       const ok = await transitionStatus(item.id, "done");
       if (!ok) {
-        setError(lastError?.message ?? "Failed to approve — please try again.");
+        const msg = lastError?.message ?? "Failed to approve — please try again.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", toastKey);
         return;
       }
+      showActionToast("Approved.", "success", toastKey);
       await load();
+    } catch (e) {
+      showActionToast(e instanceof Error ? e.message : "Approve failed.", "error", toastKey);
+      throw e;
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, transitionStatus, lastError, load]);
+  }, [item, transitionStatus, lastError, load, showActionToast]);
 
   const handleGateReopen = useCallback(async (feedback: string) => {
     if (!item) return;
-    setActionLoading(true);
+    const toastKey = `${item.id}:gate_reopen`;
+    setActionLoading("gate_reopen");
     try {
       // Append feedback to notes so the next work session sees it in its prompt.
       if (feedback.trim()) {
@@ -444,36 +519,48 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       await transitionStatus(item.id, "in_progress");
       // Spawn a new work session immediately — the backend now accepts in_progress.
       await spawnSessionFromItem(item.id);
+      showActionToast("Reopened — new session started.", "success", toastKey);
       await load();
+    } catch (e) {
+      showActionToast(e instanceof Error ? e.message : "Reopen failed.", "error", toastKey);
+      throw e;
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, transitionStatus, spawnSessionFromItem, updateBacklogItem, load, currentFlags]);
+  }, [item, transitionStatus, spawnSessionFromItem, updateBacklogItem, load, currentFlags, showActionToast]);
 
   const handleGateOverride = useCallback(
     async (reason: string) => {
       if (!item) return;
-      setActionLoading(true);
+      const toastKey = `${item.id}:gate_override`;
+      setActionLoading("gate_override");
       try {
         const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
         if (!reviewSession) {
-          setError("No review session found — cannot override verdict.");
+          const msg = "No review session found — cannot override verdict.";
+          if (mountedRef.current) setError(msg);
+          showActionToast(msg, "error", toastKey);
           return;
         }
         await overrideVerdict(reviewSession.entityId, reason, "done");
+        showActionToast("Overridden to done.", "success", toastKey);
         await load();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Override failed.");
+        const msg = e instanceof Error ? e.message : "Override failed.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", toastKey);
+        throw e;
       } finally {
-        setActionLoading(false);
+        if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, overrideVerdict, load]
+    [item, overrideVerdict, load, showActionToast]
   );
 
   const handleGateSkip = useCallback(async () => {
     if (!item) return;
-    setActionLoading(true);
+    const toastKey = `${item.id}:gate_skip`;
+    setActionLoading("gate_skip");
     try {
       const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
       if (reviewSession) {
@@ -482,17 +569,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         // No review session yet — direct transition (item.skipReviewGate path)
         const ok = await transitionStatus(item.id, "done");
         if (!ok) {
-          setError(lastError?.message ?? "Failed to skip gate — please try again.");
+          const msg = lastError?.message ?? "Failed to skip gate — please try again.";
+          if (mountedRef.current) setError(msg);
+          showActionToast(msg, "error", toastKey);
           return;
         }
       }
+      showActionToast("Gate skipped — marked done.", "success", toastKey);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Skip gate failed.");
+      const msg = e instanceof Error ? e.message : "Skip gate failed.";
+      if (mountedRef.current) setError(msg);
+      showActionToast(msg, "error", toastKey);
+      throw e;
     } finally {
-      setActionLoading(false);
+      if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, overrideVerdict, transitionStatus, lastError, load]);
+  }, [item, overrideVerdict, transitionStatus, lastError, load, showActionToast]);
 
   // Only show the full-screen loader on the INITIAL load (no item yet). Background
   // refreshes (the triage poll re-runs load() every 5s and toggles `loading`) must
@@ -659,7 +752,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <TriageLoadingIndicator
               elapsedSeconds={triageElapsedSeconds}
               context="item"
-              onCancel={actionLoading ? () => {} : handleCancelTriage}
+              onCancel={actionLoading !== null ? () => {} : handleCancelTriage}
               compact={false}
             />
           </div>
@@ -774,7 +867,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                   onOverride={handleGateOverride}
                   onSkipGate={handleGateSkip}
                   onReReview={() => triggerReReview(item.id).then(() => load())}
-                  actionPending={actionLoading}
+                  actionPending={actionLoading !== null}
                 />
               </div>
 
@@ -820,11 +913,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <button
                 className={styles.actionButton}
                 onClick={() => handleAction("mark_done")}
-                disabled={actionLoading}
+                disabled={actionLoading !== null}
+                aria-busy={actionLoading === "mark_done"}
                 title="Mark done manually (if PR already merged)"
                 data-testid="backlog-action-mark-done"
               >
-                Mark Done
+                <ActionButtonLabel pending={actionLoading === "mark_done"} label="Mark Done" />
               </button>
             </div>
           </div>
@@ -857,22 +951,24 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("mark_ready")}
-                  disabled={actionLoading || item.acCriteria.length === 0}
+                  disabled={actionLoading !== null || item.acCriteria.length === 0}
                   aria-disabled={item.acCriteria.length === 0}
+                  aria-busy={actionLoading === "mark_ready"}
                   title={item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined}
                   data-testid="backlog-action-mark-ready"
                 >
-                  Mark Ready
+                  <ActionButtonLabel pending={actionLoading === "mark_ready"} label="Mark Ready" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading || !item.repoPath}
+                  disabled={actionLoading !== null || !item.repoPath}
                   aria-disabled={!item.repoPath}
+                  aria-busy={actionLoading === "trigger_triage"}
                   title={!item.repoPath ? "Set repository path first" : undefined}
                   data-testid="backlog-action-trigger-triage"
                 >
-                  Trigger Triage
+                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
                 </button>
               </>
             )}
@@ -882,18 +978,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading || !item.repoPath}
+                  disabled={actionLoading !== null || !item.repoPath}
                   aria-disabled={!item.repoPath}
+                  aria-busy={actionLoading === "trigger_triage"}
                   title={!item.repoPath ? "Set repository path first" : undefined}
                   data-testid="backlog-action-trigger-triage"
                 >
-                  Trigger Triage
+                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("spawn_session")}
-                  disabled={actionLoading || !canSpawnSession}
+                  disabled={actionLoading !== null || !canSpawnSession}
                   aria-disabled={!canSpawnSession}
+                  aria-busy={actionLoading === "spawn_session"}
                   title={
                     !canSpawnSession
                       ? "Approve the plan or enable skip_planning to spawn a session"
@@ -901,13 +999,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                   }
                   data-testid="backlog-action-spawn-session"
                 >
-                  Spawn Session
+                  <ActionButtonLabel pending={actionLoading === "spawn_session"} label="Spawn Session" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("spawn_session_autonomous")}
-                  disabled={actionLoading || !canRunAutonomously}
+                  disabled={actionLoading !== null || !canRunAutonomously}
                   aria-disabled={!canRunAutonomously}
+                  aria-busy={actionLoading === "spawn_session_autonomous"}
                   title={
                     !canRunAutonomously
                       ? "Item must be in Ready status to run autonomously"
@@ -915,16 +1014,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                   }
                   data-testid="backlog-action-run-autonomously"
                 >
-                  Run Autonomously
+                  <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
                 </button>
                 {item.planArtifactsPath && (
                   <button
                     className={styles.actionButton}
                     onClick={() => handleAction("approve_plan")}
-                    disabled={actionLoading}
+                    disabled={actionLoading !== null}
+                    aria-busy={actionLoading === "approve_plan"}
                     data-testid="backlog-action-approve-plan"
                   >
-                    Approve Plan
+                    <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
                   </button>
                 )}
               </>
@@ -942,11 +1042,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "restart_session"}
                   title="Stop the current session and re-spawn it in a fresh git worktree"
                   data-testid="backlog-action-restart-session"
                 >
-                  Restart
+                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
                 </button>
               </>
             )}
@@ -956,23 +1057,25 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={`${styles.actionButton} ${styles.actionButtonDanger}`}
                   onClick={() => handleAction("override_done")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "override_done"}
                   data-testid="backlog-action-override-done"
                 >
-                  Override → Done
+                  <ActionButtonLabel pending={actionLoading === "override_done"} label="Override → Done" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("re_review")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "re_review"}
                   data-testid="backlog-action-re-review"
                 >
-                  Re-review
+                  <ActionButtonLabel pending={actionLoading === "re_review"} label="Re-review" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("manual_review")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
                   data-testid="backlog-action-manual-review"
                 >
                   Submit Review
@@ -980,11 +1083,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "restart_session"}
                   title="Stop the review session and restart work from scratch in a fresh git worktree"
                   data-testid="backlog-action-restart-session"
                 >
-                  Restart
+                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
                 </button>
               </>
             )}
@@ -1020,24 +1124,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <div className={styles.manualReviewActions}>
                   <button
                     className={styles.actionButton}
-                    disabled={!manualReviewSummary.trim() || actionLoading}
+                    disabled={!manualReviewSummary.trim() || actionLoading !== null}
+                    aria-busy={actionLoading === "manual_review_submit"}
                     onClick={async () => {
-                      setActionLoading(true);
+                      const toastKey = `${item.id}:manual_review_submit`;
+                      setActionLoading("manual_review_submit");
                       try {
                         await submitManualReview(item.id, manualReviewOutcome, manualReviewSummary.trim());
+                        showActionToast("Review submitted.", "success", toastKey);
                         setShowManualReview(false);
                         setManualReviewSummary("");
                         setManualReviewOutcome("PASS");
                         await load();
                       } catch (e) {
-                        setError(e instanceof Error ? e.message : "Submit failed.");
+                        const msg = e instanceof Error ? e.message : "Submit failed.";
+                        if (mountedRef.current) setError(msg);
+                        showActionToast(msg, "error", toastKey);
                       } finally {
-                        setActionLoading(false);
+                        if (mountedRef.current) setActionLoading(null);
                       }
                     }}
                     data-testid="manual-review-submit"
                   >
-                    Submit
+                    <ActionButtonLabel pending={actionLoading === "manual_review_submit"} label="Submit" />
                   </button>
                   <button
                     className={styles.actionButtonSecondary}
@@ -1055,18 +1164,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("archive")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "archive"}
                   data-testid="backlog-action-archive"
                 >
-                  Archive
+                  <ActionButtonLabel pending={actionLoading === "archive"} label="Archive" />
                 </button>
                 <button
                   className={styles.actionButton}
                   onClick={() => handleAction("reopen")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "reopen"}
                   data-testid="backlog-action-reopen"
                 >
-                  Re-open to Review
+                  <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
                 </button>
               </>
             )}
@@ -1077,21 +1188,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
                   onClick={() => handleAction("send_back_idea")}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "send_back_idea"}
                   title="Reset to Idea and clear plan approval so triage can re-run"
                   data-testid="backlog-action-send-back-idea"
                 >
-                  ↩ Return to Triage
+                  <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
                 </button>
                 {["in_progress", "review", "pr_pending", "done"].includes(item.status) && (
                   <button
                     className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
                     onClick={() => handleAction("send_back_ready")}
-                    disabled={actionLoading}
+                    disabled={actionLoading !== null}
+                    aria-busy={actionLoading === "send_back_ready"}
                     title="Move back to Ready to re-spawn without full re-triage"
                     data-testid="backlog-action-send-back-ready"
                   >
-                    ↩ Back to Ready
+                    <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
                   </button>
                 )}
               </>
@@ -1100,10 +1213,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <button
               className={styles.actionButtonDanger}
               onClick={() => handleAction("delete")}
-              disabled={actionLoading}
+              disabled={actionLoading !== null}
+              aria-busy={actionLoading === "delete"}
               data-testid="backlog-action-delete"
             >
-              Delete
+              <ActionButtonLabel pending={actionLoading === "delete"} label="Delete" />
             </button>
           </div>
         </div>
@@ -1216,6 +1330,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                       onClick={async (e) => {
                         e.preventDefault();
                         if (!confirm("Delete this session? This cannot be undone.")) return;
+                        const toastKey = `${item.id}:delete_session:${s.sessionId}`;
                         setDeletingSessionId(s.sessionId);
                         try {
                           if (s.role === "triage") {
@@ -1224,9 +1339,14 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                             track({ name: "backlog_delete_session", category: "user_action", component: "BacklogItemDetail", labels: { role: s.role } });
                             await deleteSession(s.sessionId, true);
                           }
+                          showActionToast("Session deleted.", "success", toastKey);
                           await load();
+                        } catch (err) {
+                          const msg = err instanceof Error ? err.message : "Failed to delete session.";
+                          if (mountedRef.current) setError(msg);
+                          showActionToast(msg, "error", toastKey);
                         } finally {
-                          setDeletingSessionId(null);
+                          if (mountedRef.current) setDeletingSessionId(null);
                         }
                       }}
                     >
@@ -1323,10 +1443,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 <button
                   className={styles.saveNotesButton}
                   onClick={handleSaveNotes}
-                  disabled={actionLoading}
+                  disabled={actionLoading !== null}
+                  aria-busy={actionLoading === "save_notes"}
                   data-testid="backlog-notes-save"
                 >
-                  Save
+                  <ActionButtonLabel pending={actionLoading === "save_notes"} label="Save" />
                 </button>
                 <button
                   className={styles.cancelNotesButton}
