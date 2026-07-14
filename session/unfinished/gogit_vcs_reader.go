@@ -1225,14 +1225,23 @@ func lcsLengthBytes(a, b [][]byte) int {
 // unbounded walks in large build trees.
 func walkUntracked(root string, indexed map[string]struct{}, matcher gitignore.Matcher, fn func(absPath string)) error {
 	count := 0
-	err := walkUntrackedRec(root, root, indexed, matcher, &count, fn)
+	err := walkUntrackedRec(root, indexed, matcher, nil, &count, fn)
 	if errors.Is(err, errStopWalk) {
 		return nil
 	}
 	return err
 }
 
-func walkUntrackedRec(root, dir string, indexed map[string]struct{}, matcher gitignore.Matcher, count *int, fn func(string)) error {
+// walkUntrackedRec recurses depth-first, threading the path components seen
+// so far through `parts` instead of re-deriving and re-splitting a relative
+// path string on every visited entry (the original approach allocated a new
+// []string via strings.Split(filepath.Rel(...), "/") per file/dir, in this
+// same hot walk the PR is optimizing). Appending to `parts` and letting
+// sibling calls overwrite the same backing-array slot is safe here because
+// the walk is single-goroutine and depth-first: a sibling's entire subtree
+// (including every fn callback in it) completes before the next sibling's
+// append can reuse that slot.
+func walkUntrackedRec(dir string, indexed map[string]struct{}, matcher gitignore.Matcher, parts []string, count *int, fn func(string)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -1243,24 +1252,23 @@ func walkUntrackedRec(root, dir string, indexed map[string]struct{}, matcher git
 			continue
 		}
 		full := filepath.Join(dir, name)
-		rel, relErr := filepath.Rel(root, full)
-		if relErr != nil {
-			continue
-		}
-		rel = filepath.ToSlash(rel)
-		if matcher != nil && matcher.Match(strings.Split(rel, "/"), de.IsDir()) {
+		childParts := append(parts, name)
+		if matcher != nil && matcher.Match(childParts, de.IsDir()) {
 			continue // gitignored — for a dir this skips the whole subtree
 		}
 		if de.IsDir() {
-			if err := walkUntrackedRec(root, full, indexed, matcher, count, fn); err != nil {
+			if err := walkUntrackedRec(full, indexed, matcher, childParts, count, fn); err != nil {
 				return err
 			}
-		} else if _, tracked := indexed[rel]; !tracked {
-			*count++
-			if *count > maxUntrackedFiles {
-				return errStopWalk
+		} else {
+			rel := strings.Join(childParts, "/")
+			if _, tracked := indexed[rel]; !tracked {
+				*count++
+				if *count > maxUntrackedFiles {
+					return errStopWalk
+				}
+				fn(full)
 			}
-			fn(full)
 		}
 	}
 	return nil
@@ -1283,7 +1291,14 @@ func worktreeGitDir(repoPath string) string {
 	if !strings.HasPrefix(line, prefix) {
 		return gitPath
 	}
-	return strings.TrimPrefix(line, prefix)
+	wtGitDir := strings.TrimPrefix(line, prefix)
+	if !filepath.IsAbs(wtGitDir) {
+		// Defensive: git worktree add always writes an absolute path in
+		// practice, but resolve relative to repoPath if it ever isn't,
+		// matching how the commondir line below already handles this.
+		wtGitDir = filepath.Join(repoPath, wtGitDir)
+	}
+	return filepath.Clean(wtGitDir)
 }
 
 // gitCommonDir returns the path to the common git directory (the main .git dir),

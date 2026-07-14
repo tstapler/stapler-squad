@@ -791,3 +791,23 @@ func TestWorktreeGitDir_LinkedWorktree_ResolvesPerWorktreeGitdir(t *testing.T) {
 		t.Errorf("os.Stat(%q) failed: %v (resolved gitdir should contain a per-worktree index file)", indexPath, err)
 	}
 }
+
+// TestWorktreeGitDir_RelativeGitdirLine_ResolvedAgainstRepoPath verifies the
+// defensive fallback for a ".git" file containing a relative "gitdir:" line.
+// Real `git worktree add` always writes an absolute path (confirmed by the
+// test above), but this guards against any tool or manual setup that writes
+// a relative one — without it, a relative gitdir would be returned as-is and
+// the subsequent os.Stat(.../index) in diffShortstatUncached would look in
+// the wrong location, silently breaking the racy-mtime gate.
+func TestWorktreeGitDir_RelativeGitdirLine_ResolvedAgainstRepoPath(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: .git/worktrees/relative-case\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := worktreeGitDir(repo)
+	want := filepath.Join(repo, ".git", "worktrees", "relative-case")
+	if got != want {
+		t.Errorf("worktreeGitDir(%q) = %q, want %q (relative gitdir line resolved against repoPath)", repo, got, want)
+	}
+}
