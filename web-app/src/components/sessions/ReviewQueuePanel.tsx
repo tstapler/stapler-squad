@@ -133,7 +133,15 @@ function joinSet(set: Set<string> | Set<number>): string | undefined {
 }
 
 function parseNumSet(v: string | undefined): Set<number> {
-  return new Set(v ? v.split(",").filter(Boolean).map(Number) : []);
+  return new Set(
+    v
+      ? v
+          .split(",")
+          .filter(Boolean)
+          .map(Number)
+          .filter((n) => Number.isFinite(n))
+      : []
+  );
 }
 
 function parseStrSet(v: string | undefined): Set<string> {

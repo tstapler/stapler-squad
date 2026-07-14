@@ -914,4 +914,19 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
       expect.objectContaining({ scroll: false })
     );
   });
+
+  it("ignores non-numeric priority values in the URL instead of filtering out every item", () => {
+    // Regression test: parseNumSet previously kept NaN when hydrating from a non-numeric
+    // URL value (e.g. ?priority=abc), producing a non-empty Set(NaN). Since no item's
+    // priority ever equals NaN, priorityFilter.size > 0 caused every item to be filtered out.
+    mockSearchParams = new URLSearchParams({ priority: "abc" });
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
+  });
 });
