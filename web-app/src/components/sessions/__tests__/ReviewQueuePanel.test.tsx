@@ -661,6 +661,87 @@ describe("ReviewQueuePanel — combinable filters", () => {
     expect(ids).toEqual(["s-a", "s-b"]);
   });
 
+  it("sorts by name descending when the direction is toggled", () => {
+    const b = makeReviewItem({ sessionId: "s-b", sessionName: "Bravo" });
+    const a = makeReviewItem({ sessionId: "s-a", sessionName: "Alpha" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([b, a]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
+    fireEvent.click(screen.getByRole("button", { name: /sort direction/i }));
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-b", "s-a"]);
+  });
+
+  it("sorts by priority ascending when selected", () => {
+    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
+    const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, urgent]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "priority" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-urgent", "s-low"]);
+  });
+
+  it("sorts by last activity (age) ascending when selected", () => {
+    const older = makeReviewItem({
+      sessionId: "s-older",
+      sessionName: "Older Item",
+      lastActivity: { seconds: BigInt(100), nanos: 0 } as unknown as ReviewItem["lastActivity"],
+    });
+    const newer = makeReviewItem({
+      sessionId: "s-newer",
+      sessionName: "Newer Item",
+      lastActivity: { seconds: BigInt(200), nanos: 0 } as unknown as ReviewItem["lastActivity"],
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([newer, older]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "age" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-older", "s-newer"]);
+  });
+
+  it("sorts by diff size ascending when selected", () => {
+    const large = makeReviewItem({
+      sessionId: "s-large",
+      sessionName: "Large Diff",
+      diffStats: { added: 100, removed: 50, content: "" } as unknown as ReviewItem["diffStats"],
+    });
+    const small = makeReviewItem({
+      sessionId: "s-small",
+      sessionName: "Small Diff",
+      diffStats: { added: 1, removed: 0, content: "" } as unknown as ReviewItem["diffStats"],
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([large, small]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "diffSize" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-small", "s-large"]);
+  });
+
   it("clear-all resets every filter dimension and search text", () => {
     const item = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
     mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
@@ -713,6 +794,43 @@ describe("ReviewQueuePanel — group by", () => {
 
     expect(screen.queryByTestId(/^review-group-/)).not.toBeInTheDocument();
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+  });
+
+  it("keeps action buttons and current-item highlighting intact when items are grouped", () => {
+    const onRunOneShot = jest.fn();
+    const first = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      program: "claude",
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+    });
+    const second = makeReviewItem({
+      sessionId: "s2",
+      sessionName: "Second Item",
+      program: "aider",
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([first, second]));
+
+    renderPanel({ onRunOneShot });
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+
+    expect(screen.getByTestId("review-group-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
+
+    // Action buttons (Create PR) render correctly for both items despite grouping.
+    expect(screen.getByTestId("create-pr-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-s2")).toBeInTheDocument();
+
+    // useReviewQueueNavigation is mocked with currentIndex: 0, which maps to the first
+    // item in the (pre-group) flat items array — "s1" here. Its wrapper must still be
+    // rendered as the highlighted "current" item even though it's nested under a group.
+    expect(screen.getByTestId("current-item")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toHaveAttribute("data-current", "true");
+    expect(screen.getByTestId("review-item-s2")).not.toHaveAttribute("data-current");
   });
 });
 
