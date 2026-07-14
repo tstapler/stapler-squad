@@ -291,6 +291,48 @@ func TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers(t *test
 	}
 }
 
+// TestGoGitVCSReader_ConcurrentDiffShortstatAndHasUncommitted_NoDataRace
+// launches concurrent DiffShortstat and HasUncommitted calls against the same
+// repo. Both consume entry.headTreeCache (and DiffShortstat additionally
+// populates/reads entry.blobCache and entry.untrackedMatcher), which is the
+// new code's explicit design intent for sharing state across the two RPCs.
+// Following the convention of
+// TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers: no
+// invocation-count assertions, race-detector-clean (run with `go test -race`)
+// is the correctness gate.
+func TestGoGitVCSReader_ConcurrentDiffShortstatAndHasUncommitted_NoDataRace(t *testing.T) {
+	repo := initRepoInternal(t)
+	readme := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(readme, []byte("hello\nchanged\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &GoGitVCSReader{}
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	errCh := make(chan error, workers*2)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			if _, err := r.DiffShortstat(repo); err != nil {
+				errCh <- fmt.Errorf("DiffShortstat: %w", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := r.HasUncommitted(repo); err != nil {
+				errCh <- fmt.Errorf("HasUncommitted: %w", err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+}
+
 // TestGoGitVCSReader_AheadBehind_InvalidPath_ReturnsError verifies that
 // openRepoEntry failure inside the singleflight Do body is returned as an
 // error to the caller without panicking. True panic injection requires a
@@ -392,6 +434,58 @@ func TestGoGitVCSReader_DiffShortstat_gitignoredUntrackedFile_notCounted(t *test
 	}
 }
 
+// TestGoGitVCSReader_DiffShortstat_gitignoredDirectoryTree_notWalked verifies
+// that an entirely ignored directory (e.g. ".gitignore" containing "build/")
+// is excluded as a whole subtree — the walk never descends into it at all,
+// not just that individual files under it are filtered post-walk. This is
+// the PR's own motivating case (ignored directory trees like node_modules/,
+// build output, the ~163GB profiling finding), which the flat-file test
+// above does not exercise: a matcher bug that only filters files but still
+// recurses into ignored directories would pass the flat-file test yet still
+// read gigabytes from an ignored build tree.
+func TestGoGitVCSReader_DiffShortstat_gitignoredDirectoryTree_notWalked(t *testing.T) {
+	repo := initRepoInternal(t)
+
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("build/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "visible.txt"), []byte("hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nested directory tree under the ignored "build/" prefix. If the walk
+	// ever descended into it, this file's 300 lines would inflate Insertions
+	// and its presence would inflate Files.
+	nestedDir := filepath.Join(repo, "build", "nested", "deep")
+	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	inflatingContent := strings.Repeat("line\n", 300)
+	if err := os.WriteFile(filepath.Join(nestedDir, "artifact.txt"), []byte(inflatingContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A second file directly under build/ (not nested) to further confirm
+	// the whole subtree, not just the "nested" path segment, is skipped.
+	if err := os.WriteFile(filepath.Join(repo, "build", "output.bin"), []byte(inflatingContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &GoGitVCSReader{}
+	d, err := r.DiffShortstat(repo)
+	if err != nil {
+		t.Fatalf("DiffShortstat: %v", err)
+	}
+
+	// Only .gitignore (1 line) and visible.txt (1 line) should be counted;
+	// nothing under build/ should ever be visited.
+	if d.Files != 2 {
+		t.Errorf("Files = %d, want 2 (.gitignore + visible.txt; the entire build/ subtree must be excluded)", d.Files)
+	}
+	if d.Insertions != 2 {
+		t.Errorf("Insertions = %d, want 2: build/'s nested 600 lines must not be counted (walk must not descend into an ignored directory)", d.Insertions)
+	}
+}
+
 // TestGoGitVCSReader_DiffShortstat_headTreeCache_invalidatesOnNewCommit
 // verifies the headTreeCache is keyed by HEAD commit hash and is NOT reused
 // once HEAD moves. A stale cache here would silently compare the working
@@ -457,6 +551,12 @@ func TestGoGitVCSReader_DiffShortstat_headTreeCache_invalidatesOnNewCommit(t *te
 // the file's HEAD-version bytes (not the working-tree bytes) keyed by the
 // HEAD blob hash — guarding against accidentally caching the wrong side of
 // the diff, which repeated-poll callers would silently reuse.
+//
+// It then makes a SECOND diffShortstatUncached call after modifying the
+// working-tree file again (without HEAD moving), proving the cached HEAD
+// blob is still compared correctly on a second poll — not merely present in
+// the map. A bug that cached the wrong side, or served stale content on
+// reuse, would still pass the first call's assertions but fail here.
 func TestGoGitVCSReader_DiffShortstat_blobCache_populatedWithCorrectContent(t *testing.T) {
 	repo := initRepoInternal(t)
 	readme := filepath.Join(repo, "README.md")
@@ -472,6 +572,9 @@ func TestGoGitVCSReader_DiffShortstat_blobCache_populatedWithCorrectContent(t *t
 	}
 	if d.Files != 1 {
 		t.Fatalf("Files = %d, want 1", d.Files)
+	}
+	if d.Insertions != 1 || d.Deletions != 0 {
+		t.Fatalf("first call: Insertions=%d Deletions=%d, want 1/0 (HEAD \"hello\\n\" -> WT \"hello\\nchanged\\n\")", d.Insertions, d.Deletions)
 	}
 
 	entryVal, ok := r.repoCache.Load(repo)
@@ -490,6 +593,24 @@ func TestGoGitVCSReader_DiffShortstat_blobCache_populatedWithCorrectContent(t *t
 	})
 	if !found {
 		t.Error("blobCache does not contain the HEAD blob content (\"hello\\n\") for the changed file")
+	}
+
+	// Second poll: modify the working tree again, HEAD does not move. This
+	// call should hit the cached HEAD blob (entry.blobCache) rather than
+	// re-reading it from the packfile, and still compute the correct diff
+	// against the fresh working-tree content.
+	if err := os.WriteFile(readme, []byte("hello\nchanged\nagain\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	d2, err := r.diffShortstatUncached(repo)
+	if err != nil {
+		t.Fatalf("diffShortstatUncached (second poll): %v", err)
+	}
+	if d2.Files != 1 {
+		t.Errorf("second call: Files = %d, want 1", d2.Files)
+	}
+	if d2.Insertions != 2 || d2.Deletions != 0 {
+		t.Errorf("second call: Insertions=%d Deletions=%d, want 2/0 (HEAD \"hello\\n\" -> WT \"hello\\nchanged\\nagain\\n\"): cached HEAD blob must still be compared correctly on reuse", d2.Insertions, d2.Deletions)
 	}
 }
 
@@ -563,8 +684,8 @@ func TestGoGitVCSReader_HasUncommitted_headTreeCache_invalidatesOnNewCommit(t *t
 }
 
 // TestReachableSet_CapsAtLimit verifies reachableSet stops walking history
-// once reachableSetLimit commits have been visited, rather than walking the
-// full history unboundedly (the same class of bound findMergeBase already
+// once maxReachableSetCommits commits have been visited, rather than walking
+// the full history unboundedly (the same class of bound findMergeBase already
 // applies via mergeBaseBFSLimit).
 func TestReachableSet_CapsAtLimit(t *testing.T) {
 	repo := initRepoInternal(t) // 1 commit already (the initial commit)
@@ -588,16 +709,16 @@ func TestReachableSet_CapsAtLimit(t *testing.T) {
 		t.Fatalf("Head: %v", err)
 	}
 
-	origLimit := reachableSetLimit
-	reachableSetLimit = 3
-	defer func() { reachableSetLimit = origLimit }()
+	origLimit := maxReachableSetCommits
+	maxReachableSetCommits = 3
+	defer func() { maxReachableSetCommits = origLimit }()
 
 	set, err := reachableSet(gitRepo, head.Hash())
 	if err != nil {
 		t.Fatalf("reachableSet: %v", err)
 	}
 	if len(set) != 3 {
-		t.Errorf("len(set) = %d, want 3 (capped by reachableSetLimit; history has 6 commits)", len(set))
+		t.Errorf("len(set) = %d, want 3 (capped by maxReachableSetCommits; history has 6 commits)", len(set))
 	}
 }
 
@@ -634,4 +755,39 @@ func TestLcsLength_CapsAtMaxLines(t *testing.T) {
 			t.Errorf("lcsLengthBytes = %d, want 2 for input at/under the cap", got)
 		}
 	})
+}
+
+// TestWorktreeGitDir_LinkedWorktree_ResolvesPerWorktreeGitdir verifies that
+// worktreeGitDir, for a REAL linked worktree created via `git worktree add`,
+// resolves to the per-worktree gitdir under the main repo's
+// .git/worktrees/<name> — NOT the main repo's own .git directory. This is
+// the exact scenario worktreeGitDir exists for: diffShortstatUncached uses
+// it to find the per-worktree index file for the racy-mtime gate
+// (fileNeedsContentCheck), and a bug that fell back to the main repo's .git
+// would read the WRONG index's mtime, silently misclassifying a dirty linked
+// worktree as clean (or vice versa). Prior to this test, worktreeGitDir had
+// zero coverage for linked worktrees.
+func TestWorktreeGitDir_LinkedWorktree_ResolvesPerWorktreeGitdir(t *testing.T) {
+	mainRepo := initRepoInternal(t)
+
+	linkedPath := filepath.Join(filepath.Dir(mainRepo), "linked-worktree")
+	gitRunInternal(t, mainRepo, "worktree", "add", linkedPath, "-b", "feature-branch")
+
+	got := worktreeGitDir(linkedPath)
+
+	wantDir := filepath.Join(mainRepo, ".git", "worktrees", "linked-worktree")
+	gotClean := filepath.Clean(got)
+	wantClean := filepath.Clean(wantDir)
+	if gotClean != wantClean {
+		t.Errorf("worktreeGitDir(%q) = %q, want %q (the main repo's per-worktree gitdir, not %q)",
+			linkedPath, gotClean, wantClean, filepath.Join(mainRepo, ".git"))
+	}
+
+	// Prove the resolved path actually has a per-worktree index file — the
+	// whole point of this function existing (the index is per-worktree, not
+	// shared via commondir like most of .git/ is for linked worktrees).
+	indexPath := filepath.Join(got, "index")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Errorf("os.Stat(%q) failed: %v (resolved gitdir should contain a per-worktree index file)", indexPath, err)
+	}
 }
