@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // TestParseHeadlessVerdictResult_ValidJSON verifies that well-formed JSON is parsed correctly.
@@ -125,6 +126,40 @@ func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 	assert.Contains(t, prompt, "no diff available")
 }
 
+// TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection verifies
+// the empty-diff path instructs the reviewer to independently verify against the
+// current codebase rather than trusting the work session's self-report alone.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "")
+	assert.Contains(t, prompt, "## No-Diff Verification")
+}
+
+// TestBuildHeadlessReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection is a
+// regression guard: the No-Diff Verification section must only appear when there is
+// actually no diff to review.
+func TestBuildHeadlessReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "")
+	assert.NotContains(t, prompt, "## No-Diff Verification")
+}
+
+// TestBuildReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection mirrors the
+// headless test for the tool-invocation (non-headless) prompt variant.
+func TestBuildReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildReviewPrompt(item, nil, "", false, uuid.New().String(), "")
+	assert.Contains(t, prompt, "## No-Diff Verification")
+}
+
+// TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection is the
+// BuildReviewPrompt regression guard counterpart.
+func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, uuid.New().String(), "")
+	assert.NotContains(t, prompt, "## No-Diff Verification")
+}
+
 // TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection verifies
 // that non-empty verification notes are rendered in a distinctly-labeled section
 // separate from the diff, so the reviewer can tell it apart from code-derived evidence.
@@ -166,6 +201,106 @@ func TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars(t *testing
 	prompt := BuildReviewPrompt(item, nil, "diff content", false, uuid.New().String(), notes)
 
 	assert.Contains(t, prompt, "[truncated]")
+}
+
+// TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent verifies a criterion's
+// self-reported Note (via report_progress) is rendered alongside its text.
+func TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
+	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
+
+	assert.Contains(t, prompt, "Note (self-reported by work session via report_progress): implemented via foo.go, verified with go test")
+}
+
+// TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty verifies no Note line is
+// rendered when the criterion has no self-reported note.
+func TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing"}}
+	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
+
+	assert.NotContains(t, prompt, "Note (self-reported by work session")
+}
+
+// TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars verifies the Note
+// is bounded like other sanitized fields so a runaway self-report can't blow out
+// the prompt budget.
+func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
+	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
+
+	assert.Contains(t, prompt, "[truncated]")
+}
+
+// TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent verifies the
+// Note renders even with a non-empty diff, proving the rendering is unconditional
+// (not gated on diff == "").
+func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff --git a/foo.go b/foo.go\n+added line", false, "")
+
+	assert.Contains(t, prompt, "Note (self-reported by work session via report_progress): implemented via foo.go, verified with go test")
+}
+
+// TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty verifies no Note
+// line is rendered when the criterion has no self-reported note.
+func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing"}}
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "")
+
+	assert.NotContains(t, prompt, "Note (self-reported by work session")
+}
+
+// TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars verifies
+// the Note is bounded in the headless prompt variant too.
+func TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "")
+
+	assert.Contains(t, prompt, "[truncated]")
+}
+
+// TestMergeLiveCriterionNotes_OverlaysNoteAndStatusByIndex verifies a live
+// criterion's Note and Status are overlaid onto the matching snapshot entry.
+func TestMergeLiveCriterionNotes_OverlaysNoteAndStatusByIndex(t *testing.T) {
+	snapshot := []AcCriterion{{Index: 0, Text: "Do the thing", Status: AcStatusPending}}
+	live := []AcCriterion{{Index: 0, Text: "Do the thing", Status: AcStatusDone, Note: "finished via report_progress"}}
+
+	merged := MergeLiveCriterionNotes(snapshot, live)
+
+	require.Len(t, merged, 1)
+	assert.Equal(t, "finished via report_progress", merged[0].Note)
+	assert.Equal(t, AcStatusDone, merged[0].Status)
+	assert.Equal(t, "Do the thing", merged[0].Text)
+}
+
+// TestMergeLiveCriterionNotes_SnapshotEmpty_ReturnsLive verifies an empty
+// snapshot falls back to the live criteria unchanged.
+func TestMergeLiveCriterionNotes_SnapshotEmpty_ReturnsLive(t *testing.T) {
+	live := []AcCriterion{{Index: 0, Text: "Do the thing", Note: "live note"}}
+
+	merged := MergeLiveCriterionNotes(nil, live)
+
+	assert.Equal(t, live, merged)
+}
+
+// TestMergeLiveCriterionNotes_LiveNoteEmpty_KeepsSnapshotNote verifies the
+// snapshot's Note is preserved when the live criterion has no note (so a
+// report_progress call that only updates status doesn't erase an earlier note).
+func TestMergeLiveCriterionNotes_LiveNoteEmpty_KeepsSnapshotNote(t *testing.T) {
+	snapshot := []AcCriterion{{Index: 0, Text: "Do the thing", Note: "snapshot note", Status: AcStatusInProgress}}
+	live := []AcCriterion{{Index: 0, Text: "Do the thing", Status: AcStatusDone}}
+
+	merged := MergeLiveCriterionNotes(snapshot, live)
+
+	require.Len(t, merged, 1)
+	assert.Equal(t, "snapshot note", merged[0].Note)
+	assert.Equal(t, AcStatusDone, merged[0].Status)
 }
 
 // TestSanitizeDiff_ReplacesTripleBacktick ensures fence injection is neutralised.
@@ -244,4 +379,230 @@ func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 	diff, _, err = GetGitDiffRef(context.Background(), repo, baseSHA, "feature")
 	require.NoError(t, err)
 	assert.Contains(t, diff, "feature.txt", "GetGitDiffRef with an explicit branch name must find commits on that branch regardless of what's checked out")
+}
+
+// ─── BuildReviewCallOptions ─────────────────────────────────────────────────
+
+// TestBuildReviewCallOptions_EmptyDiff_ReturnsCodebaseAccessOptionsAndShortTimeout
+// verifies the empty-diff branch grants bounded WorkDir/AllowedTools/PermissionMode
+// access and uses the shorter CodebaseReadCallTimeout, per ADR-001.
+func TestBuildReviewCallOptions_EmptyDiff_ReturnsCodebaseAccessOptionsAndShortTimeout(t *testing.T) {
+	systemPrompt, opts, callTimeout, path := BuildReviewCallOptions("", "/some/worktree")
+
+	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), systemPrompt)
+	assert.Equal(t, "/some/worktree", opts.WorkDir)
+	assert.Equal(t, "Read,Grep,Glob", opts.AllowedTools)
+	assert.Equal(t, PermissionModeBypassPermissions, opts.PermissionMode)
+	assert.Equal(t, headless.CodebaseReadCallTimeout, callTimeout)
+	assert.Equal(t, "codebase-read", path)
+}
+
+// TestBuildReviewCallOptions_NonEmptyDiff_ReturnsPlainOptionsAndDefaultTimeout verifies
+// the non-empty-diff branch is unchanged from the pre-existing behavior: no tool
+// access, plain system prompt, and the shared DefaultCallTimeout.
+func TestBuildReviewCallOptions_NonEmptyDiff_ReturnsPlainOptionsAndDefaultTimeout(t *testing.T) {
+	systemPrompt, opts, callTimeout, path := BuildReviewCallOptions("diff --git a/foo.go b/foo.go\n+x", "/some/worktree")
+
+	assert.Equal(t, headless.HeadlessReviewSystemPrompt(), systemPrompt)
+	assert.Equal(t, headless.CallOptions{}, opts)
+	assert.Equal(t, headless.DefaultCallTimeout, callTimeout)
+	assert.Equal(t, "diff", path)
+}
+
+// TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools is a permanent
+// regression guard for the ADR-001 hard invariant: the codebase-read review call must
+// never be granted Bash or any write-capable tool.
+func TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools(t *testing.T) {
+	_, opts, _, _ := BuildReviewCallOptions("", "/some/worktree")
+	assert.NotContains(t, opts.AllowedTools, "Bash")
+	assert.NotContains(t, opts.AllowedTools, "Write")
+}
+
+// ─── ParseHeadlessToolReads ─────────────────────────────────────────────────
+
+// TestParseHeadlessToolReads_ExtractsListFromValidJSON verifies the tool_reads array
+// is extracted from a well-formed headless verdict response.
+func TestParseHeadlessToolReads_ExtractsListFromValidJSON(t *testing.T) {
+	text := `{"overall":"PASS","summary":"ok","tool_reads":["session/foo.go","session/bar.go"],"verdicts":[]}`
+	reads := ParseHeadlessToolReads(text)
+	assert.Equal(t, []string{"session/foo.go", "session/bar.go"}, reads)
+}
+
+// TestParseHeadlessToolReads_ReturnsNilWhenAbsent verifies a response with no
+// tool_reads field (or unparseable JSON) returns nil rather than panicking.
+func TestParseHeadlessToolReads_ReturnsNilWhenAbsent(t *testing.T) {
+	assert.Nil(t, ParseHeadlessToolReads(`{"overall":"PASS","summary":"ok","verdicts":[]}`))
+	assert.Nil(t, ParseHeadlessToolReads("not json at all"))
+}
+
+// ─── verifyToolReadsExist ───────────────────────────────────────────────────
+
+// TestVerifyToolReadsExist_AllPathsExist_ReturnsTrue verifies a true result when
+// every claimed path resolves to a real file under codebaseWorkDir.
+func TestVerifyToolReadsExist_AllPathsExist_ReturnsTrue(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("package b"), 0o644))
+
+	ok, _ := verifyToolReadsExist(dir, []string{"a.go", "b.go"})
+	assert.True(t, ok)
+}
+
+// TestVerifyToolReadsExist_OnePathMissing_ReturnsFalse verifies a single missing path
+// among several claimed reads fails the whole check.
+func TestVerifyToolReadsExist_OnePathMissing_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0o644))
+
+	ok, badPath := verifyToolReadsExist(dir, []string{"a.go", "does-not-exist.go"})
+	assert.False(t, ok)
+	assert.Equal(t, "does-not-exist.go", badPath)
+}
+
+// TestVerifyToolReadsExist_ResolvesRelativeToCodebaseWorkDir verifies relative paths
+// are resolved against codebaseWorkDir (not the process cwd) and absolute paths that
+// are genuinely contained under codebaseWorkDir are accepted.
+func TestVerifyToolReadsExist_ResolvesRelativeToCodebaseWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "session")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "foo.go"), []byte("package session"), 0o644))
+
+	ok, _ := verifyToolReadsExist(dir, []string{"session/foo.go"})
+	assert.True(t, ok)
+	ok, _ = verifyToolReadsExist(dir, []string{filepath.Join(sub, "foo.go")})
+	assert.True(t, ok, "absolute paths contained under codebaseWorkDir must be accepted")
+}
+
+// TestVerifyToolReadsExist_AbsolutePathOutsideCodebaseWorkDir_ReturnsFalse verifies a
+// fabricated tool_reads citation of a real-but-unrelated absolute path (anywhere else
+// on the host) is rejected, not stat'd unconditionally — the MUST FIX #1 containment
+// gap.
+func TestVerifyToolReadsExist_AbsolutePathOutsideCodebaseWorkDir_ReturnsFalse(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "unrelated.txt")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("real file, wrong tree"), 0o644))
+
+	ok, badPath := verifyToolReadsExist(dir, []string{outsideFile})
+	assert.False(t, ok, "a real absolute path outside codebaseWorkDir must not verify")
+	assert.Equal(t, outsideFile, badPath)
+}
+
+// TestVerifyToolReadsExist_RelativePathTraversalEscapesCodebaseWorkDir_ReturnsFalse
+// verifies a relative path containing ".." that resolves outside codebaseWorkDir is
+// rejected rather than stat'd at its escaped location.
+func TestVerifyToolReadsExist_RelativePathTraversalEscapesCodebaseWorkDir_ReturnsFalse(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "workdir")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	// A real file that exists one level above codebaseWorkDir — reachable only via "..".
+	require.NoError(t, os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("outside"), 0o644))
+
+	ok, badPath := verifyToolReadsExist(dir, []string{"../secret.txt"})
+	assert.False(t, ok, "a relative path escaping codebaseWorkDir via .. must not verify")
+	assert.Equal(t, "../secret.txt", badPath)
+}
+
+// ─── DegradeIfUnverified ────────────────────────────────────────────────────
+
+// TestDegradeIfUnverified_DiffPath_NoOp verifies the diff path (normal review, no
+// tool access) is never touched by the degrade logic.
+func TestDegradeIfUnverified_DiffPath_NoOp(t *testing.T) {
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomePass, Evidence: "line 1"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("diff", ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
+
+	assert.Equal(t, ReviewOutcomePass, overall)
+	assert.Equal(t, verdicts, gotVerdicts)
+	assert.Equal(t, "all good", summary)
+	assert.Equal(t, "diff", path)
+}
+
+// TestDegradeIfUnverified_CodebaseReadPath_NonEmptyToolReads_AllPathsExist_NoDowngrade
+// verifies a codebase-read verdict backed by real, verifiable tool reads is trusted
+// as-is and labeled "codebase-read-verified".
+func TestDegradeIfUnverified_CodebaseReadPath_NonEmptyToolReads_AllPathsExist_NoDowngrade(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.go"), []byte("package foo"), 0o644))
+
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomePass, Evidence: "foo.go:1 — package foo"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", ReviewOutcomePass, verdicts, "found it", []string{"foo.go"}, dir)
+
+	assert.Equal(t, ReviewOutcomePass, overall)
+	assert.Equal(t, verdicts, gotVerdicts)
+	assert.Equal(t, "found it", summary)
+	assert.Equal(t, "codebase-read-verified", path)
+}
+
+// TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnPass_DowngradesToUnverifiable
+// is the core safety guard: a PASS verdict on the codebase-read path with no evidence
+// of tool use must never be trusted.
+func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnPass_DowngradesToUnverifiable(t *testing.T) {
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomePass, Evidence: "trust me"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
+
+	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
+	require.Len(t, gotVerdicts, 1)
+	assert.Equal(t, ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Contains(t, summary, "Degraded to UNVERIFIABLE")
+	assert.Contains(t, summary, "all good")
+	assert.Equal(t, "codebase-read-degraded", path)
+}
+
+// TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnFail_DowngradesToUnverifiable
+// verifies the same downgrade applies to a FAIL verdict, not just PASS — an
+// unsubstantiated FAIL on this path is just as untrustworthy as an unsubstantiated
+// PASS (never mis-labeled FAIL per ADR-001).
+func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnFail_DowngradesToUnverifiable(t *testing.T) {
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomeFail, Evidence: "couldn't find it"}}
+	overall, gotVerdicts, _, path := DegradeIfUnverified("codebase-read", ReviewOutcomeFail, verdicts, "not found", nil, "/some/dir")
+
+	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
+	require.Len(t, gotVerdicts, 1)
+	assert.Equal(t, ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Equal(t, "codebase-read-degraded", path)
+}
+
+// TestDegradeIfUnverified_CodebaseReadPath_AlreadyUnverifiable_LabeledDegradedNotDoubleWrapped
+// verifies an already-UNVERIFIABLE verdict is labeled "codebase-read-degraded" for
+// logging but its summary is not double-wrapped with another "Degraded to..." prefix.
+func TestDegradeIfUnverified_CodebaseReadPath_AlreadyUnverifiable_LabeledDegradedNotDoubleWrapped(t *testing.T) {
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomeUnverifiable, Evidence: "n/a"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", ReviewOutcomeUnverifiable, verdicts, "could not verify", nil, "/some/dir")
+
+	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, verdicts, gotVerdicts)
+	assert.Equal(t, "could not verify", summary, "summary must not be re-wrapped when already UNVERIFIABLE")
+	assert.Equal(t, "codebase-read-degraded", path)
+}
+
+// TestDegradeIfUnverified_ToolReadsPathDoesNotExist_ForcesUnverifiable verifies a
+// fabricated tool_reads entry (a path that doesn't actually exist under
+// codebaseWorkDir) forces the downgrade even though tool_reads is non-empty.
+func TestDegradeIfUnverified_ToolReadsPathDoesNotExist_ForcesUnverifiable(t *testing.T) {
+	dir := t.TempDir()
+
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomePass, Evidence: "fabricated"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", ReviewOutcomePass, verdicts, "all good", []string{"does-not-exist.go"}, dir)
+
+	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
+	require.Len(t, gotVerdicts, 1)
+	assert.Equal(t, ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Contains(t, summary, "does-not-exist.go", "summary must name the specific offending path, not just the directory")
+	assert.Contains(t, summary, "does not exist or escapes")
+	assert.Equal(t, "codebase-read-degraded", path)
+}
+
+// TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifiable
+// verifies a single fabricated path among several genuine ones still forces the
+// downgrade — verifyToolReadsExist requires ALL claimed paths to exist.
+func TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifiable(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.go"), []byte("package real"), 0o644))
+
+	verdicts := []CriterionVerdict{{CriterionIndex: 0, Outcome: ReviewOutcomePass, Evidence: "mixed"}}
+	overall, _, _, path := DegradeIfUnverified("codebase-read", ReviewOutcomePass, verdicts, "all good", []string{"real.go", "fabricated.go"}, dir)
+
+	assert.Equal(t, ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, "codebase-read-degraded", path)
 }

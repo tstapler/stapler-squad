@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -82,6 +85,9 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	} else {
 		for _, c := range acSnapshot {
 			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
+			if c.Note != "" {
+				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
+			}
 		}
 	}
 	sb.WriteString("\n")
@@ -100,12 +106,15 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 	// --- task protocol ---
 	sb.WriteString("## Your Role\n")
 	sb.WriteString(headless.ReviewSystemPrompt())
+	sb.WriteString(" A criterion's self-reported Note (e.g. 'already implemented, no diff needed') is informational context only, not evidence. It is never sufficient by itself for that criterion's PASS — you must still find the criterion's satisfying change reflected in the diff itself, or mark it FAIL/UNVERIFIABLE.")
 	sb.WriteString("\n\n")
 
 	// --- diff ---
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
-		sb.WriteString("(no diff available)\n")
+		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
+		sb.WriteString("## No-Diff Verification\n")
+		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
 	} else {
 		if diffTruncated {
 			sb.WriteString("NOTE: The diff was truncated to fit context limits. Mark criteria as UNVERIFIABLE if the relevant code is not visible.\n\n")
@@ -151,6 +160,9 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	} else {
 		for _, c := range acSnapshot {
 			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
+			if c.Note != "" {
+				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
+			}
 		}
 	}
 	sb.WriteString("\n")
@@ -168,7 +180,9 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 
 	sb.WriteString("## Git Diff\n")
 	if diff == "" {
-		sb.WriteString("(no diff available)\n")
+		sb.WriteString("(no diff available — no committed code changes were found for this session)\n\n")
+		sb.WriteString("## No-Diff Verification\n")
+		sb.WriteString("This can mean the criteria were already satisfied before this session started, or that no work happened. Check each criterion against the CURRENT codebase yourself using your available tools before verdicting; do not rely on the work session's note or verification evidence alone.\n\n")
 	} else {
 		if diffTruncated {
 			sb.WriteString("NOTE: The diff was truncated to fit context limits. Mark criteria as UNVERIFIABLE if the relevant code is not visible.\n\n")
@@ -190,11 +204,59 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	return sb.String()
 }
 
+// MergeLiveCriterionNotes overlays each criterion's live Note and Status
+// (from item.AcceptanceCriteria) onto a possibly-stale snapshot, matched by Index.
+// Fixes staleness where report_progress writes a Note onto the live item after an
+// ItemSession's AcSnapshot was already captured at spawn time.
+func MergeLiveCriterionNotes(snapshot, live []AcCriterion) []AcCriterion {
+	if len(snapshot) == 0 {
+		return live
+	}
+	liveByIdx := make(map[int]AcCriterion, len(live))
+	for _, c := range live {
+		liveByIdx[c.Index] = c
+	}
+	merged := make([]AcCriterion, len(snapshot))
+	copy(merged, snapshot)
+	for i, c := range merged {
+		if lc, ok := liveByIdx[c.Index]; ok {
+			if lc.Note != "" {
+				merged[i].Note = lc.Note
+			}
+			merged[i].Status = lc.Status
+		}
+	}
+	return merged
+}
+
+// BuildReviewCallOptions decides the headless review call's system prompt, CallOptions,
+// and context timeout for a given diff state. This is the single point of decision for
+// the empty-diff codebase-access branch — both ReviewGateRunner.Run and TriggerReReview
+// must call this instead of independently constructing the same literals (see ADR-001).
+//
+// The returned path label is one of "diff" (normal, no tool access) or "codebase-read"
+// (empty diff, granted bounded Read/Grep/Glob access under codebaseWorkDir). Callers use
+// the label to decide whether DegradeIfUnverified applies and for logging.
+func BuildReviewCallOptions(diff, codebaseWorkDir string) (systemPrompt string, opts headless.CallOptions, callTimeout time.Duration, path string) {
+	if diff == "" {
+		return headless.HeadlessReviewSystemPromptWithCodebaseAccess(),
+			headless.CallOptions{
+				WorkDir:        codebaseWorkDir,
+				AllowedTools:   headless.CodebaseReadAllowedTools,
+				PermissionMode: PermissionModeBypassPermissions,
+			},
+			headless.CodebaseReadCallTimeout,
+			"codebase-read"
+	}
+	return headless.HeadlessReviewSystemPrompt(), headless.CallOptions{}, headless.DefaultCallTimeout, "diff"
+}
+
 // headlessVerdictJSON is the JSON shape the headless review LLM is expected to return.
 type headlessVerdictJSON struct {
-	Overall  string             `json:"overall"`
-	Summary  string             `json:"summary"`
-	Verdicts []CriterionVerdict `json:"verdicts"`
+	Overall   string             `json:"overall"`
+	Summary   string             `json:"summary"`
+	ToolReads []string           `json:"tool_reads"`
+	Verdicts  []CriterionVerdict `json:"verdicts"`
 }
 
 // ParseHeadlessVerdictResult extracts verdict data from a headless LLM JSON response.
@@ -221,6 +283,128 @@ func ParseHeadlessVerdictResult(text string) (overall ReviewOutcome, verdicts []
 	}
 
 	return overall, v.Verdicts, v.Summary
+}
+
+// ParseHeadlessToolReads extracts the tool_reads list from a headless LLM JSON
+// response. Returns nil if the field is absent or the JSON doesn't parse.
+func ParseHeadlessToolReads(text string) []string {
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start == -1 || end <= start {
+		return nil
+	}
+	var v headlessVerdictJSON
+	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+		return nil
+	}
+	return v.ToolReads
+}
+
+// verifyToolReadsExist does a cheap, non-LLM os.Stat on every path in toolReads,
+// resolved relative to codebaseWorkDir (absolute paths are stat'd as-is). Every
+// resolved path MUST also be contained within codebaseWorkDir — an absolute path
+// pointing anywhere else on the host, or a relative path that escapes
+// codebaseWorkDir via "..", is treated as unverified/fabricated rather than stat'd
+// unconditionally. Returns false and the first offending path if ANY claimed path
+// does not exist or escapes codebaseWorkDir.
+func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, badPath string) {
+	root, rootErr := filepath.Abs(codebaseWorkDir)
+	if rootErr != nil {
+		return false, codebaseWorkDir
+	}
+	for _, p := range toolReads {
+		resolved := p
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(root, resolved)
+		}
+		resolved, err := filepath.Abs(resolved)
+		if err != nil {
+			return false, p
+		}
+		rel, relErr := filepath.Rel(root, resolved)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			// Escapes codebaseWorkDir — treat as unverified/fabricated regardless of
+			// whether the path happens to exist somewhere else on the host.
+			return false, p
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			return false, p
+		}
+	}
+	return true, ""
+}
+
+// DegradeIfUnverified force-downgrades overall/verdicts to UNVERIFIABLE when path is
+// "codebase-read" and EITHER toolReads is empty OR any claimed tool_reads path does
+// not actually exist under (or escapes) codebaseWorkDir. Returns the possibly-downgraded
+// outcome, verdicts, an annotated summary, and the refined path label
+// ("codebase-read-verified" or "codebase-read-degraded") for logging. No-op when
+// path != "codebase-read".
+func DegradeIfUnverified(path string, overall ReviewOutcome, verdicts []CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string) (ReviewOutcome, []CriterionVerdict, string, string) {
+	if path != "codebase-read" {
+		return overall, verdicts, summary, path
+	}
+	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads)
+	if len(toolReads) > 0 && verified {
+		return overall, verdicts, summary, "codebase-read-verified"
+	}
+	if overall != ReviewOutcomeUnverifiable {
+		downgraded := make([]CriterionVerdict, len(verdicts))
+		for i, v := range verdicts {
+			v.Outcome = ReviewOutcomeUnverifiable
+			downgraded[i] = v
+		}
+		reason := "no tool_reads evidence"
+		if len(toolReads) > 0 {
+			reason = fmt.Sprintf("tool_reads claimed path %q which does not exist or escapes %s", badPath, codebaseWorkDir)
+		}
+		summary = fmt.Sprintf("Degraded to UNVERIFIABLE: codebase-read reviewer returned %s with %s — treated as unverified, not trusted. Original summary: %s", overall, reason, summary)
+		return ReviewOutcomeUnverifiable, downgraded, summary, "codebase-read-degraded"
+	}
+	return overall, verdicts, summary, "codebase-read-degraded"
+}
+
+// RecordDegradedReviewVerdict persists a synthetic UNVERIFIABLE verdict for a review
+// that could not actually be attempted or completed (capability self-check failure,
+// codebase-read timeout/cancellation) — the shared create+end round trip previously
+// duplicated across ReviewGateRunner.Run (session/review_gate.go) and
+// TriggerReReview (server/services/backlog_service_triage.go), each with two nearly
+// identical ~30-line copies of this same sequence.
+//
+// It creates the ItemSession+ReviewVerdict pair atomically and immediately marks the
+// session ended, using a cleanupCtx that is ALWAYS derived from context.Background()
+// (bounded to 10s) rather than any caller-supplied context — this write must succeed
+// even when the review's own context is itself expired or cancelled, which is exactly
+// the situation that triggers this degrade path in the first place (a codebase-read
+// timeout/cancellation, or a capability self-check that ran against a near-expired
+// ctx). See ADR-001 for the rationale on treating both as infrastructure signals, not
+// evidence of failure.
+//
+// Returns the resulting ItemSessionSummary for the caller's own logging, RPC response
+// construction, or auto-reopen-goroutine handling — those differ enough between
+// ReviewGateRunner and TriggerReReview (return-vs-goroutine control flow, RPC error
+// wrapping) that they remain the caller's responsibility rather than being folded in
+// here.
+func RecordDegradedReviewVerdict(storage *Storage, itemID string, acSnapshot AcCriteriaJSON, uuidPrefix, summary string) (ItemSessionSummary, error) {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cleanupCancel()
+
+	is, err := storage.CreateItemSessionWithVerdict(cleanupCtx, ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: uuidPrefix + uuid.New().String(),
+		SessionRole: SessionRoleReview,
+		AcSnapshot:  acSnapshot,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewVerdictUnverifiable,
+		Summary:        summary,
+	})
+	if err != nil {
+		return ItemSessionSummary{}, err
+	}
+	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil {
+		log.WarningLog.Printf("[headless] RecordDegradedReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
+	}
+	return is, nil
 }
 
 // sanitizeDiff neutralises triple-backtick sequences in a diff to prevent

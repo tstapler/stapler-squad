@@ -5,6 +5,8 @@ package headless
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,7 +23,7 @@ func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	result, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.")
+	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Say hello in exactly 3 words.", CallOptions{})
 	require.NoError(t, err)
 	assert.NotEmpty(t, result, "result should be non-empty")
 	t.Logf("claude response: %q", result)
@@ -42,10 +44,10 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'")
+	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{})
 	require.NoError(t, err, "first call should succeed")
 
-	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'")
+	_, _, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'second call'", CallOptions{})
 	require.NoError(t, err, "second call should succeed")
 
 	require.Len(t, capturedArgs, 2, "should have captured 2 calls")
@@ -69,6 +71,54 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 		}
 	}
 	assert.True(t, foundResume, "second call should use --resume; got: %v", capturedArgs[1])
+}
+
+// TestPool_RealClaude_WorkDirOnly_GrantsReadAccess verifies that
+// CallOptions{WorkDir: ...} alone (no other flags) grants the headless
+// `claude -p` subprocess real read access to files in that directory.
+func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
+	tempDir := t.TempDir()
+	markerValue := "STAPLER_SQUAD_MARKER_7f3a1"
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
+
+	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
+	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{WorkDir: tempDir})
+	require.NoError(t, err)
+	require.Contains(t, result, markerValue)
+}
+
+// TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess verifies that
+// CallOptions{WorkDir, AllowedTools, PermissionMode} together still grant the
+// headless `claude -p` subprocess real read access to files in that
+// directory, i.e. the defensive --allowedTools/--permission-mode flags don't
+// break the WorkDir-only read access proven by
+// TestPool_RealClaude_WorkDirOnly_GrantsReadAccess above.
+func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
+	tempDir := t.TempDir()
+	markerValue := "STAPLER_SQUAD_MARKER_9c2e4"
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
+
+	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
+	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// session.PermissionModeBypassPermissions == "bypassPermissions", but the
+	// session package imports session/headless, so importing session here
+	// would create an import cycle; use the literal value instead.
+	result, _, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", "Read the file marker.txt in your current working directory and output ONLY its exact contents, nothing else.", CallOptions{
+		WorkDir:        tempDir,
+		AllowedTools:   "Read,Grep,Glob",
+		PermissionMode: "bypassPermissions",
+	})
+	require.NoError(t, err)
+	require.Contains(t, result, markerValue)
 }
 
 // argsCapturingRunner wraps a real runner and records args.

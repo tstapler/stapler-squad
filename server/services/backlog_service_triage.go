@@ -668,7 +668,7 @@ func (s *BacklogService) TriggerTriage(
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
 		defer cancel()
 
-		raw, callErr := s.headlessPool.CallBlockingWithOptions(triageCtx,
+		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
@@ -676,7 +676,7 @@ func (s *BacklogService) TriggerTriage(
 		)
 
 		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
-		// shutdown. Created HERE, after CallBlockingWithOptions returns, not before
+		// shutdown. Created HERE, after CallBlocking returns, not before
 		// it: the LLM call above routinely takes 7-15 minutes (4 parallel research
 		// subagents), so a cleanupCtx created before it would have its 10s budget
 		// already expired by the time these persistence calls run below — every
@@ -865,25 +865,77 @@ Do not modify the code. Only write the review verdict.
 	// This avoids needing tmux and runs the review inline via LLM call.
 	if s.headlessPool != nil {
 		headlessPrompt := session.BuildHeadlessReviewPrompt(item, acSnapshot, workSessionDiff, false, verificationNotes)
-		reviewCtx, reviewCancel := context.WithTimeout(ctx, headless.DefaultCallTimeout)
+		codebaseWorkDir := s.resolveCodebaseWorkDir(ctx, item.RepoPath, mostRecentWorkSession)
+		systemPrompt, callOpts, callTimeout, reviewPath := session.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
+		// callStart is recorded immediately before the headless call sequence
+		// (capability self-check, then CallBlocking) so Epic 2.5's duration_ms=
+		// observability logging reflects the real cost of this re-review attempt,
+		// including a first-in-process capability self-check when one runs.
+		callStart := time.Now()
+
+		// Story 2.2.6c: before the FIRST real codebase-read call in this process's
+		// lifetime, verify the claude CLI/config actually grants WorkDir+AllowedTools+
+		// PermissionMode read access — shares headless.DefaultCapabilitySelfCheck (via
+		// s.capabilityCheck) with ReviewGateRunner so a failure discovered via either
+		// call site short-circuits the other. A failure here means every
+		// AllowedTools/PermissionMode-bearing call would silently produce zero real
+		// evidence, so skip the real call entirely and record UNVERIFIABLE directly —
+		// mirrors the codebase-read-timeout branch's shape below.
+		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
+			reviewPath = "codebase-read-degraded"
+			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, capSummary)
+			if createErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
+			}
+			log.WarningLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
+			return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+				ItemSession: itemSessionToProto(is, s.buildCostLookup()),
+			}), nil
+		}
+
+		reviewCtx, reviewCancel := context.WithTimeout(ctx, callTimeout)
 		defer reviewCancel()
 
-		reviewResult, callErr := s.headlessPool.CallBlockingWithOptions(
-			reviewCtx, headless.FeatureKeyReview, headless.HeadlessReviewSystemPrompt(), headlessPrompt, headless.CallOptions{},
+		reviewResult, callCostUSD, callErr := s.headlessPool.CallBlocking(
+			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
 		)
 		if callErr != nil {
+			// Story 2.2.4c: a timeout OR a parent-context cancellation on the codebase-read
+			// path is an infrastructure signal (hung/degraded tool access, or e.g. process
+			// shutdown mid-call), not evidence the criteria failed — degrade to UNVERIFIABLE
+			// instead of the normal error path below. ADR-001's rationale for timeouts
+			// applies equally to cancellation.
+			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
+				reviewPath = "codebase-read-degraded"
+				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, timeoutSummary)
+				if createErr != nil {
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
+				}
+				log.WarningLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, session.ReviewVerdictUnverifiable, reviewPath, time.Since(callStart).Milliseconds())
+				return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
+				}), nil
+			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 
 		overall, perCriterion, reviewSummary := session.ParseHeadlessVerdictResult(reviewResult)
+		toolReads := session.ParseHeadlessToolReads(reviewResult)
+		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir)
+		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
+		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
+		// observability fields.
 		perCriterionJSON, _ := json.Marshal(perCriterion)
 
 		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
-			ItemID:      item.ID,
-			SessionUUID: reviewSessionUUID,
-			SessionRole: session.SessionRoleReview,
-			AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+			ItemID:           item.ID,
+			SessionUUID:      reviewSessionUUID,
+			SessionRole:      session.SessionRoleReview,
+			AcSnapshot:       session.AcCriteriaJSON(acSnapshotJSON),
+			EstimatedCostUsd: callCostUSD,
 		}, session.ReviewVerdictData{
 			OverallOutcome: overall,
 			PerCriterion:   string(perCriterionJSON),
@@ -896,7 +948,7 @@ Do not modify the code. Only write the review verdict.
 			log.WarningLog.Printf("[TriggerReReview] UpdateItemSessionEnded: %v", endErr)
 		}
 
-		log.InfoLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s)", item.ID, overall)
+		log.InfoLog.Printf("[TriggerReReview] headless re-review complete for item %s (outcome %s, path=%s, duration_ms=%d)", item.ID, overall, reviewPath, time.Since(callStart).Milliseconds())
 
 		return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 			ItemSession: itemSessionToProto(is, s.buildCostLookup()),
@@ -1035,6 +1087,20 @@ func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSessio
 	return
 }
 
+// resolveCodebaseWorkDir returns the directory the headless codebase-read review call
+// (BuildReviewCallOptions' empty-diff branch) should be granted Read/Grep/Glob access
+// to. Prefers the work session's dedicated worktree path (freshest, matches the
+// session's actual branch); falls back to repoPath when no worktree is recorded or the
+// lookup fails (directory-mode sessions, or a worktree that's since been cleaned up).
+func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) string {
+	if workSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" {
+			return wt.WorktreePath
+		}
+	}
+	return repoPath
+}
+
 // getWorkSessionDiff returns the git diff for the given work session. It prefers the
 // session's dedicated worktree path and base SHA; falls back to the item's repo when
 // the worktree directory is gone (commits remain accessible via the shared object store).
@@ -1076,11 +1142,11 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 // resolveACSnapshot returns the acceptance criteria to use for a re-review. It prefers
 // the snapshot captured at work-session start; falls back to the item's current AC.
 func resolveACSnapshot(workSession *session.ItemSessionSummary, itemAC session.AcCriteriaJSON) []session.AcCriterion {
+	live, _ := session.ParseAcCriteria(itemAC)
 	if workSession != nil && workSession.AcSnapshot != "" {
 		if ac, _ := session.ParseAcCriteria(workSession.AcSnapshot); len(ac) > 0 {
-			return ac
+			return session.MergeLiveCriterionNotes(ac, live)
 		}
 	}
-	ac, _ := session.ParseAcCriteria(itemAC)
-	return ac
+	return live
 }
