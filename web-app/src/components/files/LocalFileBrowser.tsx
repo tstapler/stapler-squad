@@ -15,7 +15,12 @@ import {
   ExternalLink,
   FolderOpen,
   X,
+  TerminalSquare,
 } from "lucide-react";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { SessionType } from "@/gen/session/v1/types_pb";
 import * as styles from "./LocalFileBrowser.css";
 
 interface FileEntry {
@@ -25,10 +30,42 @@ interface FileEntry {
   size: number;
 }
 
+// Wire shape from GET /api/local/files/list — a plain REST JSON endpoint (not
+// ConnectRPC), so field names are the Go struct's raw snake_case json tags.
+interface RawFileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
+interface RawDirListing {
+  path: string;
+  parent: string;
+  entries: RawFileEntry[];
+  total: number;
+  has_more: boolean;
+}
+
 interface DirListing {
   path: string;
   entries: FileEntry[];
-  truncated?: boolean;
+  total: number;
+  hasMore: boolean;
+}
+
+function fromRawListing(raw: RawDirListing): DirListing {
+  return {
+    path: raw.path,
+    total: raw.total,
+    hasMore: raw.has_more,
+    entries: raw.entries.map((e) => ({
+      name: e.name,
+      path: e.path,
+      isDir: e.is_dir,
+      size: e.size,
+    })),
+  };
 }
 
 type RenderMode = "html" | "image" | "svg" | "pdf" | "video" | "text" | "binary";
@@ -76,8 +113,11 @@ function fileIconForEntry(entry: FileEntry) {
   }
 }
 
-function serveUrl(absPath: string): string {
-  return `/api/local/serve${absPath}`;
+export function serveUrl(absPath: string): string {
+  // Per-segment encoding so `#`, `?`, spaces, and unicode in filenames survive
+  // as path characters instead of being read as a URL fragment/query or breaking.
+  const encoded = absPath.split("/").map(encodeURIComponent).join("/");
+  return `/api/local/serve${encoded}`;
 }
 
 function formatSize(bytes: number): string {
@@ -114,11 +154,11 @@ function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose }: Vi
   return (
     <div className={styles.viewerToolbar}>
       <span className={styles.viewerLabel}>{name}</span>
-      <button onClick={handleOpen} className={styles.externalButton} title={openLabel}>
+      <button onClick={handleOpen} className={styles.externalButton} title={openLabel} data-testid="file-browser-viewer-open-external">
         <ExternalLink size={14} />
       </button>
       {onClose && (
-        <button onClick={onClose} className={styles.externalButton} title="Close file viewer">
+        <button onClick={onClose} className={styles.externalButton} title="Close file viewer" data-testid="file-browser-viewer-close">
           <X size={14} />
         </button>
       )}
@@ -245,6 +285,7 @@ function FileViewer({ entry, onClose }: FileViewerProps) {
             <button
               onClick={() => window.open(url, "_blank", "noopener")}
               className={styles.externalButton}
+              data-testid="file-browser-viewer-download"
             >
               Open / Download <ExternalLink size={14} />
             </button>
@@ -265,12 +306,18 @@ export function LocalFileBrowser() {
   const [listError, setListError] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<FileEntry | null>(null);
   const [loading, setLoading] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [openingTerminal, setOpeningTerminal] = useState(false);
+  const { createSession } = useSessionService({ enabled: true });
+  const analytics = useAnalytics();
 
   const navigate = useCallback(
     (path: string) => {
       setCurrentPath(path);
       setPathInput(path);
       setSelectedEntry(null);
+      setFilterText("");
       router.replace(`/files?path=${encodeURIComponent(path)}`);
     },
     [router]
@@ -289,10 +336,10 @@ export function LocalFileBrowser() {
           return r.text().then((t) => {
             throw new Error((t || `HTTP ${r.status}`).trim());
           });
-        return r.json() as Promise<DirListing>;
+        return r.json() as Promise<RawDirListing>;
       })
       .then((data) => {
-        setListing(data);
+        setListing(fromRawListing(data));
       })
       .catch((e: unknown) => {
         if (e instanceof Error && e.name === "AbortError") return;
@@ -315,21 +362,43 @@ export function LocalFileBrowser() {
     }
   };
 
+  const handleOpenTerminal = async () => {
+    setTerminalError(null);
+    setOpeningTerminal(true);
+    try {
+      const session = await createSession({ path: currentPath, sessionType: SessionType.DIRECTORY });
+      analytics.track({ name: "file_browser.open_terminal", category: "user_action", component: "LocalFileBrowser" });
+      if (session) {
+        router.push(`/?session=${session.id}`);
+      } else {
+        setTerminalError("Failed to create session");
+      }
+    } catch (e: unknown) {
+      setTerminalError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpeningTerminal(false);
+    }
+  };
+
   const crumbs = buildBreadcrumbs(currentPath);
+  const filteredEntries = (listing?.entries ?? []).filter((entry) =>
+    entry.name.toLowerCase().includes(filterText.trim().toLowerCase())
+  );
 
   return (
     <div className={styles.page}>
       <div className={styles.pathBar}>
         <form onSubmit={handlePathSubmit} className={styles.pathForm}>
-          <input
-            className={styles.pathInput}
-            value={pathInput}
-            onChange={(e) => setPathInput(e.target.value)}
-            placeholder="/path/to/directory"
-            aria-label="Directory path"
-            spellCheck={false}
-          />
-          <button type="submit" className={styles.pathButton}>
+          <div className={styles.pathInputWrapper}>
+            <RepoPathInput
+              value={pathInput}
+              onChange={setPathInput}
+              onSelect={(entry) => navigate(entry.path)}
+              placeholder="/path/to/directory"
+              data-testid="file-browser-path-input"
+            />
+          </div>
+          <button type="submit" className={styles.pathButton} data-testid="file-browser-go-button">
             Go
           </button>
           <button
@@ -338,10 +407,22 @@ export function LocalFileBrowser() {
             onClick={() => navigate(parentDir(currentPath))}
             disabled={currentPath === "/"}
             title="Go up one level"
+            data-testid="file-browser-up-button"
           >
             <ArrowUp size={16} />
           </button>
+          <button
+            type="button"
+            className={styles.upButton}
+            onClick={handleOpenTerminal}
+            disabled={openingTerminal}
+            title="Open terminal here"
+            data-testid="file-browser-open-terminal"
+          >
+            <TerminalSquare size={16} />
+          </button>
         </form>
+        {terminalError && <div className={styles.sidebarEmpty}>{terminalError}</div>}
         <nav className={styles.breadcrumbs} aria-label="Path breadcrumbs">
           {crumbs.map((crumb, i) => (
             <span key={crumb.path} className={styles.crumbGroup}>
@@ -353,27 +434,40 @@ export function LocalFileBrowser() {
               <button
                 className={styles.breadcrumbLink}
                 onClick={() => navigate(crumb.path)}
+                data-testid={`file-browser-breadcrumb-${i}`}
               >
                 {crumb.label}
               </button>
             </span>
           ))}
         </nav>
+        <input
+          className={styles.pathInput}
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          placeholder="Filter entries…"
+          aria-label="Filter entries"
+          spellCheck={false}
+          data-testid="file-browser-filter-input"
+        />
       </div>
 
       <div className={styles.content({ fileOpen: !!selectedEntry })}>
-        <aside className={styles.sidebar}>
+        <aside className={styles.sidebar} data-testid="file-browser-entry-list">
           {loading && <div className={styles.sidebarEmpty}>Loading…</div>}
           {listError && <div className={styles.sidebarEmpty}>{listError}</div>}
           {!loading && !listError && listing && listing.entries.length === 0 && (
             <div className={styles.sidebarEmpty}>Empty directory</div>
           )}
-          {listing?.truncated && (
-            <div className={styles.sidebarEmpty}>
-              Showing first 5000 entries
+          {!loading && !listError && listing && listing.entries.length > 0 && filteredEntries.length === 0 && (
+            <div className={styles.sidebarEmpty}>No matching entries</div>
+          )}
+          {listing?.hasMore && (
+            <div className={styles.sidebarEmpty} data-testid="file-browser-truncation-notice">
+              Showing first {listing.entries.length} of {listing.total} entries
             </div>
           )}
-          {listing?.entries.map((entry) => {
+          {filteredEntries.map((entry) => {
             const Icon = fileIconForEntry(entry);
             const isActive = selectedEntry?.path === entry.path;
             return (
@@ -382,6 +476,7 @@ export function LocalFileBrowser() {
                 className={styles.fileEntry({ active: isActive })}
                 onClick={() => handleEntryClick(entry)}
                 title={entry.path}
+                data-testid="file-browser-entry"
               >
                 <span className={styles.fileIcon}>
                   <Icon size={15} />
