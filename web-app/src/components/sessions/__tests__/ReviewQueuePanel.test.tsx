@@ -561,6 +561,34 @@ describe("ReviewQueuePanel — combinable filters", () => {
     expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
   });
 
+  it("filters by category", () => {
+    const bugfix = makeReviewItem({ sessionId: "s1", sessionName: "First Item", category: "bugfix" });
+    const feature = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", category: "feature" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([bugfix, feature]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "feature (1)" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters by tag", () => {
+    const backend = makeReviewItem({ sessionId: "s1", sessionName: "First Item", tags: ["backend"] });
+    const frontend = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", tags: ["frontend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend, frontend]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "frontend (1)" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
   it("filters to items with a GitHub PR when Has PR is selected", () => {
     const withPr = makeReviewItem({ sessionId: "s1", sessionName: "S1", githubPrUrl: "https://github.com/org/repo/pull/1" });
     const withoutPr = makeReviewItem({ sessionId: "s2", sessionName: "S2", githubPrUrl: "" });
@@ -570,6 +598,34 @@ describe("ReviewQueuePanel — combinable filters", () => {
     openFilters();
 
     fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("filters to items without a GitHub PR when No PR is selected", () => {
+    const withPr = makeReviewItem({ sessionId: "s1", sessionName: "S1", githubPrUrl: "https://github.com/org/repo/pull/1" });
+    const withoutPr = makeReviewItem({ sessionId: "s2", sessionName: "S2", githubPrUrl: "" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withPr, withoutPr]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "No PR" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters to items diverged from base when Diverged from base is selected", () => {
+    const diverged = makeReviewItem({ sessionId: "s1", sessionName: "S1", branchDivergedFromBase: true });
+    const notDiverged = makeReviewItem({ sessionId: "s2", sessionName: "S2", branchDivergedFromBase: false });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([diverged, notDiverged]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "Diverged from base" }));
 
     expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
     expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
