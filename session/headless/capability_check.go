@@ -50,7 +50,7 @@ var DefaultCapabilitySelfCheck = &CodebaseReadCapabilitySelfCheck{}
 // can call it without an adapter.
 func (c *CodebaseReadCapabilitySelfCheck) Ensure(ctx context.Context, pool PoolClient) bool {
 	c.once.Do(func() {
-		ok := c.run(ctx, pool)
+		ok := c.run(pool)
 		c.ok.Store(ok)
 		c.checked.Store(true)
 		if ok {
@@ -100,16 +100,16 @@ func NewFailedCapabilitySelfCheckForTesting() *CodebaseReadCapabilitySelfCheck {
 // BuildReviewCallOptions grants on the empty-diff codebase-read path), and check
 // the marker content round-trips.
 //
-// ctx is intentionally NOT used to derive the probe's context. Ensure's result is
-// cached for the lifetime of the process (sync.Once), seeded by whichever caller's
-// ctx happens to win the race to run this method first. If the probe's context were
-// derived from that caller's (possibly short-lived, per-review) ctx, a transient
-// cancellation/deadline on the FIRST caller would permanently poison the
-// process-lifetime cached verdict for every later caller, even though the underlying
-// capability is fine. Deriving from context.Background() (bounded only by
-// capabilityCheckTimeout) ensures the cached verdict reflects a real capability
-// determination, not an artifact of the first caller's context lifetime.
-func (c *CodebaseReadCapabilitySelfCheck) run(ctx context.Context, pool PoolClient) bool {
+// run takes no ctx parameter deliberately: Ensure's result is cached for the
+// lifetime of the process (sync.Once), seeded by whichever caller wins the race to
+// run this method first. If the probe's context were derived from that caller's
+// (possibly short-lived, per-review) ctx, a transient cancellation/deadline on the
+// FIRST caller would permanently poison the process-lifetime cached verdict for
+// every later caller, even though the underlying capability is fine. Deriving from
+// context.Background() (bounded only by capabilityCheckTimeout) ensures the cached
+// verdict reflects a real capability determination, not an artifact of the first
+// caller's context lifetime — so there is no legitimate use for a ctx parameter here.
+func (c *CodebaseReadCapabilitySelfCheck) run(pool PoolClient) bool {
 	if pool == nil {
 		return false
 	}
