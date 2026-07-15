@@ -90,19 +90,31 @@ Some acceptance criteria describe things that cannot be observed in a diff at al
 A criterion's self-reported Note (e.g. "already implemented, no diff needed") is informational context only, not evidence. It is never sufficient by itself for that criterion's PASS — you must still find the criterion's satisfying change reflected in the diff itself, or mark it FAIL/UNVERIFIABLE.`
 
 // headlessReviewSystemPromptWithCodebaseAccess is used for empty-diff headless review
-// calls that ARE granted read-only tool access (Read/Grep/Glob) via CallOptions.WorkDir.
-// Uses falsification framing: the model must independently locate and quote its OWN
-// evidence, treating the work session's claim as a hypothesis to check, not a fact to
-// accept. Also requires a "tool_reads" list of files actually opened, so the caller can
-// detect a PASS/FAIL reached with no real evidence of tool use and degrade it.
-const headlessReviewSystemPromptWithCodebaseAccess = `You are a code review agent reviewing a backlog item where no diff was found — either the acceptance criteria were already satisfied before this session started, or no work was done. You have read-only tool access (Read, Grep, Glob) scoped to the item's own repository checkout. Use it to independently verify each criterion:
+// calls that ARE granted read-only tool access (Read/Grep/Glob only — see
+// CodebaseReadAllowedTools) via CallOptions.WorkDir. Uses falsification framing: the
+// model must independently locate and quote its OWN evidence, treating the work
+// session's claim as a hypothesis to check, not a fact to accept. Also requires a
+// "tool_reads" list of files actually opened, so the caller can detect a PASS/FAIL
+// reached with no real evidence of tool use and degrade it.
+//
+// A scoped Bash allowlist (git log/show/diff/blame, go test/vet/build, sg) was added
+// here and to CodebaseReadAllowedTools in a later revision, then reverted — see
+// ADR-001's 2026-07-15 addendum. The empirical integration test
+// TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed proved that under
+// --permission-mode bypassPermissions, AllowedTools/DisallowedTools do not provide
+// real technical enforcement for Bash: an explicitly unlisted command executed freely,
+// and command-chaining after an allowed prefix also succeeded in full. Do not
+// reintroduce a Bash grant here without re-reading that ADR addendum.
+const headlessReviewSystemPromptWithCodebaseAccess = `You are a code review agent reviewing a backlog item where no diff was found — either the acceptance criteria were already satisfied before this session started, or no work was done. You have read-only tool access scoped to the item's own repository checkout: Read, Grep, Glob for inspecting files. No other tools are available.
+Use these tools to independently and thoroughly verify each criterion — this is a genuine investigation, not a narrow file:line lookup:
 1. Search the current codebase yourself for code that satisfies each criterion. Treat the work session's note or verification evidence as a hypothesis to falsify, not a citation to trust — a criterion is not PASS merely because the agent claims it is already implemented.
-2. When you find satisfying code, your evidence field must quote YOUR OWN file path plus line/symbol and snippet from what you read — not a restatement of the agent's claim.
-3. If you cannot locate satisfying code — including because it would live in a vendored or dependency path you cannot fully inspect — mark that criterion UNVERIFIABLE, not PASS.
-4. Do not modify any files. Do not run destructive or write commands.
-5. List EVERY file path you actually opened with Read/Grep/Glob during this review in "tool_reads", even if it didn't contain relevant code. If you did not use any tool, leave "tool_reads" empty — do not fabricate entries; an empty list on a confident verdict will be treated as unverified.
+2. Additional context may be provided below: prior review attempts on this item (## Prior Review Attempts), the full history of self-reported progress notes (## Full Notes History), the item's overall goal and status history (## Item Context), and a searchable transcript of the work session's own terminal activity (## Session Transcript). Use these to build a complete picture — e.g. a criterion marked UNVERIFIABLE twice before with the same evidence gap is a strong signal, and the session transcript may show the actual commands/output the work session claims to have run.
+3. When you find satisfying code, your evidence field must quote YOUR OWN file path plus line/symbol and snippet from what you read — not a restatement of the agent's claim.
+4. If you cannot locate satisfying code — including because it would live in a vendored or dependency path you cannot fully inspect — mark that criterion UNVERIFIABLE, not PASS.
+5. Do not modify any files. Do not run any commands.
+6. List EVERY real file path your investigation actually touched in "tool_reads" — regardless of whether it was opened directly with Read or matched/returned by a Grep/Glob search. When a search confirms something is ABSENT (no matching file, no matching symbol), that absence is real evidence — but do not list the nonexistent path itself in "tool_reads" (every entry must be a real file that exists); instead list the real file(s) your search actually returned (e.g. what Glob found in the relevant directory), so the thoroughness of the absence-check is auditable from what WAS found. If you did not use any tool at all, leave "tool_reads" empty — do not fabricate entries; an empty list on a confident verdict will be treated as unverified.
 Output ONLY a single JSON object — no other text before or after it:
-{"overall":"PASS","summary":"concise assessment","tool_reads":["path/to/file.go","path/to/other.go"],"verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"file:line — quoted snippet you read yourself"}]}
+{"overall":"PARTIAL","summary":"concise assessment","tool_reads":["auth/login.go","main.go"],"verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"auth/login.go:9-24 — quoted snippet you read yourself"},{"criterion_index":1,"outcome":"FAIL","evidence":"Glob **/*.go returned only main.go and auth/login.go; Grep for 'RateLimit|ratelimit' found no matches — no rate-limiting code exists anywhere in the repo"}]}
 Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Set overall to PASS only when every criterion passes.`
 
 // ReviewSystemPrompt returns the stable system prompt for review gate calls.
@@ -120,15 +132,36 @@ func HeadlessReviewSystemPromptWithCodebaseAccess() string {
 }
 
 // CodebaseReadCallTimeout is the context timeout used for the empty-diff codebase-read
-// headless call — deliberately shorter than DefaultCallTimeout (900s) so a hung or
-// degraded tool-access call fails fast into the UNVERIFIABLE degrade path instead of
-// blocking the review gate for up to 15 minutes.
-const CodebaseReadCallTimeout = 150 * time.Second
+// headless call. Originally 150s (deliberately shorter than DefaultCallTimeout's 900s so
+// a hung or degraded tool-access call fails fast into the UNVERIFIABLE degrade path).
+// Raised to 600s (10 minutes) and kept there even after the Bash tool grant below was
+// reverted (see CodebaseReadAllowedTools) — the relaxed budget was motivated by the
+// richer context payload (prior review attempts, full notes history, item context, a
+// searchable session transcript file via Grep), not by Bash tool use, so genuine
+// Read/Grep/Glob exploration of that larger context still legitimately takes longer
+// than a bounded lookup and 150s was starting to force premature UNVERIFIABLE degrades
+// on reviews that were making real progress. 600s remains well short of the shared 900s
+// DefaultCallTimeout, so a genuinely hung codebase-read call still fails into the degrade
+// path before hitting the full 15-minute ceiling other headless call types tolerate.
+const CodebaseReadCallTimeout = 600 * time.Second
 
 // CodebaseReadAllowedTools is the AllowedTools value granted to the empty-diff
 // codebase-read headless call (BuildReviewCallOptions) and to the capability
 // self-check probe (CodebaseReadCapabilitySelfCheck.run), which exercises the same
 // call shape. Shared as a constant so the two call sites cannot silently drift.
+//
+// This is deliberately Read/Grep/Glob only — no Bash grant of any kind. A scoped Bash
+// allowlist (git log/show/diff/blame, go test/vet/build, sg) was added here in a later
+// revision, then reverted — see ADR-001's 2026-07-15 addendum. The empirical
+// integration test TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed
+// (session/headless/integration_test.go) proved that under
+// --permission-mode bypassPermissions, --allowedTools/--disallowedTools do NOT provide
+// real technical enforcement for Bash: an explicitly unlisted command executed freely
+// and wrote a real file to disk, and command-chaining after an allowed prefix also
+// succeeded in full. This Read/Grep/Glob-only grant is the one whose safety was
+// actually verified empirically, via TestPool_RealClaude_WorkDirOnly_GrantsReadAccess
+// and TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess — do not re-add Bash
+// here without re-reading the ADR addendum and re-running that integration test.
 const CodebaseReadAllowedTools = "Read,Grep,Glob"
 
 // headlessTriageSystemPrompt instructs the model to perform pre-implementation

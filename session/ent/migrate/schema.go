@@ -165,6 +165,36 @@ var (
 			},
 		},
 	}
+	// BacklogProgressNotesColumns holds the columns for the "backlog_progress_notes" table.
+	BacklogProgressNotesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "criterion_index", Type: field.TypeInt},
+		{Name: "note", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeString},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "item_id", Type: field.TypeUUID},
+	}
+	// BacklogProgressNotesTable holds the schema information for the "backlog_progress_notes" table.
+	BacklogProgressNotesTable = &schema.Table{
+		Name:       "backlog_progress_notes",
+		Columns:    BacklogProgressNotesColumns,
+		PrimaryKey: []*schema.Column{BacklogProgressNotesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_progress_notes_backlog_items_progress_notes",
+				Columns:    []*schema.Column{BacklogProgressNotesColumns[5]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "backlogprogressnote_item_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogProgressNotesColumns[5], BacklogProgressNotesColumns[4]},
+			},
+		},
+	}
 	// BacklogStatusEventsColumns holds the columns for the "backlog_status_events" table.
 	BacklogStatusEventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -890,6 +920,7 @@ var (
 		AnalyticsEventsTable,
 		ApprovalRulesTable,
 		BacklogItemsTable,
+		BacklogProgressNotesTable,
 		BacklogStatusEventsTable,
 		ClassificationAnalyticsTable,
 		ClaudeMetadataTable,
@@ -915,6 +946,7 @@ var (
 
 func init() {
 	BacklogItemsTable.ForeignKeys[0].RefTable = ItemSourcesTable
+	BacklogProgressNotesTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	BacklogStatusEventsTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	ClaudeMetadataTable.ForeignKeys[0].RefTable = ClaudeSessionsTable
 	ClaudeSessionsTable.ForeignKeys[0].RefTable = SessionsTable

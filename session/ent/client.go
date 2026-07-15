@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -50,6 +51,8 @@ type Client struct {
 	ApprovalRule *ApprovalRuleClient
 	// BacklogItem is the client for interacting with the BacklogItem builders.
 	BacklogItem *BacklogItemClient
+	// BacklogProgressNote is the client for interacting with the BacklogProgressNote builders.
+	BacklogProgressNote *BacklogProgressNoteClient
 	// BacklogStatusEvent is the client for interacting with the BacklogStatusEvent builders.
 	BacklogStatusEvent *BacklogStatusEventClient
 	// ClassificationAnalytics is the client for interacting with the ClassificationAnalytics builders.
@@ -100,6 +103,7 @@ func (c *Client) init() {
 	c.AnalyticsEvent = NewAnalyticsEventClient(c.config)
 	c.ApprovalRule = NewApprovalRuleClient(c.config)
 	c.BacklogItem = NewBacklogItemClient(c.config)
+	c.BacklogProgressNote = NewBacklogProgressNoteClient(c.config)
 	c.BacklogStatusEvent = NewBacklogStatusEventClient(c.config)
 	c.ClassificationAnalytics = NewClassificationAnalyticsClient(c.config)
 	c.ClaudeMetadata = NewClaudeMetadataClient(c.config)
@@ -213,6 +217,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
 		BacklogItem:             NewBacklogItemClient(cfg),
+		BacklogProgressNote:     NewBacklogProgressNoteClient(cfg),
 		BacklogStatusEvent:      NewBacklogStatusEventClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
@@ -253,6 +258,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
 		BacklogItem:             NewBacklogItemClient(cfg),
+		BacklogProgressNote:     NewBacklogProgressNoteClient(cfg),
 		BacklogStatusEvent:      NewBacklogStatusEventClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
@@ -300,11 +306,11 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogStatusEvent,
-		c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession, c.DiffStats,
-		c.ErrorEvent, c.EscapeEvent, c.ItemSession, c.ItemSource, c.Project,
-		c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag,
-		c.Workflow, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogProgressNote,
+		c.BacklogStatusEvent, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent, c.ItemSession,
+		c.ItemSource, c.Project, c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell,
+		c.SourceSyncEvent, c.Tag, c.Workflow, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -314,11 +320,11 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogStatusEvent,
-		c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession, c.DiffStats,
-		c.ErrorEvent, c.EscapeEvent, c.ItemSession, c.ItemSource, c.Project,
-		c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag,
-		c.Workflow, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogProgressNote,
+		c.BacklogStatusEvent, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent, c.ItemSession,
+		c.ItemSource, c.Project, c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell,
+		c.SourceSyncEvent, c.Tag, c.Workflow, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -333,6 +339,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ApprovalRule.mutate(ctx, m)
 	case *BacklogItemMutation:
 		return c.BacklogItem.mutate(ctx, m)
+	case *BacklogProgressNoteMutation:
+		return c.BacklogProgressNote.mutate(ctx, m)
 	case *BacklogStatusEventMutation:
 		return c.BacklogStatusEvent.mutate(ctx, m)
 	case *ClassificationAnalyticsMutation:
@@ -796,6 +804,22 @@ func (c *BacklogItemClient) QueryStatusEvents(_m *BacklogItem) *BacklogStatusEve
 	return query
 }
 
+// QueryProgressNotes queries the progress_notes edge of a BacklogItem.
+func (c *BacklogItemClient) QueryProgressNotes(_m *BacklogItem) *BacklogProgressNoteQuery {
+	query := (&BacklogProgressNoteClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(backlogprogressnote.Table, backlogprogressnote.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ProgressNotesTable, backlogitem.ProgressNotesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QuerySource queries the source edge of a BacklogItem.
 func (c *BacklogItemClient) QuerySource(_m *BacklogItem) *ItemSourceQuery {
 	query := (&ItemSourceClient{config: c.config}).Query()
@@ -834,6 +858,155 @@ func (c *BacklogItemClient) mutate(ctx context.Context, m *BacklogItemMutation) 
 		return (&BacklogItemDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown BacklogItem mutation op: %q", m.Op())
+	}
+}
+
+// BacklogProgressNoteClient is a client for the BacklogProgressNote schema.
+type BacklogProgressNoteClient struct {
+	config
+}
+
+// NewBacklogProgressNoteClient returns a client for the BacklogProgressNote from the given config.
+func NewBacklogProgressNoteClient(c config) *BacklogProgressNoteClient {
+	return &BacklogProgressNoteClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `backlogprogressnote.Hooks(f(g(h())))`.
+func (c *BacklogProgressNoteClient) Use(hooks ...Hook) {
+	c.hooks.BacklogProgressNote = append(c.hooks.BacklogProgressNote, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `backlogprogressnote.Intercept(f(g(h())))`.
+func (c *BacklogProgressNoteClient) Intercept(interceptors ...Interceptor) {
+	c.inters.BacklogProgressNote = append(c.inters.BacklogProgressNote, interceptors...)
+}
+
+// Create returns a builder for creating a BacklogProgressNote entity.
+func (c *BacklogProgressNoteClient) Create() *BacklogProgressNoteCreate {
+	mutation := newBacklogProgressNoteMutation(c.config, OpCreate)
+	return &BacklogProgressNoteCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of BacklogProgressNote entities.
+func (c *BacklogProgressNoteClient) CreateBulk(builders ...*BacklogProgressNoteCreate) *BacklogProgressNoteCreateBulk {
+	return &BacklogProgressNoteCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *BacklogProgressNoteClient) MapCreateBulk(slice any, setFunc func(*BacklogProgressNoteCreate, int)) *BacklogProgressNoteCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &BacklogProgressNoteCreateBulk{err: fmt.Errorf("calling to BacklogProgressNoteClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*BacklogProgressNoteCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &BacklogProgressNoteCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for BacklogProgressNote.
+func (c *BacklogProgressNoteClient) Update() *BacklogProgressNoteUpdate {
+	mutation := newBacklogProgressNoteMutation(c.config, OpUpdate)
+	return &BacklogProgressNoteUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *BacklogProgressNoteClient) UpdateOne(_m *BacklogProgressNote) *BacklogProgressNoteUpdateOne {
+	mutation := newBacklogProgressNoteMutation(c.config, OpUpdateOne, withBacklogProgressNote(_m))
+	return &BacklogProgressNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *BacklogProgressNoteClient) UpdateOneID(id uuid.UUID) *BacklogProgressNoteUpdateOne {
+	mutation := newBacklogProgressNoteMutation(c.config, OpUpdateOne, withBacklogProgressNoteID(id))
+	return &BacklogProgressNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for BacklogProgressNote.
+func (c *BacklogProgressNoteClient) Delete() *BacklogProgressNoteDelete {
+	mutation := newBacklogProgressNoteMutation(c.config, OpDelete)
+	return &BacklogProgressNoteDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *BacklogProgressNoteClient) DeleteOne(_m *BacklogProgressNote) *BacklogProgressNoteDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *BacklogProgressNoteClient) DeleteOneID(id uuid.UUID) *BacklogProgressNoteDeleteOne {
+	builder := c.Delete().Where(backlogprogressnote.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &BacklogProgressNoteDeleteOne{builder}
+}
+
+// Query returns a query builder for BacklogProgressNote.
+func (c *BacklogProgressNoteClient) Query() *BacklogProgressNoteQuery {
+	return &BacklogProgressNoteQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeBacklogProgressNote},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a BacklogProgressNote entity by its id.
+func (c *BacklogProgressNoteClient) Get(ctx context.Context, id uuid.UUID) (*BacklogProgressNote, error) {
+	return c.Query().Where(backlogprogressnote.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *BacklogProgressNoteClient) GetX(ctx context.Context, id uuid.UUID) *BacklogProgressNote {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryItem queries the item edge of a BacklogProgressNote.
+func (c *BacklogProgressNoteClient) QueryItem(_m *BacklogProgressNote) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogprogressnote.Table, backlogprogressnote.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, backlogprogressnote.ItemTable, backlogprogressnote.ItemColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *BacklogProgressNoteClient) Hooks() []Hook {
+	return c.hooks.BacklogProgressNote
+}
+
+// Interceptors returns the client interceptors.
+func (c *BacklogProgressNoteClient) Interceptors() []Interceptor {
+	return c.inters.BacklogProgressNote
+}
+
+func (c *BacklogProgressNoteClient) mutate(ctx context.Context, m *BacklogProgressNoteMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&BacklogProgressNoteCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&BacklogProgressNoteUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&BacklogProgressNoteUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&BacklogProgressNoteDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown BacklogProgressNote mutation op: %q", m.Op())
 	}
 }
 
@@ -3586,15 +3759,17 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogStatusEvent,
-		ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent,
-		EscapeEvent, ItemSession, ItemSource, Project, ReviewVerdict, Session,
-		SessionGoal, Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
+		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
+		BacklogStatusEvent, ClassificationAnalytics, ClaudeMetadata, ClaudeSession,
+		DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource, Project,
+		ReviewVerdict, Session, SessionGoal, Shell, SourceSyncEvent, Tag, Workflow,
+		Worktree []ent.Hook
 	}
 	inters struct {
-		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogStatusEvent,
-		ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent,
-		EscapeEvent, ItemSession, ItemSource, Project, ReviewVerdict, Session,
-		SessionGoal, Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
+		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
+		BacklogStatusEvent, ClassificationAnalytics, ClaudeMetadata, ClaudeSession,
+		DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource, Project,
+		ReviewVerdict, Session, SessionGoal, Shell, SourceSyncEvent, Tag, Workflow,
+		Worktree []ent.Interceptor
 	}
 )

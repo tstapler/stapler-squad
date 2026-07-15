@@ -898,6 +898,26 @@ func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, cr
 	return er.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
+// AppendProgressNote records a single report_progress call as an immutable history
+// entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
+func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("progress note history not supported by this storage backend")
+	}
+	return er.AppendProgressNote(ctx, itemID, criterionIndex, note, status)
+}
+
+// ListProgressNotesForItem returns the full append-only history of report_progress
+// calls for a backlog item, ordered by created_at ascending.
+func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.ListProgressNotesForItem(ctx, itemID)
+}
+
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
 func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)

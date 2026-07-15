@@ -2,10 +2,12 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -97,7 +99,7 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 	}
 	diff := "diff --git a/auth.go b/auth.go\n+func LoginGoogle() {}"
 
-	prompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, false, "")
+	prompt := BuildHeadlessReviewPrompt(item, acSnapshot, diff, false, "", ReviewContextExtras{})
 
 	assert.Contains(t, prompt, item.Title)
 	assert.Contains(t, prompt, item.Description)
@@ -115,14 +117,14 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 // TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote verifies truncation marker.
 func TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", true, "")
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", true, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "truncated")
 }
 
 // TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder verifies empty-diff handling.
 func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "no diff available")
 }
 
@@ -131,7 +133,7 @@ func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 // current codebase rather than trusting the work session's self-report alone.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "## No-Diff Verification")
 }
 
@@ -140,7 +142,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t
 // actually no diff to review.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", ReviewContextExtras{})
 	assert.NotContains(t, prompt, "## No-Diff Verification")
 }
 
@@ -166,7 +168,7 @@ func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testin
 func TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	notes := "ran `go test ./session/...` -> ok (41 tests)"
-	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, notes)
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, notes, ReviewContextExtras{})
 
 	assert.Contains(t, prompt, "## Verification Evidence (reported by work session — not visible in the diff)")
 	assert.Contains(t, prompt, notes)
@@ -177,7 +179,7 @@ func TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection(t 
 // reviewer isn't cued to look for evidence that doesn't exist.
 func TestBuildHeadlessReviewPrompt_EmptyVerificationNotes_OmitsSection(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "", ReviewContextExtras{})
 
 	assert.NotContains(t, prompt, "Verification Evidence")
 }
@@ -240,7 +242,7 @@ func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
-	prompt := BuildHeadlessReviewPrompt(item, ac, "diff --git a/foo.go b/foo.go\n+added line", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff --git a/foo.go b/foo.go\n+added line", false, "", ReviewContextExtras{})
 
 	assert.Contains(t, prompt, "Note (self-reported by work session via report_progress): implemented via foo.go, verified with go test")
 }
@@ -250,7 +252,7 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.
 func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []AcCriterion{{Index: 0, Text: "Do the thing"}}
-	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
 	assert.NotContains(t, prompt, "Note (self-reported by work session")
 }
@@ -260,9 +262,179 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) 
 func TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
-	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "")
+	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
 	assert.Contains(t, prompt, "[truncated]")
+}
+
+// ─── ReviewContextExtras rendering ──────────────────────────────────────────
+
+// perCriterionJSONFixture builds the []CriterionVerdict JSON stored in
+// ReviewVerdictSummary.PerCriterion for a single non-PASS criterion, matching the shape
+// parsePerCriterionVerdicts expects.
+func perCriterionJSONFixture(t *testing.T, idx int, outcome ReviewOutcome, evidence string) string {
+	t.Helper()
+	b, err := json.Marshal([]CriterionVerdict{{CriterionIndex: idx, Outcome: outcome, Evidence: evidence}})
+	require.NoError(t, err)
+	return string(b)
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered verifies the
+// "## Prior Review Attempts" section renders outcome, summary, and non-PASS
+// per-criterion evidence from a prior review-role ItemSession.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{
+		PriorSessions: []ItemSessionSummary{
+			{
+				Role: SessionRoleReview,
+				ReviewVerdict: &ReviewVerdictSummary{
+					OverallOutcome: string(ReviewVerdictUnverifiable),
+					Summary:        "could not locate satisfying code",
+					PerCriterion:   perCriterionJSONFixture(t, 1, ReviewOutcomeFail, "no evidence found in auth.go"),
+				},
+			},
+		},
+	}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
+
+	assert.Contains(t, prompt, "## Prior Review Attempts")
+	assert.Contains(t, prompt, "could not locate satisfying code")
+	assert.Contains(t, prompt, "no evidence found in auth.go")
+}
+
+// TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted is a
+// leakage guard: ReviewContextExtras sections must never render on the normal
+// diff-review path, even when extras is populated.
+func TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{
+		PriorSessions: []ItemSessionSummary{
+			{
+				Role: SessionRoleReview,
+				ReviewVerdict: &ReviewVerdictSummary{
+					OverallOutcome: string(ReviewVerdictUnverifiable),
+					Summary:        "could not locate satisfying code",
+				},
+			},
+		},
+	}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
+
+	assert.NotContains(t, prompt, "## Prior Review Attempts")
+	assert.NotContains(t, prompt, "could not locate satisfying code")
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyDiff_FullNotesHistory_Rendered verifies the
+// "## Full Notes History" section renders every ProgressNoteData entry.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_FullNotesHistory_Rendered(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{
+		ProgressNotes: []ProgressNoteData{
+			{CriterionIndex: 0, Status: "in_progress", Note: "started work on the OAuth flow", CreatedAt: time.Now()},
+			{CriterionIndex: 0, Status: "done", Note: "OAuth flow now complete and tested", CreatedAt: time.Now()},
+		},
+	}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
+
+	assert.Contains(t, prompt, "## Full Notes History")
+	assert.Contains(t, prompt, "started work on the OAuth flow")
+	assert.Contains(t, prompt, "OAuth flow now complete and tested")
+}
+
+// TestBuildHeadlessReviewPrompt_NonEmptyDiff_FullNotesHistory_Omitted is a leakage
+// guard for the Full Notes History section.
+func TestBuildHeadlessReviewPrompt_NonEmptyDiff_FullNotesHistory_Omitted(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{
+		ProgressNotes: []ProgressNoteData{
+			{CriterionIndex: 0, Status: "done", Note: "should never appear on diff path", CreatedAt: time.Now()},
+		},
+	}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
+
+	assert.NotContains(t, prompt, "## Full Notes History")
+	assert.NotContains(t, prompt, "should never appear on diff path")
+}
+
+// TestBuildHeadlessReviewPrompt_FullNotesHistory_CapsAtMaxEntries verifies the
+// history is bounded to the most recent maxContextExtrasEntries with an
+// "...N earlier entries omitted..." marker, mirroring backlog_context.go's
+// maxPriorAttemptsWithFullEvidence capping pattern.
+func TestBuildHeadlessReviewPrompt_FullNotesHistory_CapsAtMaxEntries(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	var notes []ProgressNoteData
+	for i := 0; i < maxContextExtrasEntries+5; i++ {
+		notes = append(notes, ProgressNoteData{CriterionIndex: 0, Status: "in_progress", Note: "note", CreatedAt: time.Now()})
+	}
+	extras := ReviewContextExtras{ProgressNotes: notes}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
+
+	assert.Contains(t, prompt, "5 earlier notes omitted")
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyDiff_ItemContext_Rendered verifies the
+// "## Item Context" section renders the item's goal (Description) and a compact
+// status-transition history.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_ItemContext_Rendered(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	note := "auto-reopened after failed review"
+	extras := ReviewContextExtras{
+		ItemDescription: "Add OAuth2 login support",
+		StatusEvents: []BacklogStatusEventData{
+			{FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "auto-reopen", Note: &note, CreatedAt: time.Now()},
+		},
+	}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
+
+	assert.Contains(t, prompt, "## Item Context")
+	assert.Contains(t, prompt, "Add OAuth2 login support")
+	assert.Contains(t, prompt, "review → in_progress")
+	assert.Contains(t, prompt, "auto-reopened after failed review")
+}
+
+// TestBuildHeadlessReviewPrompt_NonEmptyDiff_ItemContext_Omitted is a leakage guard
+// for the Item Context section.
+func TestBuildHeadlessReviewPrompt_NonEmptyDiff_ItemContext_Omitted(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{ItemDescription: "should never appear on diff path"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
+
+	assert.NotContains(t, prompt, "## Item Context")
+	assert.NotContains(t, prompt, "should never appear on diff path")
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_Rendered verifies the
+// "## Session Transcript" section renders an instruction pointing at the transcript
+// file's relative path, when TranscriptRelPath is set.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_Rendered(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{TranscriptRelPath: ".stapler-squad-review-transcript-abc123.txt"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
+
+	assert.Contains(t, prompt, "## Session Transcript")
+	assert.Contains(t, prompt, ".stapler-squad-review-transcript-abc123.txt")
+	assert.Contains(t, prompt, "Grep")
+}
+
+// TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_OmittedWhenEmptyPath
+// verifies no Session Transcript section renders when no transcript was available.
+func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_OmittedWhenEmptyPath(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
+
+	assert.NotContains(t, prompt, "## Session Transcript")
+}
+
+// TestBuildHeadlessReviewPrompt_NonEmptyDiff_SessionTranscript_Omitted is a leakage
+// guard for the Session Transcript section.
+func TestBuildHeadlessReviewPrompt_NonEmptyDiff_SessionTranscript_Omitted(t *testing.T) {
+	item := &BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	extras := ReviewContextExtras{TranscriptRelPath: ".stapler-squad-review-transcript-abc123.txt"}
+	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
+
+	assert.NotContains(t, prompt, "## Session Transcript")
+	assert.NotContains(t, prompt, ".stapler-squad-review-transcript-abc123.txt")
 }
 
 // TestMergeLiveCriterionNotes_OverlaysNoteAndStatusByIndex verifies a live
@@ -391,8 +563,9 @@ func TestBuildReviewCallOptions_EmptyDiff_ReturnsCodebaseAccessOptionsAndShortTi
 
 	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), systemPrompt)
 	assert.Equal(t, "/some/worktree", opts.WorkDir)
-	assert.Equal(t, "Read,Grep,Glob", opts.AllowedTools)
+	assert.Equal(t, headless.CodebaseReadAllowedTools, opts.AllowedTools)
 	assert.Equal(t, PermissionModeBypassPermissions, opts.PermissionMode)
+	assert.Empty(t, opts.DisallowedTools, "DisallowedTools must be empty now that the Bash grant it backed was reverted (ADR-001 2026-07-15 addendum)")
 	assert.Equal(t, headless.CodebaseReadCallTimeout, callTimeout)
 	assert.Equal(t, "codebase-read", path)
 }
@@ -411,11 +584,19 @@ func TestBuildReviewCallOptions_NonEmptyDiff_ReturnsPlainOptionsAndDefaultTimeou
 
 // TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools is a permanent
 // regression guard for the ADR-001 hard invariant: the codebase-read review call must
-// never be granted Bash or any write-capable tool.
+// never be granted Write/Edit, Bash, or any other tool beyond Read/Grep/Glob. A scoped
+// Bash allowlist (git history, go test/vet/build, ast-grep) was granted here in a
+// later revision, then reverted after TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed
+// (session/headless/integration_test.go) empirically proved AllowedTools/
+// DisallowedTools provide no real technical enforcement for Bash under
+// --permission-mode bypassPermissions — see ADR-001's 2026-07-15 addendum. This test
+// asserts an exact match against "Read,Grep,Glob" (not a substring/allowlist check) so
+// a future re-expansion of the tool grant fails loudly here rather than silently.
 func TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools(t *testing.T) {
 	_, opts, _, _ := BuildReviewCallOptions("", "/some/worktree")
-	assert.NotContains(t, opts.AllowedTools, "Bash")
-	assert.NotContains(t, opts.AllowedTools, "Write")
+
+	assert.Equal(t, "Read,Grep,Glob", opts.AllowedTools)
+	assert.Empty(t, opts.DisallowedTools, "DisallowedTools must be empty now that the Bash grant it backed was reverted")
 }
 
 // ─── ParseHeadlessToolReads ─────────────────────────────────────────────────

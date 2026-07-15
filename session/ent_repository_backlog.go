@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
@@ -98,6 +99,16 @@ func backlogStatusEventToData(e *ent.BacklogStatusEvent) BacklogStatusEventData 
 		TriggeredBy: e.TriggeredBy,
 		Note:        e.Note,
 		CreatedAt:   e.CreatedAt,
+	}
+}
+
+// progressNoteToData maps an *ent.BacklogProgressNote to a ProgressNoteData DTO.
+func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
+	return ProgressNoteData{
+		CriterionIndex: n.CriterionIndex,
+		Note:           n.Note,
+		Status:         n.Status,
+		CreatedAt:      n.CreatedAt,
 	}
 }
 
@@ -564,6 +575,53 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 
 	result := backlogItemToData(item)
 	return &result, nil
+}
+
+// --- Progress note history ---
+
+// AppendProgressNote records a single report_progress call as an immutable history
+// entry, in addition to (not instead of) the current-note-per-criterion stored on
+// BacklogItem.AcceptanceCriteria. Callers should treat failures here as best-effort:
+// the history is an enrichment for reviewers, not part of report_progress's primary
+// contract of updating the criterion's current status/note.
+func (r *EntRepository) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	_, err = r.client.BacklogProgressNote.Create().
+		SetItemID(parsedItemID).
+		SetCriterionIndex(criterionIndex).
+		SetNote(note).
+		SetStatus(status).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to append progress note for item %s: %w", itemID, err)
+	}
+	return nil
+}
+
+// ListProgressNotesForItem returns the full append-only history of report_progress
+// calls for a backlog item, ordered by created_at ascending (oldest first).
+func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	notes, err := r.client.BacklogProgressNote.Query().
+		Where(backlogprogressnote.HasItemWith(backlogitem.ID(parsedItemID))).
+		Order(ent.Asc(backlogprogressnote.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list progress notes for item %s: %w", itemID, err)
+	}
+	result := make([]ProgressNoteData, len(notes))
+	for i, n := range notes {
+		result[i] = progressNoteToData(n)
+	}
+	return result, nil
 }
 
 // --- ItemSource CRUD ---

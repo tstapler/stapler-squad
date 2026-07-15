@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -48,6 +49,7 @@ const (
 	TypeAnalyticsEvent          = "AnalyticsEvent"
 	TypeApprovalRule            = "ApprovalRule"
 	TypeBacklogItem             = "BacklogItem"
+	TypeBacklogProgressNote     = "BacklogProgressNote"
 	TypeBacklogStatusEvent      = "BacklogStatusEvent"
 	TypeClassificationAnalytics = "ClassificationAnalytics"
 	TypeClaudeMetadata          = "ClaudeMetadata"
@@ -3009,6 +3011,9 @@ type BacklogItemMutation struct {
 	status_events           map[uuid.UUID]struct{}
 	removedstatus_events    map[uuid.UUID]struct{}
 	clearedstatus_events    bool
+	progress_notes          map[uuid.UUID]struct{}
+	removedprogress_notes   map[uuid.UUID]struct{}
+	clearedprogress_notes   bool
 	source                  *uuid.UUID
 	clearedsource           bool
 	done                    bool
@@ -4199,6 +4204,60 @@ func (m *BacklogItemMutation) ResetStatusEvents() {
 	m.removedstatus_events = nil
 }
 
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by ids.
+func (m *BacklogItemMutation) AddProgressNoteIDs(ids ...uuid.UUID) {
+	if m.progress_notes == nil {
+		m.progress_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.progress_notes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearProgressNotes clears the "progress_notes" edge to the BacklogProgressNote entity.
+func (m *BacklogItemMutation) ClearProgressNotes() {
+	m.clearedprogress_notes = true
+}
+
+// ProgressNotesCleared reports if the "progress_notes" edge to the BacklogProgressNote entity was cleared.
+func (m *BacklogItemMutation) ProgressNotesCleared() bool {
+	return m.clearedprogress_notes
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (m *BacklogItemMutation) RemoveProgressNoteIDs(ids ...uuid.UUID) {
+	if m.removedprogress_notes == nil {
+		m.removedprogress_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.progress_notes, ids[i])
+		m.removedprogress_notes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedProgressNotes returns the removed IDs of the "progress_notes" edge to the BacklogProgressNote entity.
+func (m *BacklogItemMutation) RemovedProgressNotesIDs() (ids []uuid.UUID) {
+	for id := range m.removedprogress_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ProgressNotesIDs returns the "progress_notes" edge IDs in the mutation.
+func (m *BacklogItemMutation) ProgressNotesIDs() (ids []uuid.UUID) {
+	for id := range m.progress_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetProgressNotes resets all changes to the "progress_notes" edge.
+func (m *BacklogItemMutation) ResetProgressNotes() {
+	m.progress_notes = nil
+	m.clearedprogress_notes = false
+	m.removedprogress_notes = nil
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by id.
 func (m *BacklogItemMutation) SetSourceID(id uuid.UUID) {
 	m.source = &id
@@ -4796,7 +4855,7 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *BacklogItemMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.item_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4805,6 +4864,9 @@ func (m *BacklogItemMutation) AddedEdges() []string {
 	}
 	if m.status_events != nil {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.progress_notes != nil {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	if m.source != nil {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -4834,6 +4896,12 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeProgressNotes:
+		ids := make([]ent.Value, 0, len(m.progress_notes))
+		for id := range m.progress_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	case backlogitem.EdgeSource:
 		if id := m.source; id != nil {
 			return []ent.Value{*id}
@@ -4844,7 +4912,7 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *BacklogItemMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.removeditem_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4853,6 +4921,9 @@ func (m *BacklogItemMutation) RemovedEdges() []string {
 	}
 	if m.removedstatus_events != nil {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.removedprogress_notes != nil {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	return edges
 }
@@ -4879,13 +4950,19 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeProgressNotes:
+		ids := make([]ent.Value, 0, len(m.removedprogress_notes))
+		for id := range m.removedprogress_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *BacklogItemMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.cleareditem_sessions {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4894,6 +4971,9 @@ func (m *BacklogItemMutation) ClearedEdges() []string {
 	}
 	if m.clearedstatus_events {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.clearedprogress_notes {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	if m.clearedsource {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -4911,6 +4991,8 @@ func (m *BacklogItemMutation) EdgeCleared(name string) bool {
 		return m.clearedsessions
 	case backlogitem.EdgeStatusEvents:
 		return m.clearedstatus_events
+	case backlogitem.EdgeProgressNotes:
+		return m.clearedprogress_notes
 	case backlogitem.EdgeSource:
 		return m.clearedsource
 	}
@@ -4941,11 +5023,674 @@ func (m *BacklogItemMutation) ResetEdge(name string) error {
 	case backlogitem.EdgeStatusEvents:
 		m.ResetStatusEvents()
 		return nil
+	case backlogitem.EdgeProgressNotes:
+		m.ResetProgressNotes()
+		return nil
 	case backlogitem.EdgeSource:
 		m.ResetSource()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem edge %s", name)
+}
+
+// BacklogProgressNoteMutation represents an operation that mutates the BacklogProgressNote nodes in the graph.
+type BacklogProgressNoteMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	criterion_index    *int
+	addcriterion_index *int
+	note               *string
+	status             *string
+	created_at         *time.Time
+	clearedFields      map[string]struct{}
+	item               *uuid.UUID
+	cleareditem        bool
+	done               bool
+	oldValue           func(context.Context) (*BacklogProgressNote, error)
+	predicates         []predicate.BacklogProgressNote
+}
+
+var _ ent.Mutation = (*BacklogProgressNoteMutation)(nil)
+
+// backlogprogressnoteOption allows management of the mutation configuration using functional options.
+type backlogprogressnoteOption func(*BacklogProgressNoteMutation)
+
+// newBacklogProgressNoteMutation creates new mutation for the BacklogProgressNote entity.
+func newBacklogProgressNoteMutation(c config, op Op, opts ...backlogprogressnoteOption) *BacklogProgressNoteMutation {
+	m := &BacklogProgressNoteMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeBacklogProgressNote,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withBacklogProgressNoteID sets the ID field of the mutation.
+func withBacklogProgressNoteID(id uuid.UUID) backlogprogressnoteOption {
+	return func(m *BacklogProgressNoteMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *BacklogProgressNote
+		)
+		m.oldValue = func(ctx context.Context) (*BacklogProgressNote, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().BacklogProgressNote.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withBacklogProgressNote sets the old BacklogProgressNote of the mutation.
+func withBacklogProgressNote(node *BacklogProgressNote) backlogprogressnoteOption {
+	return func(m *BacklogProgressNoteMutation) {
+		m.oldValue = func(context.Context) (*BacklogProgressNote, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m BacklogProgressNoteMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m BacklogProgressNoteMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of BacklogProgressNote entities.
+func (m *BacklogProgressNoteMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *BacklogProgressNoteMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *BacklogProgressNoteMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().BacklogProgressNote.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetItemID sets the "item_id" field.
+func (m *BacklogProgressNoteMutation) SetItemID(u uuid.UUID) {
+	m.item = &u
+}
+
+// ItemID returns the value of the "item_id" field in the mutation.
+func (m *BacklogProgressNoteMutation) ItemID() (r uuid.UUID, exists bool) {
+	v := m.item
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldItemID returns the old "item_id" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldItemID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldItemID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldItemID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldItemID: %w", err)
+	}
+	return oldValue.ItemID, nil
+}
+
+// ResetItemID resets all changes to the "item_id" field.
+func (m *BacklogProgressNoteMutation) ResetItemID() {
+	m.item = nil
+}
+
+// SetCriterionIndex sets the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) SetCriterionIndex(i int) {
+	m.criterion_index = &i
+	m.addcriterion_index = nil
+}
+
+// CriterionIndex returns the value of the "criterion_index" field in the mutation.
+func (m *BacklogProgressNoteMutation) CriterionIndex() (r int, exists bool) {
+	v := m.criterion_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCriterionIndex returns the old "criterion_index" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldCriterionIndex(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCriterionIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCriterionIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCriterionIndex: %w", err)
+	}
+	return oldValue.CriterionIndex, nil
+}
+
+// AddCriterionIndex adds i to the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) AddCriterionIndex(i int) {
+	if m.addcriterion_index != nil {
+		*m.addcriterion_index += i
+	} else {
+		m.addcriterion_index = &i
+	}
+}
+
+// AddedCriterionIndex returns the value that was added to the "criterion_index" field in this mutation.
+func (m *BacklogProgressNoteMutation) AddedCriterionIndex() (r int, exists bool) {
+	v := m.addcriterion_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCriterionIndex resets all changes to the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) ResetCriterionIndex() {
+	m.criterion_index = nil
+	m.addcriterion_index = nil
+}
+
+// SetNote sets the "note" field.
+func (m *BacklogProgressNoteMutation) SetNote(s string) {
+	m.note = &s
+}
+
+// Note returns the value of the "note" field in the mutation.
+func (m *BacklogProgressNoteMutation) Note() (r string, exists bool) {
+	v := m.note
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNote returns the old "note" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldNote(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNote is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNote requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNote: %w", err)
+	}
+	return oldValue.Note, nil
+}
+
+// ClearNote clears the value of the "note" field.
+func (m *BacklogProgressNoteMutation) ClearNote() {
+	m.note = nil
+	m.clearedFields[backlogprogressnote.FieldNote] = struct{}{}
+}
+
+// NoteCleared returns if the "note" field was cleared in this mutation.
+func (m *BacklogProgressNoteMutation) NoteCleared() bool {
+	_, ok := m.clearedFields[backlogprogressnote.FieldNote]
+	return ok
+}
+
+// ResetNote resets all changes to the "note" field.
+func (m *BacklogProgressNoteMutation) ResetNote() {
+	m.note = nil
+	delete(m.clearedFields, backlogprogressnote.FieldNote)
+}
+
+// SetStatus sets the "status" field.
+func (m *BacklogProgressNoteMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *BacklogProgressNoteMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *BacklogProgressNoteMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *BacklogProgressNoteMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *BacklogProgressNoteMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *BacklogProgressNoteMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearItem clears the "item" edge to the BacklogItem entity.
+func (m *BacklogProgressNoteMutation) ClearItem() {
+	m.cleareditem = true
+	m.clearedFields[backlogprogressnote.FieldItemID] = struct{}{}
+}
+
+// ItemCleared reports if the "item" edge to the BacklogItem entity was cleared.
+func (m *BacklogProgressNoteMutation) ItemCleared() bool {
+	return m.cleareditem
+}
+
+// ItemIDs returns the "item" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ItemID instead. It exists only for internal usage by the builders.
+func (m *BacklogProgressNoteMutation) ItemIDs() (ids []uuid.UUID) {
+	if id := m.item; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetItem resets all changes to the "item" edge.
+func (m *BacklogProgressNoteMutation) ResetItem() {
+	m.item = nil
+	m.cleareditem = false
+}
+
+// Where appends a list predicates to the BacklogProgressNoteMutation builder.
+func (m *BacklogProgressNoteMutation) Where(ps ...predicate.BacklogProgressNote) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the BacklogProgressNoteMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *BacklogProgressNoteMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.BacklogProgressNote, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *BacklogProgressNoteMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *BacklogProgressNoteMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (BacklogProgressNote).
+func (m *BacklogProgressNoteMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *BacklogProgressNoteMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.item != nil {
+		fields = append(fields, backlogprogressnote.FieldItemID)
+	}
+	if m.criterion_index != nil {
+		fields = append(fields, backlogprogressnote.FieldCriterionIndex)
+	}
+	if m.note != nil {
+		fields = append(fields, backlogprogressnote.FieldNote)
+	}
+	if m.status != nil {
+		fields = append(fields, backlogprogressnote.FieldStatus)
+	}
+	if m.created_at != nil {
+		fields = append(fields, backlogprogressnote.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *BacklogProgressNoteMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		return m.ItemID()
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.CriterionIndex()
+	case backlogprogressnote.FieldNote:
+		return m.Note()
+	case backlogprogressnote.FieldStatus:
+		return m.Status()
+	case backlogprogressnote.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *BacklogProgressNoteMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		return m.OldItemID(ctx)
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.OldCriterionIndex(ctx)
+	case backlogprogressnote.FieldNote:
+		return m.OldNote(ctx)
+	case backlogprogressnote.FieldStatus:
+		return m.OldStatus(ctx)
+	case backlogprogressnote.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogProgressNoteMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetItemID(v)
+		return nil
+	case backlogprogressnote.FieldCriterionIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCriterionIndex(v)
+		return nil
+	case backlogprogressnote.FieldNote:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNote(v)
+		return nil
+	case backlogprogressnote.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case backlogprogressnote.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *BacklogProgressNoteMutation) AddedFields() []string {
+	var fields []string
+	if m.addcriterion_index != nil {
+		fields = append(fields, backlogprogressnote.FieldCriterionIndex)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *BacklogProgressNoteMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.AddedCriterionIndex()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogProgressNoteMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case backlogprogressnote.FieldCriterionIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCriterionIndex(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *BacklogProgressNoteMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(backlogprogressnote.FieldNote) {
+		fields = append(fields, backlogprogressnote.FieldNote)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *BacklogProgressNoteMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ClearField(name string) error {
+	switch name {
+	case backlogprogressnote.FieldNote:
+		m.ClearNote()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ResetField(name string) error {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		m.ResetItemID()
+		return nil
+	case backlogprogressnote.FieldCriterionIndex:
+		m.ResetCriterionIndex()
+		return nil
+	case backlogprogressnote.FieldNote:
+		m.ResetNote()
+		return nil
+	case backlogprogressnote.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case backlogprogressnote.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *BacklogProgressNoteMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.item != nil {
+		edges = append(edges, backlogprogressnote.EdgeItem)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *BacklogProgressNoteMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		if id := m.item; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *BacklogProgressNoteMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *BacklogProgressNoteMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *BacklogProgressNoteMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareditem {
+		edges = append(edges, backlogprogressnote.EdgeItem)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *BacklogProgressNoteMutation) EdgeCleared(name string) bool {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		return m.cleareditem
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ClearEdge(name string) error {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		m.ClearItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ResetEdge(name string) error {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		m.ResetItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote edge %s", name)
 }
 
 // BacklogStatusEventMutation represents an operation that mutates the BacklogStatusEvent nodes in the graph.

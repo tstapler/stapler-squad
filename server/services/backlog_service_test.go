@@ -18,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
@@ -1273,13 +1274,67 @@ func TestTriggerReReview_EmptyDiff_UsesWorkDirAndCodebaseAccessPrompt(t *testing
 	require.Equal(t, 1, pool.callCount())
 	call := pool.firstCall()
 	assert.Equal(t, repoDir, call.workDir, "empty-diff re-review must be granted WorkDir access to the codebase")
-	assert.Equal(t, "Read,Grep,Glob", call.allowedTools)
+	assert.Equal(t, headless.CodebaseReadAllowedTools, call.allowedTools)
 	assert.Equal(t, session.PermissionModeBypassPermissions, call.permissionMode)
 	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), call.systemPrompt)
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
 	require.NoError(t, err)
 	assert.Equal(t, session.ReviewVerdictPass, outcome)
+}
+
+// TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt is a wiring-level test
+// proving that on the codebase-read (empty-diff) path, TriggerReReview actually
+// fetches prior review sessions, the full notes history, and the item's Description,
+// and that all of this reaches the actual prompt text sent to the pool.
+func TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+
+	createdItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:              "Context extras re-review test",
+		Description:        "Add OAuth2 login support end to end",
+		AcceptanceCriteria: `[{"index":0,"text":"test","status":"pending"}]`,
+		Status:             string(session.BacklogStatusReview),
+		RepoPath:           repoDir,
+	})
+	require.NoError(t, err)
+	itemID := createdItem.ID
+
+	// A prior review session+verdict — must surface in "## Prior Review Attempts".
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "prior-review-1",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictUnverifiable,
+		Summary:        "prior attempt could not locate satisfying evidence",
+	})
+	require.NoError(t, err)
+
+	// A report_progress note — must surface in "## Full Notes History".
+	require.NoError(t, storage.AppendProgressNote(t.Context(), itemID, 0, "investigated the auth package first", "in_progress"))
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	require.Equal(t, 1, pool.callCount())
+	prompt := pool.firstCall().userPrompt
+
+	assert.Contains(t, prompt, "## Prior Review Attempts", "prior review sessions must be fetched and rendered")
+	assert.Contains(t, prompt, "prior attempt could not locate satisfying evidence")
+	assert.Contains(t, prompt, "## Full Notes History", "progress notes must be fetched and rendered")
+	assert.Contains(t, prompt, "investigated the auth package first")
+	assert.Contains(t, prompt, "## Item Context", "item description must reach the prompt")
+	assert.Contains(t, prompt, "Add OAuth2 login support end to end")
 }
 
 // TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession verifies (MUST FIX #3)
@@ -1311,7 +1366,7 @@ func TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession(t *testing.T) 
 }
 
 // TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout verifies the empty-diff
-// re-review call runs under headless.CodebaseReadCallTimeout (150s), not the plain
+// re-review call runs under headless.CodebaseReadCallTimeout (600s), not the plain
 // headless.DefaultCallTimeout (900s).
 func TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout(t *testing.T) {
 	storage := createTestStorage(t)
@@ -2145,4 +2200,42 @@ func TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap(t *testing.T) {
 	require.NoError(t, histErr)
 	assert.Len(t, resp.Msg.Events, 200)
 	assert.True(t, resp.Msg.Truncated)
+}
+
+// TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace is a regression test
+// for a real data race: BacklogService.scrollbackManager used to be a bare, unguarded
+// field, set via SetScrollbackManager and read directly by TriggerReReview. In
+// production, server/dependencies.go wires SetScrollbackManager well after the HTTP
+// server can already be serving TriggerReReview RPCs (the server starts controllers
+// and begins accepting requests before all dependency wiring, including
+// SetScrollbackManager, completes), so the field is genuinely read and written
+// concurrently. This test concurrently calls SetScrollbackManager and the internal
+// getScrollbackManager (the same accessor TriggerReReview now uses) many times; run
+// with `go test -race`, it fails on the pre-fix bare field and passes once the field
+// is guarded by scrollbackMu.
+func TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	sm1 := scrollback.NewScrollbackManager(scrollback.DefaultScrollbackConfig())
+	sm2 := scrollback.NewScrollbackManager(scrollback.DefaultScrollbackConfig())
+
+	var wg sync.WaitGroup
+	const n = 100
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				svc.SetScrollbackManager(sm1)
+			} else {
+				svc.SetScrollbackManager(sm2)
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = svc.getScrollbackManager()
+		}()
+	}
+	wg.Wait()
 }

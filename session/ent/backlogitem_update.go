@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
@@ -422,6 +423,21 @@ func (_u *BacklogItemUpdate) AddStatusEvents(v ...*BacklogStatusEvent) *BacklogI
 	return _u.AddStatusEventIDs(ids...)
 }
 
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (_u *BacklogItemUpdate) AddProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.AddProgressNoteIDs(ids...)
+	return _u
+}
+
+// AddProgressNotes adds the "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdate) AddProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddProgressNoteIDs(ids...)
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by ID.
 func (_u *BacklogItemUpdate) SetSourceID(id uuid.UUID) *BacklogItemUpdate {
 	_u.mutation.SetSourceID(id)
@@ -507,6 +523,27 @@ func (_u *BacklogItemUpdate) RemoveStatusEvents(v ...*BacklogStatusEvent) *Backl
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveStatusEventIDs(ids...)
+}
+
+// ClearProgressNotes clears all "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdate) ClearProgressNotes() *BacklogItemUpdate {
+	_u.mutation.ClearProgressNotes()
+	return _u
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to BacklogProgressNote entities by IDs.
+func (_u *BacklogItemUpdate) RemoveProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.RemoveProgressNoteIDs(ids...)
+	return _u
+}
+
+// RemoveProgressNotes removes "progress_notes" edges to BacklogProgressNote entities.
+func (_u *BacklogItemUpdate) RemoveProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveProgressNoteIDs(ids...)
 }
 
 // ClearSource clears the "source" edge to the ItemSource entity.
@@ -805,6 +842,51 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(backlogstatusevent.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedProgressNotesIDs(); len(nodes) > 0 && !_u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProgressNotesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {
@@ -1250,6 +1332,21 @@ func (_u *BacklogItemUpdateOne) AddStatusEvents(v ...*BacklogStatusEvent) *Backl
 	return _u.AddStatusEventIDs(ids...)
 }
 
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (_u *BacklogItemUpdateOne) AddProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.AddProgressNoteIDs(ids...)
+	return _u
+}
+
+// AddProgressNotes adds the "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdateOne) AddProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddProgressNoteIDs(ids...)
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by ID.
 func (_u *BacklogItemUpdateOne) SetSourceID(id uuid.UUID) *BacklogItemUpdateOne {
 	_u.mutation.SetSourceID(id)
@@ -1335,6 +1432,27 @@ func (_u *BacklogItemUpdateOne) RemoveStatusEvents(v ...*BacklogStatusEvent) *Ba
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveStatusEventIDs(ids...)
+}
+
+// ClearProgressNotes clears all "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdateOne) ClearProgressNotes() *BacklogItemUpdateOne {
+	_u.mutation.ClearProgressNotes()
+	return _u
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to BacklogProgressNote entities by IDs.
+func (_u *BacklogItemUpdateOne) RemoveProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.RemoveProgressNoteIDs(ids...)
+	return _u
+}
+
+// RemoveProgressNotes removes "progress_notes" edges to BacklogProgressNote entities.
+func (_u *BacklogItemUpdateOne) RemoveProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveProgressNoteIDs(ids...)
 }
 
 // ClearSource clears the "source" edge to the ItemSource entity.
@@ -1663,6 +1781,51 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(backlogstatusevent.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedProgressNotesIDs(); len(nodes) > 0 && !_u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProgressNotesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

@@ -864,8 +864,53 @@ Do not modify the code. Only write the review verdict.
 	// 9. Headless path — preferred when a headless pool is configured.
 	// This avoids needing tmux and runs the review inline via LLM call.
 	if s.headlessPool != nil {
-		headlessPrompt := session.BuildHeadlessReviewPrompt(item, acSnapshot, workSessionDiff, false, verificationNotes)
 		codebaseWorkDir := s.resolveCodebaseWorkDir(ctx, item.RepoPath, mostRecentWorkSession)
+
+		// Additional context (prior review attempts, full notes history, item goal/status
+		// history, searchable session transcript) is only gathered on the empty-diff
+		// codebase-read path — see session.ReviewContextExtras. Every fetch here is
+		// best-effort/log-and-continue: none of it is required for the re-review to
+		// proceed.
+		// transcriptCleanup removes the review transcript file written into
+		// codebaseWorkDir below (if any). Defaults to a no-op; both the explicit call
+		// right after CallBlocking returns AND the deferred call are kept, mirroring
+		// ReviewGateRunner.Run's identical pattern (session/review_gate.go) — see the
+		// explicit call site below for the full rationale. Unlike ReviewGateRunner.Run,
+		// TriggerReReview has no onPass-equivalent call after the review completes (it
+		// persists the ItemSession+verdict and returns the RPC response directly; no
+		// git commit/push happens in this function), so the ordering bug Fix B in the
+		// review-gate path fixed does not currently reproduce here. The early call is
+		// still added for defense-in-depth and consistency, so a future change that
+		// adds a post-review action to this function does not silently reintroduce it.
+		transcriptCleanup := func() {}
+		defer func() { transcriptCleanup() }()
+
+		var extras session.ReviewContextExtras
+		if workSessionDiff == "" {
+			// sessions was already loaded above (step 4) — reuse it rather than a second
+			// ListItemSessions round trip.
+			extras.PriorSessions = sessions
+			if notes, notesErr := s.storage.ListProgressNotesForItem(ctx, item.ID); notesErr != nil {
+				log.WarningLog.Printf("[TriggerReReview] ListProgressNotesForItem (context extras) item=%s: %v", item.ID, notesErr)
+			} else {
+				extras.ProgressNotes = notes
+			}
+			// item was loaded via storage.GetBacklogItem above, which always eagerly
+			// loads StatusEvents — no extra fetch needed here.
+			extras.ItemDescription = item.Description
+			extras.StatusEvents = item.StatusEvents
+			if sm := s.getScrollbackManager(); sm != nil && mostRecentWorkSession != nil {
+				relPath, cleanup, transcriptErr := session.WriteReviewTranscriptFile(sm, mostRecentWorkSession.SessionUUID, codebaseWorkDir, session.DefaultReviewTranscriptMaxBytes)
+				transcriptCleanup = cleanup
+				if transcriptErr != nil {
+					log.WarningLog.Printf("[TriggerReReview] WriteReviewTranscriptFile item=%s: %v", item.ID, transcriptErr)
+				} else {
+					extras.TranscriptRelPath = relPath
+				}
+			}
+		}
+
+		headlessPrompt := session.BuildHeadlessReviewPrompt(item, acSnapshot, workSessionDiff, false, verificationNotes, extras)
 		systemPrompt, callOpts, callTimeout, reviewPath := session.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
 		// callStart is recorded immediately before the headless call sequence
 		// (capability self-check, then CallBlocking) so Epic 2.5's duration_ms=
@@ -900,6 +945,14 @@ Do not modify the code. Only write the review verdict.
 		reviewResult, callCostUSD, callErr := s.headlessPool.CallBlocking(
 			reviewCtx, headless.FeatureKeyReview, systemPrompt, headlessPrompt, callOpts,
 		)
+
+		// Explicit, immediate cleanup as soon as the transcript file is no longer
+		// needed — see the identical call in ReviewGateRunner.Run
+		// (session/review_gate.go) for the full rationale. Kept here even though
+		// TriggerReReview currently has no post-review commit/push action, for
+		// consistency and so this function stays safe if one is ever added.
+		transcriptCleanup()
+
 		if callErr != nil {
 			// Story 2.2.4c: a timeout OR a parent-context cancellation on the codebase-read
 			// path is an infrastructure signal (hung/degraded tool access, or e.g. process
@@ -929,8 +982,18 @@ Do not modify the code. Only write the review verdict.
 		// observability fields.
 		perCriterionJSON, _ := json.Marshal(perCriterion)
 
+		// cleanupCtx is a separate, freshly-derived context (not ctx, which may itself be
+		// close to its own deadline by the time a long-but-successful re-review call
+		// returns — e.g. an RPC deadline or the caller's own bounding timeout, even though
+		// the call itself already succeeded within reviewCtx's own budget). Same rationale
+		// as ReviewGateRunner.Run's success-path cleanupCtx and RecordDegradedReviewVerdict's
+		// cleanupCtx above: persistence is a separate, short, always-should-succeed
+		// operation that must not be held hostage by the review call's context lifetime.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
 		reviewSessionUUID := headlessReReviewUUIDPrefix + uuid.New().String()
-		is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, session.ItemSessionData{
 			ItemID:           item.ID,
 			SessionUUID:      reviewSessionUUID,
 			SessionRole:      session.SessionRoleReview,
@@ -944,7 +1007,7 @@ Do not modify the code. Only write the review verdict.
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
 		}
-		if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
+		if endErr := s.storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); endErr != nil {
 			log.WarningLog.Printf("[TriggerReReview] UpdateItemSessionEnded: %v", endErr)
 		}
 

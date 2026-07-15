@@ -30,6 +30,13 @@ type CallOptions struct {
 	// value, mirroring session.InstanceOptions.PermissionMode. Only applied when
 	// WorkDir is also set; ignored otherwise.
 	PermissionMode string
+	// DisallowedTools scopes a WorkDir-bearing call to an explicit denylist
+	// (comma-separated, e.g. "Bash(rm:*),Write,Edit"), passed through to the
+	// claude CLI's --disallowedTools flag. Mirrors AllowedTools/PermissionMode:
+	// only applied when WorkDir is also set; ignored otherwise. Used alongside
+	// AllowedTools as belt-and-suspenders — an explicit denylist of destructive
+	// Bash prefixes and write-capable tools on top of a scoped allowlist.
+	DisallowedTools string
 }
 
 // firstCallJSONResult is the JSON schema returned by claude -p --output-format json.
@@ -415,8 +422,8 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 
 		dirRunner := pr.WithWorkDir(opts.WorkDir)
-		if opts.AllowedTools != "" || opts.PermissionMode != "" {
-			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode)
+		if opts.AllowedTools != "" || opts.PermissionMode != "" || opts.DisallowedTools != "" {
+			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
 		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
 		innerCh, err := oneShot.Call(ctx, key, systemPrompt, userPrompt)

@@ -244,6 +244,14 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
+	// Append to the full-history log in addition to the current-note-per-criterion
+	// update above. This is an enrichment for reviewers (full timeline of notes across
+	// a work session), not part of report_progress's primary contract — a failure here
+	// must not fail the call that already succeeded above.
+	if appendErr := h.storage.AppendProgressNote(ctx, itemID, criteriaIndex, note, acStatus); appendErr != nil {
+		log.WarningLog.Printf("[mcp:report_progress] failed to append progress note history item=%s criterion=%d: %v", itemID, criteriaIndex, appendErr)
+	}
+
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Criterion %d updated to %q on item %s.", criteriaIndex, status, itemID,
 	)), nil

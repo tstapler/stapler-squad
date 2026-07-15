@@ -74,11 +74,13 @@ type BacklogItemEdges struct {
 	Sessions []*Session `json:"sessions,omitempty"`
 	// StatusEvents holds the value of the status_events edge.
 	StatusEvents []*BacklogStatusEvent `json:"status_events,omitempty"`
+	// ProgressNotes holds the value of the progress_notes edge.
+	ProgressNotes []*BacklogProgressNote `json:"progress_notes,omitempty"`
 	// Source holds the value of the source edge.
 	Source *ItemSource `json:"source,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [5]bool
 }
 
 // ItemSessionsOrErr returns the ItemSessions value or an error if the edge
@@ -108,12 +110,21 @@ func (e BacklogItemEdges) StatusEventsOrErr() ([]*BacklogStatusEvent, error) {
 	return nil, &NotLoadedError{edge: "status_events"}
 }
 
+// ProgressNotesOrErr returns the ProgressNotes value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) ProgressNotesOrErr() ([]*BacklogProgressNote, error) {
+	if e.loadedTypes[3] {
+		return e.ProgressNotes, nil
+	}
+	return nil, &NotLoadedError{edge: "progress_notes"}
+}
+
 // SourceOrErr returns the Source value or an error if the edge
 // was not loaded in eager-loading, or loaded but was not found.
 func (e BacklogItemEdges) SourceOrErr() (*ItemSource, error) {
 	if e.Source != nil {
 		return e.Source, nil
-	} else if e.loadedTypes[3] {
+	} else if e.loadedTypes[4] {
 		return nil, &NotFoundError{label: itemsource.Label}
 	}
 	return nil, &NotLoadedError{edge: "source"}
@@ -313,6 +324,11 @@ func (_m *BacklogItem) QuerySessions() *SessionQuery {
 // QueryStatusEvents queries the "status_events" edge of the BacklogItem entity.
 func (_m *BacklogItem) QueryStatusEvents() *BacklogStatusEventQuery {
 	return NewBacklogItemClient(_m.config).QueryStatusEvents(_m)
+}
+
+// QueryProgressNotes queries the "progress_notes" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryProgressNotes() *BacklogProgressNoteQuery {
+	return NewBacklogItemClient(_m.config).QueryProgressNotes(_m)
 }
 
 // QuerySource queries the "source" edge of the BacklogItem entity.

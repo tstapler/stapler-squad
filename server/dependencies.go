@@ -672,6 +672,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	scrollbackConfig.StoragePath = scrollbackPath
 	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
 	log.Info("initialized ScrollbackManager", "path", scrollbackPath, "compression", scrollbackConfig.StoragePath, "maxLines", scrollbackConfig.MaxLines)
+	// backlogLifecycleListener was constructed earlier (Step 5, before ScrollbackManager
+	// existed) — wire it in now so the codebase-read review path can render a searchable
+	// "## Session Transcript" prompt section. Optional enrichment: nil until this point,
+	// and review calls that ran before this line simply omit the section.
+	backlogLifecycleListener.SetScrollbackManager(scrollbackManager)
 
 	// Step 10: TmuxStreamerManager (independent)
 	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
@@ -859,6 +864,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if headlessPool != nil {
 		backlogSvc.SetHeadlessPool(headlessPool)
 	}
+	backlogSvc.SetScrollbackManager(scrollbackManager)
 	// Reuse the same registry/keyFunc backlogCtrl's periodic SyncLoop uses, so a
 	// manual TriggerSync call decrypts tokens and dispatches to plugins identically.
 	backlogSvc.SetPluginRegistry(syncRegistry)

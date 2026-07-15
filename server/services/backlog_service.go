@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -124,6 +125,21 @@ type BacklogService struct {
 	// eventBus publishes operator-facing notifications (e.g. rework-iteration-cap hit).
 	// Optional — nil means those notifications are disabled.
 	eventBus *events.EventBus
+
+	// scrollbackMu guards scrollbackManager for concurrent Set/get access. Previously
+	// unguarded, on the (false) assumption that SetScrollbackManager was always
+	// called during single-threaded startup wiring before any concurrent RPC
+	// handling began. In production, server/dependencies.go wires
+	// SetScrollbackManager at Step 9+ (backlogSvc.SetScrollbackManager) while the
+	// HTTP server can already be serving TriggerReReview RPCs that read
+	// s.scrollbackManager concurrently — the field is genuinely racy and must be
+	// mutex-guarded like every other optional-dependency field on this struct.
+	scrollbackMu sync.RWMutex
+	// scrollbackManager backs the "## Session Transcript" prompt section on the
+	// empty-diff codebase-read re-review path (session.WriteReviewTranscriptFile).
+	// Optional — nil (the default, until SetScrollbackManager is called) simply omits
+	// that section. Guarded by scrollbackMu — see its doc comment.
+	scrollbackManager *scrollback.ScrollbackManager
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
@@ -161,6 +177,23 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// SetScrollbackManager wires in the scrollback manager used to write a searchable
+// session transcript file on the empty-diff codebase-read re-review path. Optional —
+// nil (the default) simply omits the "## Session Transcript" prompt section. Safe to
+// call concurrently with RPC handlers that read the scrollback manager.
+func (s *BacklogService) SetScrollbackManager(sm *scrollback.ScrollbackManager) {
+	s.scrollbackMu.Lock()
+	defer s.scrollbackMu.Unlock()
+	s.scrollbackManager = sm
+}
+
+// getScrollbackManager returns the current scrollback manager under a read lock.
+func (s *BacklogService) getScrollbackManager() *scrollback.ScrollbackManager {
+	s.scrollbackMu.RLock()
+	defer s.scrollbackMu.RUnlock()
+	return s.scrollbackManager
 }
 
 // SetCapabilityCheck overrides the codebase-read capability self-check instance.

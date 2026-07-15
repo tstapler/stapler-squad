@@ -187,6 +187,82 @@ func TestReportProgress_SuccessfullyUpdatesAcStatus(t *testing.T) {
 	require.Equal(t, session.AcStatusPending, criteria[1].Status, "criterion 1 should remain pending")
 }
 
+// TestReportProgress_AppendsProgressNoteHistory verifies that reportProgress creates
+// a progress-note history row (AppendProgressNote) alongside the existing
+// overwrite-in-place AC criterion update — the history call is additive, not a
+// replacement for the existing behavior.
+func TestReportProgress_AppendsProgressNoteHistory(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Test item",
+		Description:        "Item for testing",
+		AcceptanceCriteria: `[{"index":0,"text":"Must work","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	isData := session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}
+	_, err = storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	// First call: in_progress with a note.
+	req1 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "in_progress",
+		"note":           "started investigating",
+	})
+	result1, err := handler.reportProgress(ctxWithUUID, req1)
+	require.NoError(t, err)
+	require.Len(t, result1.Content, 1)
+
+	// Second call: pass with a different note, same criterion — the existing
+	// overwrite behavior replaces the criterion's current note, but the history
+	// must retain BOTH notes.
+	req2 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "pass",
+		"note":           "implemented successfully",
+	})
+	result2, err := handler.reportProgress(ctxWithUUID, req2)
+	require.NoError(t, err)
+	require.Len(t, result2.Content, 1)
+
+	// The current-note-per-criterion behavior is unchanged: only the latest note
+	// is visible on the AC criterion itself.
+	fetchedItem, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Len(t, criteria, 1)
+	require.Equal(t, session.AcStatusDone, criteria[0].Status)
+	require.Equal(t, "implemented successfully", criteria[0].Note, "current note is overwritten by the latest call, as before")
+
+	// The new history log must contain BOTH notes, in order.
+	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "both report_progress calls must be preserved in the history")
+
+	require.Equal(t, "started investigating", notes[0].Note)
+	require.Equal(t, "in_progress", notes[0].Status)
+
+	require.Equal(t, "implemented successfully", notes[1].Note)
+	require.Equal(t, "done", notes[1].Status)
+}
+
 // TestGetBacklogItem_ReturnsItemWithEnvelope verifies that getBacklogItem
 // returns a properly formatted envelope with item data.
 func TestGetBacklogItem_ReturnsItemWithEnvelope(t *testing.T) {

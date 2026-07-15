@@ -313,6 +313,16 @@ type BacklogStatusEventData struct {
 	CreatedAt   time.Time
 }
 
+// ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
+// Unlike the current-note-per-criterion stored on BacklogItem.AcceptanceCriteria, this
+// represents a single append-only history entry from one report_progress call.
+type ProgressNoteData struct {
+	CriterionIndex int
+	Note           string
+	Status         string
+	CreatedAt      time.Time
+}
+
 // SourceSyncEventData is the domain DTO replacing *ent.SourceSyncEvent in Storage returns.
 type SourceSyncEventData struct {
 	ID           string

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -57,6 +58,29 @@ func buildAcChecklist(criteria []AcCriterion) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+// parsePerCriterionVerdicts unmarshals the JSON array stored in
+// ReviewVerdictSummary.PerCriterion (produced via json.Marshal([]CriterionVerdict) in
+// review_gate.go) into a typed slice. Malformed or empty input yields a nil slice and no
+// error is fatal to prompt construction — callers should treat a parse failure as "no
+// per-criterion evidence available" rather than aborting.
+func parsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var verdicts []CriterionVerdict
+	if err := json.Unmarshal([]byte(raw), &verdicts); err != nil {
+		return nil, err
+	}
+	return verdicts, nil
+}
+
+// maxPriorAttemptsWithFullEvidence caps how many of the most recent ended prior sessions
+// get the reviewer summary + per-criterion failure evidence rendered in full. Older
+// attempts still get their one-line outcome (role/commits/verdict) for continuity, but
+// omit the denser evidence to keep BuildTokenBudgetedPrompt's estimate from ballooning on
+// items with many rework cycles.
+const maxPriorAttemptsWithFullEvidence = 3
+
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
 const taskProtocolBlock = `## Your Task Protocol
 1. Read ALL acceptance criteria before starting any work.
@@ -102,7 +126,14 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 	}
 	if len(ended) > 0 {
 		sb.WriteString("\n## Prior Attempts\n")
-		for _, s := range ended {
+		// ended preserves the caller's ordering (ListItemSessions orders ascending by
+		// created_at), so the most recent attempts are at the tail of the slice. Only the
+		// last maxPriorAttemptsWithFullEvidence get full reviewer summary + evidence.
+		fullEvidenceFrom := len(ended) - maxPriorAttemptsWithFullEvidence
+		if fullEvidenceFrom < 0 {
+			fullEvidenceFrom = 0
+		}
+		for i, s := range ended {
 			fmt.Fprintf(&sb, "- Role: %s | Commits: %d", s.Role, s.CommitCountSinceSpawn)
 			if s.LastCommitMessage != "" {
 				fmt.Fprintf(&sb, " | Last commit: %s", sanitizeField(s.LastCommitMessage, 200))
@@ -111,6 +142,24 @@ func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessio
 				fmt.Fprintf(&sb, " | Verdict: %s", s.ReviewVerdict.OverallOutcome)
 			}
 			sb.WriteString("\n")
+
+			if s.ReviewVerdict == nil || i < fullEvidenceFrom {
+				continue
+			}
+			if s.ReviewVerdict.Summary != "" {
+				fmt.Fprintf(&sb, "  Reviewer summary: %s\n", sanitizeField(s.ReviewVerdict.Summary, 500))
+			}
+			verdicts, err := parsePerCriterionVerdicts(s.ReviewVerdict.PerCriterion)
+			if err != nil {
+				log.WarningLog.Printf("backlog_context: failed to parse per-criterion verdicts for item session %s: %v", s.ID, err)
+				continue
+			}
+			for _, v := range verdicts {
+				if v.Outcome == ReviewOutcomePass {
+					continue
+				}
+				fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, sanitizeField(v.Evidence, 300))
+			}
 		}
 	}
 

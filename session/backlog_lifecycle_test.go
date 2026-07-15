@@ -681,7 +681,7 @@ func TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless(t *
 	stuck, err := er.FindStuckReviewItems(ctx)
 	require.NoError(t, err)
 
-	var gotIDs []string
+	gotIDs := make([]string, 0, len(stuck))
 	for _, item := range stuck {
 		gotIDs = append(gotIDs, item.ID.String())
 	}
@@ -708,7 +708,13 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 
 	er := storage.repo.(*EntRepository)
 	listener.reconcileStuckReviewItems(ctx, er)
-	assert.Equal(t, []string{"Review item needs attention"}, notifier.calls)
+	assert.Equal(t, []string{"Review item needs attention"}, notifier.titles())
+	require.Len(t, notifier.calls, 1)
+	// The message body must interpolate the item's title and last verdict outcome,
+	// not just fire a generic notification — this is the actionable content an
+	// operator needs to triage the stuck item without digging further.
+	assert.Contains(t, notifier.calls[0].Message, "Stuck review test item")
+	assert.Contains(t, notifier.calls[0].Message, "UNVERIFIABLE")
 
 	// Second tick must not re-notify for the same item.
 	listener.reconcileStuckReviewItems(ctx, er)
@@ -1011,13 +1017,31 @@ func (f *fakePRCreator) CreatePR(title, body string) (string, int, error) {
 }
 func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return nil }
 
+// fakeNotifierCall records a single Notify invocation's title and message body, so
+// tests can assert on interpolated message content (e.g. that a verdict/outcome
+// actually reached the message), not just which notification fired.
+type fakeNotifierCall struct {
+	Title   string
+	Message string
+}
+
 // fakeNotifier is a test double implementing Notifier, recording every call.
 type fakeNotifier struct {
-	calls []string // title of each Notify call, in order
+	calls []fakeNotifierCall // one per Notify call, in order
 }
 
 func (f *fakeNotifier) Notify(itemID, title, message string, notificationType, priority int32) {
-	f.calls = append(f.calls, title)
+	f.calls = append(f.calls, fakeNotifierCall{Title: title, Message: message})
+}
+
+// titles returns just the Title of every recorded call, in order — for tests (the
+// majority) that only care which notification fired, not its message body.
+func (f *fakeNotifier) titles() []string {
+	titles := make([]string, len(f.calls))
+	for i, c := range f.calls {
+		titles[i] = c.Title
+	}
+	return titles
 }
 
 // newPushAndCreatePRTestFixture creates a review-status BacklogItem with a linked
@@ -1081,7 +1105,7 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
-	assert.Contains(t, notifier.calls, "PR creation failed")
+	assert.Contains(t, notifier.titles(), "PR creation failed")
 }
 
 // TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies verifies that a
@@ -1109,7 +1133,7 @@ func TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies(t *testing
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
-	assert.Contains(t, notifier.calls, "PR creation failed")
+	assert.Contains(t, notifier.titles(), "PR creation failed")
 }
 
 // TestPushAndCreatePR_ReusesExistingPR_WhenAlreadySet verifies the "PR already

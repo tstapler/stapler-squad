@@ -47,27 +47,28 @@ var (
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.
 type ProcessRunner struct {
-	claudeBin      string
-	workDir        string // optional working directory; empty = inherit from parent
-	allowedTools   string // optional --allowedTools value; empty = not passed
-	permissionMode string // optional --permission-mode value; empty = not passed
+	claudeBin       string
+	workDir         string // optional working directory; empty = inherit from parent
+	allowedTools    string // optional --allowedTools value; empty = not passed
+	permissionMode  string // optional --permission-mode value; empty = not passed
+	disallowedTools string // optional --disallowedTools value; empty = not passed
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
-// directory to workDir, preserving any existing allowedTools/permissionMode. Used by
-// CallBlocking for per-call directory override.
+// directory to workDir, preserving any existing allowedTools/permissionMode/
+// disallowedTools. Used by CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode}
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode, disallowedTools: r.disallowedTools}
 }
 
-// WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode
-// set, preserving any existing workDir.
-func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode}
+// WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode/
+// disallowedTools set, preserving any existing workDir.
+func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedTools string) *ProcessRunner {
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode, disallowedTools: disallowedTools}
 }
 
-// toolAccessArgs returns the --allowedTools/--permission-mode flag pairs for r's
-// configured values, in that order.
+// toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
+// pairs for r's configured values, in that order.
 func (r *ProcessRunner) toolAccessArgs() []string {
 	var extra []string
 	if r.allowedTools != "" {
@@ -75,6 +76,9 @@ func (r *ProcessRunner) toolAccessArgs() []string {
 	}
 	if r.permissionMode != "" {
 		extra = append(extra, "--permission-mode", r.permissionMode)
+	}
+	if r.disallowedTools != "" {
+		extra = append(extra, "--disallowedTools", r.disallowedTools)
 	}
 	return extra
 }
