@@ -179,3 +179,250 @@ Epic 2.2):
   primary consumer) is what originally motivated the 4th-method proposal —
   the consolidated method is what `BuildReviewCallOptions`'s output is passed
   to.
+
+## 2026-07-15 Addendum: Expanded Tool Grant, Relaxed Timeout, Richer Context
+
+This addendum extends (does not replace) the decision above. The core
+invariant this ADR exists to protect — **the codebase-read reviewer must
+never be granted write access** — is unchanged. What changed is that the
+read-only surface got richer, and the timeout budget was relaxed to match.
+
+### Expanded tool grant: scoped Bash allowlist + explicit denylist
+
+`headless.CallOptions` gained a third field, `DisallowedTools string`,
+mirroring `AllowedTools`/`PermissionMode` exactly: `headless.ProcessRunner`
+gained a `disallowedTools` field, `WithToolAccess` took a third parameter,
+and `toolAccessArgs()` appends `--disallowedTools <value>` after the existing
+two flags when set. This is the same flag-injection pattern this ADR
+originally established for `--allowedTools`/`--permission-mode` — just a
+third flag in the same family.
+
+`headless.CodebaseReadAllowedTools` (previously `"Read,Grep,Glob"`) is
+extended in place to also grant a **scoped** set of Bash commands, using the
+CLI's documented `Bash(<command prefix>*)` scoping syntax (`claude --help`
+gives `--allowedTools "Bash(git *) Edit"` as the canonical example of scoping
+a Bash grant to a command prefix):
+
+```
+Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git blame:*),Bash(go test:*),Bash(go vet:*),Bash(go build:*),Bash(sg:*)
+```
+
+Rationale per tool: `git log`/`show`/`diff`/`blame` let the reviewer
+establish code provenance and history context (e.g. "was this code already
+here before the session started, or did the session's claim of
+'already implemented' just not produce a diff for some other reason?") that
+plain file reads cannot answer. `go test`/`vet`/`build` let the reviewer
+cheaply verify a claim ("tests pass", "it builds") instead of trusting a
+self-report, closing exactly the class of gap the falsification-framing
+system prompt exists to guard against. `sg` (ast-grep, per this repo's
+`CLAUDE.md` reference) gives structural search for cases a plain grep is
+unreliable for (e.g. "find every caller of this function").
+
+A new constant, `headless.CodebaseReadDisallowedTools`, is paired with it as
+belt-and-suspenders — an explicit, process-level denylist enforced by the CLI
+itself, not only by `AllowedTools` being a scoped grant that in principle
+could be misconfigured:
+
+```
+Bash(rm:*),Bash(git push:*),Bash(git commit:*),Bash(git checkout:*),Bash(git reset:*),Bash(curl:*),Bash(wget:*),Bash(chmod:*),Bash(mv:*),Bash(cp:*),Write,Edit,MultiEdit,NotebookEdit
+```
+
+`BuildReviewCallOptions`'s empty-diff branch now sets
+`DisallowedTools: headless.CodebaseReadDisallowedTools` alongside the
+existing `AllowedTools`/`PermissionMode` fields — still the single point of
+construction this ADR's Repair Pass Addendum established, so the invariant
+has exactly one place to audit. The hard-invariant regression test,
+`TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools`, was
+strengthened to match: it no longer does a substring check for the literal
+`"Bash"` (that check would now be trivially false, since safe Bash grants
+exist by design) — it checks every entry in `AllowedTools` against an exact
+allowlist of known-safe scoped prefixes, and checks `DisallowedTools` for
+every destructive verb/write tool it must explicitly deny.
+
+### Relaxed timeout: 150s → 600s
+
+`headless.CodebaseReadCallTimeout` moves from 150s to 600s (10 minutes).
+150s was calibrated for a bounded Read/Grep/Glob lookup; it was starting to
+force premature UNVERIFIABLE degrades on codebase-read reviews that were
+making genuine progress once the tool surface and context payload both grew
+(git history digging, test/build runs, and the richer context below all
+legitimately take longer). 600s remains well short of the shared 900s
+`DefaultCallTimeout`, so a genuinely hung codebase-read call still fails into
+the degrade path (`DegradeIfUnverified`, unchanged) before hitting the full
+15-minute ceiling other headless call types tolerate — the fail-fast posture
+this ADR originally established for the timeout is preserved, just recalibrated.
+
+### Richer context: prior verdicts, notes history, item context, searchable transcript
+
+Four new, read-only context sources are available to the codebase-read
+reviewer, gated behind `diff == ""` exactly like the tool grant above (the
+"expensive extras only on the hard-to-verify path" posture is unchanged):
+
+- **Prior Review Attempts** — every past review-role `ItemSession` for the
+  item (via `Storage.ListItemSessions`), with outcome, summary, and non-PASS
+  per-criterion evidence.
+- **Full Notes History** — the complete append-only `report_progress` history
+  for the item (via `Storage.ListProgressNotesForItem`), superseding the
+  single latest-note-per-criterion view already shown in the acceptance
+  criteria list.
+- **Item Context** — the item's Description (goal) and a compact
+  status-transition history (`BacklogItemData.StatusEvents`, already eagerly
+  loaded by every `GetBacklogItem` call — no new query needed at either call
+  site, since both `ReviewGateRunner.Run` and `TriggerReReview` already hold
+  an `item` loaded that way).
+- **Session Transcript** — a searchable file (not embedded prompt text) of
+  the work session's own terminal activity, written via the already-landed
+  `WriteReviewTranscriptFile` (Wave 1) to a dot-prefixed file inside
+  `codebaseWorkDir`, referenced by relative path with an instruction to
+  `Grep` it rather than read it in full. Both call sites now hold (or
+  received wiring for) a `*scrollback.ScrollbackManager` reference —
+  `ReviewGateRunner` via a new `SetScrollbackManager` setter (delegated
+  through `BacklogLifecycleListener.SetScrollbackManager`, wired in
+  `server/dependencies.go` once `ScrollbackManager` is constructed at Step
+  9 — the listener itself is constructed earlier, at Step 5), and
+  `BacklogService` via an equivalent `SetScrollbackManager` setter, wired at
+  its own construction site once `ScrollbackManager` already exists. The
+  returned `cleanup func()` is always deferred immediately, so the transcript
+  file never lingers in the real repo checkout regardless of whether the
+  review succeeds, fails, or times out.
+
+All four sources are read-only queries/writes to files the review process
+itself created and cleans up — none of them grant the reviewer any new
+capability, and none of them bear on the write-access invariant. They are
+bundled into one struct parameter, `session.ReviewContextExtras`, added to
+`BuildHeadlessReviewPrompt`'s signature — a struct rather than four more
+positional parameters for the same reason `headless.CallOptions` itself is a
+struct: Go has no named/optional parameters, and this keeps both call sites
+and any future extension of the context payload clean. Every field is
+zero-value-safe; a caller that doesn't have a given piece of context (e.g. no
+scrollback manager wired) simply gets that section omitted rather than
+needing a distinct code path.
+
+Every fetch feeding `ReviewContextExtras` is best-effort/log-and-continue at
+both call sites — a failure to list prior sessions, notes, or write a
+transcript file never blocks a review that would otherwise succeed, matching
+this ADR's existing posture that infrastructure hiccups on the enrichment
+path are not evidence about the acceptance criteria.
+
+### What did not change
+
+- The reviewer still never receives `Write`, `Edit`, `MultiEdit`, or
+  `NotebookEdit` — now enforced by both `AllowedTools` scoping (an
+  allowlist) and `DisallowedTools` (an explicit denylist), not by
+  `AllowedTools` scoping alone.
+- `tool_reads` verification and `DegradeIfUnverified` are unchanged — a
+  PASS/FAIL verdict with fabricated or unverifiable `tool_reads` still
+  degrades to `UNVERIFIABLE` exactly as before, regardless of which tool
+  produced the (claimed) evidence.
+- The falsification-framing instruction ("treat the work session's claim as
+  a hypothesis to check, not a fact to accept") in
+  `headlessReviewSystemPromptWithCodebaseAccess` is preserved verbatim; the
+  prompt update only adds guidance on the new tools/context sources and
+  reframes the closing instruction toward a more thorough analysis, without
+  weakening or removing the anti-gaming guardrails this feature depends on.
+
+## 2026-07-15 Addendum #2: Bash Grant Reverted — Empirically Disproven
+
+**This addendum records the FINAL decision on the tool grant. Addendum #1
+above (the scoped Bash allowlist + `DisallowedTools` denylist) is superseded
+by this one. Do not read Addendum #1 as current behavior — it is kept only
+as a record of what was tried and why it did not work.**
+
+### What was tested
+
+Addendum #1's reasoning for the Bash grant treated `AllowedTools` (an
+allowlist of scoped `Bash(<prefix>*)` entries) plus `DisallowedTools` (an
+explicit denylist of destructive prefixes) as a real, process-level
+technical restriction — "enforced by the CLI itself, not only by
+`AllowedTools` scoping alone." This assumption was never empirically
+verified for Bash specifically (unlike the Read/Grep/Glob grant, which
+*was* verified by `TestPool_RealClaude_WorkDirOnly_GrantsReadAccess` and
+`TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess`).
+
+A new integration test,
+`TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed`
+(`session/headless/integration_test.go`), was added specifically to check
+this assumption against the real `claude` CLI under
+`--permission-mode bypassPermissions` — the exact permission mode this
+feature uses. It ran two sub-tests against the real binary:
+
+1. **UnlistedCommand** — asked the reviewer to run `whoami`, a command
+   present in neither the allowlist nor the denylist by name.
+2. **ChainedAfterAllowed** — asked the reviewer to run
+   `git log --help; whoami > <canary file>`, chaining an unlisted command
+   after an explicitly-allowed `git log` prefix, to check whether the CLI's
+   matching is naive-prefix-based (vulnerable to chaining) or genuinely
+   parses/restricts the full command.
+
+### Result
+
+**Both sub-tests found no real enforcement.** The explicitly unlisted
+`whoami` command executed freely and wrote a real file to disk; the
+chained command after an allowed prefix also executed in full. Under
+`bypassPermissions`, `--allowedTools`/`--disallowedTools` behave as
+pre-approval hints at best for Bash — they are not a hard technical filter.
+This directly contradicts the "enforced by the CLI itself" claim
+Addendum #1's decision rested on.
+
+### Decision
+
+**Drop Bash access entirely.** Revert to the original,
+empirically-PROVEN-safe grant: `AllowedTools: "Read,Grep,Glob"`, no
+`DisallowedTools`. This is not a partial rollback — every `Bash(...)` entry
+is removed from `headless.CodebaseReadAllowedTools`, which reverts to
+exactly `"Read,Grep,Glob"`. `headless.CodebaseReadDisallowedTools` is
+removed as a production constant (it existed only to back the now-reverted
+Bash grant); the `DisallowedTools` field on `headless.CallOptions` /
+`headless.ProcessRunner` remains as general-purpose plumbing for a future
+call site that might genuinely need it, but `BuildReviewCallOptions` no
+longer populates it.
+
+The structural difference that makes `Read,Grep,Glob` safe where a scoped
+Bash grant is not: Read/Grep/Glob have no arbitrary-execution surface —
+their worst case is reading a file inside `WorkDir`. Bash's worst case is
+running any command the underlying shell can run, and this test proved the
+CLI's scoping syntax does not actually constrain that at the process level
+under `bypassPermissions`. `TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed`
+is retained (not deleted) specifically so this finding stays discoverable in
+the test suite and the reasoning above doesn't have to be rediscovered the
+hard way by a future change that re-attempts a Bash grant. The exact
+allowlist/denylist strings it exercised were moved into the test file
+itself (`testCodebaseReadAllowedToolsWithBash` /
+`testCodebaseReadDisallowedTools`) so the test keeps exercising the
+disproven shape even though production no longer references those values.
+
+### What changed as a result
+
+- `headless.CodebaseReadAllowedTools`: `"Read,Grep,Glob,Bash(...)..."` →
+  `"Read,Grep,Glob"`.
+- `headless.CodebaseReadDisallowedTools`: removed.
+- `BuildReviewCallOptions`'s empty-diff branch: no longer sets
+  `DisallowedTools`.
+- `headlessReviewSystemPromptWithCodebaseAccess`: the Bash-specific
+  instructions (running `go test`/`go vet`/`go build`, `git log`/`show`/
+  `blame` via Bash, `sg` structural search) are removed. The falsification
+  framing, the `tool_reads` citation requirement, and the instructions to
+  use the richer context sections (prior review attempts, full notes
+  history, item context, searchable session transcript via Grep) are
+  preserved — none of those depend on Bash.
+- `TestBuildReviewCallOptions_EmptyDiff_NeverIncludesWriteTools`: reverted
+  from an allowlist/denylist-membership check back to an exact-match
+  assertion (`AllowedTools == "Read,Grep,Glob"`, `DisallowedTools` empty).
+- `headless.CodebaseReadCallTimeout` stays at 600s (unchanged from
+  Addendum #1) — the relaxed budget was motivated by the richer context
+  payload (prior verdicts, notes history, item context, searchable
+  transcript), not by Bash tool use, so it remains valid independent of
+  this revert.
+
+### What did not change (again)
+
+- The reviewer still never receives `Write`, `Edit`, `MultiEdit`, or
+  `NotebookEdit` — now enforced the same way the ORIGINAL grant enforced it
+  (Addendum #1's belt-and-suspenders `DisallowedTools` reasoning is moot
+  once there's no Bash to restrict): by `AllowedTools` being a narrow,
+  empirically-verified allowlist of three read-only tools with no execution
+  surface.
+- `tool_reads` verification, `DegradeIfUnverified`, and the richer context
+  sources (prior review attempts, full notes history, item context,
+  searchable session transcript) are all unchanged and remain fully in
+  effect — none of them depended on the Bash grant.
