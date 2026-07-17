@@ -27,8 +27,21 @@ type OneShotPRCreator interface {
 // autoCreatePRPrompt is the default one-shot prompt used when a backlog item's
 // AutoCreatePR policy is enabled. Mirrors DEFAULT_PR_PROMPT in
 // web-app/src/components/sessions/ReviewQueuePanel.tsx — the same prompt a
-// human sees pre-filled in the manual "Create PR" modal.
+// human sees pre-filled in the manual "Create PR" modal. Kept in sync manually;
+// TestMaybeAutoCreatePR_* tests only exercise the Go side, so a drift between
+// the two literals would not be caught by CI today.
 const autoCreatePRPrompt = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made."
+
+// Timeouts for the AutoCreatePR trigger (server/review_queue_manager.go's
+// maybeAutoCreatePR). autoCreatePRRunTimeout is passed explicitly as
+// RunOneShotForSession's timeoutSeconds (rather than 0) so this value is the
+// single source of truth — RunOneShot's own internal 900s default clamp
+// (server/services/session_service.go) is a fallback for other callers, not a
+// second definition this trigger depends on coincidentally matching.
+const (
+	autoCreatePRLookupTimeout = 20 * time.Second
+	autoCreatePRRunTimeout    = 900 * time.Second
+)
 
 // ReactiveQueueManager manages the review queue with immediate reactivity to user interactions.
 // It listens to interaction events and immediately re-evaluates the queue instead of waiting
@@ -44,6 +57,14 @@ type ReactiveQueueManager struct {
 	// policy (see maybeAutoCreatePR). nil disables the feature entirely — safe
 	// default for tests and any wiring path that doesn't call the setter.
 	oneShotRunner OneShotPRCreator
+
+	// autoCreatePRInFlight tracks sessions with an in-progress AutoCreatePR
+	// one-shot run, keyed by stable session UUID. Prevents a second concurrent
+	// run for the same session when the review-queue item is removed and
+	// re-added (acknowledgment, grace-period expiry, detection flicker) while
+	// the first run — which can take up to autoCreatePRRunTimeout — is still
+	// in flight and hasn't persisted GitHubPRURL yet. See maybeAutoCreatePR.
+	autoCreatePRInFlight sync.Map
 
 	// activityCh is sent to when EventApprovalResponse or EventUserInteraction arrives,
 	// causing the poll loop to snap back to its fast interval immediately.
@@ -348,10 +369,18 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 
 // maybeAutoCreatePR implements the opt-in "auto-create PR on Complete" policy
 // (docs/tasks/backlog-feature-improvement.md, 2026-07-17 entry): when a session
-// newly transitions to TASK_COMPLETE and the backlog item behind it has
-// AutoCreatePR set, run the one-shot PR-creation prompt automatically instead of
-// waiting for a human to click "Create PR" in the Review Queue. Off by default —
+// is at TASK_COMPLETE and the backlog item behind it has AutoCreatePR set, run
+// the one-shot PR-creation prompt automatically instead of waiting for a human
+// to click "Create PR" in the Review Queue. Off by default —
 // SkipReviewGate/SkipPlanning/AutoSpawnSession precedent: opt-in per-item bool.
+//
+// Called from both OnItemAdded (item newly enters the queue already at
+// TASK_COMPLETE) and OnQueueUpdated (item was already queued for a different
+// reason — e.g. ReasonIdle while status detection lagged — and only later
+// transitioned to TASK_COMPLETE; ReviewQueue.Add only fires OnItemAdded on the
+// exists==false branch, so relying on OnItemAdded alone silently misses this
+// transition). Safe to call repeatedly/redundantly for the same item — the
+// in-flight guard and GitHubPRURL re-check below make it idempotent.
 func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 	if rqm.oneShotRunner == nil || rqm.storage == nil || rqm.poller == nil {
 		return
@@ -372,8 +401,23 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 		return
 	}
 
+	// Atomic check-and-set: only one in-flight run per session at a time.
+	// Without this, a session removed and re-added to the queue (ack,
+	// grace-period expiry, detection flicker) while a first run is still
+	// executing — up to autoCreatePRRunTimeout, since GitHubPRURL isn't
+	// persisted until the run completes — would pass the GitHubPRURL check
+	// above a second time and launch a concurrent duplicate `claude -p` run
+	// against the same worktree.
+	if _, alreadyRunning := rqm.autoCreatePRInFlight.LoadOrStore(stableID, struct{}{}); alreadyRunning {
+		return
+	}
+
+	rqm.wg.Add(1)
 	go func() {
-		lookupCtx, cancel := context.WithTimeout(rqm.baseContext(), 20*time.Second)
+		defer rqm.wg.Done()
+		defer rqm.autoCreatePRInFlight.Delete(stableID)
+
+		lookupCtx, cancel := context.WithTimeout(rqm.baseContext(), autoCreatePRLookupTimeout)
 		defer cancel()
 
 		itemSession, err := rqm.storage.GetItemSessionBySessionUUID(lookupCtx, stableID)
@@ -385,9 +429,17 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
 			return
 		}
 
-		runCtx, runCancel := context.WithTimeout(rqm.baseContext(), 900*time.Second)
+		// Re-check immediately before the expensive call: closes the TOCTOU
+		// window between the synchronous check above and this goroutine
+		// actually running — e.g. a human clicking the manual "Create PR"
+		// button for this same session during the DB lookups just above.
+		if inst.GitHubPRURL != "" {
+			return
+		}
+
+		runCtx, runCancel := context.WithTimeout(rqm.baseContext(), autoCreatePRRunTimeout)
 		defer runCancel()
-		prURL, runErr := rqm.oneShotRunner.RunOneShotForSession(runCtx, stableID, autoCreatePRPrompt, 0)
+		prURL, runErr := rqm.oneShotRunner.RunOneShotForSession(runCtx, stableID, autoCreatePRPrompt, int32(autoCreatePRRunTimeout.Seconds()))
 		if runErr != nil {
 			log.Warn("auto-create-PR: one-shot prompt failed", "session", inst.Title, "backlog_item", backlogItem.ID, "err", runErr)
 			return
@@ -422,6 +474,18 @@ func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string) {
 
 // OnQueueUpdated is called when the queue is updated.
 func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
+	// AutoCreatePR: catch the transition-while-queued case OnItemAdded misses
+	// (see maybeAutoCreatePR's doc comment) — a session already in the queue
+	// for a different reason (e.g. ReasonIdle) that later reaches
+	// ReasonTaskComplete fires OnQueueUpdated, not OnItemAdded. Safe to call
+	// for every TASK_COMPLETE item on every update: maybeAutoCreatePR's
+	// in-flight guard and GitHubPRURL check make repeated calls idempotent.
+	for _, item := range items {
+		if item.Reason == session.ReasonTaskComplete {
+			rqm.maybeAutoCreatePR(item)
+		}
+	}
+
 	// Optionally publish statistics update
 	stats := rqm.queue.GetStatistics()
 	event := &sessionv1.ReviewQueueEvent{
