@@ -161,6 +161,19 @@ export class BacklogPage {
     await submitButton.click();
   }
 
+  /**
+   * Selects a pipeline mode option in the new/edit item form's radio group
+   * (Epic 3.2 — BacklogItemForm.tsx). `slug` is the PipelineMode's slug; use
+   * "default" for the built-in default option.
+   */
+  getPipelineModeOption(slug: string): Locator {
+    return this.page.getByTestId(`backlog-pipeline-mode-${slug}`);
+  }
+
+  async selectPipelineMode(slug: string) {
+    await this.getPipelineModeOption(slug).click();
+  }
+
   async cancelNewItemForm() {
     const cancelButton = this.page.locator('[data-testid="backlog-form-cancel"]');
     await cancelButton.click();
