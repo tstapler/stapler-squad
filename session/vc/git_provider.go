@@ -155,9 +155,20 @@ func (g *GitProvider) GetBranch() (string, error) {
 	return output, nil
 }
 
+// GetChangedFiles returns the current working-tree/index status as a flat
+// list of FileChange entries. It orchestrates three pure steps: run the
+// porcelain status + numstat git commands, parse the porcelain output
+// (parsePorcelainV2Z), then merge in per-file insertion/deletion counts
+// (mergeNumstat).
 func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
-	// Use porcelain v2 for machine-readable output
-	output, err := g.runGit("status", "--porcelain=v2", "--untracked-files=all")
+	// Use porcelain v2 with NUL-delimited (-z) records. Without -z, git only
+	// quotes paths containing "unusual" characters — a plain-ASCII filename
+	// with a literal space is emitted unquoted, which makes any
+	// space-splitting parse ambiguous. With -z, records are NUL-separated and
+	// the path is never itself split, so paths (and rename origPaths)
+	// containing spaces parse correctly. See parsePorcelainV2Z for the
+	// record layout.
+	output, err := g.runGit("status", "--porcelain=v2", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, err
 	}
@@ -176,59 +187,78 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 		stagedStats = stats
 	}
 
-	var files []FileChange
-	lines := strings.Split(output, "\n")
+	files := parsePorcelainV2Z(output)
+	return mergeNumstat(files, unstagedStats, stagedStats), nil
+}
 
-	for _, line := range lines {
-		if line == "" {
+// parsePorcelainV2Z parses the NUL-delimited output of
+// `git status --porcelain=v2 -z --untracked-files=all` into a list of
+// FileChange entries. Additions/Deletions are left zero-valued — merging
+// numstat counts in is a separate step, see mergeNumstat.
+//
+// Record formats (fields within a record are space-separated up to a fixed
+// count; everything after that is the literal, unsplit path):
+//
+//	1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+//	2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>
+//	u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
+//	? <path>
+//	! <path>
+//
+// With -z, records are NUL-separated instead of newline-separated. Rename
+// and copy ("2 ") records are followed by one extra NUL-delimited token
+// holding <origPath> — that token has no recognized record prefix of its
+// own, so the loop must consume it explicitly as part of the preceding "2 "
+// record rather than mistaking it for the next record.
+func parsePorcelainV2Z(output string) []FileChange {
+	tokens := strings.Split(output, "\x00")
+
+	var files []FileChange
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if token == "" {
 			continue
 		}
 
-		// Parse porcelain v2 format
-		// Ordinary entries: 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
-		// Renamed/copied: 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path><tab><origPath>
-		// Untracked: ? <path>
-		// Ignored: ! <path>
-
-		if strings.HasPrefix(line, "? ") {
+		switch {
+		case strings.HasPrefix(token, "? "):
 			files = append(files, FileChange{
-				Path:     line[2:],
+				Path:     token[2:],
 				Status:   FileUntracked,
 				IsStaged: false,
 			})
-			continue
-		}
 
-		if strings.HasPrefix(line, "! ") {
+		case strings.HasPrefix(token, "! "):
 			// Ignored files - skip
-			continue
-		}
 
-		if strings.HasPrefix(line, "1 ") || strings.HasPrefix(line, "2 ") {
-			// Renamed/copied entries have a tab-separated <origPath> suffix that
-			// strings.Fields would otherwise merge into the space-separated fields
-			// before it — split that off first.
-			mainPart := line
-			var oldPath string
-			if strings.HasPrefix(line, "2 ") {
-				if idx := strings.Index(line, "\t"); idx != -1 {
-					mainPart = line[:idx]
-					oldPath = line[idx+1:]
-				}
+		case strings.HasPrefix(token, "1 "), strings.HasPrefix(token, "2 "):
+			isRenameOrCopy := strings.HasPrefix(token, "2 ")
+
+			// Non-path fields before the path: "1"/"2", XY, sub, mH, mI, mW,
+			// hH, hI — 8 fields. Rename/copy records have one extra
+			// "<X><score>" field before the path.
+			fieldCount := 8
+			if isRenameOrCopy {
+				fieldCount = 9
 			}
 
-			parts := strings.Fields(mainPart)
-			if len(parts) < 9 {
+			// SplitN caps the number of pieces, so the final piece is
+			// whatever remains after the fixed fields — the literal path,
+			// spaces and all, with no further splitting.
+			parts := strings.SplitN(token, " ", fieldCount+1)
+			if len(parts) != fieldCount+1 {
 				continue
 			}
 
 			xy := parts[1] // XY status codes
-			// path is always the last space-separated field: for ordinary ("1 ")
-			// entries that's parts[8]; for rename/copy ("2 ") entries the extra
-			// "<X><score>" field shifts it to parts[9].
-			path := parts[len(parts)-1]
+			path := parts[fieldCount]
 
-			// Parse XY status codes
+			var oldPath string
+			if isRenameOrCopy && i+1 < len(tokens) {
+				oldPath = tokens[i+1]
+				i++ // consume the origPath token — it is not its own record
+			}
+
 			// X = status in index (staged), Y = status in worktree (unstaged)
 			indexStatus := xy[0]
 			worktreeStatus := xy[1]
@@ -265,22 +295,30 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 					OldPath:  oldPath,
 				})
 			}
-		}
 
-		// Handle unmerged entries (u <xy> ...)
-		if strings.HasPrefix(line, "u ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 11 {
-				path := parts[10]
-				files = append(files, FileChange{
-					Path:     path,
-					Status:   FileConflict,
-					IsStaged: false,
-				})
+		case strings.HasPrefix(token, "u "):
+			// "u" <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path> — 11
+			// fields total; SplitN keeps the path unsplit even with spaces.
+			parts := strings.SplitN(token, " ", 11)
+			if len(parts) != 11 {
+				continue
 			}
+			files = append(files, FileChange{
+				Path:     parts[10],
+				Status:   FileConflict,
+				IsStaged: false,
+			})
 		}
 	}
 
+	return files
+}
+
+// mergeNumstat applies per-file insertion/deletion counts onto files,
+// selecting stagedStats or unstagedStats per file based on its IsStaged
+// flag. Files with no matching numstat entry (e.g. untracked files, or a
+// numstat lookup that failed) are left with zero Additions/Deletions.
+func mergeNumstat(files []FileChange, unstagedStats, stagedStats map[string]numstatEntry) []FileChange {
 	for i := range files {
 		stats := unstagedStats
 		if files[i].IsStaged {
@@ -291,8 +329,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 			files[i].Deletions = entry.deletions
 		}
 	}
-
-	return files, nil
+	return files
 }
 
 // numstatEntry holds the per-file insertion/deletion counts reported by

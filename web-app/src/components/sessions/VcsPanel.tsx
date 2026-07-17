@@ -13,46 +13,30 @@ interface VcsPanelProps {
   session?: Session;
 }
 
-function getFileStatusIcon(status: FileStatus): string {
-  switch (status) {
-    case FileStatus.MODIFIED:   return "M";
-    case FileStatus.ADDED:      return "A";
-    case FileStatus.DELETED:    return "D";
-    case FileStatus.RENAMED:    return "R";
-    case FileStatus.COPIED:     return "C";
-    case FileStatus.UNTRACKED:  return "?";
-    case FileStatus.IGNORED:    return "!";
-    case FileStatus.CONFLICT:   return "!!";
-    default:                    return " ";
-  }
-}
+// FILE_STATUS_META is the single source of truth for how each FileStatus
+// renders in this full-row panel: icon glyph, accessible label, and CSS
+// class. Previously this was three parallel switch statements
+// (getFileStatusIcon/getFileStatusLabel/getFileStatusClass) that had to be
+// kept in sync by hand — a lookup table makes drift between them impossible.
+//
+// Note: the conflict glyph here ("!!") intentionally differs from
+// FilesTab.tsx's compact file-tree badge ("U"). This is a full-row panel
+// where a louder glyph is appropriate; FilesTab's badge is a single-char
+// git-porcelain-style indicator. See the comment in FilesTab.tsx.
+const FILE_STATUS_META: Record<FileStatus, { icon: string; label: string; className: string }> = {
+  [FileStatus.UNSPECIFIED]: { icon: " ", label: "Unknown", className: "" },
+  [FileStatus.MODIFIED]:   { icon: "M",  label: "Modified",  className: styles.modified },
+  [FileStatus.ADDED]:      { icon: "A",  label: "Added",     className: styles.added },
+  [FileStatus.DELETED]:    { icon: "D",  label: "Deleted",   className: styles.deleted },
+  [FileStatus.RENAMED]:    { icon: "R",  label: "Renamed",   className: styles.renamed },
+  [FileStatus.COPIED]:     { icon: "C",  label: "Copied",    className: styles.copied },
+  [FileStatus.UNTRACKED]:  { icon: "?",  label: "Untracked", className: styles.untracked },
+  [FileStatus.IGNORED]:    { icon: "!",  label: "Ignored",   className: styles.ignored },
+  [FileStatus.CONFLICT]:   { icon: "!!", label: "Conflict — resolve before merging", className: styles.conflict },
+};
 
-function getFileStatusLabel(status: FileStatus): string {
-  switch (status) {
-    case FileStatus.MODIFIED:   return "Modified";
-    case FileStatus.ADDED:      return "Added";
-    case FileStatus.DELETED:    return "Deleted";
-    case FileStatus.RENAMED:    return "Renamed";
-    case FileStatus.COPIED:     return "Copied";
-    case FileStatus.UNTRACKED:  return "Untracked";
-    case FileStatus.IGNORED:    return "Ignored";
-    case FileStatus.CONFLICT:   return "Conflict — resolve before merging";
-    default:                    return "Unknown";
-  }
-}
-
-function getFileStatusClass(status: FileStatus): string {
-  switch (status) {
-    case FileStatus.MODIFIED:   return styles.modified;
-    case FileStatus.ADDED:      return styles.added;
-    case FileStatus.DELETED:    return styles.deleted;
-    case FileStatus.RENAMED:    return styles.renamed;
-    case FileStatus.COPIED:     return styles.copied;
-    case FileStatus.UNTRACKED:  return styles.untracked;
-    case FileStatus.IGNORED:    return styles.ignored;
-    case FileStatus.CONFLICT:   return styles.conflict;
-    default:                    return "";
-  }
+function getFileStatusMeta(status: FileStatus) {
+  return FILE_STATUS_META[status] ?? { icon: " ", label: "Unknown", className: "" };
 }
 
 function getVcsTypeName(type: VCSType): string {
@@ -85,16 +69,17 @@ function FileList({
       <ul className={styles.fileList}>
         {files.map((file, index) => {
           const hasStats = file.additions > 0 || file.deletions > 0;
+          const meta = getFileStatusMeta(file.status);
           return (
             <li
               key={index}
-              className={`${styles.fileItem} ${getFileStatusClass(file.status)} ${
+              className={`${styles.fileItem} ${meta.className} ${
                 file.status === FileStatus.CONFLICT ? styles.conflictItem : ""
               }`}
-              title={getFileStatusLabel(file.status)}
+              title={meta.label}
             >
-              <span className={styles.fileStatus} aria-label={getFileStatusLabel(file.status)}>
-                {getFileStatusIcon(file.status)}
+              <span className={styles.fileStatus} aria-label={meta.label}>
+                {meta.icon}
               </span>
               <span
                 className={`${styles.filePath} ${onNavigateToFile ? styles.filePathClickable : ""}`}
