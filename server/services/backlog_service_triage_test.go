@@ -289,6 +289,45 @@ func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testin
 	assert.Empty(t, pool.calls, "must not start a second headless review call while one is already active")
 }
 
+// TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns verifies the
+// counterpart to TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens
+// for the review-respawn path: a work session that looks open (EndedAt nil)
+// but is confirmed dead (no live tmux/CLI process) must be tombstoned so the
+// respawn can proceed, rather than blocking forever like the pr_pending live
+// bug this mirrors (docs/tasks/backlog-feature-improvement.md).
+func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
+	svc.SetSessionStopper(stopper)
+	pool := &fakeHeadlessPool{response: `{"overall":"UNVERIFIABLE","summary":"no evidence","verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Review item with a dead prior work session",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	deadIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "dead-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
+	require.NoError(t, respawnErr)
+	assert.NotEmpty(t, pool.calls, "respawn must proceed once the dead work session is cleared, not block forever")
+
+	deadFetched, err := storage.GetItemSession(context.Background(), deadIS.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, deadFetched.EndedAt, "the dead work session must be tombstoned")
+}
+
 // TestAutoRespawnReview_NoActiveSession_TriggersReReview verifies the success
 // path: an abandoned review item with no active session gets a fresh review pass,
 // and (mirroring TestTriggerReReview_HeadlessPassAutoTransitionsToDone) a PASS

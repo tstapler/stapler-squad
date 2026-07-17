@@ -1083,6 +1083,14 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	)
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
+		// Do NOT proceed to dispatch a respawn below: row.NotifiedAt is still nil
+		// on this failure, so the row.NotifiedAt != nil guard above will let the
+		// NEXT tick back in too. Falling through here would mean a sustained
+		// MarkStuckNotified failure re-dispatches a respawn (not just a
+		// notification) every ~60s tick, breaking the "exactly once per
+		// stuck-row lifetime" guarantee this function documents. Notification
+		// itself already fired above regardless — only the respawn is skipped.
+		return
 	}
 
 	// Close the loop: a notification alone leaves the item stuck until a human
