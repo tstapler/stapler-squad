@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,6 +195,254 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 	deadFetched, err := storage.GetItemSession(context.Background(), deadIS.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, deadFetched.EndedAt, "the dead session must be tombstoned")
+}
+
+// --- AutoReopenForPRFix: proactive branch sync with main (Task 2.1.6d) ---
+//
+// Before AutoReopenForPRFix respawns a fix session, it now merges main into the
+// worktree behind the currently open, failing PR — preventive sync rather than
+// reactive (the PR #157 pattern: a branch drifted from main with nobody proactively
+// resyncing it until it hit a hard conflict). These three tests cover the merge, the
+// conflict, and the no-op cases via syncPRBranchWithMain.
+
+// runGitTestCmd runs a git command in dir and fails the test on error.
+func runGitTestCmd(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
+	return string(out)
+}
+
+// setupPRFixSyncRepo builds an "origin" repo and a clone of it (repoPath) with an
+// "origin" remote already configured — mirroring production, where item.RepoPath is a
+// checkout whose worktrees (git worktree add) share the same .git and inherit that
+// remote. It returns the origin dir and the clone (repoPath), both with a branch
+// explicitly named "main" (prFixMainBranch's target).
+func setupPRFixSyncRepo(t *testing.T) (originDir, repoPath string) {
+	t.Helper()
+	originDir = t.TempDir()
+	initGitRepoWithCommit(t, originDir)
+	runGitTestCmd(t, originDir, "branch", "-M", "main")
+
+	repoPath = filepath.Join(t.TempDir(), "clone")
+	cloneCmd := exec.Command("git", "clone", originDir, repoPath) //nolint:norawexec // test helper
+	out, err := cloneCmd.CombinedOutput()
+	require.NoError(t, err, "git clone failed: %s", out)
+	runGitTestCmd(t, repoPath, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, repoPath, "config", "user.name", "Test")
+	return originDir, repoPath
+}
+
+// attachPRFixWorkSession records a completed work ItemSession for item plus the
+// GitWorktreeData needed for syncPRBranchWithMain's GetWorktreeDataBySessionUUID
+// lookup to find worktreePath — the worktree behind the currently open PR.
+//
+// Persists straight through repo.Create (the same low-level path
+// session/ent_repository_test.go's TestEntRepository_Worktree uses) rather than going
+// through session.FromInstanceData/storage.AddInstance: constructing a live *Instance
+// pulls in gitManager/state-machine machinery that isn't needed here and, for a
+// worktree directory git created directly (not through the app's own worktree
+// registry), triggered an unrelated existence-check cleanup that deleted the very
+// worktree this helper is trying to register.
+func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *session.EntRepository, item *session.BacklogItemData, sessionUUID, repoPath, worktreePath, branchName string) {
+	t.Helper()
+	is, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now().Add(-time.Hour)))
+
+	baseCommitSHA := strings.TrimSpace(runGitTestCmd(t, worktreePath, "rev-parse", "HEAD"))
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      sessionUUID,
+		UUID:       sessionUUID,
+		Path:       worktreePath,
+		WorkingDir: worktreePath,
+		Branch:     branchName,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoPath,
+			WorktreePath:  worktreePath,
+			SessionName:   sessionUUID,
+			BranchName:    branchName,
+			BaseCommitSHA: baseCommitSHA,
+		},
+	}))
+}
+
+// createTestStorageWithRepo is createTestStorage but also returns the underlying
+// *session.EntRepository, needed by attachPRFixWorkSession to persist worktree data
+// via the low-level repo.Create path.
+func createTestStorageWithRepo(t *testing.T) (*session.Storage, *session.EntRepository) {
+	t.Helper()
+	testDir := t.TempDir()
+	repo, err := session.NewEntRepository(session.WithDatabasePath(testDir + "/sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { repo.Close() })
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	return storage, repo
+}
+
+// TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly
+// verifies the preventive-sync path: a fix landed on main after the PR's branch was
+// created (drift unrelated to the PR's own diff). AutoReopenForPRFix must merge main
+// into the PR's branch, push the merge back to origin, and tell the spawned session it
+// did so.
+func TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly(t *testing.T) {
+	originDir, repoPath := setupPRFixSyncRepo(t)
+
+	const workBranch = "backlog/pr-fix-clean-merge"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+
+	// The PR's own work: an unrelated new file, committed on the PR branch.
+	require.NoError(t, os.WriteFile(filepath.Join(workWT, "pr-work.txt"), []byte("pr work\n"), 0o644))
+	runGitTestCmd(t, workWT, "add", "pr-work.txt")
+	runGitTestCmd(t, workWT, "commit", "-m", "PR work")
+
+	// A fix lands on main after the branch was created — the drift this sync is meant
+	// to catch preventively.
+	require.NoError(t, os.WriteFile(filepath.Join(originDir, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGitTestCmd(t, originDir, "add", "main-fix.txt")
+	runGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
+
+	storage, repo := createTestStorageWithRepo(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item that drifted from main",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 201,
+		PrURL:    "https://github.com/example/repo/pull/201",
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "clean-merge-work-uuid", repoPath, workWT, workBranch)
+
+	reopenErr := svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: flaky test")
+	require.NoError(t, reopenErr)
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+	require.Len(t, creator.calls, 1, "a new fix session must be spawned")
+	assert.Contains(t, creator.calls[0].prompt, "[Branch sync]",
+		"the spawned session's prompt must mention the branch sync outcome")
+	assert.Contains(t, creator.calls[0].prompt, "pushed it",
+		"a clean merge must be pushed, not just merged locally")
+
+	// The push must have landed on origin: it must now have the PR branch, containing
+	// both the PR's own work and the fix that had landed on main. (workWT itself is
+	// gone by this point — SpawnSessionFromItem's reopen path cleans up the prior work
+	// session's worktree once the new fix session is safely persisted; the merge's
+	// staying power comes from having been pushed, not from the local worktree.)
+	_, refErr := exec.Command("git", "-C", originDir, "rev-parse", "refs/heads/"+workBranch).CombinedOutput() //nolint:norawexec // test assertion
+	require.NoError(t, refErr, "the merge must be pushed to the PR's branch on origin")
+	_, prWorkErr := exec.Command("git", "-C", originDir, "cat-file", "-e", workBranch+":pr-work.txt").CombinedOutput() //nolint:norawexec // test assertion
+	assert.NoError(t, prWorkErr, "pushed branch must still contain the PR's own work")
+	_, mainFixErr := exec.Command("git", "-C", originDir, "cat-file", "-e", workBranch+":main-fix.txt").CombinedOutput() //nolint:norawexec // test assertion
+	assert.NoError(t, mainFixErr, "pushed branch must contain the fix that had landed on main")
+}
+
+// TestAutoReopenForPRFix_should_IncludeConflictsInFixContext_When_MergingMainConflicts
+// verifies the conflict path: when main and the PR's branch touch the same lines, the
+// merge must be aborted (leaving the worktree clean and nothing pushed) and the
+// conflicting file paths must be folded into the fix context handed to the spawned
+// session, so resolving them against main becomes part of the fix.
+func TestAutoReopenForPRFix_should_IncludeConflictsInFixContext_When_MergingMainConflicts(t *testing.T) {
+	originDir, repoPath := setupPRFixSyncRepo(t)
+
+	const workBranch = "backlog/pr-fix-conflict"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+
+	// The PR branch edits README.md (created by initGitRepoWithCommit).
+	require.NoError(t, os.WriteFile(filepath.Join(workWT, "README.md"), []byte("# PR Edit\n"), 0o644))
+	runGitTestCmd(t, workWT, "add", "README.md")
+	runGitTestCmd(t, workWT, "commit", "-m", "PR edits README")
+
+	// Main edits the same line differently.
+	require.NoError(t, os.WriteFile(filepath.Join(originDir, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGitTestCmd(t, originDir, "add", "README.md")
+	runGitTestCmd(t, originDir, "commit", "-m", "main edits README")
+
+	storage, repo := createTestStorageWithRepo(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item that conflicts with main",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 202,
+		PrURL:    "https://github.com/example/repo/pull/202",
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "conflict-work-uuid", repoPath, workWT, workBranch)
+
+	reopenErr := svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: merge conflict risk")
+	require.NoError(t, reopenErr)
+
+	require.Len(t, creator.calls, 1, "a new fix session must be spawned even when the sync conflicts")
+	assert.Contains(t, creator.calls[0].prompt, "conflicts", "the fix context must mention the merge conflict")
+	assert.Contains(t, creator.calls[0].prompt, "README.md", "the fix context must name the conflicting file")
+
+	// Nothing must have been pushed. (The worktree's own clean-abort behavior is
+	// covered directly by session/git's TestMergeMainIntoWorktree_should_ReportConflictedAndAbort_*;
+	// workWT itself is gone by this point — see the comment at the end of the clean-merge
+	// test above for why.)
+	_, refErr := exec.Command("git", "-C", originDir, "rev-parse", "refs/heads/"+workBranch).CombinedOutput() //nolint:norawexec // test assertion
+	assert.Error(t, refErr, "a conflicted merge must never be pushed to origin")
+}
+
+// TestAutoReopenForPRFix_should_SkipSyncNote_When_BranchAlreadyUpToDateWithMain verifies
+// the no-op case: when the PR's branch already contains everything on main, the sync
+// must do nothing observable — no push, no "[Branch sync]" note cluttering the fix
+// context handed to the spawned session.
+func TestAutoReopenForPRFix_should_SkipSyncNote_When_BranchAlreadyUpToDateWithMain(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+
+	const workBranch = "backlog/pr-fix-up-to-date"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+
+	// No further commits anywhere — the branch already contains main's tip.
+
+	storage, repo := createTestStorageWithRepo(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item already in sync with main",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 203,
+		PrURL:    "https://github.com/example/repo/pull/203",
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "up-to-date-work-uuid", repoPath, workWT, workBranch)
+
+	reopenErr := svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: flaky test")
+	require.NoError(t, reopenErr)
+
+	require.Len(t, creator.calls, 1)
+	assert.NotContains(t, creator.calls[0].prompt, "[Branch sync]",
+		"an already-synced branch must not add sync noise to the fix context")
 }
 
 // --- Epic 1.6: ItemSessionSummary.PipelineModeSnapshot/SnapshotHash ---

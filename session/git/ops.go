@@ -52,3 +52,81 @@ func RemoteURL(repoPath, remote string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// MergeMainResult describes the outcome of MergeMainIntoWorktree.
+type MergeMainResult struct {
+	// UpToDate is true when the worktree's branch already contained everything
+	// from mainBranch — nothing was merged in.
+	UpToDate bool
+	// Merged is true when the merge (including a fast-forward) brought in new
+	// commits from mainBranch.
+	Merged bool
+	// Conflicted is true when merging mainBranch produced conflicts. The merge is
+	// always aborted before returning, so the worktree is left clean either way —
+	// callers never have to clean up a half-merged tree.
+	Conflicted bool
+	// ConflictedFiles lists the paths that conflicted. Populated only when
+	// Conflicted is true.
+	ConflictedFiles []string
+}
+
+// MergeMainIntoWorktree fetches mainBranch from origin and merges it into whatever
+// branch is currently checked out in worktreePath. It never leaves the worktree in a
+// conflicted state: on conflict it aborts the merge immediately (via `git merge
+// --abort`) and reports the conflicting paths, so the caller can hand that context to
+// whoever resolves it rather than leaving a half-merged working tree behind for the
+// next thing that touches it.
+func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, error) {
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer fetchCancel()
+	fetchCmd := safeexec.CommandContext(fetchCtx, "git", "-C", worktreePath, "fetch", "origin", mainBranch)
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("failed to fetch %s: %s (%w)", mainBranch, out, err)
+	}
+
+	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer mergeCancel()
+	mergeCmd := safeexec.CommandContext(mergeCtx, "git", "-C", worktreePath, "merge", "--no-edit", "origin/"+mainBranch)
+	mergeOut, mergeErr := mergeCmd.CombinedOutput()
+	if mergeErr == nil {
+		if strings.Contains(string(mergeOut), "Already up to date") {
+			return &MergeMainResult{UpToDate: true}, nil
+		}
+		return &MergeMainResult{Merged: true}, nil
+	}
+
+	// The merge failed. Distinguish real conflicts (recoverable — abort and report)
+	// from any other git failure (propagate as-is; aborting a non-conflict failure
+	// could mask the real problem).
+	conflictFiles, conflictErr := conflictedFiles(worktreePath)
+	if conflictErr != nil || len(conflictFiles) == 0 {
+		return nil, fmt.Errorf("failed to merge %s: %s (%w)", mainBranch, mergeOut, mergeErr)
+	}
+
+	abortCtx, abortCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer abortCancel()
+	abortCmd := safeexec.CommandContext(abortCtx, "git", "-C", worktreePath, "merge", "--abort")
+	if abortOut, abortErr := abortCmd.CombinedOutput(); abortErr != nil {
+		return nil, fmt.Errorf("merge of %s conflicted in %v, and merge --abort failed: %s (%w)", mainBranch, conflictFiles, abortOut, abortErr)
+	}
+
+	return &MergeMainResult{Conflicted: true, ConflictedFiles: conflictFiles}, nil
+}
+
+// conflictedFiles returns the paths with unresolved merge conflicts in worktreePath.
+func conflictedFiles(worktreePath string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "-C", worktreePath, "diff", "--name-only", "--diff-filter=U")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}

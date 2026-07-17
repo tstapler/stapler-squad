@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -156,6 +157,10 @@ const defaultTriageCleanupTimeout = 10 * time.Second
 // treated as orphaned in the re-trigger guard. This prevents a hung or leaked session
 // from blocking re-trigger indefinitely.
 const maxTriageSessionAge = 2 * time.Hour
+
+// prFixMainBranch is the branch AutoReopenForPRFix syncs a PR's branch against before
+// respawning a fix session. This repo's convention is "main" (see CLAUDE.md).
+const prFixMainBranch = "main"
 
 // slugify converts s to a lowercase hyphen-delimited slug safe for file paths.
 func slugify(s string) string {
@@ -631,6 +636,18 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		}
 	}
 
+	// Best-effort: sync the currently open PR's branch with main before handing the
+	// fix off to a new session. This is preventive rather than reactive — a CI
+	// failure caused by drift from main (rather than the PR's own diff) gets
+	// resolved here directly by pushing the merge, and a conflict discovered now
+	// becomes part of the fix context instead of being silently left for a later,
+	// harder-to-diagnose collision (the PR #157 pattern: a branch drifted from main
+	// with nobody proactively resyncing it until it hit a hard conflict). Never
+	// blocks the spawn — any failure here is logged and swallowed.
+	if syncNote := s.syncPRBranchWithMain(ctx, itemID, sessions); syncNote != "" {
+		fixContext = syncNote + "\n\n" + fixContext
+	}
+
 	// Prepend the PR failure context to the item's notes so the spawned session
 	// prompt includes it. Restore original notes after spawning.
 	originalNotes := item.Notes
@@ -667,6 +684,49 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 
 	log.InfoLog.Printf("[AutoReopenForPRFix] item %s → in_progress for PR fix session", itemID)
 	return nil
+}
+
+// syncPRBranchWithMain merges prFixMainBranch into the worktree of item's most recent
+// work session — the branch behind the currently open, failing PR — and pushes the
+// merge when it brings in new commits, so the live PR is resynced with main before the
+// fix session starts. It is best-effort: any failure (no worktree found, fetch/merge
+// error, push error) is logged and swallowed, never blocking the fix spawn. Returns a
+// note describing what happened for AutoReopenForPRFix to prepend to the fix context,
+// or "" when there's nothing worth telling the spawned session (no worktree to sync,
+// or the branch was already up to date with main).
+func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string, sessions []session.ItemSessionSummary) string {
+	_, workSession := findMostRecentSessions(sessions)
+	if workSession == nil {
+		return ""
+	}
+	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
+	if wtErr != nil || wt.WorktreePath == "" {
+		log.InfoLog.Printf("[AutoReopenForPRFix] syncPRBranchWithMain item=%s: no worktree to sync (%v)", itemID, wtErr)
+		return ""
+	}
+
+	result, mergeErr := git.MergeMainIntoWorktree(wt.WorktreePath, prFixMainBranch)
+	if mergeErr != nil {
+		log.WarningLog.Printf("[AutoReopenForPRFix] merge %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, mergeErr)
+		return ""
+	}
+
+	switch {
+	case result.Conflicted:
+		log.InfoLog.Printf("[AutoReopenForPRFix] item=%s: merging %s into %s produced conflicts in %v", itemID, prFixMainBranch, wt.BranchName, result.ConflictedFiles)
+		return fmt.Sprintf("[Branch sync] Merging %q into this PR's branch (%s) produced conflicts in:\n- %s\n\nThe merge was aborted so the worktree is clean; resolving these conflicts against %s is part of this fix.",
+			prFixMainBranch, wt.BranchName, strings.Join(result.ConflictedFiles, "\n- "), prFixMainBranch)
+	case result.Merged:
+		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
+		if pushErr := g.PushBranch(); pushErr != nil {
+			log.WarningLog.Printf("[AutoReopenForPRFix] push merged %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, pushErr)
+			return fmt.Sprintf("[Branch sync] Merged %q into this PR's branch (%s) but could not push the merge (%v) — push it before continuing.", prFixMainBranch, wt.BranchName, pushErr)
+		}
+		log.InfoLog.Printf("[AutoReopenForPRFix] item=%s: merged and pushed %s into %s", itemID, prFixMainBranch, wt.BranchName)
+		return fmt.Sprintf("[Branch sync] Merged the latest %q into this PR's branch (%s) and pushed it — the branch is now up to date with %s.", prFixMainBranch, wt.BranchName, prFixMainBranch)
+	default: // UpToDate
+		return ""
+	}
 }
 
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
