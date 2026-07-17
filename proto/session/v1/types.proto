@@ -858,6 +858,12 @@ message FileChange {
 
   // Original path for renames/copies
   string old_path = 4;
+
+  // Lines added, from `git diff --numstat` (0 for untracked/binary files)
+  int32 additions = 5;
+
+  // Lines removed, from `git diff --numstat` (0 for untracked/binary files)
+  int32 deletions = 6;
 }
 
 // VCSStatus represents the current status of the version control system

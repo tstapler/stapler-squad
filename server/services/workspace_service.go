@@ -483,10 +483,12 @@ func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
 
 func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 	return &sessionv1.FileChange{
-		Path:     f.Path,
-		Status:   fileStatusToProto(f.Status),
-		IsStaged: f.IsStaged,
-		OldPath:  f.OldPath,
+		Path:      f.Path,
+		Status:    fileStatusToProto(f.Status),
+		IsStaged:  f.IsStaged,
+		OldPath:   f.OldPath,
+		Additions: int32(f.Additions),
+		Deletions: int32(f.Deletions),
 	}
 }
 

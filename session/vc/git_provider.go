@@ -166,6 +166,16 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 		return nil, nil
 	}
 
+	// Best-effort per-file insertion/deletion counts. A numstat failure (e.g. no
+	// commits yet) should not prevent the file list itself from being returned.
+	var unstagedStats, stagedStats map[string]numstatEntry
+	if stats, statErr := g.getNumstat(false); statErr == nil {
+		unstagedStats = stats
+	}
+	if stats, statErr := g.getNumstat(true); statErr == nil {
+		stagedStats = stats
+	}
+
 	var files []FileChange
 	lines := strings.Split(output, "\n")
 
@@ -195,23 +205,28 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 		}
 
 		if strings.HasPrefix(line, "1 ") || strings.HasPrefix(line, "2 ") {
-			parts := strings.Fields(line)
+			// Renamed/copied entries have a tab-separated <origPath> suffix that
+			// strings.Fields would otherwise merge into the space-separated fields
+			// before it — split that off first.
+			mainPart := line
+			var oldPath string
+			if strings.HasPrefix(line, "2 ") {
+				if idx := strings.Index(line, "\t"); idx != -1 {
+					mainPart = line[:idx]
+					oldPath = line[idx+1:]
+				}
+			}
+
+			parts := strings.Fields(mainPart)
 			if len(parts) < 9 {
 				continue
 			}
 
 			xy := parts[1] // XY status codes
-			path := parts[8]
-
-			// Handle renamed/copied entries
-			if strings.HasPrefix(line, "2 ") {
-				if idx := strings.Index(line, "\t"); idx != -1 {
-					pathParts := strings.SplitN(line[idx+1:], "\t", 2)
-					if len(pathParts) == 2 {
-						path = pathParts[0]
-					}
-				}
-			}
+			// path is always the last space-separated field: for ordinary ("1 ")
+			// entries that's parts[8]; for rename/copy ("2 ") entries the extra
+			// "<X><score>" field shifts it to parts[9].
+			path := parts[len(parts)-1]
 
 			// Parse XY status codes
 			// X = status in index (staged), Y = status in worktree (unstaged)
@@ -226,6 +241,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 					Path:     path,
 					Status:   FileConflict,
 					IsStaged: false,
+					OldPath:  oldPath,
 				})
 				continue
 			}
@@ -236,6 +252,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 					Path:     path,
 					Status:   parseGitStatusChar(indexStatus),
 					IsStaged: true,
+					OldPath:  oldPath,
 				})
 			}
 
@@ -245,6 +262,7 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 					Path:     path,
 					Status:   parseGitStatusChar(worktreeStatus),
 					IsStaged: false,
+					OldPath:  oldPath,
 				})
 			}
 		}
@@ -263,7 +281,89 @@ func (g *GitProvider) GetChangedFiles() ([]FileChange, error) {
 		}
 	}
 
+	for i := range files {
+		stats := unstagedStats
+		if files[i].IsStaged {
+			stats = stagedStats
+		}
+		if entry, ok := stats[files[i].Path]; ok {
+			files[i].Additions = entry.additions
+			files[i].Deletions = entry.deletions
+		}
+	}
+
 	return files, nil
+}
+
+// numstatEntry holds the per-file insertion/deletion counts reported by
+// `git diff --numstat`.
+type numstatEntry struct {
+	additions int
+	deletions int
+}
+
+// getNumstat returns per-file insertion/deletion counts keyed by the file's
+// current (post-change) path. Pass cached=true for staged changes
+// (`git diff --numstat --cached`), false for unstaged (`git diff --numstat`).
+// Binary files report "-" for both counts, which are treated as 0.
+func (g *GitProvider) getNumstat(cached bool) (map[string]numstatEntry, error) {
+	args := []string{"diff", "--numstat"}
+	if cached {
+		args = append(args, "--cached")
+	}
+	output, err := g.runGit(args...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]numstatEntry)
+	if output == "" {
+		return result, nil
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		added, err := strconv.Atoi(parts[0])
+		if err != nil {
+			added = 0 // binary files report "-"
+		}
+		removed, err := strconv.Atoi(parts[1])
+		if err != nil {
+			removed = 0
+		}
+		result[numstatPath(parts[2])] = numstatEntry{additions: added, deletions: removed}
+	}
+
+	return result, nil
+}
+
+// numstatPath extracts the current (post-change) path from a numstat path
+// field, which may be a plain path or a rename, reported either as
+// "old => new" or with a shared prefix/suffix factored out:
+// "common/{old => new}/tail".
+func numstatPath(raw string) string {
+	idx := strings.Index(raw, "=>")
+	if idx == -1 {
+		return strings.TrimSpace(raw)
+	}
+
+	before, after := raw[:idx], raw[idx+2:]
+	if braceStart := strings.LastIndex(before, "{"); braceStart != -1 {
+		if braceEnd := strings.Index(after, "}"); braceEnd != -1 {
+			prefix := before[:braceStart]
+			newSegment := strings.TrimSpace(after[:braceEnd])
+			suffix := after[braceEnd+1:]
+			return strings.TrimSpace(prefix + newSegment + suffix)
+		}
+	}
+
+	return strings.TrimSpace(after)
 }
 
 // parseGitStatusChar converts a git status character to FileStatus

@@ -62,10 +62,12 @@ func (s FileStatus) String() string {
 
 // FileChange represents a changed file in the working directory
 type FileChange struct {
-	Path     string     // File path relative to repository root
-	Status   FileStatus // Type of change
-	IsStaged bool       // Whether the change is staged for commit
-	OldPath  string     // Original path for renames/copies
+	Path      string     // File path relative to repository root
+	Status    FileStatus // Type of change
+	IsStaged  bool       // Whether the change is staged for commit
+	OldPath   string     // Original path for renames/copies
+	Additions int        // Lines added, from `git diff --numstat` (0 for untracked/binary files)
+	Deletions int        // Lines removed, from `git diff --numstat` (0 for untracked/binary files)
 }
 
 // VCSStatus represents the current status of the version control system

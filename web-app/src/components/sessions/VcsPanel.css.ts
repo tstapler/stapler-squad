@@ -372,9 +372,17 @@ export const fileItem = style({
       borderBottom: "none",
     },
   },
+  "@media": {
+    "(max-width: 480px)": {
+      gap: "6px",
+      padding: "8px",
+      fontSize: "12px",
+    },
+  },
 });
 
 export const fileStatus = style({
+  flexShrink: 0,
   width: "16px",
   textAlign: "center",
   fontWeight: "bold",
@@ -382,9 +390,35 @@ export const fileStatus = style({
 
 export const filePath = style({
   flex: 1,
+  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
+});
+
+// Insertion/deletion counts (+N -M), similar to `git diff --stat`. Fixed to
+// its content width and never shrinks — filePath truncates first so the
+// counts and the status badge never get pushed off-screen on narrow viewports.
+export const fileStats = style({
+  flexShrink: 0,
+  display: "flex",
+  gap: "6px",
+  fontSize: "12px",
+  fontVariantNumeric: "tabular-nums",
+  "@media": {
+    "(max-width: 480px)": {
+      fontSize: "11px",
+      gap: "4px",
+    },
+  },
+});
+
+export const fileStatsAdditions = style({
+  color: vars.color.success,
+});
+
+export const fileStatsDeletions = style({
+  color: vars.color.error,
 });
 
 export const modified = style({});
@@ -403,13 +437,28 @@ export const renamed = style({});
 globalStyle(`${renamed} .${fileStatus}`, { color: vars.color.primary });
 globalStyle(`${renamed} .${filePath}`, { color: vars.color.primary });
 
+export const copied = style({});
+globalStyle(`${copied} .${fileStatus}`, { color: vars.color.primary });
+globalStyle(`${copied} .${filePath}`, { color: vars.color.primary });
+
 export const untracked = style({});
 globalStyle(`${untracked} .${fileStatus}`, { color: vars.color.textMuted });
 globalStyle(`${untracked} .${filePath}`, { color: vars.color.textMuted });
 
+export const ignored = style({});
+globalStyle(`${ignored} .${fileStatus}`, { color: vars.color.textDisabled });
+globalStyle(`${ignored} .${filePath}`, { color: vars.color.textDisabled });
+
 export const conflict = style({});
 globalStyle(`${conflict} .${fileStatus}`, { color: vars.color.error, fontWeight: "bold" });
 globalStyle(`${conflict} .${filePath}`, { color: vars.color.error, fontWeight: "bold" });
+
+// Conflicts block a merge, so they get a loud full-row treatment on top of
+// the text-color styling above — not just a colored badge like other statuses.
+export const conflictItem = style({
+  background: vars.color.errorBg,
+  borderLeft: `3px solid ${vars.color.error}`,
+});
 
 export const filePathClickable = style({
   cursor: "pointer",

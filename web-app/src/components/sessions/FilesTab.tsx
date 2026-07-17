@@ -25,6 +25,7 @@ function fileChangeToStatusLetter(status: FileStatus): string {
     case FileStatus.ADDED:       return "A";
     case FileStatus.DELETED:     return "D";
     case FileStatus.RENAMED:     return "R";
+    case FileStatus.COPIED:      return "C";
     case FileStatus.UNTRACKED:   return "?";
     case FileStatus.CONFLICT:    return "U";
     default:                     return "";

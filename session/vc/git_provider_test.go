@@ -424,6 +424,52 @@ func TestGitProviderGetChangedFiles(t *testing.T) {
 			t.Errorf("files[0].Status = %v, want %v", files[0].Status, FileUntracked)
 		}
 	})
+
+	t.Run("renamed file reports new path, old path, and status", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		initGitRepoWithCommit(t, tmpDir)
+
+		// `git mv` stages a rename; porcelain v2 reports it as a single "2 "
+		// entry with a tab-separated <origPath> suffix — the case that used to
+		// be mis-parsed as Path="R100" (the similarity-score token) with no
+		// OldPath at all.
+		cmd := safeexec.CommandContext(context.Background(), "git", "mv", "test.txt", "renamed.txt")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("Failed to rename file: %v", err)
+		}
+
+		provider, err := NewGitProvider(tmpDir)
+		if err != nil {
+			t.Fatalf("NewGitProvider() error = %v", err)
+		}
+
+		files, err := provider.GetChangedFiles()
+		if err != nil {
+			t.Fatalf("GetChangedFiles() error = %v", err)
+		}
+
+		if len(files) != 1 {
+			t.Fatalf("GetChangedFiles() returned %d files, want 1: %+v", len(files), files)
+		}
+
+		if files[0].Path != "renamed.txt" {
+			t.Errorf("files[0].Path = %q, want %q", files[0].Path, "renamed.txt")
+		}
+
+		if files[0].OldPath != "test.txt" {
+			t.Errorf("files[0].OldPath = %q, want %q", files[0].OldPath, "test.txt")
+		}
+
+		if files[0].Status != FileRenamed {
+			t.Errorf("files[0].Status = %v, want %v", files[0].Status, FileRenamed)
+		}
+
+		if !files[0].IsStaged {
+			t.Error("files[0].IsStaged = false, want true")
+		}
+	})
 }
 
 func TestGitProviderStageOperations(t *testing.T) {

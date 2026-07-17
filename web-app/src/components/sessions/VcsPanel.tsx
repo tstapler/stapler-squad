@@ -21,8 +21,23 @@ function getFileStatusIcon(status: FileStatus): string {
     case FileStatus.RENAMED:    return "R";
     case FileStatus.COPIED:     return "C";
     case FileStatus.UNTRACKED:  return "?";
-    case FileStatus.CONFLICT:   return "U";
+    case FileStatus.IGNORED:    return "!";
+    case FileStatus.CONFLICT:   return "!!";
     default:                    return " ";
+  }
+}
+
+function getFileStatusLabel(status: FileStatus): string {
+  switch (status) {
+    case FileStatus.MODIFIED:   return "Modified";
+    case FileStatus.ADDED:      return "Added";
+    case FileStatus.DELETED:    return "Deleted";
+    case FileStatus.RENAMED:    return "Renamed";
+    case FileStatus.COPIED:     return "Copied";
+    case FileStatus.UNTRACKED:  return "Untracked";
+    case FileStatus.IGNORED:    return "Ignored";
+    case FileStatus.CONFLICT:   return "Conflict — resolve before merging";
+    default:                    return "Unknown";
   }
 }
 
@@ -32,7 +47,9 @@ function getFileStatusClass(status: FileStatus): string {
     case FileStatus.ADDED:      return styles.added;
     case FileStatus.DELETED:    return styles.deleted;
     case FileStatus.RENAMED:    return styles.renamed;
+    case FileStatus.COPIED:     return styles.copied;
     case FileStatus.UNTRACKED:  return styles.untracked;
+    case FileStatus.IGNORED:    return styles.ignored;
     case FileStatus.CONFLICT:   return styles.conflict;
     default:                    return "";
   }
@@ -66,18 +83,39 @@ function FileList({
         {title} ({files.length})
       </h4>
       <ul className={styles.fileList}>
-        {files.map((file, index) => (
-          <li key={index} className={`${styles.fileItem} ${getFileStatusClass(file.status)}`}>
-            <span className={styles.fileStatus}>{getFileStatusIcon(file.status)}</span>
-            <span
-              className={`${styles.filePath} ${onNavigateToFile ? styles.filePathClickable : ""}`}
-              onClick={onNavigateToFile && file.path ? () => onNavigateToFile(file.path) : undefined}
-              title={onNavigateToFile ? "Open in Files tab" : undefined}
+        {files.map((file, index) => {
+          const hasStats = file.additions > 0 || file.deletions > 0;
+          return (
+            <li
+              key={index}
+              className={`${styles.fileItem} ${getFileStatusClass(file.status)} ${
+                file.status === FileStatus.CONFLICT ? styles.conflictItem : ""
+              }`}
+              title={getFileStatusLabel(file.status)}
             >
-              {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-            </span>
-          </li>
-        ))}
+              <span className={styles.fileStatus} aria-label={getFileStatusLabel(file.status)}>
+                {getFileStatusIcon(file.status)}
+              </span>
+              <span
+                className={`${styles.filePath} ${onNavigateToFile ? styles.filePathClickable : ""}`}
+                onClick={onNavigateToFile && file.path ? () => onNavigateToFile(file.path) : undefined}
+                title={onNavigateToFile ? "Open in Files tab" : undefined}
+              >
+                {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+              </span>
+              {hasStats && (
+                <span className={styles.fileStats}>
+                  {file.additions > 0 && (
+                    <span className={styles.fileStatsAdditions}>+{file.additions}</span>
+                  )}
+                  {file.deletions > 0 && (
+                    <span className={styles.fileStatsDeletions}>-{file.deletions}</span>
+                  )}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
