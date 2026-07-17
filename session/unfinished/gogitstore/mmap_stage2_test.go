@@ -717,9 +717,11 @@ func writeAndCommit(t *testing.T, repoDir, relPath, content, message string) {
 // non-deterministically (exit 128, lost temp pack file) under shared-runner
 // tmpfs/memory pressure, unrelated to this package's own logic. `gc` is
 // idempotent, so a bounded retry is a safe, targeted fix for that specific
-// environment hiccup and does not mask a real failure.
+// environment hiccup and does not mask a real failure. maxAttempts and the
+// backoff (gitRetryBackoff, gogitstore_test.go) match gitRun's — see that
+// function's doc comment for the 2026-07-17 widening.
 func runGitCmd(dir string, args ...string) error {
-	const maxAttempts = 3
+	const maxAttempts = 5
 	var lastErr error
 	var lastOut []byte
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -737,7 +739,7 @@ func runGitCmd(dir string, args ...string) error {
 		if !gitCommandIsRetryable(args) || attempt == maxAttempts {
 			break
 		}
-		time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+		time.Sleep(gitRetryBackoff(attempt))
 	}
 	return fmt.Errorf("git %v: %w: %s", args, lastErr, lastOut)
 }

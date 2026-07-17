@@ -2,6 +2,7 @@ package gogitstore
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +55,14 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	// number of times is a safe, targeted absorber for this specific class
 	// of flake; it does not mask a real failure, since a genuinely broken
 	// fixture fails identically on every attempt.
-	const maxAttempts = 3
+	//
+	// maxAttempts and the backoff schedule were widened on 2026-07-17: CI
+	// run 29566220225 hit the same "fatal: failed to run repack" signature
+	// and exhausted the original 3-attempt/150ms*attempt budget under 5
+	// PRs' CI running concurrently on a resource-shared runner — the flat,
+	// unjittered short delays let concurrent retries pile back into the
+	// same contention window in lockstep. See gitRetryBackoff.
+	const maxAttempts = 5
 	var lastErr error
 	var lastOut []byte
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -73,9 +81,23 @@ func gitRun(t *testing.T, dir string, args ...string) {
 			break
 		}
 		t.Logf("git %v failed (attempt %d/%d), retrying: %v\n%s", args, attempt, maxAttempts, err, out)
-		time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+		time.Sleep(gitRetryBackoff(attempt))
 	}
 	t.Fatalf("git %v failed: %v\n%s", args, lastErr, lastOut)
+}
+
+// gitRetryBackoff returns the delay before retrying a failed retryable git
+// command (see gitRun's doc comment above and runGitCmd's in
+// mmap_stage2_test.go, which both call this). attempt is 1-indexed — the
+// attempt number that just failed. Delay grows linearly with attempt, plus
+// random jitter, so that many concurrent test binaries that all started
+// retrying around the same moment (e.g. under CI's -race sweep with
+// several PRs' jobs sharing one runner) don't retry in lockstep back into
+// the exact same tmpfs/memory contention window.
+func gitRetryBackoff(attempt int) time.Duration {
+	const base = 400 * time.Millisecond
+	const maxJitter = 300 * time.Millisecond
+	return time.Duration(attempt)*base + time.Duration(rand.Int63n(int64(maxJitter)))
 }
 
 // gitCommandIsRetryable reports whether args is a git subcommand known to be
