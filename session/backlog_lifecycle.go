@@ -49,6 +49,18 @@ type PRFixSpawner interface {
 	AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error
 }
 
+// ReviewRespawner can automatically re-trigger the review gate for a backlog
+// item stuck in review with no active session in flight (the
+// StuckReasonAbandonedReview condition — see markAbandonedReview). Before this
+// existed, such items were detected and notified but nothing ever respawned
+// work on them, so they sat forever until a human noticed (see
+// docs/tasks/backlog-feature-improvement.md, 2026-07-17 update — 4 real items
+// went stale this way, several with nearly all acceptance criteria already
+// marked complete, just never actually re-reviewed).
+type ReviewRespawner interface {
+	AutoRespawnReview(ctx context.Context, itemID string) error
+}
+
 // prPendingChecker is the subset of GitWorktree's PR-status behavior that
 // ReconcilePRPending depends on. Defined here (the consumer) rather than in
 // package git, scoped to exactly what's called.
@@ -112,6 +124,10 @@ type BacklogLifecycleListener struct {
 	// prFixMu guards prFixSpawner for concurrent Set/get access.
 	prFixMu      sync.RWMutex
 	prFixSpawner PRFixSpawner
+
+	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
+	reviewRespawnMu sync.RWMutex
+	reviewRespawner ReviewRespawner
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
@@ -220,6 +236,21 @@ func (l *BacklogLifecycleListener) getPRFixSpawner() PRFixSpawner {
 	l.prFixMu.RLock()
 	defer l.prFixMu.RUnlock()
 	return l.prFixSpawner
+}
+
+// SetReviewRespawner wires in the spawner used to automatically re-trigger the
+// review gate for items abandoned in review with no active session.
+func (l *BacklogLifecycleListener) SetReviewRespawner(r ReviewRespawner) {
+	l.reviewRespawnMu.Lock()
+	defer l.reviewRespawnMu.Unlock()
+	l.reviewRespawner = r
+}
+
+// getReviewRespawner returns the current review respawner under a read lock.
+func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
+	l.reviewRespawnMu.RLock()
+	defer l.reviewRespawnMu.RUnlock()
+	return l.reviewRespawner
 }
 
 // SetPRPendingCheckerFactory overrides the factory used to construct the
@@ -995,13 +1026,20 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 }
 
 // markAbandonedReview writes/refreshes the durable abandoned_review row for
-// itemID and notifies once the condition has held past the 15-minute grace
-// (abandonedReview pure fn, Story 2.1.0) — gives the 60s reconcile one or
-// more ticks to re-spawn a review gate before flagging, avoiding a false
-// positive on an item that just entered review. The row itself is
+// itemID and, once the condition has held past the 15-minute grace
+// (abandonedReview pure fn, Story 2.1.0), notifies AND auto-respawns a review
+// pass via the injected ReviewRespawner (if wired) — gives the 60s reconcile
+// one or more ticks to re-spawn a review gate before flagging, avoiding a
+// false positive on an item that just entered review. The row itself is
 // mark/refreshed unconditionally so first_detected_at tracks the true onset
-// even before the grace elapses. Best-effort: errors are logged, never
-// returned.
+// even before the grace elapses. Respawn shares the exact same "notify once"
+// gate as the notification (row.NotifiedAt IS NULL): it fires exactly once
+// per stuck-row lifetime, not on every tick, so a genuinely-failing item
+// doesn't spin the reconciler on repeated re-review attempts — the
+// respawned call's own internal iteration cap (see
+// BacklogService.AutoRespawnReview) is what actually stops runaway retries
+// across separate abandoned_review occurrences. Best-effort: errors are
+// logged, never returned.
 func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *EntRepository, itemID, itemTitle, contextDesc string) {
 	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonAbandonedReview, BacklogStatusReview, contextDesc)
 	if err != nil {
@@ -1046,6 +1084,29 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
 	}
+
+	// Close the loop: a notification alone leaves the item stuck until a human
+	// notices — the exact gap that let 4 real backlog items go stale, some for
+	// multiple days (docs/tasks/backlog-feature-improvement.md). Dispatched
+	// async, bounded by reviewSem (same limiter the sibling review-gate-respawn
+	// path in ReconcileStuck uses): a headless re-review call can take minutes,
+	// and this runs inside a synchronous detector sweep that must not block.
+	respawner := l.getReviewRespawner()
+	if respawner == nil {
+		log.DebugLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: no ReviewRespawner configured, notification only", itemID)
+		return
+	}
+	go func(id string) {
+		select {
+		case l.reviewSem <- struct{}{}:
+		case <-l.shutdownCtx.Done():
+			return
+		}
+		defer func() { <-l.reviewSem }()
+		if respawnErr := respawner.AutoRespawnReview(l.shutdownCtx, id); respawnErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview AutoRespawnReview item=%s: %v", id, respawnErr)
+		}
+	}(itemID)
 }
 
 // resolveStuckLogged resolves an open BacklogStuckState row for (itemID, reason),

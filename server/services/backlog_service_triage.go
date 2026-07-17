@@ -448,6 +448,18 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 	return false
 }
 
+// hasActiveReviewSession reports whether any of the provided ItemSessions is an
+// open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
+// AutoRespawnReview to avoid double-spawning a review pass that is already running.
+func hasActiveReviewSession(priorSessions []session.ItemSessionSummary) bool {
+	for _, ps := range priorSessions {
+		if ps.Role == session.SessionRoleReview && ps.EndedAt == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRevisionTitle returns the session title for a backlog work session. On reopen
 // (isReopen=true) it appends "-rN" where N is one past the existing work-session count.
 func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session.ItemSessionSummary) string {
@@ -683,6 +695,82 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	}
 
 	log.InfoLog.Printf("[AutoReopenForPRFix] item %s → in_progress for PR fix session", itemID)
+	return nil
+}
+
+// AutoRespawnReview implements session.ReviewRespawner. It re-triggers the review gate
+// for a backlog item abandoned in review with no active session — closing the gap where
+// StuckReasonAbandonedReview was previously only detected and notified, never acted on,
+// which let real backlog items sit stuck for days (docs/tasks/backlog-feature-improvement.md).
+//
+// Unlike AutoReopenAfterFailedReview/AutoReopenForPRFix, this does NOT transition the
+// item's status: the item is already "review" (TriggerReReview requires exactly that
+// status) and the underlying work may well already be complete — the whole point of
+// re-review is to find out, not to force another work session. See TriggerReReview for
+// why this is likely the right respawn mechanism over spawning a fresh work session: a
+// live audit found several abandoned-review items with nearly all acceptance criteria
+// already marked complete, just never actually reviewed.
+//
+// Deliberately NOT gated by maxConcurrentBacklogWorkItems: that cap bounds concurrent
+// "in_progress" items, and this path never transitions the item out of "review" (a
+// manual TriggerReReview call doesn't check that cap either — this preserves existing
+// behavior rather than introducing a new restriction). Concurrency is instead bounded by
+// the caller (markAbandonedReview), which dispatches under l.reviewSem — the same
+// limiter ReconcileStuck's sibling review-gate-respawn path already uses.
+func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusReview {
+		// Already moved on by the time this async call runs (e.g. a review gate
+		// was re-spawned by ReconcileStuck's FindReviewItemsWithoutGate path, or a
+		// human acted manually) — nothing to do.
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions for cap check: %w", sessErr)
+	}
+
+	// Re-check liveness immediately before acting: the caller (markAbandonedReview)
+	// dispatches this asynchronously under a semaphore, so time may have passed
+	// since the detector query that found the item abandoned. Tombstone any work
+	// session confirmed dead first, mirroring AutoReopenForPRFix's identical guard.
+	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
+	if hasActiveWorkSession(sessions) || hasActiveReviewSession(sessions) {
+		log.InfoLog.Printf("[AutoRespawnReview] item %s already has an active session; skipping respawn", itemID)
+		return nil
+	}
+
+	// Cap on *review* sessions, not work sessions: this path never spawns a work
+	// session, so the work-session counters AutoReopenAfterFailedReview/
+	// AutoReopenForPRFix use would never trip here. Without a cap of its own, an
+	// item whose underlying work is genuinely incomplete (verdict never PASSes)
+	// would re-review forever, once per abandoned_review occurrence. Reuses the
+	// same threshold and notifyReworkCapHit pattern as the other two rework loops
+	// for consistency rather than inventing a new constant.
+	reviewCount := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleReview {
+			reviewCount++
+		}
+	}
+	if reviewCount >= maxAutoReworkIterations {
+		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, maxAutoReworkIterations)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session")
+		return nil
+	}
+
+	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+		return fmt.Errorf("trigger re-review: %w", reviewErr)
+	}
+	log.InfoLog.Printf("[AutoRespawnReview] item %s re-review triggered", itemID)
 	return nil
 }
 

@@ -509,6 +509,24 @@ func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string
 	return nil
 }
 
+// fakeReviewRespawner is a test double implementing ReviewRespawner. Calls are
+// delivered on a buffered channel (not a plain bool/counter) because
+// markAbandonedReview dispatches AutoRespawnReview asynchronously (bounded by
+// reviewSem) — tests must synchronize on the channel rather than racing a
+// direct field read.
+type fakeReviewRespawner struct {
+	calls chan string
+}
+
+func newFakeReviewRespawner() *fakeReviewRespawner {
+	return &fakeReviewRespawner{calls: make(chan string, 8)}
+}
+
+func (f *fakeReviewRespawner) AutoRespawnReview(ctx context.Context, itemID string) error {
+	f.calls <- itemID
+	return nil
+}
+
 // TestBacklogLifecycleListener_IgnoresEventsWhenDisabled verifies that when the listener
 // is disabled via SetEnabled(false), lifecycle events from an Instance are silently dropped
 // and no storage side effects occur.
@@ -774,6 +792,88 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status)
+}
+
+// TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace is a regression test
+// for the "detected and notified, but nothing ever respawns work" gap
+// (docs/tasks/backlog-feature-improvement.md, 2026-07-17 update): 4 real backlog
+// items sat stuck in review for days because markAbandonedReview only ever
+// wrote the stuck row and notified — nothing re-triggered the review gate.
+// AutoRespawnReview must fire exactly once a stuck-row occurrence, on the same
+// 15-minute-grace / notify-once edge as the notification itself (not on every
+// tick, and not before the grace elapses).
+func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
+
+	listener := NewBacklogLifecycleListener(storage)
+	respawner := newFakeReviewRespawner()
+	listener.SetReviewRespawner(respawner)
+
+	er := storage.repo.(*EntRepository)
+
+	// First tick: still within the 15-minute grace — must not respawn yet.
+	listener.reconcileStuckReviewItems(ctx, er)
+	select {
+	case id := <-respawner.calls:
+		t.Fatalf("must not respawn before the 15-minute grace elapses, got call for item=%s", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Backdate the row past the grace so the next tick is respawn-worthy —
+	// mirrors TestReconcileStuckReviewItems_NotifiesOncePerItem's identical setup
+	// for the notification this respawn is meant to sit alongside.
+	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonAbandonedReview, time.Now().Add(-20*time.Minute))
+
+	listener.reconcileStuckReviewItems(ctx, er)
+	select {
+	case id := <-respawner.calls:
+		assert.Equal(t, item.ID, id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for AutoRespawnReview to be dispatched")
+	}
+
+	// Third tick must not respawn a second time for the same stuck-row occurrence
+	// (the notify-once gate — row.NotifiedAt already set — blocks re-entry).
+	listener.reconcileStuckReviewItems(ctx, er)
+	select {
+	case id := <-respawner.calls:
+		t.Fatalf("must not respawn a second time for the same occurrence, got call for item=%s", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Detection-only for status: this reconciler must never mutate item status
+	// itself — only the respawned review session (if any) may do that.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status)
+}
+
+// TestMarkAbandonedReview_NoRespawn_WhenNoReviewRespawnerConfigured verifies
+// markAbandonedReview degrades gracefully (notification only, no panic) when no
+// ReviewRespawner has been wired — the same nil-safe default every other
+// injected spawner on this listener already follows.
+func TestMarkAbandonedReview_NoRespawn_WhenNoReviewRespawnerConfigured(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	// Deliberately not calling SetReviewRespawner.
+
+	er := storage.repo.(*EntRepository)
+	listener.reconcileStuckReviewItems(ctx, er)
+	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonAbandonedReview, time.Now().Add(-20*time.Minute))
+	listener.reconcileStuckReviewItems(ctx, er)
+
+	assert.Equal(t, []string{"Review item needs attention"}, notifier.titles(), "notification must still fire with no respawner wired")
 }
 
 // newPRPendingTestItem creates a pr_pending BacklogItem with the given PR

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // --- Story 2.1.2: rework_cap durable write (notifyReworkCapHit) ---
@@ -195,6 +196,145 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 	deadFetched, err := storage.GetItemSession(context.Background(), deadIS.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, deadFetched.EndedAt, "the dead session must be tombstoned")
+}
+
+// --- AutoRespawnReview: closes the "detected/notified but never respawned" gap ---
+//
+// Before this, markAbandonedReview (session/backlog_lifecycle.go) only wrote a
+// stuck row and notified an operator — nothing ever re-triggered the review gate,
+// so real backlog items sat stuck in review for days
+// (docs/tasks/backlog-feature-improvement.md, 2026-07-17 update). AutoRespawnReview
+// implements session.ReviewRespawner and is the mechanism markAbandonedReview now
+// dispatches into.
+
+// TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies is the regression
+// test for the runaway-loop risk this fix introduces if left unbounded: unlike
+// AutoReopenAfterFailedReview/AutoReopenForPRFix, AutoRespawnReview never adds a
+// work session, so their work-session-counting cap would never trip here. Without
+// its own cap on *review* sessions, an item whose underlying work is genuinely
+// incomplete (verdict never PASSes) would re-review forever, once per
+// abandoned_review occurrence. This asserts the cap — reusing the same
+// maxAutoReworkIterations threshold and notifyReworkCapHit pattern as the other
+// two rework loops — actually stops it.
+func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Repeatedly-failing review item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Seed maxAutoReworkIterations (3) prior, already-ended review sessions —
+	// the shape left behind by 3 prior abandoned_review respawns that each ran
+	// to completion without a PASS verdict.
+	for i := 0; i < 3; i++ {
+		is, isErr := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
+	}
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
+	require.NoError(t, respawnErr, "hitting the cap is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not spin")
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason, "cap hit must write the same durable rework_cap row the other two rework loops use")
+}
+
+// TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn verifies
+// AutoRespawnReview does not spawn a second, concurrent re-review pass when one
+// is already running — the headless re-review path only records its ItemSession
+// row after the LLM call completes, so a naive implementation could otherwise
+// double-dispatch across two reconcile ticks landing close together.
+func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	// A headless pool being wired but never called proves no second attempt fired.
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Review item with an active re-review already running",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-review-uuid",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
+	require.NoError(t, respawnErr)
+	assert.Empty(t, pool.calls, "must not start a second headless review call while one is already active")
+}
+
+// TestAutoRespawnReview_NoActiveSession_TriggersReReview verifies the success
+// path: an abandoned review item with no active session gets a fresh review pass,
+// and (mirroring TestTriggerReReview_HeadlessPassAutoTransitionsToDone) a PASS
+// verdict from that respawned review carries the item all the way to done —
+// proving the respawn is not just "detected," it actually unsticks the item.
+func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	createResp, err := svc.CreateBacklogItem(context.Background(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "Abandoned review item",
+		RepoPath: repoDir,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	for _, status := range []string{
+		string(session.BacklogStatusReady),
+		string(session.BacklogStatusInProgress),
+		string(session.BacklogStatusReview),
+	} {
+		_, err = svc.TransitionBacklogItemStatus(context.Background(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: status,
+		}))
+		require.NoError(t, err)
+	}
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), itemID)
+	require.NoError(t, respawnErr)
+	assert.NotEmpty(t, pool.calls, "must actually invoke the headless review call, not just detect the item")
+
+	updated, err := svc.GetBacklogItem(context.Background(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
+		"a PASS verdict from the respawned review should carry the item to done, same as a manual TriggerReReview call")
 }
 
 // --- AutoReopenForPRFix: proactive branch sync with main (Task 2.1.6d) ---

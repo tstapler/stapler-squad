@@ -921,6 +921,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetSyncFeatureEnabledCheck(backlogCtrl.IsEnabled)
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
+	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
 	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not
