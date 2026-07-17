@@ -303,10 +303,11 @@ func exerciseRepo(t *testing.T, repo *git.Repository) {
 // gets collected away rather than accumulating in the reading. It is still
 // process-wide (not scoped to a single goroutine), so callers comparing two
 // HeapAlloc-based deltas should still prefer a tolerance margin over a
-// strict inequality, and ideally median-of-N sampling — see
-// TestMmapIndex_HeapAllocation_LowerThanCopyBased and
-// TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst for both
-// patterns applied.
+// strict inequality, and ideally median-of-N sampling too — see
+// TestMmapIndex_HeapAllocation_LowerThanCopyBased for both applied
+// together, and TestSharedIndex_SecondAndLaterWorktreesCostLessThanFirst
+// for the tolerance-margin half alone (it averages one sample per worktree
+// rather than taking a median of repeated samples).
 func heapAllocNow() uint64 {
 	runtime.GC()
 	runtime.GC() // two passes: the first can promote finalizer-pending garbage that only the second reclaims

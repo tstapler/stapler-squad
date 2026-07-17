@@ -160,6 +160,10 @@ func TestMmapIndex_HeapAllocation_LowerThanCopyBased(t *testing.T) {
 		t.Fatalf("resolveGitFilesystems: %v", err)
 	}
 
+	// samplesPerArm=5 balances noise-immunity (a single bad sample can no
+	// longer flip the median) against wall-clock cost — each sample forces
+	// a double-GC pass plus a fresh ensureIndex() over the 600-object
+	// fixture built above.
 	const samplesPerArm = 5
 
 	sample := func(useMmap bool) uint64 {
