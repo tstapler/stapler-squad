@@ -695,6 +695,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Step 8: ReactiveQueueManager
 	reactiveQueueMgr := NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
+	// Wires the opt-in AutoCreatePR policy — sessionService is available this early
+	// (constructed in BuildCoreDepsWithOptions, aliased above), so no setter-injection
+	// race window like SetHeadlessPool's had.
+	reactiveQueueMgr.SetOneShotRunner(sessionService)
 	log.Info("ReactiveQueueManager initialized")
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation

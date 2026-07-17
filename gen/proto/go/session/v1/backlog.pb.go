@@ -819,6 +819,7 @@ type BacklogItem struct {
 	PrNumber              int32                  `protobuf:"varint,23,opt,name=pr_number,json=prNumber,proto3" json:"pr_number,omitempty"`
 	AutoSpawnSession      bool                   `protobuf:"varint,24,opt,name=auto_spawn_session,json=autoSpawnSession,proto3" json:"auto_spawn_session,omitempty"`
 	PipelineMode          *string                `protobuf:"bytes,25,opt,name=pipeline_mode,json=pipelineMode,proto3,oneof" json:"pipeline_mode,omitempty"`
+	AutoCreatePr          bool                   `protobuf:"varint,26,opt,name=auto_create_pr,json=autoCreatePr,proto3" json:"auto_create_pr,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -1026,6 +1027,13 @@ func (x *BacklogItem) GetPipelineMode() string {
 		return *x.PipelineMode
 	}
 	return ""
+}
+
+func (x *BacklogItem) GetAutoCreatePr() bool {
+	if x != nil {
+		return x.AutoCreatePr
+	}
+	return false
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -1423,6 +1431,7 @@ type CreateBacklogItemRequest struct {
 	SkipTriage         bool                   `protobuf:"varint,9,opt,name=skip_triage,json=skipTriage,proto3" json:"skip_triage,omitempty"`
 	AutoSpawnSession   bool                   `protobuf:"varint,10,opt,name=auto_spawn_session,json=autoSpawnSession,proto3" json:"auto_spawn_session,omitempty"`
 	PipelineMode       *string                `protobuf:"bytes,11,opt,name=pipeline_mode,json=pipelineMode,proto3,oneof" json:"pipeline_mode,omitempty"`
+	AutoCreatePr       bool                   `protobuf:"varint,12,opt,name=auto_create_pr,json=autoCreatePr,proto3" json:"auto_create_pr,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1532,6 +1541,13 @@ func (x *CreateBacklogItemRequest) GetPipelineMode() string {
 		return *x.PipelineMode
 	}
 	return ""
+}
+
+func (x *CreateBacklogItemRequest) GetAutoCreatePr() bool {
+	if x != nil {
+		return x.AutoCreatePr
+	}
+	return false
 }
 
 type CreateBacklogItemResponse struct {
@@ -1801,6 +1817,7 @@ type UpdateBacklogItemRequest struct {
 	ExpectedUpdatedAt  *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=expected_updated_at,json=expectedUpdatedAt,proto3" json:"expected_updated_at,omitempty"`
 	AutoSpawnSession   bool                   `protobuf:"varint,12,opt,name=auto_spawn_session,json=autoSpawnSession,proto3" json:"auto_spawn_session,omitempty"`
 	PipelineMode       *string                `protobuf:"bytes,13,opt,name=pipeline_mode,json=pipelineMode,proto3,oneof" json:"pipeline_mode,omitempty"`
+	AutoCreatePr       bool                   `protobuf:"varint,14,opt,name=auto_create_pr,json=autoCreatePr,proto3" json:"auto_create_pr,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1924,6 +1941,13 @@ func (x *UpdateBacklogItemRequest) GetPipelineMode() string {
 		return *x.PipelineMode
 	}
 	return ""
+}
+
+func (x *UpdateBacklogItemRequest) GetAutoCreatePr() bool {
+	if x != nil {
+		return x.AutoCreatePr
+	}
+	return false
 }
 
 type UpdateBacklogItemResponse struct {
@@ -5662,7 +5686,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\tto_status\x18\x03 \x01(\tR\btoStatus\x12!\n" +
 	"\ftriggered_by\x18\x04 \x01(\tR\vtriggeredBy\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xbb\b\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe1\b\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -5693,7 +5717,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x06pr_url\x18\x16 \x01(\tR\x05prUrl\x12\x1b\n" +
 	"\tpr_number\x18\x17 \x01(\x05R\bprNumber\x12,\n" +
 	"\x12auto_spawn_session\x18\x18 \x01(\bR\x10autoSpawnSession\x12(\n" +
-	"\rpipeline_mode\x18\x19 \x01(\tH\x00R\fpipelineMode\x88\x01\x01B\x10\n" +
+	"\rpipeline_mode\x18\x19 \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
+	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePrB\x10\n" +
 	"\x0e_pipeline_mode\"\xd9\x02\n" +
 	"\n" +
 	"ItemSource\x12\x0e\n" +
@@ -5738,7 +5763,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\ritems_updated\x18\x05 \x01(\x05R\fitemsUpdated\x12#\n" +
 	"\ritems_skipped\x18\x06 \x01(\x05R\fitemsSkipped\x12#\n" +
 	"\ritems_errored\x18\a \x01(\x05R\fitemsErrored\x12#\n" +
-	"\rerror_message\x18\b \x01(\tR\ferrorMessage\"\xc5\x03\n" +
+	"\rerror_message\x18\b \x01(\tR\ferrorMessage\"\xeb\x03\n" +
 	"\x18CreateBacklogItemRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12H\n" +
@@ -5752,7 +5777,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"skipTriage\x12,\n" +
 	"\x12auto_spawn_session\x18\n" +
 	" \x01(\bR\x10autoSpawnSession\x12(\n" +
-	"\rpipeline_mode\x18\v \x01(\tH\x00R\fpipelineMode\x88\x01\x01B\x10\n" +
+	"\rpipeline_mode\x18\v \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
+	"\x0eauto_create_pr\x18\f \x01(\bR\fautoCreatePrB\x10\n" +
 	"\x0e_pipeline_mode\"s\n" +
 	"\x19CreateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\x12)\n" +
@@ -5767,7 +5793,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\asort_by\x18\x03 \x01(\tR\x06sortBy\x12)\n" +
 	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xb2\x04\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xd8\x04\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -5782,7 +5808,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	" \x01(\tR\x0eexpectedStatus\x12J\n" +
 	"\x13expected_updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x11expectedUpdatedAt\x12,\n" +
 	"\x12auto_spawn_session\x18\f \x01(\bR\x10autoSpawnSession\x12(\n" +
-	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01B\x10\n" +
+	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
+	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePrB\x10\n" +
 	"\x0e_pipeline_mode\"H\n" +
 	"\x19UpdateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"4\n" +

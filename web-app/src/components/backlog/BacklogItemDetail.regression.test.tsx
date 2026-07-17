@@ -80,6 +80,7 @@ const baseItem: BacklogItem = {
   skipPlanning: false,
   skipReviewGate: false,
   autoSpawnSession: false,
+  autoCreatePR: false,
   planApproved: false,
   // triageStatus "running" is what enables the 5s background poll.
   triageStatus: "running",

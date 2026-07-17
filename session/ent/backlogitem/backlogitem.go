@@ -33,6 +33,8 @@ const (
 	FieldSkipPlanning = "skip_planning"
 	// FieldAutoSpawnSession holds the string denoting the auto_spawn_session field in the database.
 	FieldAutoSpawnSession = "auto_spawn_session"
+	// FieldAutoCreatePr holds the string denoting the auto_create_pr field in the database.
+	FieldAutoCreatePr = "auto_create_pr"
 	// FieldPipelineMode holds the string denoting the pipeline_mode field in the database.
 	FieldPipelineMode = "pipeline_mode"
 	// FieldPlanApproved holds the string denoting the plan_approved field in the database.
@@ -127,6 +129,7 @@ var Columns = []string{
 	FieldSkipReviewGate,
 	FieldSkipPlanning,
 	FieldAutoSpawnSession,
+	FieldAutoCreatePr,
 	FieldPipelineMode,
 	FieldPlanApproved,
 	FieldPlanApprovedAt,
@@ -184,6 +187,8 @@ var (
 	DefaultSkipPlanning bool
 	// DefaultAutoSpawnSession holds the default value on creation for the "auto_spawn_session" field.
 	DefaultAutoSpawnSession bool
+	// DefaultAutoCreatePr holds the default value on creation for the "auto_create_pr" field.
+	DefaultAutoCreatePr bool
 	// DefaultPipelineMode holds the default value on creation for the "pipeline_mode" field.
 	DefaultPipelineMode string
 	// DefaultPlanApproved holds the default value on creation for the "plan_approved" field.
@@ -251,6 +256,11 @@ func BySkipPlanning(opts ...sql.OrderTermOption) OrderOption {
 // ByAutoSpawnSession orders the results by the auto_spawn_session field.
 func ByAutoSpawnSession(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAutoSpawnSession, opts...).ToFunc()
+}
+
+// ByAutoCreatePr orders the results by the auto_create_pr field.
+func ByAutoCreatePr(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAutoCreatePr, opts...).ToFunc()
 }
 
 // ByPipelineMode orders the results by the pipeline_mode field.

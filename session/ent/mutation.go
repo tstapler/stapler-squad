@@ -2993,6 +2993,7 @@ type BacklogItemMutation struct {
 	skip_review_gate        *bool
 	skip_planning           *bool
 	auto_spawn_session      *bool
+	auto_create_pr          *bool
 	pipeline_mode           *string
 	plan_approved           *bool
 	plan_approved_at        *time.Time
@@ -3515,6 +3516,42 @@ func (m *BacklogItemMutation) OldAutoSpawnSession(ctx context.Context) (v bool, 
 // ResetAutoSpawnSession resets all changes to the "auto_spawn_session" field.
 func (m *BacklogItemMutation) ResetAutoSpawnSession() {
 	m.auto_spawn_session = nil
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (m *BacklogItemMutation) SetAutoCreatePr(b bool) {
+	m.auto_create_pr = &b
+}
+
+// AutoCreatePr returns the value of the "auto_create_pr" field in the mutation.
+func (m *BacklogItemMutation) AutoCreatePr() (r bool, exists bool) {
+	v := m.auto_create_pr
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAutoCreatePr returns the old "auto_create_pr" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldAutoCreatePr(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAutoCreatePr is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAutoCreatePr requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAutoCreatePr: %w", err)
+	}
+	return oldValue.AutoCreatePr, nil
+}
+
+// ResetAutoCreatePr resets all changes to the "auto_create_pr" field.
+func (m *BacklogItemMutation) ResetAutoCreatePr() {
+	m.auto_create_pr = nil
 }
 
 // SetPipelineMode sets the "pipeline_mode" field.
@@ -4466,7 +4503,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 22)
+	fields := make([]string, 0, 23)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -4493,6 +4530,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	}
 	if m.auto_spawn_session != nil {
 		fields = append(fields, backlogitem.FieldAutoSpawnSession)
+	}
+	if m.auto_create_pr != nil {
+		fields = append(fields, backlogitem.FieldAutoCreatePr)
 	}
 	if m.pipeline_mode != nil {
 		fields = append(fields, backlogitem.FieldPipelineMode)
@@ -4559,6 +4599,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.SkipPlanning()
 	case backlogitem.FieldAutoSpawnSession:
 		return m.AutoSpawnSession()
+	case backlogitem.FieldAutoCreatePr:
+		return m.AutoCreatePr()
 	case backlogitem.FieldPipelineMode:
 		return m.PipelineMode()
 	case backlogitem.FieldPlanApproved:
@@ -4612,6 +4654,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldSkipPlanning(ctx)
 	case backlogitem.FieldAutoSpawnSession:
 		return m.OldAutoSpawnSession(ctx)
+	case backlogitem.FieldAutoCreatePr:
+		return m.OldAutoCreatePr(ctx)
 	case backlogitem.FieldPipelineMode:
 		return m.OldPipelineMode(ctx)
 	case backlogitem.FieldPlanApproved:
@@ -4709,6 +4753,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAutoSpawnSession(v)
+		return nil
+	case backlogitem.FieldAutoCreatePr:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAutoCreatePr(v)
 		return nil
 	case backlogitem.FieldPipelineMode:
 		v, ok := value.(string)
@@ -4978,6 +5029,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldAutoSpawnSession:
 		m.ResetAutoSpawnSession()
+		return nil
+	case backlogitem.FieldAutoCreatePr:
+		m.ResetAutoCreatePr()
 		return nil
 	case backlogitem.FieldPipelineMode:
 		m.ResetPipelineMode()

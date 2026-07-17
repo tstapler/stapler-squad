@@ -350,6 +350,13 @@ type BacklogItemData struct {
 	SkipReviewGate     bool
 	SkipPlanning       bool
 	AutoSpawnSession   bool
+	// AutoCreatePR, when true, automatically runs the same one-shot PR-creation
+	// prompt the Review Queue's manual "Create PR" button uses, once a work
+	// session for this item reaches TASK_COMPLETE (see
+	// server.ReactiveQueueManager.maybeAutoCreatePR). Off by default — a
+	// deliberate opt-in, since it removes the human review-the-prompt
+	// checkpoint before an LLM-authored PR is created.
+	AutoCreatePR bool
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -438,6 +445,7 @@ type BacklogItemUpdate struct {
 	SkipReviewGate     *bool
 	SkipPlanning       *bool
 	AutoSpawnSession   *bool
+	AutoCreatePR       *bool
 	// PipelineMode is a pointer for partial-update presence: nil means "leave
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See

@@ -100,6 +100,8 @@ export interface BacklogItem {
   skipReviewGate: boolean;
   /** When true, a work session is spawned automatically once the item reaches ready — no manual "Spawn Session" click required. */
   autoSpawnSession: boolean;
+  /** When true, a PR is created automatically (same one-shot prompt as the manual Review Queue "Create PR" button) once a work session reaches TASK_COMPLETE — no manual click required. */
+  autoCreatePR: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
   acCriteria: AcCriterion[];
@@ -197,6 +199,7 @@ export interface BacklogItemInput {
   skipPlanning?: boolean;
   skipReviewGate?: boolean;
   autoSpawnSession?: boolean;
+  autoCreatePR?: boolean;
   acCriteria?: AcCriterion[];
   notes?: string;
   skipTriage?: boolean;
@@ -363,6 +366,7 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     skipPlanning: p.skipPlanning,
     skipReviewGate: p.skipReviewGate,
     autoSpawnSession: p.autoSpawnSession,
+    autoCreatePR: p.autoCreatePr,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
@@ -544,6 +548,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipPlanning: data.skipPlanning ?? false,
           skipReviewGate: data.skipReviewGate ?? false,
           autoSpawnSession: data.autoSpawnSession ?? false,
+          autoCreatePr: data.autoCreatePR ?? false,
           acceptanceCriteria: toProtoAcCriteria(data.acCriteria ?? []),
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
@@ -575,6 +580,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           skipPlanning: data.skipPlanning,
           skipReviewGate: data.skipReviewGate,
           autoSpawnSession: data.autoSpawnSession,
+          autoCreatePr: data.autoCreatePR,
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,

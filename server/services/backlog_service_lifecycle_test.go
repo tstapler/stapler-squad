@@ -77,3 +77,40 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 	require.NotNil(t, resp.Msg.Item.PipelineMode)
 	assert.Equal(t, "quick", *resp.Msg.Item.PipelineMode)
 }
+
+// ─── auto_create_pr policy flag (opt-in "auto-create PR on Complete") ─────────
+
+// TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted is the
+// default-behavior guard for the opt-in AutoCreatePR policy — an item created
+// without the flag must not have it silently enabled.
+func TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted(t *testing.T) {
+	svc := newBacklogService(t)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item without auto-create-pr",
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Item.AutoCreatePr)
+}
+
+// TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue verifies
+// CreateBacklogItem persists an explicitly-enabled auto_create_pr flag, and
+// UpdateBacklogItem round-trips it (unconditional-bool-wrap pattern, same as
+// SkipReviewGate/SkipPlanning/AutoSpawnSession).
+func TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "item with auto-create-pr",
+		AutoCreatePr: true,
+	}))
+	require.NoError(t, err)
+	assert.True(t, created.Msg.Item.AutoCreatePr)
+
+	updated, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:       created.Msg.Item.Id,
+		AutoCreatePr: true,
+	}))
+	require.NoError(t, err)
+	assert.True(t, updated.Msg.Item.AutoCreatePr, "UpdateBacklogItem must persist auto_create_pr")
+}

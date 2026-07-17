@@ -101,6 +101,11 @@ func AutoSpawnSession(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldAutoSpawnSession, v))
 }
 
+// AutoCreatePr applies equality check predicate on the "auto_create_pr" field. It's identical to AutoCreatePrEQ.
+func AutoCreatePr(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoCreatePr, v))
+}
+
 // PipelineMode applies equality check predicate on the "pipeline_mode" field. It's identical to PipelineModeEQ.
 func PipelineMode(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPipelineMode, v))
@@ -589,6 +594,16 @@ func AutoSpawnSessionEQ(v bool) predicate.BacklogItem {
 // AutoSpawnSessionNEQ applies the NEQ predicate on the "auto_spawn_session" field.
 func AutoSpawnSessionNEQ(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNEQ(FieldAutoSpawnSession, v))
+}
+
+// AutoCreatePrEQ applies the EQ predicate on the "auto_create_pr" field.
+func AutoCreatePrEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoCreatePr, v))
+}
+
+// AutoCreatePrNEQ applies the NEQ predicate on the "auto_create_pr" field.
+func AutoCreatePrNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldAutoCreatePr, v))
 }
 
 // PipelineModeEQ applies the EQ predicate on the "pipeline_mode" field.

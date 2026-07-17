@@ -116,6 +116,7 @@ var (
 		{Name: "skip_review_gate", Type: field.TypeBool, Default: false},
 		{Name: "skip_planning", Type: field.TypeBool, Default: false},
 		{Name: "auto_spawn_session", Type: field.TypeBool, Default: false},
+		{Name: "auto_create_pr", Type: field.TypeBool, Default: false},
 		{Name: "pipeline_mode", Type: field.TypeString, Default: ""},
 		{Name: "plan_approved", Type: field.TypeBool, Default: false},
 		{Name: "plan_approved_at", Type: field.TypeTime, Nullable: true},
@@ -139,7 +140,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[23]},
+				Columns:    []*schema.Column{BacklogItemsColumns[24]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -153,12 +154,12 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[22]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[23]},
 			},
 			{
 				Name:    "backlogitem_external_id",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[16]},
+				Columns: []*schema.Column{BacklogItemsColumns[17]},
 			},
 			{
 				Name:    "backlogitem_status",

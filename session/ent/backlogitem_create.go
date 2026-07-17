@@ -148,6 +148,20 @@ func (_c *BacklogItemCreate) SetNillableAutoSpawnSession(v *bool) *BacklogItemCr
 	return _c
 }
 
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (_c *BacklogItemCreate) SetAutoCreatePr(v bool) *BacklogItemCreate {
+	_c.mutation.SetAutoCreatePr(v)
+	return _c
+}
+
+// SetNillableAutoCreatePr sets the "auto_create_pr" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableAutoCreatePr(v *bool) *BacklogItemCreate {
+	if v != nil {
+		_c.SetAutoCreatePr(*v)
+	}
+	return _c
+}
+
 // SetPipelineMode sets the "pipeline_mode" field.
 func (_c *BacklogItemCreate) SetPipelineMode(v string) *BacklogItemCreate {
 	_c.mutation.SetPipelineMode(v)
@@ -493,6 +507,10 @@ func (_c *BacklogItemCreate) defaults() {
 		v := backlogitem.DefaultAutoSpawnSession
 		_c.mutation.SetAutoSpawnSession(v)
 	}
+	if _, ok := _c.mutation.AutoCreatePr(); !ok {
+		v := backlogitem.DefaultAutoCreatePr
+		_c.mutation.SetAutoCreatePr(v)
+	}
 	if _, ok := _c.mutation.PipelineMode(); !ok {
 		v := backlogitem.DefaultPipelineMode
 		_c.mutation.SetPipelineMode(v)
@@ -548,6 +566,9 @@ func (_c *BacklogItemCreate) check() error {
 	}
 	if _, ok := _c.mutation.AutoSpawnSession(); !ok {
 		return &ValidationError{Name: "auto_spawn_session", err: errors.New(`ent: missing required field "BacklogItem.auto_spawn_session"`)}
+	}
+	if _, ok := _c.mutation.AutoCreatePr(); !ok {
+		return &ValidationError{Name: "auto_create_pr", err: errors.New(`ent: missing required field "BacklogItem.auto_create_pr"`)}
 	}
 	if _, ok := _c.mutation.PipelineMode(); !ok {
 		return &ValidationError{Name: "pipeline_mode", err: errors.New(`ent: missing required field "BacklogItem.pipeline_mode"`)}
@@ -632,6 +653,10 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AutoSpawnSession(); ok {
 		_spec.SetField(backlogitem.FieldAutoSpawnSession, field.TypeBool, value)
 		_node.AutoSpawnSession = value
+	}
+	if value, ok := _c.mutation.AutoCreatePr(); ok {
+		_spec.SetField(backlogitem.FieldAutoCreatePr, field.TypeBool, value)
+		_node.AutoCreatePr = value
 	}
 	if value, ok := _c.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
@@ -963,6 +988,18 @@ func (u *BacklogItemUpsert) SetAutoSpawnSession(v bool) *BacklogItemUpsert {
 // UpdateAutoSpawnSession sets the "auto_spawn_session" field to the value that was provided on create.
 func (u *BacklogItemUpsert) UpdateAutoSpawnSession() *BacklogItemUpsert {
 	u.SetExcluded(backlogitem.FieldAutoSpawnSession)
+	return u
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (u *BacklogItemUpsert) SetAutoCreatePr(v bool) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldAutoCreatePr, v)
+	return u
+}
+
+// UpdateAutoCreatePr sets the "auto_create_pr" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateAutoCreatePr() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldAutoCreatePr)
 	return u
 }
 
@@ -1372,6 +1409,20 @@ func (u *BacklogItemUpsertOne) SetAutoSpawnSession(v bool) *BacklogItemUpsertOne
 func (u *BacklogItemUpsertOne) UpdateAutoSpawnSession() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.UpdateAutoSpawnSession()
+	})
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (u *BacklogItemUpsertOne) SetAutoCreatePr(v bool) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetAutoCreatePr(v)
+	})
+}
+
+// UpdateAutoCreatePr sets the "auto_create_pr" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateAutoCreatePr() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateAutoCreatePr()
 	})
 }
 
@@ -1982,6 +2033,20 @@ func (u *BacklogItemUpsertBulk) SetAutoSpawnSession(v bool) *BacklogItemUpsertBu
 func (u *BacklogItemUpsertBulk) UpdateAutoSpawnSession() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.UpdateAutoSpawnSession()
+	})
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (u *BacklogItemUpsertBulk) SetAutoCreatePr(v bool) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetAutoCreatePr(v)
+	})
+}
+
+// UpdateAutoCreatePr sets the "auto_create_pr" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateAutoCreatePr() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateAutoCreatePr()
 	})
 }
 

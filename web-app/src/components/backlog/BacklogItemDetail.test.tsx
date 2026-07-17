@@ -127,6 +127,7 @@ function makeItem(linkedSessions: LinkedSession[]): BacklogItem {
     skipPlanning: false,
     skipReviewGate: false,
     autoSpawnSession: false,
+    autoCreatePR: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions,

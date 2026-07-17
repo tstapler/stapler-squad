@@ -83,6 +83,59 @@ deep-copy-on-construct design (good DIP/ISP, matches this repo's anti-interface-
 convention) is a solid template to clone into a `PipelineEngine` interface for per-item
 skill/stage configuration, rather than inventing a new abstraction style.
 
+## Update — 2026-07-17 (later): opt-in "auto-create PR on Complete" policy (closes recommended action #2)
+
+Closes recommended action #2 from the "Why nothing is reaching merge" update above: added an
+opt-in, per-item `AutoCreatePR` policy flag so PR creation can skip the manual Review Queue
+"Create PR" click entirely for items that opt in — while leaving the manual click as the
+default, deliberate human-review-the-prompt checkpoint for everyone else. Confirmed the
+trust trade-off with the user first, as that update flagged.
+
+**Data model / RPC** — followed the exact `SkipReviewGate`/`SkipPlanning`/`AutoSpawnSession`
+precedent (same file, same unconditional-bool-wrap pattern) rather than inventing a new
+convention: `session/ent/schema/backlog_item.go` (`auto_create_pr` field, default false) →
+`proto/session/v1/backlog.proto` (`BacklogItem.auto_create_pr = 26`,
+`CreateBacklogItemRequest.auto_create_pr = 12`, `UpdateBacklogItemRequest.auto_create_pr = 14`)
+→ `session/repository.go` (`BacklogItemData.AutoCreatePR`, `BacklogItemUpdate.AutoCreatePR`) →
+`session/ent_repository_backlog.go` → `server/services/backlog_service.go` /
+`backlog_service_lifecycle.go`. Exposed in `BacklogItemForm.tsx` alongside the existing three
+toggles, and added to `BacklogItemDetail.tsx`'s `currentFlags()` helper (the fix from the
+`AutoSpawnSession` entry above) so partial updates from that panel don't silently reset it.
+
+**Trigger point** — the manual flow is `ReviewQueuePanel.tsx`'s "Create PR" button →
+`RunOneShot` RPC (`server/services/session_service.go:3405`), gated on a session reaching
+`AttentionReason.TASK_COMPLETE` in the Review Queue. Rather than polling, hooked the existing
+`ReviewQueue.Subscribe`/`OnItemAdded` observer callback (`server/review_queue_manager.go`) —
+already fired exactly once when a session newly enters the queue (not on every poll tick,
+per `session/queue/queue.go`'s `exists` check), and already the hook point for the
+TASK_COMPLETE push notification. Added `maybeAutoCreatePR`: on a new TASK_COMPLETE item, if
+the session resolves to a backlog item (via `Storage.GetItemSessionBySessionUUID` →
+`Storage.GetBacklogItem`) with `AutoCreatePR = true` and no existing PR URL, it runs the same
+one-shot prompt the manual modal pre-fills (`DEFAULT_PR_PROMPT` in `ReviewQueuePanel.tsx`,
+mirrored server-side as `autoCreatePRPrompt`) via a new `RunOneShotForSession` method on
+`SessionService` — a thin wrapper around the existing `RunOneShot` RPC logic, so automated and
+manual PR creation share one code path (same PR-URL extraction, same PR persistence).
+
+**Wiring**: `OneShotPRCreator` is a narrow interface defined in `server` (the consumer),
+satisfied by `*services.SessionService` — per this repo's anti-interface-pollution convention.
+Wired via a post-construction `SetOneShotRunner` setter in `server/dependencies.go` (mirrors
+the existing `SetHeadlessPool` pattern) rather than a constructor parameter, to avoid touching
+the 6+ existing `NewReactiveQueueManager(...)` call sites across `server/review_queue_manager_test.go`.
+Runs in a goroutine so a slow/failing LLM call never blocks queue-add notification delivery.
+
+**Tests**: `server/review_queue_manager_test.go` —
+`TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled` (flag on: verifies the one-shot
+runner is invoked with the session's stable UUID) and
+`TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled` (flag off, the default: verifies
+zero calls — the manual click path is unchanged). `server/services/backlog_service_lifecycle_test.go` —
+`TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted` and
+`TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue` (Create/Update round-trip).
+`web-app/src/components/backlog/BacklogItemForm.test.tsx` — new `describe` block covering the
+checkbox's default-unchecked state and both submit-payload values. Full `go test ./server/...
+./session/...` and `cd web-app && npx jest --no-coverage` pass. No e2e spec added — the
+`AutoSpawnSession` precedent this mirrors also has none, only Go + Jest coverage, so this
+follows the same established pattern rather than introducing a new expectation.
+
 ## is-it-ready Verdict (provisional)
 
 **⚠️ FIX THEN SHIP** — Goal Compliance 🔴, Architecture 🔴, Code Quality 🟡, Operational

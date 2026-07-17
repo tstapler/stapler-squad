@@ -142,7 +142,7 @@ describe("BacklogItemForm — checkbox help text", () => {
     ).toBeInTheDocument();
   });
 
-  it("wraps the 3 checkboxes in an 'Overrides' fieldset", async () => {
+  it("wraps the 4 checkboxes in an 'Overrides' fieldset", async () => {
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
     await screen.findByTestId("backlog-pipeline-mode-default");
 
@@ -152,6 +152,61 @@ describe("BacklogItemForm — checkbox help text", () => {
     expect(fieldset).toContainElement(screen.getByTestId("backlog-skip-planning-checkbox"));
     expect(fieldset).toContainElement(screen.getByTestId("backlog-skip-review-checkbox"));
     expect(fieldset).toContainElement(screen.getByTestId("backlog-auto-spawn-session-checkbox"));
+    expect(fieldset).toContainElement(screen.getByTestId("backlog-auto-create-pr-checkbox"));
+  });
+
+  it("explains auto-create-pr in plain language", async () => {
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    expect(
+      screen.getByText(
+        /Skip the manual Review Queue "Create PR" click — a PR is opened automatically/
+      )
+    ).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemForm — auto-create-pr toggle", () => {
+  it("defaults to unchecked and submits autoCreatePR: false when left untouched", async () => {
+    const onSubmit = jest.fn(() => Promise.resolve());
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).not.toBeChecked();
+
+    fireEvent.change(screen.getByTestId("backlog-title-input"), {
+      target: { value: "Some title" },
+    });
+    fireEvent.change(screen.getByTestId("backlog-repo-path-input"), {
+      target: { value: "/home/user/project" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ autoCreatePR: false }))
+    );
+  });
+
+  it("submits autoCreatePR: true once the checkbox is checked", async () => {
+    const onSubmit = jest.fn(() => Promise.resolve());
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    fireEvent.click(screen.getByTestId("backlog-auto-create-pr-checkbox"));
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).toBeChecked();
+
+    fireEvent.change(screen.getByTestId("backlog-title-input"), {
+      target: { value: "Some title" },
+    });
+    fireEvent.change(screen.getByTestId("backlog-repo-path-input"), {
+      target: { value: "/home/user/project" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ autoCreatePR: true }))
+    );
   });
 });
 

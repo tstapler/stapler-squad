@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -745,5 +746,165 @@ func TestOnItemAdded_NotificationFallsBackToTitleWhenNoMatch(t *testing.T) {
 
 	if gotID != "orphan-session" {
 		t.Errorf("notification event.SessionID = %q, want raw title %q", gotID, "orphan-session")
+	}
+}
+
+// fakeOneShotPRCreator is a test double for OneShotPRCreator that records every
+// call so maybeAutoCreatePR's trigger behavior can be asserted without exercising
+// the real headless LLM pool / claude binary.
+type fakeOneShotPRCreator struct {
+	mu     sync.Mutex
+	calls  []string // sessionIDs passed to RunOneShotForSession
+	prURL  string
+	runErr error
+}
+
+func (f *fakeOneShotPRCreator) RunOneShotForSession(_ context.Context, sessionID, _ string, _ int32) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, sessionID)
+	return f.prURL, f.runErr
+}
+
+func (f *fakeOneShotPRCreator) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// newReactiveQueueTestSetupWithStorage is like newReactiveQueueTestSetup but also
+// returns the underlying *session.Storage, needed by tests that create backlog
+// items / item sessions to exercise maybeAutoCreatePR's storage lookups.
+func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *session.Storage) {
+	t.Helper()
+	testDir := t.TempDir()
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("newReactiveQueueTestSetupWithStorage: create repo: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)
+	}
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+
+	mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
+	return mgr, poller, storage
+}
+
+// TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled verifies the opt-in
+// "auto-create PR on Complete" policy (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-17 entry): when the backlog item behind a session has AutoCreatePR set
+// and that session newly transitions to TASK_COMPLETE, the one-shot PR-creation
+// prompt runs automatically — no manual Review Queue "Create PR" click required.
+func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "auto-create-pr item",
+		Status:       string(session.BacklogStatusInProgress),
+		Priority:     3,
+		AutoCreatePR: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "widgets-work-session"
+	const sessionUUID = "cccc1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	deadline := time.After(3 * time.Second)
+	for fake.callCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for AutoCreatePR to invoke the one-shot PR runner")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 one-shot call, got %d", got)
+	}
+	fake.mu.Lock()
+	gotSessionID := fake.calls[0]
+	fake.mu.Unlock()
+	if gotSessionID != sessionUUID {
+		t.Errorf("one-shot runner called with sessionID = %q, want stable UUID %q", gotSessionID, sessionUUID)
+	}
+}
+
+// TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled is the
+// default-behavior guard: with AutoCreatePR left false (the default), a
+// TASK_COMPLETE session must NOT trigger an automatic PR — the existing manual
+// "Create PR" click in the Review Queue remains the only path.
+func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/99"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "manual-pr item",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+		// AutoCreatePR intentionally omitted — defaults to false.
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "manual-work-session"
+	const sessionUUID = "dddd1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	// Give the (would-be) async trigger a chance to fire before asserting absence.
+	time.Sleep(200 * time.Millisecond)
+
+	if got := fake.callCount(); got != 0 {
+		t.Fatalf("AutoCreatePR=false must never invoke the one-shot PR runner, got %d call(s)", got)
 	}
 }

@@ -3494,6 +3494,27 @@ func (s *SessionService) RunOneShot(
 	}), nil
 }
 
+// RunOneShotForSession runs a one-shot prompt against a session's worktree without
+// the ConnectRPC request/response wrapper, for automation callers. It reuses
+// RunOneShot's exact logic (same PR-URL extraction, same PR persistence) so
+// automated and manual PR creation share one code path — currently used by the
+// opt-in AutoCreatePR review-queue policy (server.ReactiveQueueManager).
+// Returns the extracted PR URL, or an error if the prompt failed.
+func (s *SessionService) RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error) {
+	resp, err := s.RunOneShot(ctx, connect.NewRequest(&sessionv1.RunOneShotRequest{
+		SessionId:      sessionID,
+		Prompt:         prompt,
+		TimeoutSeconds: timeoutSeconds,
+	}))
+	if err != nil {
+		return "", err
+	}
+	if resp.Msg.Error != "" {
+		return "", fmt.Errorf("one-shot prompt failed: %s", resp.Msg.Error)
+	}
+	return resp.Msg.PrUrl, nil
+}
+
 // extractPRURL scans the last 10 non-empty lines of output for a GitHub PR URL
 // of the form https://github.com/…/pull/NNN.
 func extractPRURL(output string) string {

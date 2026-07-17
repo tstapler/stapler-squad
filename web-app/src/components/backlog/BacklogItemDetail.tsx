@@ -299,15 +299,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, submitManualReview, archiveBacklogItem, deleteBacklogItem, onClose, load]
   );
 
-  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession unconditionally on
-  // every UpdateBacklogItem call (they're plain proto bools, not optional — no "unset"
-  // wire representation), so any partial update that omits them silently resets them to
-  // false. Every partial updateBacklogItem call below must spread these current values.
+  // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
+  // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
+  // optional — no "unset" wire representation), so any partial update that omits them
+  // silently resets them to false. Every partial updateBacklogItem call below must
+  // spread these current values.
   const currentFlags = useCallback(
     () => ({
       skipPlanning: item?.skipPlanning ?? false,
       skipReviewGate: item?.skipReviewGate ?? false,
       autoSpawnSession: item?.autoSpawnSession ?? false,
+      autoCreatePR: item?.autoCreatePR ?? false,
     }),
     [item]
   );

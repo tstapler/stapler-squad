@@ -118,6 +118,7 @@ message BacklogItem {
   int32 pr_number = 23;
   bool auto_spawn_session = 24;
   optional string pipeline_mode = 25;
+  bool auto_create_pr = 26;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -186,6 +187,7 @@ message CreateBacklogItemRequest {
   bool skip_triage = 9;
   bool auto_spawn_session = 10;
   optional string pipeline_mode = 11;
+  bool auto_create_pr = 12;
 }
 
 message CreateBacklogItemResponse {
@@ -226,6 +228,7 @@ message UpdateBacklogItemRequest {
   google.protobuf.Timestamp expected_updated_at = 11;
   bool auto_spawn_session = 12;
   optional string pipeline_mode = 13;
+  bool auto_create_pr = 14;
 }
 
 message UpdateBacklogItemResponse {

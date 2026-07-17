@@ -186,6 +186,20 @@ func (_u *BacklogItemUpdate) SetNillableAutoSpawnSession(v *bool) *BacklogItemUp
 	return _u
 }
 
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (_u *BacklogItemUpdate) SetAutoCreatePr(v bool) *BacklogItemUpdate {
+	_u.mutation.SetAutoCreatePr(v)
+	return _u
+}
+
+// SetNillableAutoCreatePr sets the "auto_create_pr" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableAutoCreatePr(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetAutoCreatePr(*v)
+	}
+	return _u
+}
+
 // SetPipelineMode sets the "pipeline_mode" field.
 func (_u *BacklogItemUpdate) SetPipelineMode(v string) *BacklogItemUpdate {
 	_u.mutation.SetPipelineMode(v)
@@ -719,6 +733,9 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.AutoSpawnSession(); ok {
 		_spec.SetField(backlogitem.FieldAutoSpawnSession, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AutoCreatePr(); ok {
+		_spec.SetField(backlogitem.FieldAutoCreatePr, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
 	}
@@ -1206,6 +1223,20 @@ func (_u *BacklogItemUpdateOne) SetAutoSpawnSession(v bool) *BacklogItemUpdateOn
 func (_u *BacklogItemUpdateOne) SetNillableAutoSpawnSession(v *bool) *BacklogItemUpdateOne {
 	if v != nil {
 		_u.SetAutoSpawnSession(*v)
+	}
+	return _u
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (_u *BacklogItemUpdateOne) SetAutoCreatePr(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetAutoCreatePr(v)
+	return _u
+}
+
+// SetNillableAutoCreatePr sets the "auto_create_pr" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableAutoCreatePr(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetAutoCreatePr(*v)
 	}
 	return _u
 }
@@ -1772,6 +1803,9 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if value, ok := _u.mutation.AutoSpawnSession(); ok {
 		_spec.SetField(backlogitem.FieldAutoSpawnSession, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AutoCreatePr(); ok {
+		_spec.SetField(backlogitem.FieldAutoCreatePr, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)

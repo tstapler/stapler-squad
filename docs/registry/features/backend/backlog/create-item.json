@@ -6,7 +6,10 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service_lifecycle.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+  "tested": true,
+  "testIds": [
+    "TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted",
+    "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue"
+  ],
+  "lastModified": "2026-07-17T00:00:00-07:00"
 }

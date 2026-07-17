@@ -43,6 +43,9 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Bool("auto_spawn_session").
 			Default(false).
 			Comment("When true, a work session is spawned automatically once the item reaches ready — no manual 'Spawn Session' click required."),
+		field.Bool("auto_create_pr").
+			Default(false).
+			Comment("When true, a PR is created automatically (via the same one-shot prompt the manual Review Queue 'Create PR' button uses) once a work session for this item reaches TASK_COMPLETE — no manual click required."),
 		field.String("pipeline_mode").
 			Default("").
 			Comment("Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline)."),

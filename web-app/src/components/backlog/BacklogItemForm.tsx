@@ -70,6 +70,7 @@ export function BacklogItemForm({
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
   const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
+  const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
   const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
     initialValues?.acCriteria ?? []
   );
@@ -205,6 +206,7 @@ export function BacklogItemForm({
           skipPlanning,
           skipReviewGate,
           autoSpawnSession,
+          autoCreatePR,
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
           pipelineMode,
@@ -213,7 +215,7 @@ export function BacklogItemForm({
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, acCriteria, pipelineMode, onSubmit, validate]
+    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, onSubmit, validate]
   );
 
   const addCriterion = useCallback(() => {
@@ -410,6 +412,24 @@ export function BacklogItemForm({
             </label>
             <span className={styles.checkboxHint}>
               Skip the manual &quot;Spawn Session&quot; click — start work automatically once triage marks the item ready.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-create-pr">
+              <input
+                id="backlog-auto-create-pr"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoCreatePR}
+                onChange={(e) => setAutoCreatePR(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-create-pr-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-create PR on completion</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
             </span>
           </div>
         </div>

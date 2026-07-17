@@ -143,6 +143,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		SkipReviewGate:     item.SkipReviewGate,
 		SkipPlanning:       item.SkipPlanning,
 		AutoSpawnSession:   item.AutoSpawnSession,
+		AutoCreatePR:       item.AutoCreatePr,
 		PipelineMode:       item.PipelineMode,
 		PlanApproved:       item.PlanApproved,
 		PlanApprovedAt:     item.PlanApprovedAt,
@@ -208,6 +209,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetSkipReviewGate(data.SkipReviewGate).
 		SetSkipPlanning(data.SkipPlanning).
 		SetAutoSpawnSession(data.AutoSpawnSession).
+		SetAutoCreatePr(data.AutoCreatePR).
 		SetPipelineMode(data.PipelineMode).
 		SetPlanApproved(data.PlanApproved).
 		SetNillablePlanApprovedAt(data.PlanApprovedAt).
@@ -442,6 +444,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	}
 	if update.AutoSpawnSession != nil {
 		u.SetAutoSpawnSession(*update.AutoSpawnSession)
+	}
+	if update.AutoCreatePR != nil {
+		u.SetAutoCreatePr(*update.AutoCreatePR)
 	}
 	if update.PipelineMode != nil {
 		u.SetPipelineMode(*update.PipelineMode)
