@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -1275,23 +1276,23 @@ func TestPushAndCreatePR_NoWorktree_FallsBackToDone(t *testing.T) {
 	assert.Equal(t, string(BacklogStatusDone), fetched.Status)
 }
 
-// ─── NotifyPRCreatedOutOfBand ──────────────────────────────────────────────────
+// ─── RecordPRCreatedOutOfBand ──────────────────────────────────────────────────
 //
 // Regression coverage for the status-desync bug behind PR #157's linked backlog
 // item getting stuck at "review"/BOUNCING instead of "pr_pending": the Review
 // Queue's manual "Create PR" button drives SessionService.RunOneShot, a path
 // that creates a real PR but — unlike pushAndCreatePR — never touched the
 // backlog item at all. See docs/tasks/backlog-feature-improvement.md's
-// "second, compounding root cause" note and NotifyPRCreatedOutOfBand's doc
+// "second, compounding root cause" note and RecordPRCreatedOutOfBand's doc
 // comment above for the full trace.
 
-// TestNotifyPRCreatedOutOfBand_TransitionsReviewToPRPending verifies the core
+// TestRecordPRCreatedOutOfBand_TransitionsReviewToPRPending verifies the core
 // fix: a PR created out-of-band (i.e. not via pushAndCreatePR) for a
 // backlog-linked, in-review session moves the item to pr_pending with the PR
 // fields populated, exactly like pushAndCreatePR itself would — this is what
 // makes the item visible to ReconcilePRPending's FindPRPendingItems query
 // again.
-func TestNotifyPRCreatedOutOfBand_TransitionsReviewToPRPending(t *testing.T) {
+func TestRecordPRCreatedOutOfBand_TransitionsReviewToPRPending(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -1300,7 +1301,7 @@ func TestNotifyPRCreatedOutOfBand_TransitionsReviewToPRPending(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(true)
 
-	listener.NotifyPRCreatedOutOfBand(context.Background(), is.SessionUUID,
+	listener.RecordPRCreatedOutOfBand(context.Background(), is.SessionUUID,
 		"https://github.com/tstapler/stapler-squad/pull/157", 157)
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
@@ -1311,10 +1312,10 @@ func TestNotifyPRCreatedOutOfBand_TransitionsReviewToPRPending(t *testing.T) {
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/157", fetched.PrURL)
 }
 
-// TestNotifyPRCreatedOutOfBand_NoOp_WhenSessionNotBacklogLinked verifies the
+// TestRecordPRCreatedOutOfBand_NoOp_WhenSessionNotBacklogLinked verifies the
 // overwhelmingly common case — RunOneShot called for a session with no
 // linked backlog item — is a silent no-op, not an error.
-func TestNotifyPRCreatedOutOfBand_NoOp_WhenSessionNotBacklogLinked(t *testing.T) {
+func TestRecordPRCreatedOutOfBand_NoOp_WhenSessionNotBacklogLinked(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -1323,16 +1324,16 @@ func TestNotifyPRCreatedOutOfBand_NoOp_WhenSessionNotBacklogLinked(t *testing.T)
 
 	// Must not panic or block; there is nothing further to assert since no
 	// backlog item exists to have been mutated.
-	listener.NotifyPRCreatedOutOfBand(context.Background(), uuid.New().String(),
+	listener.RecordPRCreatedOutOfBand(context.Background(), uuid.New().String(),
 		"https://github.com/tstapler/stapler-squad/pull/1", 1)
 }
 
-// TestNotifyPRCreatedOutOfBand_NoOp_WhenItemNotInReview verifies the precondition
+// TestRecordPRCreatedOutOfBand_NoOp_WhenItemNotInReview verifies the precondition
 // guard: an item that isn't currently "review" (e.g. already pr_pending from a
 // concurrent pushAndCreatePR, or in_progress) is left untouched rather than
 // force-transitioned, so this out-of-band path can never fight the item's real
 // state owner.
-func TestNotifyPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
+func TestRecordPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -1357,7 +1358,7 @@ func TestNotifyPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(true)
 
-	listener.NotifyPRCreatedOutOfBand(ctx, sessionUUID,
+	listener.RecordPRCreatedOutOfBand(ctx, sessionUUID,
 		"https://github.com/tstapler/stapler-squad/pull/1", 1)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -1367,12 +1368,12 @@ func TestNotifyPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 	assert.Equal(t, 0, fetched.PrNumber, "must not stamp PR fields onto an item it declined to transition")
 }
 
-// TestNotifyPRCreatedOutOfBand_NoOp_WhenListenerDisabled verifies the feature-flag
+// TestRecordPRCreatedOutOfBand_NoOp_WhenListenerDisabled verifies the feature-flag
 // gate: with the backlog automation feature off (the zero-value default —
 // production only enables it via feature_controller.go's SetEnabled(true)),
 // this manual-flow reconciliation must not fire either, matching every other
 // listener entry point's behavior.
-func TestNotifyPRCreatedOutOfBand_NoOp_WhenListenerDisabled(t *testing.T) {
+func TestRecordPRCreatedOutOfBand_NoOp_WhenListenerDisabled(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
@@ -1381,12 +1382,42 @@ func TestNotifyPRCreatedOutOfBand_NoOp_WhenListenerDisabled(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	// Deliberately not calling SetEnabled(true).
 
-	listener.NotifyPRCreatedOutOfBand(context.Background(), is.SessionUUID,
+	listener.RecordPRCreatedOutOfBand(context.Background(), is.SessionUUID,
 		"https://github.com/tstapler/stapler-squad/pull/157", 157)
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "disabled listener must not transition the item")
+}
+
+// TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasStuck
+// verifies the resolveStuckLogged side effect actually clears a stale
+// abandoned_review row, not just that it's called — code-review found the
+// other four tests never left an item in a stuck state before calling
+// RecordPRCreatedOutOfBand, so that clearing behavior (part of the method's
+// own stated purpose, mirroring pushAndCreatePR's identical resolve calls)
+// was never verified to actually work.
+func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasStuck(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "review abandoned before manual PR creation")
+	require.NoError(t, err)
+	require.True(t, applied, "test setup: MarkStuck must actually open a row")
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+
+	listener.RecordPRCreatedOutOfBand(ctx, is.SessionUUID,
+		"https://github.com/tstapler/stapler-squad/pull/157", 157)
+
+	rows, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, stillOpen := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	assert.False(t, stillOpen, "abandoned_review must be resolved once an out-of-band PR moves the item out of review")
 }
 
 // ─── handleReviewSessionExited ────────────────────────────────────────────────

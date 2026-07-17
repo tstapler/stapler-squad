@@ -3489,11 +3489,11 @@ func (s *SessionService) RunOneShot(
 		// entirely outside the automated pushAndCreatePR path, which is the
 		// only other place that ever moves a backlog item to pr_pending. Without
 		// this call the item is silently left in "review" forever, invisible to
-		// ReconcilePRPending (see NotifyPRCreatedOutOfBand's doc comment in
+		// ReconcilePRPending (see RecordPRCreatedOutOfBand's doc comment in
 		// session/backlog_lifecycle.go for the full root-cause trace). No-op for
 		// non-backlog sessions.
 		if s.backlogLifecycleListener != nil {
-			s.backlogLifecycleListener.NotifyPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
+			s.backlogLifecycleListener.RecordPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
 		}
 	}
 
