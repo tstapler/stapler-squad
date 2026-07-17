@@ -227,6 +227,44 @@ func TestHistoryFileDetector_DetectByPath_PicksMostRecentWhenMultiple(t *testing
 	assert.Equal(t, uuid2, info.ConversationUUID, "should return most recently modified file")
 }
 
+func TestHistoryFileDetector_DetectByPath_StillReturnsSingleMostRecent_When_DetectAllByPathAdded(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectPath := "/Users/alice/regressiontest"
+	projectDir := ClaudeProjectDirName(projectPath)
+	dir := filepath.Join(tmpHome, ".claude", "projects", projectDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	uuid1 := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	uuid2 := "11111111-2222-3333-4444-555555555555"
+	p1 := filepath.Join(dir, uuid1+".jsonl")
+	p2 := filepath.Join(dir, uuid2+".jsonl")
+
+	require.NoError(t, os.WriteFile(p1, []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(p2, []byte("{}"), 0o644))
+
+	past := time.Now().Add(-1 * time.Hour)
+	future := time.Now()
+	require.NoError(t, os.Chtimes(p1, past, past))
+	require.NoError(t, os.Chtimes(p2, future, future))
+
+	detector := NewHistoryFileDetectorWithHomeDir(nil, tmpHome)
+
+	// Existing DetectByPath callers (HistoryLinker) still get exactly one
+	// result — the most recently modified file — unaffected by the new
+	// DetectAllByPath variant.
+	info, err := detector.DetectByPath(projectPath)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.Equal(t, uuid2, info.ConversationUUID)
+
+	// The new variant returns both, most-recent first.
+	all, err := detector.DetectAllByPath(projectPath)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	assert.Equal(t, uuid2, all[0].ConversationUUID)
+	assert.Equal(t, uuid1, all[1].ConversationUUID)
+}
+
 func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -248,4 +286,37 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 	require.NotNil(t, info)
 	// Returns the first match
 	assert.Equal(t, uuid1, info.ConversationUUID)
+}
+
+func TestHistoryFileDetector_ResolveFilePath_ReconstructsPath_When_HomeDirOverridden(t *testing.T) {
+	tmpHome := t.TempDir()
+	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, tmpHome)
+
+	projectPath := "/Users/alice/myproject"
+	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+	got, err := detector.ResolveFilePath(projectPath, uuid)
+	require.NoError(t, err)
+
+	want := filepath.Join(tmpHome, ".claude", "projects", "-Users-alice-myproject", uuid+".jsonl")
+	assert.Equal(t, want, got)
+	// ResolveFilePath does not touch the filesystem -- it's a pure path
+	// construction, so this must hold even though nothing was ever written
+	// to tmpHome.
+	_, statErr := os.Stat(got)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestHistoryFileDetector_ResolveFilePath_UsesRealHomeDir_When_NoOverride(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	detector := NewHistoryFileDetector(&mockProcessInspector{})
+	uuid := "11111111-2222-3333-4444-555555555555"
+
+	got, err := detector.ResolveFilePath("/Users/alice/myproject", uuid)
+	require.NoError(t, err)
+
+	want := filepath.Join(homeDir, ".claude", "projects", "-Users-alice-myproject", uuid+".jsonl")
+	assert.Equal(t, want, got)
 }

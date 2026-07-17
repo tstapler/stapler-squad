@@ -72,11 +72,28 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 	workspace := inst.GetWorkingDirectory()
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
 	claudeLogPath := filepath.Join(claudeProjectsDir, ClaudeProjectDirName(workspace), uuidStr+".jsonl")
-	if _, err := os.Stat(claudeLogPath); err != nil {
-		return nil, fmt.Errorf("claude transcript file not found for UUID %s: %w", uuidStr, err)
+
+	return ReadCanonicalTurnsFromFile(claudeLogPath)
+}
+
+// ReadCanonicalTurnsFromFile parses a Claude JSONL transcript at the given
+// path into CanonicalTurns, independent of any live Instance. It is the
+// shared parsing core used both by ClaudeAdapter.Import (which resolves a
+// path from an Instance's working directory + conversation UUID first) and
+// by the import-external-session preview path (Story 1.1.4), which reads a
+// resolved history file's turns without ever constructing a half-built
+// Instance just to read history.
+//
+// Trailing partial lines (e.g. a JSONL file caught mid-write by a live
+// writer) are tolerated: a line that fails to unmarshal as a well-formed
+// turn is simply skipped rather than treated as an error, per the pitfalls
+// research's "tolerate trailing partial lines" requirement.
+func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("claude transcript file not found at %s: %w", path, err)
 	}
 
-	file, err := os.Open(claudeLogPath)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
