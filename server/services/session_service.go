@@ -3483,6 +3483,18 @@ func (s *SessionService) RunOneShot(
 		} else {
 			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url", "github_pr_number"}))
 		}
+
+		// This RunOneShot call may have been the Review Queue's manual "Create
+		// PR" button for a backlog-linked session — that flow creates the PR
+		// entirely outside the automated pushAndCreatePR path, which is the
+		// only other place that ever moves a backlog item to pr_pending. Without
+		// this call the item is silently left in "review" forever, invisible to
+		// ReconcilePRPending (see NotifyPRCreatedOutOfBand's doc comment in
+		// session/backlog_lifecycle.go for the full root-cause trace). No-op for
+		// non-backlog sessions.
+		if s.backlogLifecycleListener != nil {
+			s.backlogLifecycleListener.NotifyPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.RunOneShotResponse{
