@@ -84,12 +84,24 @@ func MergeMainIntoWorktree(worktreePath, mainBranch string) (*MergeMainResult, e
 		return nil, fmt.Errorf("failed to fetch %s: %s (%w)", mainBranch, out, err)
 	}
 
+	// Capture HEAD before the merge so up-to-date can be detected by comparing SHAs
+	// rather than parsing merge output text ("Already up to date." is locale- and
+	// git-version-dependent, e.g. older git prints "Already up-to-date.").
+	beforeSHA, headErr := getHeadCommitSHA(worktreePath)
+	if headErr != nil {
+		return nil, fmt.Errorf("failed to resolve HEAD before merge: %w", headErr)
+	}
+
 	mergeCtx, mergeCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer mergeCancel()
 	mergeCmd := safeexec.CommandContext(mergeCtx, "git", "-C", worktreePath, "merge", "--no-edit", "origin/"+mainBranch)
 	mergeOut, mergeErr := mergeCmd.CombinedOutput()
 	if mergeErr == nil {
-		if strings.Contains(string(mergeOut), "Already up to date") {
+		afterSHA, headErr := getHeadCommitSHA(worktreePath)
+		if headErr != nil {
+			return nil, fmt.Errorf("failed to resolve HEAD after merge: %w", headErr)
+		}
+		if afterSHA == beforeSHA {
 			return &MergeMainResult{UpToDate: true}, nil
 		}
 		return &MergeMainResult{Merged: true}, nil

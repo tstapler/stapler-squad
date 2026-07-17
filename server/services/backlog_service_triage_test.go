@@ -205,6 +205,22 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // resyncing it until it hit a hard conflict). These three tests cover the merge, the
 // conflict, and the no-op cases via syncPRBranchWithMain.
 
+// chmodRecursive sets mode on every entry under root (root included). A plain
+// os.Chmod(root, mode) only affects root itself, which isn't enough to make a git
+// remote's push targets (.git/objects/**, .git/refs/**) unwritable — git creates new
+// files a few directories deep, and those subdirectories keep their own (writable)
+// permissions unless changed individually.
+func chmodRecursive(t *testing.T, root string, mode os.FileMode) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chmod(path, mode)
+	})
+	require.NoError(t, err)
+}
+
 // runGitTestCmd runs a git command in dir and fails the test on error.
 func runGitTestCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -443,6 +459,99 @@ func TestAutoReopenForPRFix_should_SkipSyncNote_When_BranchAlreadyUpToDateWithMa
 	require.Len(t, creator.calls, 1)
 	assert.NotContains(t, creator.calls[0].prompt, "[Branch sync]",
 		"an already-synced branch must not add sync noise to the fix context")
+}
+
+// TestAutoReopenForPRFix_should_ReportUnpushedMerge_When_PushFails verifies the
+// merge-succeeds-but-push-fails path: the merge must still happen locally, and the fix
+// context must say the merge could not be pushed and give an explicit, actionable
+// command against the shared repo checkout (not the worktree, which SpawnSessionFromItem
+// deletes once the new fix session is spawned) — see syncPRBranchWithMain's push-error
+// branch.
+func TestAutoReopenForPRFix_should_ReportUnpushedMerge_When_PushFails(t *testing.T) {
+	originDir, repoPath := setupPRFixSyncRepo(t)
+
+	const workBranch = "backlog/pr-fix-push-fails"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+
+	// A fix lands on main so there's something to merge (and therefore push).
+	require.NoError(t, os.WriteFile(filepath.Join(originDir, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGitTestCmd(t, originDir, "add", "main-fix.txt")
+	runGitTestCmd(t, originDir, "commit", "-m", "fix landed on main")
+
+	// Make origin's .git tree unwritable (recursively — a top-level chmod alone leaves
+	// .git/objects and .git/refs writable) so the fetch+merge (read-only) still
+	// succeeds but the subsequent push fails. Restored before t.TempDir() cleanup runs.
+	originGitDir := filepath.Join(originDir, ".git")
+	chmodRecursive(t, originGitDir, 0o555)
+	t.Cleanup(func() { chmodRecursive(t, originGitDir, 0o755) })
+
+	storage, repo := createTestStorageWithRepo(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item whose merge can't be pushed",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 204,
+		PrURL:    "https://github.com/example/repo/pull/204",
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "push-fails-work-uuid", repoPath, workWT, workBranch)
+
+	reopenErr := svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: flaky test")
+	require.NoError(t, reopenErr, "a push failure during sync must not block the fix spawn")
+
+	require.Len(t, creator.calls, 1, "a new fix session must be spawned even when the sync's push fails")
+	prompt := creator.calls[0].prompt
+	assert.Contains(t, prompt, "could not push", "the fix context must say the merge could not be pushed")
+	assert.Contains(t, prompt, workBranch, "the fix context must name the affected branch")
+	assert.Contains(t, prompt, "git -C "+repoPath, "the fix context must give an actionable command against the shared repo checkout")
+}
+
+// TestAutoReopenForPRFix_should_SpawnNormally_When_SyncFetchFails verifies that a sync
+// failure unrelated to the merge outcome (here: origin unreachable, so the fetch itself
+// errors) is swallowed exactly like syncPRBranchWithMain's other best-effort failure
+// paths — no "[Branch sync]" note, and the fix session is spawned normally rather than
+// being blocked by a sync-layer problem.
+func TestAutoReopenForPRFix_should_SpawnNormally_When_SyncFetchFails(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+
+	const workBranch = "backlog/pr-fix-fetch-fails"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+	runGitTestCmd(t, workWT, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, workWT, "config", "user.name", "Test")
+
+	// Break the "origin" remote so MergeMainIntoWorktree's fetch fails outright.
+	runGitTestCmd(t, workWT, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item whose sync fetch fails",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 205,
+		PrURL:    "https://github.com/example/repo/pull/205",
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "fetch-fails-work-uuid", repoPath, workWT, workBranch)
+
+	reopenErr := svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: flaky test")
+	require.NoError(t, reopenErr, "a sync fetch failure must not block the fix spawn")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+	require.Len(t, creator.calls, 1, "a new fix session must still be spawned when the sync's fetch fails")
+	assert.NotContains(t, creator.calls[0].prompt, "[Branch sync]",
+		"a swallowed sync error must not add a sync note to the fix context")
 }
 
 // --- Epic 1.6: ItemSessionSummary.PipelineModeSnapshot/SnapshotHash ---

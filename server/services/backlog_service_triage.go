@@ -720,7 +720,15 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if pushErr := g.PushBranch(); pushErr != nil {
 			log.WarningLog.Printf("[AutoReopenForPRFix] push merged %s into item=%s branch=%s: %v", prFixMainBranch, itemID, wt.BranchName, pushErr)
-			return fmt.Sprintf("[Branch sync] Merged %q into this PR's branch (%s) but could not push the merge (%v) — push it before continuing.", prFixMainBranch, wt.BranchName, pushErr)
+			// The fix session that reads this note gets its own fresh worktree
+			// (SpawnSessionFromItem always creates a new one on reopen), not this
+			// one — so the note must be actionable from anywhere, not just "push
+			// it": name the branch and give the exact command against the shared
+			// repo checkout, whose .git the now-deleted worktree's branch ref
+			// still lives in (worktree cleanup never deletes branches).
+			return fmt.Sprintf("[Branch sync] Merged the latest %q into this PR's branch (%s) locally, but could not push it to origin (%v). "+
+				"The merge commit is not lost — push it from the shared repo checkout before continuing: `git -C %s push origin %s`.",
+				prFixMainBranch, wt.BranchName, pushErr, wt.RepoPath, wt.BranchName)
 		}
 		log.InfoLog.Printf("[AutoReopenForPRFix] item=%s: merged and pushed %s into %s", itemID, prFixMainBranch, wt.BranchName)
 		return fmt.Sprintf("[Branch sync] Merged the latest %q into this PR's branch (%s) and pushed it — the branch is now up to date with %s.", prFixMainBranch, wt.BranchName, prFixMainBranch)

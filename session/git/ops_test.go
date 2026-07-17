@@ -129,3 +129,51 @@ func TestMergeMainIntoWorktree_should_ReportConflictedAndAbort_When_MainAndBranc
 	status := runGit(t, work, "status", "--porcelain")
 	assert.Empty(t, strings.TrimSpace(status), "worktree must be restored to clean after aborting a conflicted merge")
 }
+
+// TestMergeMainIntoWorktree_should_ReturnError_When_FetchFails verifies that a fetch
+// failure (bad/unreachable "origin" remote) is propagated as an error rather than
+// silently reported as any MergeMainResult state — callers (syncPRBranchWithMain) rely
+// on a non-nil error to distinguish "nothing to tell the caller" from "something broke".
+func TestMergeMainIntoWorktree_should_ReturnError_When_FetchFails(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	// Point "origin" at a path that isn't a git repo at all, so `git fetch origin main`
+	// fails outright rather than just finding nothing new.
+	runGit(t, work, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	result, err := MergeMainIntoWorktree(work, "main")
+	require.Error(t, err, "an unreachable origin must surface as an error, not a result")
+	assert.Nil(t, result)
+}
+
+// TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictReason
+// verifies that a merge failure NOT caused by a content conflict (here: uncommitted
+// local changes that the merge would overwrite) is propagated as an error and does not
+// get misreported as MergeMainResult.Conflicted — aborting a merge that never started
+// would mask the real problem.
+func TestMergeMainIntoWorktree_should_ReturnError_When_MergeFailsForNonConflictReason(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	runGit(t, work, "checkout", "-b", "feature")
+
+	// Main moves forward so there's something to merge.
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "main-fix.txt"), []byte("fix on main\n"), 0o644))
+	runGit(t, origin, "add", "main-fix.txt")
+	runGit(t, origin, "commit", "-m", "fix landed on main")
+
+	// Dirty the worktree on a path the incoming merge will also touch, so git refuses
+	// the merge with "would be overwritten" rather than a content conflict.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "main-fix.txt"), []byte("uncommitted local edit\n"), 0o644))
+
+	result, err := MergeMainIntoWorktree(work, "main")
+	require.Error(t, err, "a non-conflict merge failure must be returned as an error")
+	assert.Nil(t, result)
+
+	// The offending uncommitted change must be left exactly as-is (no destructive abort
+	// of a merge that never actually started).
+	content, readErr := os.ReadFile(filepath.Join(work, "main-fix.txt"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "uncommitted local edit\n", string(content))
+}
