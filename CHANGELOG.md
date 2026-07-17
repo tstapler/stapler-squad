@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.38.0](https://github.com/tstapler/stapler-squad/compare/v1.37.0...v1.38.0) (2026-07-17)
+
+
+### Features
+
+* **backlog:** add pipeline-mode selector, management UI, and what-ran surface ([54a34cc](https://github.com/tstapler/stapler-squad/commit/54a34cc47e563039adf3f6bbc85d4086cbf614d9))
+* **backlog:** add PipelineMode CRUD RPCs with structural validation ([edcf2f2](https://github.com/tstapler/stapler-squad/commit/edcf2f233e18945c8905bd70b7c25edfb41eeb57))
+* **backlog:** add PipelineMode data model and PipelineEngine seam ([37daaed](https://github.com/tstapler/stapler-squad/commit/37daaed8dfdcee61cdffcc5fa33f719aa5b70b30))
+* **backlog:** durable stuck-item visibility on /unfinished ([a0ebca8](https://github.com/tstapler/stapler-squad/commit/a0ebca880b0aeb58591272e9b56d304a72bc9c42))
+* **backlog:** grant reviewer bounded codebase read access on empty-diff reviews ([#155](https://github.com/tstapler/stapler-squad/issues/155)) ([9697b86](https://github.com/tstapler/stapler-squad/commit/9697b869bce12b0f242ef697b249a255c863d9dd))
+* **backlog:** opt-in auto-spawn-session toggle + fix a partial-update clobbering bug ([b28ace2](https://github.com/tstapler/stapler-squad/commit/b28ace2f5679a307a79b06ba494c2cee9c032757))
+* **backlog:** standing detector for orphaned triage sessions ([60c8a2a](https://github.com/tstapler/stapler-squad/commit/60c8a2ab729237f3b19f3f92a81883e31c477243))
+* **unfinished:** control gogitstore's mmap index via feature flags ([9da5dfa](https://github.com/tstapler/stapler-squad/commit/9da5dfacef9f23eee1f7204c21136b9c7bdc3dd9))
+* **unfinished:** gogitstore production hardening — eviction, refcounting, mmap index ([97251a5](https://github.com/tstapler/stapler-squad/commit/97251a542b43d2bfd385a5d82c4fefe33ffcdc6f))
+
+
+### Bug Fixes
+
+* **actor:** route MCP server URL backfill through SetMCPServerURL ([c1c9e5e](https://github.com/tstapler/stapler-squad/commit/c1c9e5eb968fd70b5f810bb3558ee34cdc80aeb4))
+* auto-regenerate ent ORM code on build (self-heal missing packages) ([81fa981](https://github.com/tstapler/stapler-squad/commit/81fa981a6a7e5d00b664f8cda3b92268824a84b4))
+* **backlog:** auto-transition re-review PASS verdict to done; close bucket-2 manual-gates audit ([4d1501a](https://github.com/tstapler/stapler-squad/commit/4d1501a9ee489ea90ec363d2b31b9f9d45283836))
+* **backlog:** AutoReopenForPRFix skips status churn when a fix is already active ([f8f788a](https://github.com/tstapler/stapler-squad/commit/f8f788ab46683e944f77acd1f20c73da88623170))
+* **backlog:** distinguish real lookup failures from expected not-linked case ([d13755d](https://github.com/tstapler/stapler-squad/commit/d13755da8caf6ada2199abf5cf55693d41ed3377))
+* **backlog:** notify on silent auto-merge fallback; dedup stuck-resolve idiom ([47bbe05](https://github.com/tstapler/stapler-squad/commit/47bbe05dfd42a7b79fff664f9e12009421ff98b4))
+* **backlog:** notify operator when post-triage persistence fails ([11570a2](https://github.com/tstapler/stapler-squad/commit/11570a2c3b004ec50e58a4008ac4a9e5635bbb54))
+* **backlog:** reconcile review-session-spawn refactor with pipeline-mode wiring ([7042dc8](https://github.com/tstapler/stapler-squad/commit/7042dc8c000df67ff810c0d660da1c8489c769f2))
+* **backlog:** surface status-transition failure in autonomous-complete notification ([5a809a6](https://github.com/tstapler/stapler-squad/commit/5a809a6d0277794168fa2f5d313c40c28b1c7560))
+* **backlog:** tombstone dead work sessions blocking respawn ([af426f2](https://github.com/tstapler/stapler-squad/commit/af426f27aea0152269179acf699e1bde4ffd0e4f))
+* **backlog:** unrecognized session role still notifies the operator ([3295389](https://github.com/tstapler/stapler-squad/commit/329538912876a8d6ed6aa6ad6268e50839edd29c))
+* **ci:** bump release build Go version to match go.mod ([7cde747](https://github.com/tstapler/stapler-squad/commit/7cde7473da66c24944ec3fab19be668d6f10ff65))
+* **ci:** fetch the tmux submodule in every checkout that needs it ([8c30912](https://github.com/tstapler/stapler-squad/commit/8c309121f233a983bb911f8b0691b616427c0981))
+* **ci:** make release builds structurally independent of tag-push recursion ([03ec5ab](https://github.com/tstapler/stapler-squad/commit/03ec5abfa791b6fd6b8ccc9ff2e41920fb5776c3))
+* extract full tmux release tarball, not just configure ([c9a2528](https://github.com/tstapler/stapler-squad/commit/c9a2528cfc39e7968e2ba8f681638ccbb8071e22))
+* **git:** stop deleting worktree branches on cleanup/reset ([a1e8efd](https://github.com/tstapler/stapler-squad/commit/a1e8efdf79eee2f22e34debea55df2f26914743a))
+* **lint:** clear golangci-lint findings blocking CI ([3657cb0](https://github.com/tstapler/stapler-squad/commit/3657cb0ee8372d0cf938b1b1f0defef1be8a46dd))
+* re-register third_party/tmux as a real git submodule gitlink ([7058d92](https://github.com/tstapler/stapler-squad/commit/7058d92fee95f47cc2e741c1d11afbd0872d17c1))
+* remove broken Bazel/rules_foreign_cc tmux build path ([c4adbbf](https://github.com/tstapler/stapler-squad/commit/c4adbbfca5b35a3ca7578bf5c17c56e557d8a637))
+* simplify build-tmux Makefile target and stamp prerequisite ([5e69576](https://github.com/tstapler/stapler-squad/commit/5e695769bda25e1e51ee1316fd247aa5e3bc8602))
+* **test:** derive MCP tool count from registration, not a hardcoded literal ([e2302f0](https://github.com/tstapler/stapler-squad/commit/e2302f0a37ff1863383c36c88b7e88950e599bd7))
+* **test:** eliminate two more tmux integration test flakes ([1f91b1b](https://github.com/tstapler/stapler-squad/commit/1f91b1b0a357300bb0f9a1c62c3cf999ad7513a3))
+* **test:** retry transient git-gc failures in gogitstore test fixtures ([b78b6c8](https://github.com/tstapler/stapler-squad/commit/b78b6c8dbf8118871ac7a079f6694e60cf0c65c5))
+* **test:** stimulate PTY output in TestStreamTerminal_SendsRawOutput to eliminate a real flake ([7ff0ac9](https://github.com/tstapler/stapler-squad/commit/7ff0ac99d5f337cd126c658cc9d9d8184b215dae))
+* **test:** update MCP tool count assertion to 26 ([6a00974](https://github.com/tstapler/stapler-squad/commit/6a00974e59eb2a3d487f7e9aae1a55466e2f2f08))
+* **tmux:** recover EnsureServerRunning from a transient check-race ([0d1272b](https://github.com/tstapler/stapler-squad/commit/0d1272b5f7b82e100aac4c8846b0a8ec481f980a))
+* **unfinished:** harden gogitstore mmap index for production readiness ([cfa0121](https://github.com/tstapler/stapler-squad/commit/cfa01210ee88530af21c5f3a15bedc2dedba0f37))
+* **unfinished:** memory-based cache eviction and event-driven scanning ([c998fa9](https://github.com/tstapler/stapler-squad/commit/c998fa900c5e90b268d0f59e6f151cdd141a6d80))
+* **unfinished:** shrink and share go-git's per-repo object cache ([ed6d85a](https://github.com/tstapler/stapler-squad/commit/ed6d85ae9d66866dfed2588b6aa95ac38ff81f8c))
+
 ## [1.37.0](https://github.com/tstapler/stapler-squad/compare/v1.36.0...v1.37.0) (2026-07-14)
 
 
