@@ -344,6 +344,43 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Request-scoped timeout (AC5)
+// ---------------------------------------------------------------------------
+
+// TestCreateSessionTimeout_ComfortablyAboveGitCloneBound guards against the
+// constant silently regressing below the documented worst case (git clone up
+// to ~120s) — see the comment on createSessionTimeout.
+func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
+	assert.Greater(t, createSessionTimeout, 120*time.Second)
+}
+
+// TestCreateSession_GitHubURLResolution_BoundedByContext verifies that
+// CreateSession's GitHub URL resolution step (the one known synchronous
+// sub-operation that can block for up to ~120s on a real clone) is bound to
+// the request context rather than able to hang the RPC forever. An
+// already-expired context makes the goroutine+select race in
+// session_service.go deterministic: ctx.Done() is closed before the
+// resolver's real network call could possibly complete.
+func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already expired before CreateSession even starts
+
+	start := time.Now()
+	_, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "github-timeout-test",
+		Path:  "https://github.com/octocat/Hello-World",
+	}))
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assertConnectCode(t, err, connect.CodeDeadlineExceeded)
+	assert.Less(t, elapsed, 2*time.Second, "CreateSession must fail fast on an expired context, not hang on GitHub resolution")
+}
+
+// ---------------------------------------------------------------------------
 // Status manager wiring regression
 // ---------------------------------------------------------------------------
 

@@ -294,3 +294,81 @@ describe("Omnibar alias namePrefix population", () => {
     );
   });
 });
+
+describe("Omnibar detection re-run on async alias load (AC0)", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockUsePathCompletions.mockReturnValue(defaultCompletions);
+    mockUsePathHistory.mockReturnValue(defaultHistory);
+    // Simulate the alias list not having resolved yet — same as OmnibarContext.tsx
+    // before its useAliases() fetch completes and registers AliasDetector.
+    mockUseAliases.mockReturnValue({
+      aliases: [],
+      loading: true,
+      error: null,
+      refetch: jest.fn(),
+    });
+    // No AliasDetector registered yet — mirrors production before OmnibarContext's
+    // effect has registered it. Reset to the plain default set (no dynamic detectors).
+    resetDefaultRegistry();
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+    jest.useRealTimers();
+    jest.clearAllMocks();
+    resetDefaultRegistry();
+  });
+
+  it("re-evaluates and unblocks submission once aliases finish loading, without an extra keystroke", async () => {
+    const onCreateSession = jest.fn().mockResolvedValue(undefined);
+    const { input, rerender, getByRole } = renderOmnibar({ onCreateSession });
+
+    // Type "@ssq my-feature" before the alias list has resolved — AliasDetector
+    // isn't registered yet, so this currently mis-detects as a bare SessionSearch
+    // (not submittable).
+    await typeAndDetect(input, "@ssq my-feature");
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    });
+    expect(onCreateSession).not.toHaveBeenCalled();
+
+    // Alias list resolves: OmnibarContext would register AliasDetector at this point.
+    getDefaultRegistry().register(new AliasDetector([SSQ_ALIAS]));
+    mockUseAliases.mockReturnValue({
+      aliases: [SSQ_ALIAS],
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    // Re-render with unchanged props so Omnibar re-invokes useAliases() and picks
+    // up the resolved list — no additional typing/keystroke from the user.
+    rerender(
+      <Omnibar
+        isOpen={true}
+        onClose={jest.fn()}
+        onCreateSession={onCreateSession}
+        onNavigateToSession={jest.fn()}
+      />
+    );
+
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(getByRole("combobox", { name: /session source input/i }), {
+        key: "Enter",
+        ctrlKey: true,
+      });
+    });
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "ssq-my-feature" })
+    );
+  });
+});

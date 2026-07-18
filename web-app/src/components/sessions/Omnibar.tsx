@@ -281,7 +281,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       : isPathInput
       ? (detection?.localPath ?? "")
       : "";
-  const { worktrees, isLoading: isWorktreesLoading } = useWorktreeSuggestions(repoPathForWorktrees, {
+  const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
   });
 
@@ -408,7 +408,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
 
     debounceRef.current = setTimeout(() => {
-      if (input.trim()) {
+      try {
+        if (input.trim()) {
         // Pre-process slash commands before detection so /oneoff etc. aren't
         // misidentified as local paths by LocalPathDetector (priority 100).
         const slashCmd = parseSlashCommand(input);
@@ -522,6 +523,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         dispatchMode({ kind: "reset_to_discovery" });
         setResultHighlightIndex(-1);
       }
+      } catch (err) {
+        // Never let a thrown exception mid-update abandon UI state — leave the
+        // last valid detection/canSubmit state in place and surface the failure.
+        console.error("[Omnibar] input detection failed:", err);
+        setError(err instanceof Error ? err.message : "Failed to process input");
+      }
     }, 150); // 150ms debounce
 
     return () => {
@@ -529,7 +536,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         clearTimeout(debounceRef.current);
       }
     };
-  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName]);
+    // aliases/workflows are included so detection re-evaluates once the async
+    // alias/workflow lists resolve — otherwise a fast "@alias" typed before the
+    // AliasDetector/WorkflowDetector registers permanently mis-detects (e.g. as
+    // SessionSearch) with no keystroke left to trigger a re-run.
+  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
 
   // Focus input when opened
   useEffect(() => {
@@ -1343,6 +1354,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             onCancel={onClose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
+            worktreesError={worktreesError}
             isSubmitting={isSubmitting}
             canSubmit={canSubmit}
             error={error}

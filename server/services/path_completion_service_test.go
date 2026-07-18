@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // makeDir creates a directory at the given path, failing the test on error.
@@ -398,6 +400,73 @@ func TestListPathCompletions_ContextCancellation(t *testing.T) {
 	// The result may be either an error (CodeDeadlineExceeded) or a valid response
 	// depending on scheduling, but it must not panic.
 	_ = err
+}
+
+// ---------------------------------------------------------------------------
+// ListWorktrees (AC4)
+// ---------------------------------------------------------------------------
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, out)
+}
+
+func TestListWorktrees_BasicListing(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
+
+	svc := NewPathCompletionService()
+	resp, err := svc.ListWorktrees(context.Background(), newReq(&sessionv1.ListWorktreesRequest{
+		RepoPath: dir,
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Worktrees, 1)
+	assert.True(t, resp.Msg.Worktrees[0].IsMain)
+}
+
+func TestListWorktrees_NotAGitRepo(t *testing.T) {
+	dir := t.TempDir()
+
+	svc := NewPathCompletionService()
+	resp, err := svc.ListWorktrees(context.Background(), newReq(&sessionv1.ListWorktreesRequest{
+		RepoPath: dir,
+	}))
+	// Not a git repo: gracefully returns an empty list, not an error.
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Worktrees)
+}
+
+// TestListWorktrees_TimesOutOnHungGitCommand (AC4): a hung/blocking `git worktree
+// list` subprocess must not block the RPC forever — it must return a bounded
+// DeadlineExceeded error, matching ListPathCompletions' pathCompletionTimeout guard.
+func TestListWorktrees_TimesOutOnHungGitCommand(t *testing.T) {
+	// Install a fake "git" that hangs well past pathCompletionTimeout, ahead of
+	// the real git on PATH. Prepend (not replace) PATH so the script's own
+	// "sleep" invocation can still resolve.
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	require.NoError(t, os.WriteFile(fakeGit, []byte("#!/bin/sh\nsleep 30\n"), 0755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	svc := NewPathCompletionService()
+
+	start := time.Now()
+	_, err := svc.ListWorktrees(context.Background(), newReq(&sessionv1.ListWorktreesRequest{
+		RepoPath: t.TempDir(),
+	}))
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeDeadlineExceeded, connect.CodeOf(err))
+	assert.Less(t, elapsed, 10*time.Second, "ListWorktrees should time out near pathCompletionTimeout, not hang")
 }
 
 // Unit tests for helper functions.

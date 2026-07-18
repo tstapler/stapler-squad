@@ -326,9 +326,15 @@ export class DetectorRegistry {
 
   detect(input: string): DetectionResult {
     for (const detector of this.detectors) {
-      const result = detector.detect(input);
-      if (result) {
-        return result;
+      try {
+        const result = detector.detect(input);
+        if (result) {
+          return result;
+        }
+      } catch (err) {
+        // A single misbehaving detector must not prevent lower-priority
+        // detectors (or the next debounce tick) from running.
+        console.error(`[DetectorRegistry] detector "${detector.name}" threw during detect():`, err);
       }
     }
 
@@ -343,9 +349,13 @@ export class DetectorRegistry {
   detectAll(input: string): DetectionResult[] {
     const results: DetectionResult[] = [];
     for (const detector of this.detectors) {
-      const result = detector.detect(input);
-      if (result) {
-        results.push(result);
+      try {
+        const result = detector.detect(input);
+        if (result) {
+          results.push(result);
+        }
+      } catch (err) {
+        console.error(`[DetectorRegistry] detector "${detector.name}" threw during detect():`, err);
       }
     }
     return results;
