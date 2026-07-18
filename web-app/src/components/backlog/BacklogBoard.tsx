@@ -10,6 +10,8 @@ interface BacklogBoardProps {
   onAction: (action: string, itemId: string) => void;
   onItemClick: (itemId: string) => void;
   isLoading?: boolean;
+  /** itemId -> action key currently in flight for that card. */
+  pending?: Record<string, string>;
 }
 
 const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
@@ -35,12 +37,14 @@ function BoardColumn({
   onAction,
   onItemClick,
   isLoading,
+  pending,
 }: {
   column: { status: BacklogItemStatus; label: string };
   items: BacklogItem[];
   onAction: (action: string, itemId: string) => void;
   onItemClick: (itemId: string) => void;
   isLoading: boolean;
+  pending: Record<string, string>;
 }) {
   return (
     <section
@@ -70,6 +74,7 @@ function BoardColumn({
                 item={item}
                 onAction={onAction}
                 onClick={onItemClick}
+                pendingAction={pending[item.id] ?? null}
               />
             </div>
           ))
@@ -84,6 +89,7 @@ export function BacklogBoard({
   onAction,
   onItemClick,
   isLoading = false,
+  pending = {},
 }: BacklogBoardProps) {
   return (
     <div
@@ -100,6 +106,7 @@ export function BacklogBoard({
           onAction={onAction}
           onItemClick={onItemClick}
           isLoading={isLoading}
+          pending={pending}
         />
       ))}
     </div>

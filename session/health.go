@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"time"
 )
 
 // SessionHealthChecker manages session health validation and recovery
 type SessionHealthChecker struct {
-	storage *Storage
+	storage    *Storage
+	tmuxSocket TmuxSocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
 
 	// failureCounts tracks consecutive health-check failures per session title.
 	// Recovery is only attempted after failureThreshold consecutive failures,
@@ -28,6 +28,7 @@ const failureThreshold = 2
 func NewSessionHealthChecker(storage *Storage) *SessionHealthChecker {
 	return &SessionHealthChecker{
 		storage:       storage,
+		tmuxSocket:    realTmuxSocketQuerier{},
 		failureCounts: make(map[string]int),
 	}
 }
@@ -48,28 +49,40 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load instances for health check: %w", err)
 	}
+	return h.checkInstances(instances), nil
+}
 
-	// Derive the server socket from the first instance that has one set.
-	// In practice all instances in a deployment share the same socket (or "" for default).
-	serverSocket := ""
-	for _, inst := range instances {
-		if inst.TmuxServerSocket != "" {
-			serverSocket = inst.TmuxServerSocket
-			break
-		}
-	}
-
-	// Guard: if the tmux server is completely down, all sessions will look dead.
-	// Attempting to recover them all at once would be destructive and incorrect.
-	// Skip health checks until the server is back up.
-	if tmux.IsServerDown(serverSocket) {
-		log.Warn("health check: tmux server is down, skipping session checks", "socket", serverSocket)
-		return nil, nil
-	}
+// checkInstances runs a health check on the given instances, split out from
+// CheckAllSessions so the socket-scoping logic below is unit-testable with a plain
+// []*Instance and a fake TmuxSocketQuerier, without real Storage/DB wiring.
+//
+// Instances can be spread across multiple tmux server sockets (the default socket
+// for ordinary sessions, isolated sockets for some worktree/test scenarios).
+// Deriving a single socket from the first instance and applying its down/up state
+// to every instance would either skip healthy instances on other sockets (false
+// "server is down") or run destructive recovery against instances whose own socket
+// is genuinely down (false "server is up"). So each instance's down-check is scoped
+// to its own socket, memoized per socket to avoid redundant queries.
+func (h *SessionHealthChecker) checkInstances(instances []*Instance) []HealthCheckResult {
+	downSockets := make(map[string]bool)
 
 	results := make([]HealthCheckResult, 0, len(instances))
 
 	for _, instance := range instances {
+		socket := instance.TmuxServerSocket
+		down, checked := downSockets[socket]
+		if !checked {
+			down = h.tmuxSocket.IsServerDown(socket)
+			downSockets[socket] = down
+		}
+		// Guard: if this instance's tmux server is completely down, its session
+		// will look dead. Attempting to recover it would be destructive and
+		// incorrect. Skip until that socket's server is back up.
+		if down {
+			log.Warn("health check: tmux server is down, skipping session check", "session", instance.Title, "socket", socket)
+			continue
+		}
+
 		result := h.checkSingleSession(instance)
 		results = append(results, result)
 
@@ -86,7 +99,33 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 		}
 	}
 
-	return results, nil
+	return results
+}
+
+// recoveryDebounced increments the consecutive-failure counter for title and
+// reports whether failureThreshold has been reached (in which case the
+// counter is reset to 0 so the next failure starts a fresh debounce window).
+// Shared by every failure mode checkSingleSession detects (missing tmux
+// session, dead pane process, ...) so that N consecutive failures of any kind
+// -- not just the same kind -- trigger a recovery attempt.
+func (h *SessionHealthChecker) recoveryDebounced(title string) (attempt bool, count int) {
+	h.failureCountsMu.Lock()
+	defer h.failureCountsMu.Unlock()
+	h.failureCounts[title]++
+	count = h.failureCounts[title]
+	if count >= failureThreshold {
+		h.failureCounts[title] = 0
+		return true, count
+	}
+	return false, count
+}
+
+// resetFailureCount clears the consecutive-failure counter for title, called
+// whenever a session is observed healthy.
+func (h *SessionHealthChecker) resetFailureCount(title string) {
+	h.failureCountsMu.Lock()
+	delete(h.failureCounts, title)
+	h.failureCountsMu.Unlock()
 }
 
 // checkSingleSession performs a health check on a single session
@@ -112,26 +151,18 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 
 	// Check if instance thinks it's started but tmux session doesn't exist
 	if instance.Started() {
-		if !instance.TmuxAlive() {
+		switch {
+		case !instance.TmuxAlive():
 			result.IsHealthy = false
 			result.Issues = append(result.Issues, "Instance marked as started but tmux session doesn't exist")
 
 			// Debounce: only recover after failureThreshold consecutive failures.
 			// This prevents spurious recovery attempts caused by transient check glitches.
-			h.failureCountsMu.Lock()
-			h.failureCounts[instance.Title]++
-			count := h.failureCounts[instance.Title]
-			h.failureCountsMu.Unlock()
-
-			if count < failureThreshold {
+			attempt, count := h.recoveryDebounced(instance.Title)
+			if !attempt {
 				log.Debug("health check: deferring recovery", "session", instance.Title, "count", count, "threshold", failureThreshold)
 				result.Actions = append(result.Actions, fmt.Sprintf("Failure %d/%d: deferring recovery", count, failureThreshold))
 			} else {
-				// Threshold reached - attempt recovery
-				h.failureCountsMu.Lock()
-				h.failureCounts[instance.Title] = 0 // Reset counter after attempt
-				h.failureCountsMu.Unlock()
-
 				result.RecoveryAttempted = true
 				if err := instance.Start(false); err != nil {
 					result.Issues = append(result.Issues, fmt.Sprintf("Recovery failed: %v", err))
@@ -148,11 +179,51 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 					}
 				}
 			}
-		} else {
+
+		case instance.PaneProcessDead():
+			// tmux session object is alive, but remain-on-exit has left a dead
+			// "Pane is dead (signal N, ...)" placeholder because the wrapped
+			// program exited/was killed (e.g. OOM SIGKILL). TmuxAlive() alone
+			// cannot see this -- it only checks session existence -- so without
+			// this branch the session is reported healthy forever and never
+			// respawns. See session/instance_tmux.go PaneProcessDead() doc.
+			result.IsHealthy = false
+			result.Issues = append(result.Issues, "tmux session alive but pane process has exited (remain-on-exit placeholder)")
+
+			attempt, count := h.recoveryDebounced(instance.Title)
+			if !attempt {
+				log.Debug("health check: deferring dead-pane recovery", "session", instance.Title, "count", count, "threshold", failureThreshold)
+				result.Actions = append(result.Actions, fmt.Sprintf("Failure %d/%d: deferring recovery", count, failureThreshold))
+			} else {
+				result.RecoveryAttempted = true
+				// The stale session must be torn down first: Start(false) treats
+				// an existing (even dead-paned) tmux session as "already running"
+				// and just reattaches to it via RestoreWithWorkDir, which does
+				// NOT relaunch the wrapped program. Killing it first forces
+				// Start(false) down the cold-restore path that actually
+				// recreates the session and relaunches the program (with
+				// --resume when a conversation UUID is known).
+				if err := instance.KillSession(); err != nil {
+					result.Issues = append(result.Issues, fmt.Sprintf("failed to kill stale dead-pane session: %v", err))
+				}
+				if err := instance.Start(false); err != nil {
+					result.Issues = append(result.Issues, fmt.Sprintf("Recovery failed: %v", err))
+					result.RecoverySuccess = false
+					result.Actions = append(result.Actions, "Failed to respawn dead pane")
+				} else {
+					result.RecoverySuccess = true
+					result.Actions = append(result.Actions, "Respawned dead pane by recreating tmux session")
+					if instance.TmuxAlive() && !instance.PaneProcessDead() {
+						result.IsHealthy = true
+					} else {
+						result.Issues = append(result.Issues, "Session still unhealthy after recovery attempt")
+					}
+				}
+			}
+
+		default:
 			// Session is healthy - reset any accumulated failure count
-			h.failureCountsMu.Lock()
-			delete(h.failureCounts, instance.Title)
-			h.failureCountsMu.Unlock()
+			h.resetFailureCount(instance.Title)
 			result.Actions = append(result.Actions, "Tmux session is healthy")
 		}
 	}

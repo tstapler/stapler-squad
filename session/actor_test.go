@@ -15,12 +15,19 @@ import (
 )
 
 // knownBackgroundGoroutines lists process-wide goroutines started by the log
-// package and lumberjack at init/first-log time.  These are not actor leaks;
-// goleak must be told to ignore them so the actor-leak assertions stay tight.
+// package and lumberjack at init/first-log time, plus the signal-handler
+// goroutine started by TestMain that blocks on a signal channel for the
+// lifetime of the test binary.  These are not actor leaks; goleak must be
+// told to ignore them so the actor-leak assertions stay tight.
 var knownBackgroundGoroutines = []goleak.Option{
 	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
 	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
 	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
+	// TestMain spawns a signal-handler goroutine (integration_test.go) that
+	// blocks on <-sigCh for the entire test-binary lifetime.  It cannot be
+	// stopped without os.Exit, so we tell goleak to ignore it.
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func2"),
 }
 
 // newActorTestInstance constructs a minimal *Instance suitable for actor tests.
@@ -39,8 +46,20 @@ func newActorTestInstance(t *testing.T) *Instance {
 
 // TestActorNoLeak confirms that Stop() joins the actor goroutine so goleak
 // reports no leaked goroutines after the test.
+//
+// Snapshots the pre-test goroutine set via goleak.IgnoreCurrent() rather than
+// asserting a bare process-wide goleak.VerifyNone(): this test runs inside
+// the large `session` package's shared test binary, where earlier, unrelated
+// tests can leave their own long-lived background goroutines running (e.g. a
+// ResponseStream poller, an exec.Cmd wait) well past their own test's return.
+// Without the baseline, this test's assertion is really "no goroutine is
+// alive anywhere in the process", not its actual claim ("Stop() joins the
+// actor goroutine THIS test started") - and fails on those unrelated leaks
+// depending on run order/scheduling (observed in CI, not reproducible with
+// -run isolating just this test locally).
 func TestActorNoLeak(t *testing.T) {
-	defer goleak.VerifyNone(t, knownBackgroundGoroutines...)
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)
@@ -66,8 +85,12 @@ func TestActorSendSync(t *testing.T) {
 
 // TestActorStopIdempotent confirms that calling Stop() more than once does not
 // panic, deadlock, or close the done channel twice.
+//
+// See TestActorNoLeak for why this baselines via goleak.IgnoreCurrent()
+// instead of a bare process-wide goleak.VerifyNone().
 func TestActorStopIdempotent(t *testing.T) {
-	defer goleak.VerifyNone(t, knownBackgroundGoroutines...)
+	baseline := goleak.IgnoreCurrent()
+	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)

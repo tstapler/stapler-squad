@@ -10,6 +10,14 @@ export const detail = style({
   padding: vars.space["4"],
 });
 
+export const vcsRow = style({
+  display: "flex",
+  alignItems: "flex-start",
+  gap: vars.space["3"],
+  marginBottom: vars.space["3"],
+  flexWrap: "wrap",
+});
+
 export const statsRow = style({
   display: "flex",
   gap: vars.space["4"],

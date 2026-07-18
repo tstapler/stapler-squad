@@ -1,0 +1,15 @@
+{
+  "id": "backlog:list-stuck",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ListStuckBacklogItems",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_stuck.go",
+  "tested": true,
+  "testIds": [
+    "TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist",
+    "TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString"
+  ],
+  "lastModified": "2026-07-14T05:58:45.926116979-07:00"
+}

@@ -70,7 +70,7 @@ func effectiveCtx(provided, fallback string) string {
 func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority Priority) (newShouldAdd bool, newPriority Priority, newReason AttentionReason, newCtx string, cleanWorktree bool) {
 	worktree, err := inst.GetGitWorktree()
 	if err != nil {
-		log.WarningLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+		log.Warn("failed to get git worktree", "session", inst.Title, "err", err)
 		return shouldAdd, priority, "", "", false
 	}
 	if worktree == nil {
@@ -83,7 +83,7 @@ func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd b
 	}
 	if isDirty {
 		if !shouldAdd || priority == PriorityLow {
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
+			log.Debug("uncommitted changes detected", "session", inst.Title)
 			return true, PriorityLow, ReasonUncommittedChanges, "Uncommitted changes ready to commit", false
 		}
 		return shouldAdd, priority, "", "", false
@@ -145,13 +145,13 @@ func (d *DefaultStatusDeterminer) Determine(
 			priority = PriorityHigh
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Tests are failing")
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Tests failing - %s", inst.Title, ctx)
+			log.Debug("tests failing", "session", inst.Title, "ctx", ctx)
 		case statusInfo.ClaudeStatus == detection.StatusSuccess:
 			reason = ReasonTaskComplete
 			priority = PriorityLow
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion - %s", inst.Title, ctx)
+			log.Debug("task complete", "session", inst.Title, "ctx", ctx)
 		}
 
 		// Now handle idle state - but only if no status-based condition was detected above.
@@ -202,31 +202,31 @@ func (d *DefaultStatusDeterminer) Determine(
 				priority = PriorityHigh
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Waiting for approval to proceed")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Approval needed (no controller) - %s", inst.Title, ctx)
+				log.Debug("approval needed (no controller)", "session", inst.Title)
 			case detection.StatusInputRequired:
 				reason = ReasonInputRequired
 				priority = PriorityMedium
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Waiting for explicit user input")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Input required (no controller) - %s", inst.Title, ctx)
+				log.Debug("input required (no controller)", "session", inst.Title)
 			case detection.StatusError:
 				reason = ReasonErrorState
 				priority = PriorityUrgent
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Error state detected")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Error detected (no controller) - %s", inst.Title, ctx)
+				log.Debug("error detected (no controller)", "session", inst.Title)
 			case detection.StatusTestsFailing:
 				reason = ReasonTestsFailing
 				priority = PriorityHigh
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Tests are failing")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Tests failing (no controller) - %s", inst.Title, ctx)
+				log.Debug("tests failing (no controller)", "session", inst.Title)
 			case detection.StatusSuccess:
 				reason = ReasonTaskComplete
 				priority = PriorityLow
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Task completed successfully")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion (no controller) - %s", inst.Title, ctx)
+				log.Debug("task complete (no controller)", "session", inst.Title)
 			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
@@ -283,9 +283,6 @@ func (d *DefaultStatusDeterminer) Determine(
 					inst.Title, reason.String())
 			}
 		}
-	} else if log.IsDebugEnabled() {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': NOT STALE - %s since last meaningful output (threshold: %s)",
-			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(d.config.StalenessThreshold))
 	}
 
 	action := DetectionActionSkip

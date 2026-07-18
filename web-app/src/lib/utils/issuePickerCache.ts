@@ -67,6 +67,9 @@ export interface CachedIssueEntry {
   state: string;
   url: string;
   labels: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  isPR?: boolean;
 }
 
 export function getCachedIssues(
@@ -86,30 +89,35 @@ export function setCachedIssues(
   writeEntry(issuesKey(owner, repo, state), issues);
 }
 
-// ─── Last-used repo ─────────────────────────────────────────────────────────
+// ─── Recent repos (multi-entry history, up to 5) ───────────────────────────
 
-const LAST_REPO_KEY = () => cacheKey("github:lastRepo");
+const RECENT_REPOS_KEY = () => cacheKey("github:recentRepos");
+const RECENT_REPOS_MAX = 5;
 
-export interface LastUsedRepo {
+export interface RecentRepo {
   owner: string;
   repo: string;
 }
 
-export function getLastUsedRepo(): LastUsedRepo | null {
-  if (typeof window === "undefined") return null;
+export function getRecentRepos(): RecentRepo[] {
+  if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(LAST_REPO_KEY());
-    if (!raw) return null;
-    return JSON.parse(raw) as LastUsedRepo;
+    const raw = localStorage.getItem(RECENT_REPOS_KEY());
+    if (!raw) return [];
+    return JSON.parse(raw) as RecentRepo[];
   } catch {
-    return null;
+    return [];
   }
 }
 
-export function setLastUsedRepo(owner: string, repo: string): void {
+export function addRecentRepo(owner: string, repo: string): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(LAST_REPO_KEY(), JSON.stringify({ owner, repo }));
+    const existing = getRecentRepos();
+    const key = `${owner}/${repo}`;
+    const filtered = existing.filter((r) => `${r.owner}/${r.repo}` !== key);
+    const updated = [{ owner, repo }, ...filtered].slice(0, RECENT_REPOS_MAX);
+    localStorage.setItem(RECENT_REPOS_KEY(), JSON.stringify(updated));
   } catch {
     // ignore
   }

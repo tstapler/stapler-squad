@@ -28,6 +28,8 @@ interface TriageReviewPanelProps {
   /** Called when the user clicks Undo in the toast — parent reverts AC and status. */
   onUndoApply?: (preApplyCriteria: AcCriterion[]) => Promise<void>;
   onSkip: () => void;
+  /** Called when the user submits feedback to refine this triage result. */
+  onRefine?: (feedback: string) => Promise<void>;
 }
 
 /**
@@ -36,13 +38,17 @@ interface TriageReviewPanelProps {
  *
  * Per UX spec Section 3.1 and Section 7.2.
  */
-export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, onSkip }: TriageReviewPanelProps) {
+export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, onSkip, onRefine }: TriageReviewPanelProps) {
   const [dismissed, setDismissedState] = useState(() => isDismissed(item.id));
   const [applyState, setApplyState] = useState<"idle" | "applying" | "error">("idle");
   const [applyError, setApplyError] = useState<string | undefined>();
   const [showUndoToast, setShowUndoToast] = useState(false);
   const [preApplyCriteria, setPreApplyCriteria] = useState<AcCriterion[] | undefined>();
   const [isMounted, setIsMounted] = useState(false);
+  const [showRefineForm, setShowRefineForm] = useState(false);
+  const [refineFeedback, setRefineFeedback] = useState("");
+  const [refineState, setRefineState] = useState<"idle" | "submitting" | "error">("idle");
+  const [refineError, setRefineError] = useState<string | undefined>();
 
   useEffect(() => {
     setIsMounted(true);
@@ -79,6 +85,23 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
     }
   }, [item.acCriteria, item.id, onApply]);
 
+  const handleRefineSubmit = useCallback(async () => {
+    const feedback = refineFeedback.trim();
+    if (!feedback || !onRefine) return;
+    setRefineState("submitting");
+    setRefineError(undefined);
+    try {
+      await onRefine(feedback);
+      setShowRefineForm(false);
+      setRefineFeedback("");
+      setRefineState("idle");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setRefineError(msg || "Failed to submit feedback. Please try again.");
+      setRefineState("error");
+    }
+  }, [refineFeedback, onRefine]);
+
   // Undo toast rendered via portal so it appears at the bottom of the viewport.
   // Built BEFORE the dismissed guard so the toast persists after the panel hides itself.
   const undoToast = showUndoToast && preApplyCriteria && isMounted ? (
@@ -109,6 +132,7 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
   const hasSuggestions = acSuggestions.length > 0;
   const hasTasks = (triageResult.tasks?.length ?? 0) > 0;
   const isApplying = applyState === "applying";
+  const isRefining = refineState === "submitting";
 
   return (
     <>
@@ -119,7 +143,12 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
       >
         {/* Panel header */}
         <div className={styles.panelHeader}>
-          <h3 className={styles.heading}>Triage Ready</h3>
+          <h3 className={styles.heading}>
+            Triage Ready
+            {(triageResult.iteration ?? 1) > 1 && (
+              <span className={styles.iterationBadge}> · Iteration {triageResult.iteration}</span>
+            )}
+          </h3>
           <button
             type="button"
             className={styles.dismissButton}
@@ -225,7 +254,71 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
           >
             Skip — review later
           </button>
+          {onRefine && !showRefineForm && (
+            <button
+              type="button"
+              className={styles.skipButton}
+              onClick={() => setShowRefineForm(true)}
+              disabled={isApplying}
+              data-testid="triage-refine-toggle-button"
+            >
+              Not quite — give feedback
+            </button>
+          )}
         </div>
+
+        {/* Refine with feedback */}
+        {onRefine && showRefineForm && (
+          <div className={styles.refineForm} role="form" aria-label="Refine triage with feedback">
+            {refineState === "error" && refineError && (
+              <TriageErrorBanner
+                message={refineError}
+                onReload={() => {
+                  setRefineState("idle");
+                  setRefineError(undefined);
+                }}
+                onSkip={() => setShowRefineForm(false)}
+              />
+            )}
+            <label htmlFor="triage-refine-feedback" className={styles.refineLabel}>
+              What should change?
+            </label>
+            <textarea
+              id="triage-refine-feedback"
+              rows={3}
+              placeholder="e.g. missed the mobile case, re-check the auth approach"
+              value={refineFeedback}
+              onChange={(e) => setRefineFeedback(e.target.value)}
+              className={styles.refineTextarea}
+              data-testid="triage-refine-textarea"
+              disabled={isRefining}
+            />
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={styles.applyButton}
+                onClick={() => void handleRefineSubmit()}
+                disabled={isRefining || !refineFeedback.trim()}
+                aria-busy={isRefining}
+                data-testid="triage-refine-submit-button"
+              >
+                {isRefining ? "Refining…" : "Refine triage"}
+              </button>
+              <button
+                type="button"
+                className={styles.skipButton}
+                onClick={() => {
+                  setShowRefineForm(false);
+                  setRefineFeedback("");
+                }}
+                disabled={isRefining}
+                data-testid="triage-refine-cancel-button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </section>
       {undoToast}
     </>

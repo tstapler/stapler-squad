@@ -9,6 +9,12 @@ const _features = [
 
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import {
+  StuckItemsPage,
+  seedStuckItem,
+  enableBacklogFeatureFlag,
+  disableBacklogFeatureFlag,
+} from './pages/StuckItemsPage';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
@@ -21,9 +27,12 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(BASE_URL, { waitUntil: 'load' });
 
-    // Wait for network to settle so the app is fully rendered before scanning.
-    // This prevents mid-render browser crashes when axe fires under SwiftShader.
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    // Wait for a known main-page element instead of networkidle: this app
+    // polls continuously (session list, terminal streams), so network
+    // activity may never go quiet for the 500ms networkidle requires -
+    // matching this repo's e2e convention of avoiding wait conditions that
+    // depend on network settling (see alias.spec.ts's identical selector).
+    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 30_000 });
 
     // Run axe analysis
     const results = await new AxeBuilder({ page })
@@ -49,7 +58,8 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
   test('IT-5.1: Secondary routes are accessible', async ({ page }) => {
     // Navigate to review queue page
     await page.goto(`${BASE_URL}/review-queue`, { waitUntil: 'load' });
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    // See the main-page test above for why this doesn't use networkidle.
+    await page.waitForSelector('[data-testid="review-queue"]', { timeout: 30_000 });
 
     const results = await new AxeBuilder({ page })
       .exclude('pre, [class*="terminal"], [class*="Terminal"]')
@@ -60,5 +70,47 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
     );
 
     expect(criticalViolations).toHaveLength(0);
+  });
+
+  // UX Criterion 19 (design/ux.md AC 19 / validation.md row 19): the new
+  // stuck-reason chip color/text pairs must meet WCAG AA contrast (4.5:1).
+  // Depends on seedStuckItem() in ./pages/StuckItemsPage.ts — see the KNOWN
+  // GAP note there (no debug seed endpoint exists yet).
+  test('stuck-item chips pass Axe color-contrast on /unfinished', async ({ page, request }) => {
+    await enableBacklogFeatureFlag(request);
+    try {
+      await seedStuckItem(request, {
+        itemId: 'axe-pr-ready',
+        title: 'fix: axe contrast pr-ready',
+        reason: 'pr_ready_unmerged',
+        prNumber: 148,
+        prUrl: 'https://github.com/tstapler/stapler-squad/pull/148',
+      });
+      await seedStuckItem(request, {
+        itemId: 'axe-rework-cap',
+        title: 'fix: axe contrast rework-cap',
+        reason: 'rework_cap',
+        context: 'cap hit',
+      });
+      await seedStuckItem(request, {
+        itemId: 'axe-abandoned',
+        title: 'fix: axe contrast abandoned-review',
+        reason: 'abandoned_review',
+      });
+
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      const stuckPage = new StuckItemsPage(page);
+      await stuckPage.goto();
+      await expect(stuckPage.section).toBeVisible();
+
+      const results = await new AxeBuilder({ page })
+        .include('[data-testid="stuck-items-section"]')
+        .withRules(['color-contrast'])
+        .analyze();
+
+      expect(results.violations).toHaveLength(0);
+    } finally {
+      await disableBacklogFeatureFlag(request);
+    }
   });
 });

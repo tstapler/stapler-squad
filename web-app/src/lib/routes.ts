@@ -20,6 +20,7 @@ export const routes = {
   insights: "/insights",
   settingsFeatures: "/settings/features",
   settingsBacklogSources: "/settings/backlog-sources",
+  settingsPipelineModes: "/settings/pipeline-modes",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   workflows: "/workflows",

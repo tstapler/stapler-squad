@@ -9,7 +9,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -250,8 +249,15 @@ func (t *TmuxSession) readControlModeOutput() {
 		case <-doneCh:
 			return
 		default:
-			line := scanner.Text()
-			t.processControlModeLine(line)
+			// %output is the hot case (every terminal frame). Handle it in-place using
+			// scanner.Bytes() — no string allocation — falling back to scanner.Text() for
+			// all other (infrequent) events, which may pass sub-strings to async loggers.
+			b := scanner.Bytes()
+			if hasOutputPrefix(b) {
+				t.handleOutputBytes(b)
+			} else {
+				t.processControlModeLine(scanner.Text())
+			}
 		}
 	}
 
@@ -358,21 +364,13 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		return
 	}
 
-	fields := strings.SplitN(line, " ", 3)
-	notificationType := fields[0]
+	notificationType, rest, _ := strings.Cut(line, " ")
 
 	switch notificationType {
 	case "%output":
-		// %output %PANE_ID DATA — broadcast even inside a command response block.
-		if len(fields) >= 3 {
-			paneID := fields[1]
-			encodedData := fields[2]
-			data := t.decodeControlModeOutput(encodedData)
-			if len(data) > 0 {
-				t.broadcastControlModeUpdate(data)
-				log.Debug("control mode output", "session", t.sanitizedName, "pane", paneID, "bytes", len(data))
-			}
-		}
+		// Hot path is handled by handleOutputBytes in the scanner loop (no string alloc).
+		// This case is kept as fallback for tests and any caller that uses processControlModeLine directly.
+		t.handleOutputBytes([]byte(line))
 
 	case "%begin":
 		// Start of a command response. If we're already in a response (unexpected
@@ -412,8 +410,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		if t.inCmdResp {
 			// Error description lines appear between %begin and %error in the body buffer.
 			errMsg := strings.TrimSpace(t.cmdBodyBuf.String())
-			if errMsg == "" && len(fields) >= 2 {
-				errMsg = strings.Join(fields[1:], " ")
+			if errMsg == "" && rest != "" {
+				errMsg = rest
 			}
 			if t.curCmdCh != nil {
 				select {
@@ -425,8 +423,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			t.inCmdResp = false
 			t.cmdBodyBuf.Reset()
 		} else {
-			if len(fields) >= 2 {
-				log.Error("control mode error", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+			if rest != "" {
+				log.Error("control mode error", "session", t.sanitizedName, "detail", rest)
 			}
 		}
 
@@ -479,8 +477,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-closed":
-		if len(fields) >= 2 {
-			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+		if rest != "" {
+			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", rest)
 		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -491,8 +489,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-changed":
-		if len(fields) >= 3 {
-			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", fields[2])
+		_, newSession, _ := strings.Cut(rest, " ")
+		if newSession != "" {
+			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", newSession)
 		}
 
 	default:
@@ -606,55 +605,74 @@ func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, a
 	}
 }
 
+// octalVal maps ASCII byte → its octal digit value (0–7); zero for non-octal bytes.
+// Inline table eliminates strconv.ParseUint call and error allocation on every %output event.
+var octalVal [256]byte
+
+func init() {
+	for c := byte('0'); c <= '7'; c++ {
+		octalVal[c] = c - '0'
+	}
+}
+
+// outputLinePrefix is the literal prefix of every tmux control mode %output notification.
+var outputLinePrefix = []byte("%output ")
+
+// hasOutputPrefix reports whether b starts with "%output ".
+func hasOutputPrefix(b []byte) bool {
+	return bytes.HasPrefix(b, outputLinePrefix)
+}
+
+// handleOutputBytes processes a %output line from scanner.Bytes() without allocating a string.
+// Format: %output %PANE_ID DATA
+func (t *TmuxSession) handleOutputBytes(b []byte) {
+	// Skip "%output " prefix (8 bytes).
+	rest := b[8:]
+	// Find the space separating pane ID from encoded data.
+	spaceIdx := bytes.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		return
+	}
+	encodedData := rest[spaceIdx+1:]
+	if len(encodedData) == 0 {
+		return
+	}
+	data := t.decodeControlModeOutput(encodedData)
+	if len(data) > 0 {
+		t.broadcastControlModeUpdate(data)
+		log.Debug("control mode output", "session", t.sanitizedName, "bytes", len(data))
+	}
+}
+
 // decodeControlModeOutput decodes tmux control mode output format.
 // Control mode replaces characters < ASCII 32 and backslash with octal escape sequences (\ooo).
 // For example: "hello\012world" represents "hello\nworld"
-func (t *TmuxSession) decodeControlModeOutput(encoded string) []byte {
-	var result bytes.Buffer
-
+func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
+	// Pre-allocate at input length: decoded output is never longer than the encoded input
+	// (octal escapes encode 1 byte as 4 chars, so the decode is always ≤ len(encoded)).
+	result := make([]byte, 0, len(encoded))
 	i := 0
 	for i < len(encoded) {
 		if encoded[i] == '\\' && i+3 < len(encoded) {
-			// Check for octal escape sequence (\ooo)
-			octal := encoded[i+1 : i+4]
-			if isOctalDigits(octal) {
-				// Parse octal value
-				value, err := strconv.ParseUint(octal, 8, 8)
-				if err == nil {
-					result.WriteByte(byte(value))
-					i += 4 // Skip \ooo
-					continue
-				}
+			a, b, c := encoded[i+1], encoded[i+2], encoded[i+3]
+			if a >= '0' && a <= '7' && b >= '0' && b <= '7' && c >= '0' && c <= '7' {
+				result = append(result, octalVal[a]<<6|octalVal[b]<<3|octalVal[c])
+				i += 4
+				continue
 			}
 		}
-
-		// Regular character (not an octal escape)
-		result.WriteByte(encoded[i])
+		result = append(result, encoded[i])
 		i++
 	}
-
-	return result.Bytes()
-}
-
-// isOctalDigits checks if a string contains exactly 3 octal digits (0-7).
-func isOctalDigits(s string) bool {
-	if len(s) != 3 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '7' {
-			return false
-		}
-	}
-	return true
+	return result
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// Uses a write lock (not RLock) to prevent send-on-closed-channel panics when
-// UnsubscribeFromControlModeUpdates closes a channel concurrently.
+// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
+// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.Lock()
-	defer t.controlModeSubMu.Unlock()
+	t.controlModeSubMu.RLock()
+	defer t.controlModeSubMu.RUnlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {

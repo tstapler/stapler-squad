@@ -6,18 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session/ent"
 )
 
-// makeTestBacklogItemWithID creates a *ent.BacklogItem with a specific UUID.
-func makeTestBacklogItemWithID(id uuid.UUID, title, acJSON string) *ent.BacklogItem {
-	return &ent.BacklogItem{
+// makeTestBacklogItemWithID creates a *BacklogItemData with a specific string ID.
+func makeTestBacklogItemWithID(id, title, acJSON string) *BacklogItemData {
+	return &BacklogItemData{
 		ID:                 id,
 		Title:              title,
 		Description:        "Test description",
-		AcceptanceCriteria: acJSON,
+		AcceptanceCriteria: AcCriteriaJSON(acJSON),
 		Status:             "ready",
 		Priority:           1,
 	}
@@ -28,9 +25,9 @@ func makeTestBacklogItemWithID(id uuid.UUID, title, acJSON string) *ent.BacklogI
 func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"First criterion","status":"pending"},{"index":1,"text":"Second criterion","status":"pending"}]`
-	item := makeTestBacklogItemWithID(uuid.New(), "My Feature", ac)
+	item := makeTestBacklogItemWithID("test-item-id-1", "My Feature", ac)
 
-	if err := WriteSlashCommands(item, worktree); err != nil {
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
 		t.Fatalf("WriteSlashCommands returned error: %v", err)
 	}
 
@@ -69,11 +66,11 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 // TestWriteSlashCommands_DoneFileContainsItemUUID verifies done-0.md contains the item UUID.
 func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	worktree := t.TempDir()
-	itemID := uuid.New()
+	itemID := "550e8400-e29b-41d4-a716-446655440000"
 	ac := `[{"index":0,"text":"Do something","status":"pending"},{"index":1,"text":"Do more","status":"pending"}]`
 	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
 
-	if err := WriteSlashCommands(item, worktree); err != nil {
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
 		t.Fatalf("WriteSlashCommands returned error: %v", err)
 	}
 
@@ -84,8 +81,8 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 		t.Fatalf("failed to read done-0.md: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, itemID.String()) {
-		t.Errorf("done-0.md does not contain item UUID %s\nContent:\n%s", itemID.String(), content)
+	if !strings.Contains(content, itemID) {
+		t.Errorf("done-0.md does not contain item UUID %s\nContent:\n%s", itemID, content)
 	}
 
 	// done-2.md should NOT exist (only 2 criteria: index 0 and 1)
@@ -100,11 +97,11 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &ent.BacklogItem{
-		ID:                 uuid.New(),
+	item := &BacklogItemData{
+		ID:                 "test-item-id-2",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: ac,
+		AcceptanceCriteria: AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 	}
@@ -143,11 +140,11 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &ent.BacklogItem{
-		ID:                 uuid.New(),
+	item := &BacklogItemData{
+		ID:                 "test-item-id-3",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: ac,
+		AcceptanceCriteria: AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 		PlanArtifactsPath:  "/tmp/plans/my-item",
@@ -174,18 +171,18 @@ func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &ent.BacklogItem{
-		ID:                 uuid.New(),
+	item := &BacklogItemData{
+		ID:                 "test-item-id-4",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: ac,
+		AcceptanceCriteria: AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 	}
 	ended := time.Now().Add(-time.Hour)
-	priorSessions := []*ent.ItemSession{
+	priorSessions := []ItemSessionSummary{
 		{
-			SessionRole:           "work",
+			Role:                  "work",
 			EndedAt:               &ended,
 			CommitCountSinceSpawn: 3,
 			LastCommitMessage:     "fix the thing",

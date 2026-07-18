@@ -3,12 +3,14 @@ package session
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -61,18 +63,20 @@ const statusDetectionTailBytes = detection.StatusDetectionTailBytes
 // prompt on the last line.
 const statusDetectionLinesWindow = 15
 
+// tailBufPool recycles 4KB byte slices used for PTY tail reads on status-cache misses,
+// eliminating one make([]byte, 4096) allocation per miss.
+var tailBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, statusDetectionTailBytes)
+		return &b
+	},
+}
+
 // controllerLifecycle holds the running context for the controller.
 // Protected by lifecycle; write-locked only during Start/Stop transitions.
 type controllerLifecycle struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-}
-
-// cacheState groups the status and idle tail-hash caches.
-// Protected by cache; updated by GetCurrentStatus, GetIdleState, and runStatusChangeLoop.
-type cacheState struct {
-	status statusCacheEntry
-	idle   idleCacheEntry
 }
 
 // ClaudeController provides a high-level API for controlling Claude instances.
@@ -127,8 +131,15 @@ type ClaudeController struct {
 	// Written only by the single runStatusChangeLoop goroutine; atomic so no lock needed.
 	lastEmittedStatus atomic.Int64
 
-	// cache holds the tail-hash and result of the last status/idle detection run.
-	cache Locked[cacheState]
+	// statusCache and idleCache replace the former Locked[cacheState]:
+	// atomic.Pointer[T] gives lock-free reads on the ~100ms poll hot path.
+	// Writes allocate a small struct (~32/16 bytes) on cache miss (~10/s).
+	statusCache atomic.Pointer[statusCacheEntry]
+	idleCache   atomic.Pointer[idleCacheEntry]
+
+	// started shadows lifecycle.ctx != nil for lock-free IsStarted / running checks.
+	// Set true inside Start()'s write lock; cleared at the start of Stop().
+	started atomic.Bool
 }
 
 // SetOnEOFCallback registers a function called when the PTY backing this controller
@@ -359,6 +370,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		return startErr
 	}
 
+	cc.started.Store(true)
 	log.Info("claude controller started", "session", cc.sessionName)
 	return nil
 }
@@ -371,6 +383,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 // GetCurrentStatus, GetRecentOutput, Subscribe, etc. are never blocked.
 func (cc *ClaudeController) Stop() error {
 	// Phase 1: grab the cancel function and mark as stopped (brief write lock).
+	cc.started.Store(false)
 	var cancelFn context.CancelFunc
 	cc.lifecycle.Write(func(l *controllerLifecycle) {
 		if l.cancel == nil {
@@ -437,11 +450,7 @@ func (cc *ClaudeController) Stop() error {
 
 // SendCommand sends a command to the Claude instance (queued execution).
 func (cc *ClaudeController) SendCommand(text string, priority int) (string, error) {
-	var running bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		running = l.ctx != nil
-	})
-	if !running {
+	if !cc.started.Load() {
 		return "", fmt.Errorf("controller not started")
 	}
 
@@ -469,11 +478,7 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 
 // SendCommandImmediate sends a command for immediate execution (bypasses queue).
 func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult, error) {
-	var running bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		running = l.ctx != nil
-	})
-	if !running {
+	if !cc.started.Load() {
 		return nil, fmt.Errorf("controller not started")
 	}
 
@@ -554,6 +559,15 @@ func (cc *ClaudeController) GetQueuedCommands() []*Command {
 	return nil
 }
 
+// GetQueuedCommandsCount returns the number of commands in the queue without
+// allocating a slice. Use this instead of len(GetQueuedCommands()) on hot paths.
+func (cc *ClaudeController) GetQueuedCommandsCount() int {
+	if q := cc.queue.Load(); q != nil {
+		return q.Len()
+	}
+	return 0
+}
+
 // GetCommandHistory returns recent command history.
 func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
 	h := cc.history.Load()
@@ -612,7 +626,7 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 //     immediately with zero allocations.
 //
 // This function holds no lifecycle lock — it reads ptyAccess and statusDetector
-// via atomic.Pointer, and the cache via Locked[cacheState]. It therefore never
+// via atomic.Pointer, and the status/idle caches via atomic.Pointer. It therefore never
 // blocks when Stop() is running its slow cleanup.
 func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
 	pa := cc.ptyAccess.Load()
@@ -620,29 +634,25 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return detection.StatusUnknown, "PTY not initialized"
 	}
 
-	// Read only the tail bytes needed for detection — avoids copying the full 10MB buffer.
-	raw := pa.GetRecentOutput(statusDetectionTailBytes)
-	if len(raw) == 0 {
+	// Fast path: hash the tail bytes in-place (no copy) for cache check.
+	h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+	if !hasData {
 		return detection.StatusUnknown, "No terminal content"
 	}
 
-	tail := string(raw)
-	h := hashString(tail)
-
-	var hit bool
-	var cachedStatus detection.DetectedStatus
-	var cachedDesc string
-	cc.cache.Read(func(c cacheState) {
-		if h == c.status.tailHash {
-			hit = true
-			cachedStatus = c.status.status
-			cachedDesc = c.status.desc
-		}
-	})
-	if hit {
-		return cachedStatus, cachedDesc
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+		return sc.status, sc.desc
 	}
 
+	// Cache miss: read tail into pooled buffer; convert to string before returning the buffer.
+	bufp := tailBufPool.Get().(*[]byte)
+	n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+	if n == 0 {
+		tailBufPool.Put(bufp)
+		return detection.StatusUnknown, "No terminal content"
+	}
+	tail := string((*bufp)[:n])
+	tailBufPool.Put(bufp)
 	filtered, _ := filterTmuxMetadata(tail)
 
 	// Line-based reverse scan: process from the most recent line backwards.
@@ -696,9 +706,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		)
 	}
 
-	cc.cache.Write(func(c *cacheState) {
-		c.status = statusCacheEntry{tailHash: h, status: status, desc: desc}
-	})
+	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
 	return status, desc
 }
 
@@ -706,6 +714,12 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 // This prevents false positive status detections from metadata like session names
 // appearing in window titles, status bars, or shell prompts.
 func filterTmuxMetadata(content string) (string, int) {
+	// Fast path: if no line starts with '[' (tmux status bar marker), skip the rebuild.
+	// Covers the common case where terminal output has no tmux metadata lines.
+	if len(content) == 0 || (content[0] != '[' && !strings.Contains(content, "\n[")) {
+		return content, 0
+	}
+
 	var sb strings.Builder
 	sb.Grow(len(content))
 	removedCount := 0
@@ -744,12 +758,26 @@ func filterTmuxMetadata(content string) (string, int) {
 
 // lastNLines returns the last n lines of s as a slice.
 // If s has fewer than n lines, all lines are returned.
+// Scans backward to find the split point, avoiding allocation for the discarded prefix.
 func lastNLines(s string, n int) []string {
-	lines := strings.Split(s, "\n")
-	if len(lines) <= n {
-		return lines
+	if n <= 0 {
+		return nil
 	}
-	return lines[len(lines)-n:]
+	// Scan backward counting newlines; stop when we've found n of them.
+	count := 0
+	pos := len(s)
+	for pos > 0 {
+		pos--
+		if s[pos] == '\n' {
+			count++
+			if count == n {
+				// Split only the tail (avoids allocating headers for the discarded prefix).
+				return strings.Split(s[pos+1:], "\n")
+			}
+		}
+	}
+	// Fewer than n newlines in the whole string — return all lines.
+	return strings.Split(s, "\n")
 }
 
 // tailContent returns the last n bytes of s, snapped forward to the next
@@ -767,11 +795,12 @@ func tailContent(s string, n int) string {
 	return tail
 }
 
-// hashString returns a fast FNV-64a hash of s.
+// hashString returns a murmur3-64 hash of s without allocating a []byte copy.
 func hashString(s string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(s))
-	return h.Sum64()
+	if len(s) == 0 {
+		return murmur3.Sum64(nil)
+	}
+	return murmur3.Sum64(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // GetRecentOutput returns recent output from the PTY buffer.
@@ -781,26 +810,15 @@ func (cc *ClaudeController) GetRecentOutput(bytes int) []byte {
 	if pa == nil {
 		return nil
 	}
-
 	if bytes <= 0 {
 		return pa.GetBuffer()
 	}
-
-	buffer := pa.GetBuffer()
-	if len(buffer) <= bytes {
-		return buffer
-	}
-
-	return buffer[len(buffer)-bytes:]
+	return pa.GetRecentOutput(bytes)
 }
 
 // IsStarted returns whether the controller is currently started.
 func (cc *ClaudeController) IsStarted() bool {
-	var started bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		started = l.ctx != nil
-	})
-	return started
+	return cc.started.Load()
 }
 
 // GetSessionName returns the session name for this controller.
@@ -879,24 +897,23 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 
 	var state detection.IdleState
 	if pa != nil {
-		raw := pa.GetRecentOutput(statusDetectionTailBytes)
-		if len(raw) > 0 {
-			tail := string(raw)
-			h := hashString(tail)
-
-			var hit bool
-			cc.cache.Read(func(c cacheState) {
-				if h == c.idle.tailHash {
-					state = c.idle.state
-					hit = true
+		h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+		if hasData {
+			if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+				state = ic.state
+			} else {
+				bufp := tailBufPool.Get().(*[]byte)
+				n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+				if n > 0 {
+					tail := string((*bufp)[:n])
+					tailBufPool.Put(bufp)
+					filtered, _ := filterTmuxMetadata(tail)
+					state = id.DetectStateFromContent(filtered)
+					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state})
+				} else {
+					tailBufPool.Put(bufp)
+					state = id.GetState()
 				}
-			})
-			if !hit {
-				filtered, _ := filterTmuxMetadata(tail)
-				state = id.DetectStateFromContent(filtered)
-				cc.cache.Write(func(c *cacheState) {
-					c.idle = idleCacheEntry{tailHash: h, state: state}
-				})
 			}
 		} else {
 			state = id.GetState()
@@ -907,30 +924,139 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 		state = id.GetState()
 	}
 
-	lastActivity := id.GetLastActivity()
+	var lastActivity time.Time
+	if ns := id.GetLastActivityNs(); ns != 0 {
+		lastActivity = time.Unix(0, ns)
+	}
 	return state, lastActivity
 }
 
 // GetIdleStateInfo returns comprehensive idle state information.
 func (cc *ClaudeController) GetIdleStateInfo() detection.IdleStateInfo {
 	state, lastActivity := cc.GetIdleState()
-
-	id := cc.idleDetector.Load()
-	if id == nil {
+	if cc.idleDetector.Load() == nil {
 		return detection.IdleStateInfo{
 			State:        detection.IdleStateUnknown,
 			SessionName:  cc.sessionName,
 			LastActivity: time.Now(),
 		}
 	}
-
 	return detection.IdleStateInfo{
-		State:           state,
-		LastActivity:    lastActivity,
-		IdleDuration:    time.Since(lastActivity),
-		LastStateChange: id.GetStateInfo().LastStateChange,
-		SessionName:     cc.sessionName,
+		State:        state,
+		LastActivity: lastActivity,
+		IdleDuration: time.Since(lastActivity),
+		SessionName:  cc.sessionName,
 	}
+}
+
+// GetStatusAndIdleInfo returns both the detected status and idle state info in one call.
+// Saves one GetRecentHash (murmur3 over 4KB) and one cache.Read on every poll tick
+// compared to calling GetCurrentStatus + GetIdleStateInfo separately.
+func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, string, detection.IdleStateInfo) {
+	id := cc.idleDetector.Load()
+	pa := cc.ptyAccess.Load()
+
+	buildIdleInfo := func(state detection.IdleState) detection.IdleStateInfo {
+		var lastActivity time.Time
+		if id != nil {
+			if ns := id.GetLastActivityNs(); ns != 0 {
+				lastActivity = time.Unix(0, ns)
+			}
+		}
+		return detection.IdleStateInfo{
+			State:        state,
+			LastActivity: lastActivity,
+			IdleDuration: time.Since(lastActivity),
+			SessionName:  cc.sessionName,
+		}
+	}
+
+	if pa == nil {
+		return detection.StatusUnknown, "PTY not initialized", buildIdleInfo(detection.IdleStateUnknown)
+	}
+
+	h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+	if !hasData {
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+	}
+
+	// Two independent lock-free loads replace the former single RLock read.
+	var statusHit, idleHit bool
+	var cachedStatus detection.DetectedStatus
+	var cachedDesc string
+	var cachedIdleState detection.IdleState
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+		statusHit = true
+		cachedStatus = sc.status
+		cachedDesc = sc.desc
+	}
+	if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+		idleHit = true
+		cachedIdleState = ic.state
+	}
+	if statusHit && idleHit {
+		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState)
+	}
+
+	// Cache miss: read tail into pooled buffer; convert to string before returning the buffer.
+	bufp := tailBufPool.Get().(*[]byte)
+	n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+	if n == 0 {
+		tailBufPool.Put(bufp)
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+	}
+	tail := string((*bufp)[:n])
+	tailBufPool.Put(bufp)
+	filtered, _ := filterTmuxMetadata(tail)
+
+	var status detection.DetectedStatus
+	var desc string
+	var idleState detection.IdleState
+
+	if statusHit {
+		status, desc = cachedStatus, cachedDesc
+	} else {
+		lines := lastNLines(filtered, statusDetectionLinesWindow)
+		if sd := cc.statusDetector.Load(); sd != nil {
+			status, desc = sd.DetectWithContextFromLines(lines)
+			if status == detection.StatusUnknown && len(filtered) == 0 && detection.HasClaudeSpinnerActivity(tail) {
+				status = detection.StatusExecuting
+				desc = "spinner_verb: active spinner in filtered-to-empty tail"
+			}
+			if status == detection.StatusUnknown && len(lines) <= 1 && detection.HasClaudeSpinnerActivity(tail) {
+				status = detection.StatusExecuting
+				desc = "spinner_verb: active spinner in single-line tail"
+			}
+		}
+		if status == detection.StatusReady || status == detection.StatusIdle || status == detection.StatusUnknown {
+			snippet := tail
+			if len(snippet) > 512 {
+				snippet = snippet[len(snippet)-512:]
+			}
+			log.Debug("GetStatusAndIdleInfo: non-active result",
+				"session", cc.sessionName,
+				"status", status,
+				"desc", desc,
+				"tail_len", len(tail),
+				"filtered_len", len(filtered),
+				"tail_snippet", fmt.Sprintf("%q", snippet),
+			)
+		}
+	}
+
+	if idleHit {
+		idleState = cachedIdleState
+	} else if id != nil {
+		idleState = id.DetectStateFromContent(filtered)
+	}
+
+	if !statusHit {
+		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
+	}
+	if !idleHit {
+		cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: idleState})
+	}
+	return status, desc, buildIdleInfo(idleState)
 }
 
 // GetIdleDuration returns how long the session has been idle.

@@ -94,9 +94,11 @@ This resets all TCC grants for `com.stapler-squad`. Use during development to re
 
 The `make install-service` flow on macOS:
 
-1. `go build` with `CGO_LDFLAGS="-sectcreate __TEXT __info_plist Info.plist"` embeds the plist into the binary's `__TEXT/__info_plist` Mach-O section
+1. `go build` with `CGO_LDFLAGS="-sectcreate __TEXT __info_plist macos/Info.plist"` embeds the plist into the binary's `__TEXT/__info_plist` Mach-O section
 2. `otool` assertion verifies the plist was actually embedded (catches silent `CGO_ENABLED=0` failures)
 3. `codesign --sign "StaplerSquadDev" --entitlements entitlements.plist` signs the binary
 4. `install-service.sh` stops, installs, and restarts the LaunchAgent
 
 The `CFBundleIdentifier = com.stapler-squad` in the embedded plist causes TCC to track the app by bundle ID (`client_type=0`) rather than path+hash. The cert-anchored DR means the TCC row's `csreq` field matches every rebuild as long as the same cert is used.
+
+**Why `Info.plist` lives in `macos/` and not the repo root:** if the source `Info.plist` file sits in the same directory as the built binary, `codesign` auto-detects a bundle layout and seals the *entire directory* as bundle resources (every file, recursively — this repo has 80k+ tracked/untracked files). `codesign --verify` then fails with `a sealed resource is missing or invalid` the moment anything in the repo changes (a git worktree's `.git/index`, an untracked `.claude/settings.local.json`, etc.), which silently aborts `install-service.sh`'s pre-flight signature check before it ever restarts the LaunchAgent. Keeping `Info.plist` out of the binary's directory keeps `codesign` treating it as a plain Mach-O executable (`Sealed Resources=none`).

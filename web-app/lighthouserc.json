@@ -1,8 +1,8 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "npm run start",
-      "startServerReadyPattern": "started server",
+      "startServerCommand": "npx serve@14 out -l 3001",
+      "startServerReadyPattern": "Accepting connections at",
       "url": ["http://localhost:3001/"],
       "numberOfRuns": 3,
       "settings": {

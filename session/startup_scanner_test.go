@@ -51,7 +51,7 @@ func makeStartedInstance(title string) *Instance {
 		UUID:   "uuid-" + title,
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	return inst
 }
 
@@ -121,7 +121,7 @@ func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 		Title:  "paused-session",
 		Status: Paused,
 	}
-	inst.started = true
+	inst.started.Store(true)
 
 	approvalContent := "Yes, allow once"
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})

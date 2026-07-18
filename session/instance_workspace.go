@@ -110,7 +110,8 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	i := s.inst
 	result := &WorkspaceSwitchResult{}
 
-	if !i.started {
+	// Validate session state
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot switch workspace for session that has not been started")
 	}
 	if i.Status == Paused {
@@ -127,7 +128,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 		}
 		result.Success = true
 		result.ChangesHandled = "none (directory change only)"
-		i.snapshot.Store(buildSnapshot(i))
+		i.mu.Lock()
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
 		return result, nil
 	}
 
@@ -158,10 +162,13 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 			if err := killSessionLocked(s); err != nil {
 				return nil, fmt.Errorf("failed to stop session: %w", err)
 			}
-			i.started = false
+			i.started.Store(false)
 
 			log.Info("restarting session in new directory", "path", repoPath)
-			i.snapshot.Store(buildSnapshot(i))
+			i.mu.Lock()
+			snap := buildSnapshot(i)
+			i.mu.Unlock()
+			i.snapshot.Store(snap)
 			if err := startLocked(s, false); err != nil {
 				result.Error = fmt.Errorf("failed to restart session: %w", err)
 				return result, result.Error
@@ -190,7 +197,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	if err := killSessionLocked(s); err != nil {
 		return nil, fmt.Errorf("failed to stop session: %w", err)
 	}
-	i.started = false
+	i.started.Store(false)
 
 	var switchErr error
 	switch req.Type {
@@ -202,7 +209,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 
 	if switchErr != nil {
 		log.Warn("switch failed, attempting recovery", "err", switchErr)
-		i.snapshot.Store(buildSnapshot(i))
+		i.mu.Lock()
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
 		if err := startLocked(s, false); err != nil {
 			log.Error("recovery failed", "err", err)
 		}
@@ -211,7 +221,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	}
 
 	log.Info("restarting session with claude --resume")
-	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Lock()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	if err := startLocked(s, false); err != nil {
 		result.Error = fmt.Errorf("failed to restart session: %w", err)
 		return result, result.Error

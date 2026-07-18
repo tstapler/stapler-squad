@@ -66,6 +66,11 @@ function SettingsPageInner() {
                 Backlog Sources (GitHub sync) →
               </Link>
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsPipelineModes} className={styles.helpLink}>
+                Pipeline Modes →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

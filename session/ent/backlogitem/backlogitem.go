@@ -31,6 +31,12 @@ const (
 	FieldSkipReviewGate = "skip_review_gate"
 	// FieldSkipPlanning holds the string denoting the skip_planning field in the database.
 	FieldSkipPlanning = "skip_planning"
+	// FieldAutoSpawnSession holds the string denoting the auto_spawn_session field in the database.
+	FieldAutoSpawnSession = "auto_spawn_session"
+	// FieldAutoCreatePr holds the string denoting the auto_create_pr field in the database.
+	FieldAutoCreatePr = "auto_create_pr"
+	// FieldPipelineMode holds the string denoting the pipeline_mode field in the database.
+	FieldPipelineMode = "pipeline_mode"
 	// FieldPlanApproved holds the string denoting the plan_approved field in the database.
 	FieldPlanApproved = "plan_approved"
 	// FieldPlanApprovedAt holds the string denoting the plan_approved_at field in the database.
@@ -47,6 +53,22 @@ const (
 	FieldUserModifiedStatusAt = "user_modified_status_at"
 	// FieldArchivedAt holds the string denoting the archived_at field in the database.
 	FieldArchivedAt = "archived_at"
+	// FieldPrURL holds the string denoting the pr_url field in the database.
+	FieldPrURL = "pr_url"
+	// FieldPrNumber holds the string denoting the pr_number field in the database.
+	FieldPrNumber = "pr_number"
+	// FieldShippedCheckConclusion holds the string denoting the shipped_check_conclusion field in the database.
+	FieldShippedCheckConclusion = "shipped_check_conclusion"
+	// FieldShippedApprovedCount holds the string denoting the shipped_approved_count field in the database.
+	FieldShippedApprovedCount = "shipped_approved_count"
+	// FieldShippedChangesReqCount holds the string denoting the shipped_changes_req_count field in the database.
+	FieldShippedChangesReqCount = "shipped_changes_req_count"
+	// FieldShippedSnapshotAt holds the string denoting the shipped_snapshot_at field in the database.
+	FieldShippedSnapshotAt = "shipped_snapshot_at"
+	// FieldShippedFileStats holds the string denoting the shipped_file_stats field in the database.
+	FieldShippedFileStats = "shipped_file_stats"
+	// FieldShippedSnapshotCaptureFailed holds the string denoting the shipped_snapshot_capture_failed field in the database.
+	FieldShippedSnapshotCaptureFailed = "shipped_snapshot_capture_failed"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -57,6 +79,10 @@ const (
 	EdgeSessions = "sessions"
 	// EdgeStatusEvents holds the string denoting the status_events edge name in mutations.
 	EdgeStatusEvents = "status_events"
+	// EdgeStuckStates holds the string denoting the stuck_states edge name in mutations.
+	EdgeStuckStates = "stuck_states"
+	// EdgeProgressNotes holds the string denoting the progress_notes edge name in mutations.
+	EdgeProgressNotes = "progress_notes"
 	// EdgeSource holds the string denoting the source edge name in mutations.
 	EdgeSource = "source"
 	// Table holds the table name of the backlogitem in the database.
@@ -80,6 +106,20 @@ const (
 	StatusEventsInverseTable = "backlog_status_events"
 	// StatusEventsColumn is the table column denoting the status_events relation/edge.
 	StatusEventsColumn = "item_id"
+	// StuckStatesTable is the table that holds the stuck_states relation/edge.
+	StuckStatesTable = "backlog_stuck_states"
+	// StuckStatesInverseTable is the table name for the BacklogStuckState entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogstuckstate" package.
+	StuckStatesInverseTable = "backlog_stuck_states"
+	// StuckStatesColumn is the table column denoting the stuck_states relation/edge.
+	StuckStatesColumn = "item_id"
+	// ProgressNotesTable is the table that holds the progress_notes relation/edge.
+	ProgressNotesTable = "backlog_progress_notes"
+	// ProgressNotesInverseTable is the table name for the BacklogProgressNote entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogprogressnote" package.
+	ProgressNotesInverseTable = "backlog_progress_notes"
+	// ProgressNotesColumn is the table column denoting the progress_notes relation/edge.
+	ProgressNotesColumn = "item_id"
 	// SourceTable is the table that holds the source relation/edge.
 	SourceTable = "backlog_items"
 	// SourceInverseTable is the table name for the ItemSource entity.
@@ -100,6 +140,9 @@ var Columns = []string{
 	FieldRepoPath,
 	FieldSkipReviewGate,
 	FieldSkipPlanning,
+	FieldAutoSpawnSession,
+	FieldAutoCreatePr,
+	FieldPipelineMode,
 	FieldPlanApproved,
 	FieldPlanApprovedAt,
 	FieldPlanArtifactsPath,
@@ -108,6 +151,14 @@ var Columns = []string{
 	FieldExternalID,
 	FieldUserModifiedStatusAt,
 	FieldArchivedAt,
+	FieldPrURL,
+	FieldPrNumber,
+	FieldShippedCheckConclusion,
+	FieldShippedApprovedCount,
+	FieldShippedChangesReqCount,
+	FieldShippedSnapshotAt,
+	FieldShippedFileStats,
+	FieldShippedSnapshotCaptureFailed,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -152,8 +203,22 @@ var (
 	DefaultSkipReviewGate bool
 	// DefaultSkipPlanning holds the default value on creation for the "skip_planning" field.
 	DefaultSkipPlanning bool
+	// DefaultAutoSpawnSession holds the default value on creation for the "auto_spawn_session" field.
+	DefaultAutoSpawnSession bool
+	// DefaultAutoCreatePr holds the default value on creation for the "auto_create_pr" field.
+	DefaultAutoCreatePr bool
+	// DefaultPipelineMode holds the default value on creation for the "pipeline_mode" field.
+	DefaultPipelineMode string
 	// DefaultPlanApproved holds the default value on creation for the "plan_approved" field.
 	DefaultPlanApproved bool
+	// DefaultPrNumber holds the default value on creation for the "pr_number" field.
+	DefaultPrNumber int
+	// DefaultShippedApprovedCount holds the default value on creation for the "shipped_approved_count" field.
+	DefaultShippedApprovedCount int
+	// DefaultShippedChangesReqCount holds the default value on creation for the "shipped_changes_req_count" field.
+	DefaultShippedChangesReqCount int
+	// DefaultShippedSnapshotCaptureFailed holds the default value on creation for the "shipped_snapshot_capture_failed" field.
+	DefaultShippedSnapshotCaptureFailed bool
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -212,6 +277,21 @@ func BySkipPlanning(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSkipPlanning, opts...).ToFunc()
 }
 
+// ByAutoSpawnSession orders the results by the auto_spawn_session field.
+func ByAutoSpawnSession(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAutoSpawnSession, opts...).ToFunc()
+}
+
+// ByAutoCreatePr orders the results by the auto_create_pr field.
+func ByAutoCreatePr(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAutoCreatePr, opts...).ToFunc()
+}
+
+// ByPipelineMode orders the results by the pipeline_mode field.
+func ByPipelineMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPipelineMode, opts...).ToFunc()
+}
+
 // ByPlanApproved orders the results by the plan_approved field.
 func ByPlanApproved(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlanApproved, opts...).ToFunc()
@@ -250,6 +330,46 @@ func ByUserModifiedStatusAt(opts ...sql.OrderTermOption) OrderOption {
 // ByArchivedAt orders the results by the archived_at field.
 func ByArchivedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldArchivedAt, opts...).ToFunc()
+}
+
+// ByPrURL orders the results by the pr_url field.
+func ByPrURL(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPrURL, opts...).ToFunc()
+}
+
+// ByPrNumber orders the results by the pr_number field.
+func ByPrNumber(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPrNumber, opts...).ToFunc()
+}
+
+// ByShippedCheckConclusion orders the results by the shipped_check_conclusion field.
+func ByShippedCheckConclusion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedCheckConclusion, opts...).ToFunc()
+}
+
+// ByShippedApprovedCount orders the results by the shipped_approved_count field.
+func ByShippedApprovedCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedApprovedCount, opts...).ToFunc()
+}
+
+// ByShippedChangesReqCount orders the results by the shipped_changes_req_count field.
+func ByShippedChangesReqCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedChangesReqCount, opts...).ToFunc()
+}
+
+// ByShippedSnapshotAt orders the results by the shipped_snapshot_at field.
+func ByShippedSnapshotAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedSnapshotAt, opts...).ToFunc()
+}
+
+// ByShippedFileStats orders the results by the shipped_file_stats field.
+func ByShippedFileStats(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedFileStats, opts...).ToFunc()
+}
+
+// ByShippedSnapshotCaptureFailed orders the results by the shipped_snapshot_capture_failed field.
+func ByShippedSnapshotCaptureFailed(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedSnapshotCaptureFailed, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.
@@ -304,6 +424,34 @@ func ByStatusEvents(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByStuckStatesCount orders the results by stuck_states count.
+func ByStuckStatesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newStuckStatesStep(), opts...)
+	}
+}
+
+// ByStuckStates orders the results by stuck_states terms.
+func ByStuckStates(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newStuckStatesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByProgressNotesCount orders the results by progress_notes count.
+func ByProgressNotesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newProgressNotesStep(), opts...)
+	}
+}
+
+// ByProgressNotes orders the results by progress_notes terms.
+func ByProgressNotes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newProgressNotesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // BySourceField orders the results by source field.
 func BySourceField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -329,6 +477,20 @@ func newStatusEventsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(StatusEventsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, StatusEventsTable, StatusEventsColumn),
+	)
+}
+func newStuckStatesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(StuckStatesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, StuckStatesTable, StuckStatesColumn),
+	)
+}
+func newProgressNotesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ProgressNotesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ProgressNotesTable, ProgressNotesColumn),
 	)
 }
 func newSourceStep() *sqlgraph.Step {

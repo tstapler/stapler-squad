@@ -78,7 +78,14 @@ func (ps *PushService) generateVapidKeys() error {
 	ps.vapidPublicKey = base64.RawURLEncoding.EncodeToString(publicKeyBytes)
 
 	vapidData := map[string]string{
-		"privateKey": base64.RawURLEncoding.EncodeToString(privateKey.D.Bytes()),
+		// D.Bytes() (variable-length, no zero-padding) must be preserved exactly as the
+		// on-disk encoding: switching to the non-deprecated PrivateKey.Bytes() (which
+		// zero-pads to a fixed 32 bytes for P256) would change the encoded value for any
+		// key whose D has a leading zero byte, and loadVapidKeys below reconstructs D via
+		// big.Int.SetBytes which accepts this variable-length format. Changing the format
+		// risks failing to decode already-persisted production VAPID keys, which would
+		// silently invalidate all existing push subscriptions.
+		"privateKey": base64.RawURLEncoding.EncodeToString(privateKey.D.Bytes()), //nolint:staticcheck // SA1019: see comment above; format must stay byte-compatible with existing persisted keys
 		"publicKey":  ps.vapidPublicKey,
 	}
 
@@ -123,7 +130,11 @@ func (ps *PushService) loadVapidKeys() error {
 		D: new(big.Int),
 	}
 
-	privateKey.D.SetBytes(privateKeyBytes)
+	// ecdsa.ParseRawPrivateKey requires a fixed-length (32-byte for P256) input and would
+	// fail to load already-persisted keys encoded with the variable-length D.Bytes() format
+	// above (e.g. if D has a leading zero byte); big.Int.SetBytes accepts any length and is
+	// the byte-compatible counterpart to the encode side, so it is kept.
+	privateKey.D.SetBytes(privateKeyBytes)                                                               //nolint:staticcheck // SA1019: see comment above; must stay compatible with existing persisted keys
 	privateKey.PublicKey.X, privateKey.PublicKey.Y = elliptic.Unmarshal(elliptic.P256(), publicKeyBytes) //nolint:staticcheck
 	if privateKey.PublicKey.X == nil {                                                                   //nolint:staticcheck
 		return fmt.Errorf("invalid public key")
@@ -262,7 +273,11 @@ func (ps *PushService) getPrivateKeyPEM() (string, error) {
 	if ps.vapidPrivateKey == nil {
 		return "", fmt.Errorf("VAPID private key not initialized")
 	}
-	return base64.RawURLEncoding.EncodeToString(ps.vapidPrivateKey.D.Bytes()), nil
+	// Same rationale as generateVapidKeys: keep the raw, non-zero-padded D encoding so the
+	// value sent to webpush-go matches what was persisted/loaded, rather than switching to
+	// PrivateKey.Bytes() which zero-pads and could change output for keys with a leading
+	// zero byte in D.
+	return base64.RawURLEncoding.EncodeToString(ps.vapidPrivateKey.D.Bytes()), nil //nolint:staticcheck // SA1019: see comment above; format must stay byte-compatible with existing persisted keys
 }
 
 func (ps *PushService) loadSubscriptions() error {

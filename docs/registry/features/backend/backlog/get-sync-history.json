@@ -5,12 +5,12 @@
   "method": "GetSyncHistory",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service.go",
+  "handlerFile": "server/services/backlog_service_query.go",
   "tested": true,
   "testIds": [
     "TestGetSyncHistory_ReturnsInvalidArgumentWhenSourceIDEmpty",
     "TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns",
     "TestTriggerSync_SucceedsAndCreatesItems"
   ],
-  "lastModified": "2026-07-02T00:00:00-07:00"
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
 }

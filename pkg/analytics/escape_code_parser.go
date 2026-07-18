@@ -5,14 +5,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
-	"hash/fnv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 )
 
 // EscapeCategory represents the type of escape sequence
@@ -39,7 +40,6 @@ const (
 // ParsedEscapeCode represents a single parsed escape sequence
 type ParsedEscapeCode struct {
 	RawBytes    []byte         // Original bytes
-	HexEncoded  string         // Hex representation for display
 	Category    EscapeCategory // Type of sequence
 	Description string         // Human-readable description
 	StartOffset int            // Position in original data
@@ -163,7 +163,7 @@ func (p *EscapeCodeParser) IsEnabled() bool {
 func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	p.chunkSeqNum++
 
-	if !p.enabled || p.store == nil || len(data) == 0 {
+	if !p.enabled || p.store == nil || len(data) == 0 || p.captureLevel == "off" {
 		return data
 	}
 
@@ -255,9 +255,9 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 		record.PayloadHash = hex.EncodeToString(h[:])[:16]
 		record.RawBytes = code.RawBytes
 	case "summary":
-		h := fnv.New64a()
-		h.Write(code.RawBytes)
-		record.PayloadHash = fmt.Sprintf("%016x", h.Sum64())
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], murmur3.Sum64(code.RawBytes))
+		record.PayloadHash = hex.EncodeToString(buf[:])
 	}
 
 	// Apply OSC redaction
@@ -339,8 +339,8 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 
 		// Found an ESC, try to parse a complete sequence
 		code, consumed := p.parseSequenceAt(data, i)
-		if consumed > 0 && code != nil {
-			codes = append(codes, *code)
+		if consumed > 0 {
+			codes = append(codes, code)
 			i += consumed
 		} else {
 			// Not a valid sequence or incomplete, skip the ESC
@@ -351,16 +351,16 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 	return codes
 }
 
-// parseSequenceAt attempts to parse an escape sequence starting at offset
-// Returns the parsed code and number of bytes consumed
-func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEscapeCode, int) {
+// parseSequenceAt attempts to parse an escape sequence starting at offset.
+// Returns (code, consumed); consumed == 0 means no sequence found.
+func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset >= len(data) || data[offset] != 0x1b {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Need at least 2 bytes for any escape sequence
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	secondByte := data[offset+1]
@@ -389,14 +389,14 @@ func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEsca
 		if secondByte >= 0x40 && secondByte <= 0x5F {
 			return p.parseSimpleEscape(data, offset)
 		}
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 }
 
 // parseCSI parses a CSI sequence: ESC [ params... final
-func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Find the terminator (letter A-Z or a-z)
@@ -427,13 +427,12 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 		// Terminator: final byte per ECMA-48 (0x40-0x7E), not just letters —
 		// e.g. '@' (Insert Character) and '~' (used by many real xterm
 		// sequences) are valid CSI final bytes outside the A-Z/a-z range.
-		if b >= 0x40 && b <= 0x7E {
+		if ansi.IsCSIFinalByte(b) {
 			end++
 			rawBytes := data[offset:end]
 			category, description := p.categorizeCSI(rawBytes, isPrivate, hasParams)
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: description,
 				StartOffset: offset,
@@ -441,17 +440,17 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			}, end - offset
 		}
 		// Invalid character - not a valid CSI sequence
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// No terminator found - incomplete sequence
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseOSC parses an OSC sequence: ESC ] ... BEL or ESC ] ... ESC \
-func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for BEL (0x07) or ST (ESC \)
@@ -459,9 +458,8 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// BEL terminator
 		if data[end] == 0x07 {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -471,9 +469,8 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// ESC \ terminator (ST)
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -482,13 +479,13 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseStringSequence parses DCS, PM, APC, SOS sequences ending with ST
-func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for ST (ESC \) or single-byte ST (0x9C)
@@ -496,9 +493,8 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// ESC \ terminator
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -508,9 +504,8 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// Single-byte ST (C1)
 		if data[end] == 0x9C {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -519,42 +514,69 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseCharset parses character set designation sequences
-func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// ESC ( X, ESC ) X, ESC * X, ESC + X
 	rawBytes := data[offset : offset+3]
+	// pre-built constants for the common 12 combinations avoid a string concat per call.
 	var desc string
+	slot := data[offset+2] // charset selector byte
 	switch data[offset+1] {
 	case '(':
-		desc = "Designate G0 character set"
-	case ')':
-		desc = "Designate G1 character set"
-	case '*':
-		desc = "Designate G2 character set"
-	case '+':
-		desc = "Designate G3 character set"
-	}
-	if len(data) > offset+2 {
-		switch data[offset+2] {
+		switch slot {
 		case 'B':
-			desc += " (ASCII)"
+			desc = "Designate G0 character set (ASCII)"
 		case '0':
-			desc += " (DEC Special Graphics)"
+			desc = "Designate G0 character set (DEC Special Graphics)"
 		case 'A':
-			desc += " (UK)"
+			desc = "Designate G0 character set (UK)"
+		default:
+			desc = "Designate G0 character set"
+		}
+	case ')':
+		switch slot {
+		case 'B':
+			desc = "Designate G1 character set (ASCII)"
+		case '0':
+			desc = "Designate G1 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G1 character set (UK)"
+		default:
+			desc = "Designate G1 character set"
+		}
+	case '*':
+		switch slot {
+		case 'B':
+			desc = "Designate G2 character set (ASCII)"
+		case '0':
+			desc = "Designate G2 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G2 character set (UK)"
+		default:
+			desc = "Designate G2 character set"
+		}
+	case '+':
+		switch slot {
+		case 'B':
+			desc = "Designate G3 character set (ASCII)"
+		case '0':
+			desc = "Designate G3 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G3 character set (UK)"
+		default:
+			desc = "Designate G3 character set"
 		}
 	}
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategoryCharset,
 		Description: desc,
 		StartOffset: offset,
@@ -563,17 +585,16 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeC
 }
 
 // parseSimpleEscape parses simple 2-byte escape sequences
-func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	rawBytes := data[offset : offset+2]
 	desc := DescribeSimpleEscape(data[offset+1])
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategorySimple,
 		Description: desc,
 		StartOffset: offset,

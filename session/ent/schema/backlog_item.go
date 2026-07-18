@@ -40,6 +40,15 @@ func (BacklogItem) Fields() []ent.Field {
 			Default(false),
 		field.Bool("skip_planning").
 			Default(false),
+		field.Bool("auto_spawn_session").
+			Default(false).
+			Comment("When true, a work session is spawned automatically once the item reaches ready — no manual 'Spawn Session' click required."),
+		field.Bool("auto_create_pr").
+			Default(false).
+			Comment("When true, a PR is created automatically (via the same one-shot prompt the manual Review Queue 'Create PR' button uses) once a work session for this item reaches TASK_COMPLETE — no manual click required."),
+		field.String("pipeline_mode").
+			Default("").
+			Comment("Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline)."),
 		field.Bool("plan_approved").
 			Default(false),
 		field.Time("plan_approved_at").
@@ -60,6 +69,33 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Time("archived_at").
 			Optional().
 			Nillable(),
+		field.String("pr_url").
+			Optional(),
+		field.Int("pr_number").
+			Optional().
+			Default(0),
+		field.String("shipped_check_conclusion").
+			Optional().
+			Comment("Durable GitHub CI-conclusion snapshot captured at ship time — genuine GitHub CI-conclusion values only, never a capture-failure sentinel. See shipped_snapshot_capture_failed."),
+		field.Int("shipped_approved_count").
+			Optional().
+			Default(0).
+			Comment("Durable review-approval-count snapshot captured at ship time."),
+		field.Int("shipped_changes_req_count").
+			Optional().
+			Default(0).
+			Comment("Durable \"changes requested\" review-count snapshot captured at ship time."),
+		field.Time("shipped_snapshot_at").
+			Optional().
+			Nillable().
+			Comment("Timestamp the durable ship snapshot was captured at."),
+		field.String("shipped_file_stats").
+			Optional().
+			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),
+		field.Bool("shipped_snapshot_capture_failed").
+			Optional().
+			Default(false).
+			Comment("true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values"),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
@@ -75,6 +111,10 @@ func (BacklogItem) Edges() []ent.Edge {
 		edge.To("item_sessions", ItemSession.Type),
 		edge.To("sessions", Session.Type),
 		edge.To("status_events", BacklogStatusEvent.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("stuck_states", BacklogStuckState.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("progress_notes", BacklogProgressNote.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("source", ItemSource.Type).
 			Ref("backlog_items").

@@ -15,7 +15,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
@@ -24,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
@@ -48,7 +51,9 @@ const (
 	TypeAnalyticsEvent          = "AnalyticsEvent"
 	TypeApprovalRule            = "ApprovalRule"
 	TypeBacklogItem             = "BacklogItem"
+	TypeBacklogProgressNote     = "BacklogProgressNote"
 	TypeBacklogStatusEvent      = "BacklogStatusEvent"
+	TypeBacklogStuckState       = "BacklogStuckState"
 	TypeClassificationAnalytics = "ClassificationAnalytics"
 	TypeClaudeMetadata          = "ClaudeMetadata"
 	TypeClaudeSession           = "ClaudeSession"
@@ -57,6 +62,7 @@ const (
 	TypeEscapeEvent             = "EscapeEvent"
 	TypeItemSession             = "ItemSession"
 	TypeItemSource              = "ItemSource"
+	TypePipelineMode            = "PipelineMode"
 	TypeProject                 = "Project"
 	TypeReviewVerdict           = "ReviewVerdict"
 	TypeSession                 = "Session"
@@ -2974,43 +2980,63 @@ func (m *ApprovalRuleMutation) ResetEdge(name string) error {
 // BacklogItemMutation represents an operation that mutates the BacklogItem nodes in the graph.
 type BacklogItemMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *uuid.UUID
-	title                   *string
-	description             *string
-	acceptance_criteria     *string
-	priority                *int
-	addpriority             *int
-	status                  *string
-	repo_path               *string
-	skip_review_gate        *bool
-	skip_planning           *bool
-	plan_approved           *bool
-	plan_approved_at        *time.Time
-	plan_artifacts_path     *string
-	user_modified_fields    *string
-	notes                   *string
-	external_id             *string
-	user_modified_status_at *time.Time
-	archived_at             *time.Time
-	created_at              *time.Time
-	updated_at              *time.Time
-	clearedFields           map[string]struct{}
-	item_sessions           map[uuid.UUID]struct{}
-	removeditem_sessions    map[uuid.UUID]struct{}
-	cleareditem_sessions    bool
-	sessions                map[int]struct{}
-	removedsessions         map[int]struct{}
-	clearedsessions         bool
-	status_events           map[uuid.UUID]struct{}
-	removedstatus_events    map[uuid.UUID]struct{}
-	clearedstatus_events    bool
-	source                  *uuid.UUID
-	clearedsource           bool
-	done                    bool
-	oldValue                func(context.Context) (*BacklogItem, error)
-	predicates              []predicate.BacklogItem
+	op                              Op
+	typ                             string
+	id                              *uuid.UUID
+	title                           *string
+	description                     *string
+	acceptance_criteria             *string
+	priority                        *int
+	addpriority                     *int
+	status                          *string
+	repo_path                       *string
+	skip_review_gate                *bool
+	skip_planning                   *bool
+	auto_spawn_session              *bool
+	auto_create_pr                  *bool
+	pipeline_mode                   *string
+	plan_approved                   *bool
+	plan_approved_at                *time.Time
+	plan_artifacts_path             *string
+	user_modified_fields            *string
+	notes                           *string
+	external_id                     *string
+	user_modified_status_at         *time.Time
+	archived_at                     *time.Time
+	pr_url                          *string
+	pr_number                       *int
+	addpr_number                    *int
+	shipped_check_conclusion        *string
+	shipped_approved_count          *int
+	addshipped_approved_count       *int
+	shipped_changes_req_count       *int
+	addshipped_changes_req_count    *int
+	shipped_snapshot_at             *time.Time
+	shipped_file_stats              *string
+	shipped_snapshot_capture_failed *bool
+	created_at                      *time.Time
+	updated_at                      *time.Time
+	clearedFields                   map[string]struct{}
+	item_sessions                   map[uuid.UUID]struct{}
+	removeditem_sessions            map[uuid.UUID]struct{}
+	cleareditem_sessions            bool
+	sessions                        map[int]struct{}
+	removedsessions                 map[int]struct{}
+	clearedsessions                 bool
+	status_events                   map[uuid.UUID]struct{}
+	removedstatus_events            map[uuid.UUID]struct{}
+	clearedstatus_events            bool
+	stuck_states                    map[uuid.UUID]struct{}
+	removedstuck_states             map[uuid.UUID]struct{}
+	clearedstuck_states             bool
+	progress_notes                  map[uuid.UUID]struct{}
+	removedprogress_notes           map[uuid.UUID]struct{}
+	clearedprogress_notes           bool
+	source                          *uuid.UUID
+	clearedsource                   bool
+	done                            bool
+	oldValue                        func(context.Context) (*BacklogItem, error)
+	predicates                      []predicate.BacklogItem
 }
 
 var _ ent.Mutation = (*BacklogItemMutation)(nil)
@@ -3464,6 +3490,114 @@ func (m *BacklogItemMutation) ResetSkipPlanning() {
 	m.skip_planning = nil
 }
 
+// SetAutoSpawnSession sets the "auto_spawn_session" field.
+func (m *BacklogItemMutation) SetAutoSpawnSession(b bool) {
+	m.auto_spawn_session = &b
+}
+
+// AutoSpawnSession returns the value of the "auto_spawn_session" field in the mutation.
+func (m *BacklogItemMutation) AutoSpawnSession() (r bool, exists bool) {
+	v := m.auto_spawn_session
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAutoSpawnSession returns the old "auto_spawn_session" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldAutoSpawnSession(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAutoSpawnSession is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAutoSpawnSession requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAutoSpawnSession: %w", err)
+	}
+	return oldValue.AutoSpawnSession, nil
+}
+
+// ResetAutoSpawnSession resets all changes to the "auto_spawn_session" field.
+func (m *BacklogItemMutation) ResetAutoSpawnSession() {
+	m.auto_spawn_session = nil
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (m *BacklogItemMutation) SetAutoCreatePr(b bool) {
+	m.auto_create_pr = &b
+}
+
+// AutoCreatePr returns the value of the "auto_create_pr" field in the mutation.
+func (m *BacklogItemMutation) AutoCreatePr() (r bool, exists bool) {
+	v := m.auto_create_pr
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAutoCreatePr returns the old "auto_create_pr" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldAutoCreatePr(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAutoCreatePr is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAutoCreatePr requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAutoCreatePr: %w", err)
+	}
+	return oldValue.AutoCreatePr, nil
+}
+
+// ResetAutoCreatePr resets all changes to the "auto_create_pr" field.
+func (m *BacklogItemMutation) ResetAutoCreatePr() {
+	m.auto_create_pr = nil
+}
+
+// SetPipelineMode sets the "pipeline_mode" field.
+func (m *BacklogItemMutation) SetPipelineMode(s string) {
+	m.pipeline_mode = &s
+}
+
+// PipelineMode returns the value of the "pipeline_mode" field in the mutation.
+func (m *BacklogItemMutation) PipelineMode() (r string, exists bool) {
+	v := m.pipeline_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPipelineMode returns the old "pipeline_mode" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPipelineMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPipelineMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPipelineMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPipelineMode: %w", err)
+	}
+	return oldValue.PipelineMode, nil
+}
+
+// ResetPipelineMode resets all changes to the "pipeline_mode" field.
+func (m *BacklogItemMutation) ResetPipelineMode() {
+	m.pipeline_mode = nil
+}
+
 // SetPlanApproved sets the "plan_approved" field.
 func (m *BacklogItemMutation) SetPlanApproved(b bool) {
 	m.plan_approved = &b
@@ -3843,6 +3977,461 @@ func (m *BacklogItemMutation) ResetArchivedAt() {
 	delete(m.clearedFields, backlogitem.FieldArchivedAt)
 }
 
+// SetPrURL sets the "pr_url" field.
+func (m *BacklogItemMutation) SetPrURL(s string) {
+	m.pr_url = &s
+}
+
+// PrURL returns the value of the "pr_url" field in the mutation.
+func (m *BacklogItemMutation) PrURL() (r string, exists bool) {
+	v := m.pr_url
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPrURL returns the old "pr_url" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPrURL(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPrURL is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPrURL requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPrURL: %w", err)
+	}
+	return oldValue.PrURL, nil
+}
+
+// ClearPrURL clears the value of the "pr_url" field.
+func (m *BacklogItemMutation) ClearPrURL() {
+	m.pr_url = nil
+	m.clearedFields[backlogitem.FieldPrURL] = struct{}{}
+}
+
+// PrURLCleared returns if the "pr_url" field was cleared in this mutation.
+func (m *BacklogItemMutation) PrURLCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPrURL]
+	return ok
+}
+
+// ResetPrURL resets all changes to the "pr_url" field.
+func (m *BacklogItemMutation) ResetPrURL() {
+	m.pr_url = nil
+	delete(m.clearedFields, backlogitem.FieldPrURL)
+}
+
+// SetPrNumber sets the "pr_number" field.
+func (m *BacklogItemMutation) SetPrNumber(i int) {
+	m.pr_number = &i
+	m.addpr_number = nil
+}
+
+// PrNumber returns the value of the "pr_number" field in the mutation.
+func (m *BacklogItemMutation) PrNumber() (r int, exists bool) {
+	v := m.pr_number
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPrNumber returns the old "pr_number" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPrNumber(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPrNumber is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPrNumber requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPrNumber: %w", err)
+	}
+	return oldValue.PrNumber, nil
+}
+
+// AddPrNumber adds i to the "pr_number" field.
+func (m *BacklogItemMutation) AddPrNumber(i int) {
+	if m.addpr_number != nil {
+		*m.addpr_number += i
+	} else {
+		m.addpr_number = &i
+	}
+}
+
+// AddedPrNumber returns the value that was added to the "pr_number" field in this mutation.
+func (m *BacklogItemMutation) AddedPrNumber() (r int, exists bool) {
+	v := m.addpr_number
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearPrNumber clears the value of the "pr_number" field.
+func (m *BacklogItemMutation) ClearPrNumber() {
+	m.pr_number = nil
+	m.addpr_number = nil
+	m.clearedFields[backlogitem.FieldPrNumber] = struct{}{}
+}
+
+// PrNumberCleared returns if the "pr_number" field was cleared in this mutation.
+func (m *BacklogItemMutation) PrNumberCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPrNumber]
+	return ok
+}
+
+// ResetPrNumber resets all changes to the "pr_number" field.
+func (m *BacklogItemMutation) ResetPrNumber() {
+	m.pr_number = nil
+	m.addpr_number = nil
+	delete(m.clearedFields, backlogitem.FieldPrNumber)
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) SetShippedCheckConclusion(s string) {
+	m.shipped_check_conclusion = &s
+}
+
+// ShippedCheckConclusion returns the value of the "shipped_check_conclusion" field in the mutation.
+func (m *BacklogItemMutation) ShippedCheckConclusion() (r string, exists bool) {
+	v := m.shipped_check_conclusion
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedCheckConclusion returns the old "shipped_check_conclusion" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedCheckConclusion(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedCheckConclusion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedCheckConclusion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedCheckConclusion: %w", err)
+	}
+	return oldValue.ShippedCheckConclusion, nil
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) ClearShippedCheckConclusion() {
+	m.shipped_check_conclusion = nil
+	m.clearedFields[backlogitem.FieldShippedCheckConclusion] = struct{}{}
+}
+
+// ShippedCheckConclusionCleared returns if the "shipped_check_conclusion" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedCheckConclusionCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedCheckConclusion]
+	return ok
+}
+
+// ResetShippedCheckConclusion resets all changes to the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) ResetShippedCheckConclusion() {
+	m.shipped_check_conclusion = nil
+	delete(m.clearedFields, backlogitem.FieldShippedCheckConclusion)
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (m *BacklogItemMutation) SetShippedApprovedCount(i int) {
+	m.shipped_approved_count = &i
+	m.addshipped_approved_count = nil
+}
+
+// ShippedApprovedCount returns the value of the "shipped_approved_count" field in the mutation.
+func (m *BacklogItemMutation) ShippedApprovedCount() (r int, exists bool) {
+	v := m.shipped_approved_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedApprovedCount returns the old "shipped_approved_count" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedApprovedCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedApprovedCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedApprovedCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedApprovedCount: %w", err)
+	}
+	return oldValue.ShippedApprovedCount, nil
+}
+
+// AddShippedApprovedCount adds i to the "shipped_approved_count" field.
+func (m *BacklogItemMutation) AddShippedApprovedCount(i int) {
+	if m.addshipped_approved_count != nil {
+		*m.addshipped_approved_count += i
+	} else {
+		m.addshipped_approved_count = &i
+	}
+}
+
+// AddedShippedApprovedCount returns the value that was added to the "shipped_approved_count" field in this mutation.
+func (m *BacklogItemMutation) AddedShippedApprovedCount() (r int, exists bool) {
+	v := m.addshipped_approved_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (m *BacklogItemMutation) ClearShippedApprovedCount() {
+	m.shipped_approved_count = nil
+	m.addshipped_approved_count = nil
+	m.clearedFields[backlogitem.FieldShippedApprovedCount] = struct{}{}
+}
+
+// ShippedApprovedCountCleared returns if the "shipped_approved_count" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedApprovedCountCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedApprovedCount]
+	return ok
+}
+
+// ResetShippedApprovedCount resets all changes to the "shipped_approved_count" field.
+func (m *BacklogItemMutation) ResetShippedApprovedCount() {
+	m.shipped_approved_count = nil
+	m.addshipped_approved_count = nil
+	delete(m.clearedFields, backlogitem.FieldShippedApprovedCount)
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) SetShippedChangesReqCount(i int) {
+	m.shipped_changes_req_count = &i
+	m.addshipped_changes_req_count = nil
+}
+
+// ShippedChangesReqCount returns the value of the "shipped_changes_req_count" field in the mutation.
+func (m *BacklogItemMutation) ShippedChangesReqCount() (r int, exists bool) {
+	v := m.shipped_changes_req_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedChangesReqCount returns the old "shipped_changes_req_count" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedChangesReqCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedChangesReqCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedChangesReqCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedChangesReqCount: %w", err)
+	}
+	return oldValue.ShippedChangesReqCount, nil
+}
+
+// AddShippedChangesReqCount adds i to the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) AddShippedChangesReqCount(i int) {
+	if m.addshipped_changes_req_count != nil {
+		*m.addshipped_changes_req_count += i
+	} else {
+		m.addshipped_changes_req_count = &i
+	}
+}
+
+// AddedShippedChangesReqCount returns the value that was added to the "shipped_changes_req_count" field in this mutation.
+func (m *BacklogItemMutation) AddedShippedChangesReqCount() (r int, exists bool) {
+	v := m.addshipped_changes_req_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) ClearShippedChangesReqCount() {
+	m.shipped_changes_req_count = nil
+	m.addshipped_changes_req_count = nil
+	m.clearedFields[backlogitem.FieldShippedChangesReqCount] = struct{}{}
+}
+
+// ShippedChangesReqCountCleared returns if the "shipped_changes_req_count" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedChangesReqCountCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedChangesReqCount]
+	return ok
+}
+
+// ResetShippedChangesReqCount resets all changes to the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) ResetShippedChangesReqCount() {
+	m.shipped_changes_req_count = nil
+	m.addshipped_changes_req_count = nil
+	delete(m.clearedFields, backlogitem.FieldShippedChangesReqCount)
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) SetShippedSnapshotAt(t time.Time) {
+	m.shipped_snapshot_at = &t
+}
+
+// ShippedSnapshotAt returns the value of the "shipped_snapshot_at" field in the mutation.
+func (m *BacklogItemMutation) ShippedSnapshotAt() (r time.Time, exists bool) {
+	v := m.shipped_snapshot_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedSnapshotAt returns the old "shipped_snapshot_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedSnapshotAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedSnapshotAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedSnapshotAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedSnapshotAt: %w", err)
+	}
+	return oldValue.ShippedSnapshotAt, nil
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) ClearShippedSnapshotAt() {
+	m.shipped_snapshot_at = nil
+	m.clearedFields[backlogitem.FieldShippedSnapshotAt] = struct{}{}
+}
+
+// ShippedSnapshotAtCleared returns if the "shipped_snapshot_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedSnapshotAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedSnapshotAt]
+	return ok
+}
+
+// ResetShippedSnapshotAt resets all changes to the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) ResetShippedSnapshotAt() {
+	m.shipped_snapshot_at = nil
+	delete(m.clearedFields, backlogitem.FieldShippedSnapshotAt)
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (m *BacklogItemMutation) SetShippedFileStats(s string) {
+	m.shipped_file_stats = &s
+}
+
+// ShippedFileStats returns the value of the "shipped_file_stats" field in the mutation.
+func (m *BacklogItemMutation) ShippedFileStats() (r string, exists bool) {
+	v := m.shipped_file_stats
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedFileStats returns the old "shipped_file_stats" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedFileStats(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedFileStats is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedFileStats requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedFileStats: %w", err)
+	}
+	return oldValue.ShippedFileStats, nil
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (m *BacklogItemMutation) ClearShippedFileStats() {
+	m.shipped_file_stats = nil
+	m.clearedFields[backlogitem.FieldShippedFileStats] = struct{}{}
+}
+
+// ShippedFileStatsCleared returns if the "shipped_file_stats" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedFileStatsCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedFileStats]
+	return ok
+}
+
+// ResetShippedFileStats resets all changes to the "shipped_file_stats" field.
+func (m *BacklogItemMutation) ResetShippedFileStats() {
+	m.shipped_file_stats = nil
+	delete(m.clearedFields, backlogitem.FieldShippedFileStats)
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) SetShippedSnapshotCaptureFailed(b bool) {
+	m.shipped_snapshot_capture_failed = &b
+}
+
+// ShippedSnapshotCaptureFailed returns the value of the "shipped_snapshot_capture_failed" field in the mutation.
+func (m *BacklogItemMutation) ShippedSnapshotCaptureFailed() (r bool, exists bool) {
+	v := m.shipped_snapshot_capture_failed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedSnapshotCaptureFailed returns the old "shipped_snapshot_capture_failed" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedSnapshotCaptureFailed(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedSnapshotCaptureFailed is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedSnapshotCaptureFailed requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedSnapshotCaptureFailed: %w", err)
+	}
+	return oldValue.ShippedSnapshotCaptureFailed, nil
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) ClearShippedSnapshotCaptureFailed() {
+	m.shipped_snapshot_capture_failed = nil
+	m.clearedFields[backlogitem.FieldShippedSnapshotCaptureFailed] = struct{}{}
+}
+
+// ShippedSnapshotCaptureFailedCleared returns if the "shipped_snapshot_capture_failed" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedSnapshotCaptureFailedCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedSnapshotCaptureFailed]
+	return ok
+}
+
+// ResetShippedSnapshotCaptureFailed resets all changes to the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) ResetShippedSnapshotCaptureFailed() {
+	m.shipped_snapshot_capture_failed = nil
+	delete(m.clearedFields, backlogitem.FieldShippedSnapshotCaptureFailed)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -4077,6 +4666,114 @@ func (m *BacklogItemMutation) ResetStatusEvents() {
 	m.removedstatus_events = nil
 }
 
+// AddStuckStateIDs adds the "stuck_states" edge to the BacklogStuckState entity by ids.
+func (m *BacklogItemMutation) AddStuckStateIDs(ids ...uuid.UUID) {
+	if m.stuck_states == nil {
+		m.stuck_states = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.stuck_states[ids[i]] = struct{}{}
+	}
+}
+
+// ClearStuckStates clears the "stuck_states" edge to the BacklogStuckState entity.
+func (m *BacklogItemMutation) ClearStuckStates() {
+	m.clearedstuck_states = true
+}
+
+// StuckStatesCleared reports if the "stuck_states" edge to the BacklogStuckState entity was cleared.
+func (m *BacklogItemMutation) StuckStatesCleared() bool {
+	return m.clearedstuck_states
+}
+
+// RemoveStuckStateIDs removes the "stuck_states" edge to the BacklogStuckState entity by IDs.
+func (m *BacklogItemMutation) RemoveStuckStateIDs(ids ...uuid.UUID) {
+	if m.removedstuck_states == nil {
+		m.removedstuck_states = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.stuck_states, ids[i])
+		m.removedstuck_states[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedStuckStates returns the removed IDs of the "stuck_states" edge to the BacklogStuckState entity.
+func (m *BacklogItemMutation) RemovedStuckStatesIDs() (ids []uuid.UUID) {
+	for id := range m.removedstuck_states {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// StuckStatesIDs returns the "stuck_states" edge IDs in the mutation.
+func (m *BacklogItemMutation) StuckStatesIDs() (ids []uuid.UUID) {
+	for id := range m.stuck_states {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetStuckStates resets all changes to the "stuck_states" edge.
+func (m *BacklogItemMutation) ResetStuckStates() {
+	m.stuck_states = nil
+	m.clearedstuck_states = false
+	m.removedstuck_states = nil
+}
+
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by ids.
+func (m *BacklogItemMutation) AddProgressNoteIDs(ids ...uuid.UUID) {
+	if m.progress_notes == nil {
+		m.progress_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.progress_notes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearProgressNotes clears the "progress_notes" edge to the BacklogProgressNote entity.
+func (m *BacklogItemMutation) ClearProgressNotes() {
+	m.clearedprogress_notes = true
+}
+
+// ProgressNotesCleared reports if the "progress_notes" edge to the BacklogProgressNote entity was cleared.
+func (m *BacklogItemMutation) ProgressNotesCleared() bool {
+	return m.clearedprogress_notes
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (m *BacklogItemMutation) RemoveProgressNoteIDs(ids ...uuid.UUID) {
+	if m.removedprogress_notes == nil {
+		m.removedprogress_notes = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.progress_notes, ids[i])
+		m.removedprogress_notes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedProgressNotes returns the removed IDs of the "progress_notes" edge to the BacklogProgressNote entity.
+func (m *BacklogItemMutation) RemovedProgressNotesIDs() (ids []uuid.UUID) {
+	for id := range m.removedprogress_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ProgressNotesIDs returns the "progress_notes" edge IDs in the mutation.
+func (m *BacklogItemMutation) ProgressNotesIDs() (ids []uuid.UUID) {
+	for id := range m.progress_notes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetProgressNotes resets all changes to the "progress_notes" edge.
+func (m *BacklogItemMutation) ResetProgressNotes() {
+	m.progress_notes = nil
+	m.clearedprogress_notes = false
+	m.removedprogress_notes = nil
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by id.
 func (m *BacklogItemMutation) SetSourceID(id uuid.UUID) {
 	m.source = &id
@@ -4150,7 +4847,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 29)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -4175,6 +4872,15 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.skip_planning != nil {
 		fields = append(fields, backlogitem.FieldSkipPlanning)
 	}
+	if m.auto_spawn_session != nil {
+		fields = append(fields, backlogitem.FieldAutoSpawnSession)
+	}
+	if m.auto_create_pr != nil {
+		fields = append(fields, backlogitem.FieldAutoCreatePr)
+	}
+	if m.pipeline_mode != nil {
+		fields = append(fields, backlogitem.FieldPipelineMode)
+	}
 	if m.plan_approved != nil {
 		fields = append(fields, backlogitem.FieldPlanApproved)
 	}
@@ -4198,6 +4904,30 @@ func (m *BacklogItemMutation) Fields() []string {
 	}
 	if m.archived_at != nil {
 		fields = append(fields, backlogitem.FieldArchivedAt)
+	}
+	if m.pr_url != nil {
+		fields = append(fields, backlogitem.FieldPrURL)
+	}
+	if m.pr_number != nil {
+		fields = append(fields, backlogitem.FieldPrNumber)
+	}
+	if m.shipped_check_conclusion != nil {
+		fields = append(fields, backlogitem.FieldShippedCheckConclusion)
+	}
+	if m.shipped_approved_count != nil {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.shipped_changes_req_count != nil {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
+	if m.shipped_snapshot_at != nil {
+		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
+	}
+	if m.shipped_file_stats != nil {
+		fields = append(fields, backlogitem.FieldShippedFileStats)
+	}
+	if m.shipped_snapshot_capture_failed != nil {
+		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
 	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
@@ -4229,6 +4959,12 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.SkipReviewGate()
 	case backlogitem.FieldSkipPlanning:
 		return m.SkipPlanning()
+	case backlogitem.FieldAutoSpawnSession:
+		return m.AutoSpawnSession()
+	case backlogitem.FieldAutoCreatePr:
+		return m.AutoCreatePr()
+	case backlogitem.FieldPipelineMode:
+		return m.PipelineMode()
 	case backlogitem.FieldPlanApproved:
 		return m.PlanApproved()
 	case backlogitem.FieldPlanApprovedAt:
@@ -4245,6 +4981,22 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.UserModifiedStatusAt()
 	case backlogitem.FieldArchivedAt:
 		return m.ArchivedAt()
+	case backlogitem.FieldPrURL:
+		return m.PrURL()
+	case backlogitem.FieldPrNumber:
+		return m.PrNumber()
+	case backlogitem.FieldShippedCheckConclusion:
+		return m.ShippedCheckConclusion()
+	case backlogitem.FieldShippedApprovedCount:
+		return m.ShippedApprovedCount()
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.ShippedChangesReqCount()
+	case backlogitem.FieldShippedSnapshotAt:
+		return m.ShippedSnapshotAt()
+	case backlogitem.FieldShippedFileStats:
+		return m.ShippedFileStats()
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		return m.ShippedSnapshotCaptureFailed()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -4274,6 +5026,12 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldSkipReviewGate(ctx)
 	case backlogitem.FieldSkipPlanning:
 		return m.OldSkipPlanning(ctx)
+	case backlogitem.FieldAutoSpawnSession:
+		return m.OldAutoSpawnSession(ctx)
+	case backlogitem.FieldAutoCreatePr:
+		return m.OldAutoCreatePr(ctx)
+	case backlogitem.FieldPipelineMode:
+		return m.OldPipelineMode(ctx)
 	case backlogitem.FieldPlanApproved:
 		return m.OldPlanApproved(ctx)
 	case backlogitem.FieldPlanApprovedAt:
@@ -4290,6 +5048,22 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldUserModifiedStatusAt(ctx)
 	case backlogitem.FieldArchivedAt:
 		return m.OldArchivedAt(ctx)
+	case backlogitem.FieldPrURL:
+		return m.OldPrURL(ctx)
+	case backlogitem.FieldPrNumber:
+		return m.OldPrNumber(ctx)
+	case backlogitem.FieldShippedCheckConclusion:
+		return m.OldShippedCheckConclusion(ctx)
+	case backlogitem.FieldShippedApprovedCount:
+		return m.OldShippedApprovedCount(ctx)
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.OldShippedChangesReqCount(ctx)
+	case backlogitem.FieldShippedSnapshotAt:
+		return m.OldShippedSnapshotAt(ctx)
+	case backlogitem.FieldShippedFileStats:
+		return m.OldShippedFileStats(ctx)
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		return m.OldShippedSnapshotCaptureFailed(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -4359,6 +5133,27 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetSkipPlanning(v)
 		return nil
+	case backlogitem.FieldAutoSpawnSession:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAutoSpawnSession(v)
+		return nil
+	case backlogitem.FieldAutoCreatePr:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAutoCreatePr(v)
+		return nil
+	case backlogitem.FieldPipelineMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPipelineMode(v)
+		return nil
 	case backlogitem.FieldPlanApproved:
 		v, ok := value.(bool)
 		if !ok {
@@ -4415,6 +5210,62 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetArchivedAt(v)
 		return nil
+	case backlogitem.FieldPrURL:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPrURL(v)
+		return nil
+	case backlogitem.FieldPrNumber:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPrNumber(v)
+		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedCheckConclusion(v)
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedApprovedCount(v)
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedChangesReqCount(v)
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedSnapshotAt(v)
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedFileStats(v)
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedSnapshotCaptureFailed(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -4440,6 +5291,15 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addpriority != nil {
 		fields = append(fields, backlogitem.FieldPriority)
 	}
+	if m.addpr_number != nil {
+		fields = append(fields, backlogitem.FieldPrNumber)
+	}
+	if m.addshipped_approved_count != nil {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.addshipped_changes_req_count != nil {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
 	return fields
 }
 
@@ -4450,6 +5310,12 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case backlogitem.FieldPriority:
 		return m.AddedPriority()
+	case backlogitem.FieldPrNumber:
+		return m.AddedPrNumber()
+	case backlogitem.FieldShippedApprovedCount:
+		return m.AddedShippedApprovedCount()
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.AddedShippedChangesReqCount()
 	}
 	return nil, false
 }
@@ -4465,6 +5331,27 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPriority(v)
+		return nil
+	case backlogitem.FieldPrNumber:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPrNumber(v)
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddShippedApprovedCount(v)
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddShippedChangesReqCount(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -4503,6 +5390,30 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldArchivedAt) {
 		fields = append(fields, backlogitem.FieldArchivedAt)
+	}
+	if m.FieldCleared(backlogitem.FieldPrURL) {
+		fields = append(fields, backlogitem.FieldPrURL)
+	}
+	if m.FieldCleared(backlogitem.FieldPrNumber) {
+		fields = append(fields, backlogitem.FieldPrNumber)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedCheckConclusion) {
+		fields = append(fields, backlogitem.FieldShippedCheckConclusion)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedApprovedCount) {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedChangesReqCount) {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedSnapshotAt) {
+		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedFileStats) {
+		fields = append(fields, backlogitem.FieldShippedFileStats)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedSnapshotCaptureFailed) {
+		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
 	}
 	return fields
 }
@@ -4548,6 +5459,30 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 	case backlogitem.FieldArchivedAt:
 		m.ClearArchivedAt()
 		return nil
+	case backlogitem.FieldPrURL:
+		m.ClearPrURL()
+		return nil
+	case backlogitem.FieldPrNumber:
+		m.ClearPrNumber()
+		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		m.ClearShippedCheckConclusion()
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		m.ClearShippedApprovedCount()
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		m.ClearShippedChangesReqCount()
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		m.ClearShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		m.ClearShippedFileStats()
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		m.ClearShippedSnapshotCaptureFailed()
+		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
 }
@@ -4580,6 +5515,15 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 	case backlogitem.FieldSkipPlanning:
 		m.ResetSkipPlanning()
 		return nil
+	case backlogitem.FieldAutoSpawnSession:
+		m.ResetAutoSpawnSession()
+		return nil
+	case backlogitem.FieldAutoCreatePr:
+		m.ResetAutoCreatePr()
+		return nil
+	case backlogitem.FieldPipelineMode:
+		m.ResetPipelineMode()
+		return nil
 	case backlogitem.FieldPlanApproved:
 		m.ResetPlanApproved()
 		return nil
@@ -4604,6 +5548,30 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 	case backlogitem.FieldArchivedAt:
 		m.ResetArchivedAt()
 		return nil
+	case backlogitem.FieldPrURL:
+		m.ResetPrURL()
+		return nil
+	case backlogitem.FieldPrNumber:
+		m.ResetPrNumber()
+		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		m.ResetShippedCheckConclusion()
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		m.ResetShippedApprovedCount()
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		m.ResetShippedChangesReqCount()
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		m.ResetShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		m.ResetShippedFileStats()
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		m.ResetShippedSnapshotCaptureFailed()
+		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()
 		return nil
@@ -4616,7 +5584,7 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *BacklogItemMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 6)
 	if m.item_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4625,6 +5593,12 @@ func (m *BacklogItemMutation) AddedEdges() []string {
 	}
 	if m.status_events != nil {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.stuck_states != nil {
+		edges = append(edges, backlogitem.EdgeStuckStates)
+	}
+	if m.progress_notes != nil {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	if m.source != nil {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -4654,6 +5628,18 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeStuckStates:
+		ids := make([]ent.Value, 0, len(m.stuck_states))
+		for id := range m.stuck_states {
+			ids = append(ids, id)
+		}
+		return ids
+	case backlogitem.EdgeProgressNotes:
+		ids := make([]ent.Value, 0, len(m.progress_notes))
+		for id := range m.progress_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	case backlogitem.EdgeSource:
 		if id := m.source; id != nil {
 			return []ent.Value{*id}
@@ -4664,7 +5650,7 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *BacklogItemMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 6)
 	if m.removeditem_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4673,6 +5659,12 @@ func (m *BacklogItemMutation) RemovedEdges() []string {
 	}
 	if m.removedstatus_events != nil {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.removedstuck_states != nil {
+		edges = append(edges, backlogitem.EdgeStuckStates)
+	}
+	if m.removedprogress_notes != nil {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	return edges
 }
@@ -4699,13 +5691,25 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeStuckStates:
+		ids := make([]ent.Value, 0, len(m.removedstuck_states))
+		for id := range m.removedstuck_states {
+			ids = append(ids, id)
+		}
+		return ids
+	case backlogitem.EdgeProgressNotes:
+		ids := make([]ent.Value, 0, len(m.removedprogress_notes))
+		for id := range m.removedprogress_notes {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *BacklogItemMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 6)
 	if m.cleareditem_sessions {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -4714,6 +5718,12 @@ func (m *BacklogItemMutation) ClearedEdges() []string {
 	}
 	if m.clearedstatus_events {
 		edges = append(edges, backlogitem.EdgeStatusEvents)
+	}
+	if m.clearedstuck_states {
+		edges = append(edges, backlogitem.EdgeStuckStates)
+	}
+	if m.clearedprogress_notes {
+		edges = append(edges, backlogitem.EdgeProgressNotes)
 	}
 	if m.clearedsource {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -4731,6 +5741,10 @@ func (m *BacklogItemMutation) EdgeCleared(name string) bool {
 		return m.clearedsessions
 	case backlogitem.EdgeStatusEvents:
 		return m.clearedstatus_events
+	case backlogitem.EdgeStuckStates:
+		return m.clearedstuck_states
+	case backlogitem.EdgeProgressNotes:
+		return m.clearedprogress_notes
 	case backlogitem.EdgeSource:
 		return m.clearedsource
 	}
@@ -4761,11 +5775,677 @@ func (m *BacklogItemMutation) ResetEdge(name string) error {
 	case backlogitem.EdgeStatusEvents:
 		m.ResetStatusEvents()
 		return nil
+	case backlogitem.EdgeStuckStates:
+		m.ResetStuckStates()
+		return nil
+	case backlogitem.EdgeProgressNotes:
+		m.ResetProgressNotes()
+		return nil
 	case backlogitem.EdgeSource:
 		m.ResetSource()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem edge %s", name)
+}
+
+// BacklogProgressNoteMutation represents an operation that mutates the BacklogProgressNote nodes in the graph.
+type BacklogProgressNoteMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	criterion_index    *int
+	addcriterion_index *int
+	note               *string
+	status             *string
+	created_at         *time.Time
+	clearedFields      map[string]struct{}
+	item               *uuid.UUID
+	cleareditem        bool
+	done               bool
+	oldValue           func(context.Context) (*BacklogProgressNote, error)
+	predicates         []predicate.BacklogProgressNote
+}
+
+var _ ent.Mutation = (*BacklogProgressNoteMutation)(nil)
+
+// backlogprogressnoteOption allows management of the mutation configuration using functional options.
+type backlogprogressnoteOption func(*BacklogProgressNoteMutation)
+
+// newBacklogProgressNoteMutation creates new mutation for the BacklogProgressNote entity.
+func newBacklogProgressNoteMutation(c config, op Op, opts ...backlogprogressnoteOption) *BacklogProgressNoteMutation {
+	m := &BacklogProgressNoteMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeBacklogProgressNote,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withBacklogProgressNoteID sets the ID field of the mutation.
+func withBacklogProgressNoteID(id uuid.UUID) backlogprogressnoteOption {
+	return func(m *BacklogProgressNoteMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *BacklogProgressNote
+		)
+		m.oldValue = func(ctx context.Context) (*BacklogProgressNote, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().BacklogProgressNote.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withBacklogProgressNote sets the old BacklogProgressNote of the mutation.
+func withBacklogProgressNote(node *BacklogProgressNote) backlogprogressnoteOption {
+	return func(m *BacklogProgressNoteMutation) {
+		m.oldValue = func(context.Context) (*BacklogProgressNote, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m BacklogProgressNoteMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m BacklogProgressNoteMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of BacklogProgressNote entities.
+func (m *BacklogProgressNoteMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *BacklogProgressNoteMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *BacklogProgressNoteMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().BacklogProgressNote.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetItemID sets the "item_id" field.
+func (m *BacklogProgressNoteMutation) SetItemID(u uuid.UUID) {
+	m.item = &u
+}
+
+// ItemID returns the value of the "item_id" field in the mutation.
+func (m *BacklogProgressNoteMutation) ItemID() (r uuid.UUID, exists bool) {
+	v := m.item
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldItemID returns the old "item_id" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldItemID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldItemID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldItemID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldItemID: %w", err)
+	}
+	return oldValue.ItemID, nil
+}
+
+// ResetItemID resets all changes to the "item_id" field.
+func (m *BacklogProgressNoteMutation) ResetItemID() {
+	m.item = nil
+}
+
+// SetCriterionIndex sets the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) SetCriterionIndex(i int) {
+	m.criterion_index = &i
+	m.addcriterion_index = nil
+}
+
+// CriterionIndex returns the value of the "criterion_index" field in the mutation.
+func (m *BacklogProgressNoteMutation) CriterionIndex() (r int, exists bool) {
+	v := m.criterion_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCriterionIndex returns the old "criterion_index" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldCriterionIndex(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCriterionIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCriterionIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCriterionIndex: %w", err)
+	}
+	return oldValue.CriterionIndex, nil
+}
+
+// AddCriterionIndex adds i to the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) AddCriterionIndex(i int) {
+	if m.addcriterion_index != nil {
+		*m.addcriterion_index += i
+	} else {
+		m.addcriterion_index = &i
+	}
+}
+
+// AddedCriterionIndex returns the value that was added to the "criterion_index" field in this mutation.
+func (m *BacklogProgressNoteMutation) AddedCriterionIndex() (r int, exists bool) {
+	v := m.addcriterion_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCriterionIndex resets all changes to the "criterion_index" field.
+func (m *BacklogProgressNoteMutation) ResetCriterionIndex() {
+	m.criterion_index = nil
+	m.addcriterion_index = nil
+}
+
+// SetNote sets the "note" field.
+func (m *BacklogProgressNoteMutation) SetNote(s string) {
+	m.note = &s
+}
+
+// Note returns the value of the "note" field in the mutation.
+func (m *BacklogProgressNoteMutation) Note() (r string, exists bool) {
+	v := m.note
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNote returns the old "note" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldNote(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNote is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNote requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNote: %w", err)
+	}
+	return oldValue.Note, nil
+}
+
+// ClearNote clears the value of the "note" field.
+func (m *BacklogProgressNoteMutation) ClearNote() {
+	m.note = nil
+	m.clearedFields[backlogprogressnote.FieldNote] = struct{}{}
+}
+
+// NoteCleared returns if the "note" field was cleared in this mutation.
+func (m *BacklogProgressNoteMutation) NoteCleared() bool {
+	_, ok := m.clearedFields[backlogprogressnote.FieldNote]
+	return ok
+}
+
+// ResetNote resets all changes to the "note" field.
+func (m *BacklogProgressNoteMutation) ResetNote() {
+	m.note = nil
+	delete(m.clearedFields, backlogprogressnote.FieldNote)
+}
+
+// SetStatus sets the "status" field.
+func (m *BacklogProgressNoteMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *BacklogProgressNoteMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *BacklogProgressNoteMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *BacklogProgressNoteMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *BacklogProgressNoteMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the BacklogProgressNote entity.
+// If the BacklogProgressNote object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogProgressNoteMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *BacklogProgressNoteMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearItem clears the "item" edge to the BacklogItem entity.
+func (m *BacklogProgressNoteMutation) ClearItem() {
+	m.cleareditem = true
+	m.clearedFields[backlogprogressnote.FieldItemID] = struct{}{}
+}
+
+// ItemCleared reports if the "item" edge to the BacklogItem entity was cleared.
+func (m *BacklogProgressNoteMutation) ItemCleared() bool {
+	return m.cleareditem
+}
+
+// ItemIDs returns the "item" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ItemID instead. It exists only for internal usage by the builders.
+func (m *BacklogProgressNoteMutation) ItemIDs() (ids []uuid.UUID) {
+	if id := m.item; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetItem resets all changes to the "item" edge.
+func (m *BacklogProgressNoteMutation) ResetItem() {
+	m.item = nil
+	m.cleareditem = false
+}
+
+// Where appends a list predicates to the BacklogProgressNoteMutation builder.
+func (m *BacklogProgressNoteMutation) Where(ps ...predicate.BacklogProgressNote) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the BacklogProgressNoteMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *BacklogProgressNoteMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.BacklogProgressNote, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *BacklogProgressNoteMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *BacklogProgressNoteMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (BacklogProgressNote).
+func (m *BacklogProgressNoteMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *BacklogProgressNoteMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.item != nil {
+		fields = append(fields, backlogprogressnote.FieldItemID)
+	}
+	if m.criterion_index != nil {
+		fields = append(fields, backlogprogressnote.FieldCriterionIndex)
+	}
+	if m.note != nil {
+		fields = append(fields, backlogprogressnote.FieldNote)
+	}
+	if m.status != nil {
+		fields = append(fields, backlogprogressnote.FieldStatus)
+	}
+	if m.created_at != nil {
+		fields = append(fields, backlogprogressnote.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *BacklogProgressNoteMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		return m.ItemID()
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.CriterionIndex()
+	case backlogprogressnote.FieldNote:
+		return m.Note()
+	case backlogprogressnote.FieldStatus:
+		return m.Status()
+	case backlogprogressnote.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *BacklogProgressNoteMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		return m.OldItemID(ctx)
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.OldCriterionIndex(ctx)
+	case backlogprogressnote.FieldNote:
+		return m.OldNote(ctx)
+	case backlogprogressnote.FieldStatus:
+		return m.OldStatus(ctx)
+	case backlogprogressnote.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogProgressNoteMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetItemID(v)
+		return nil
+	case backlogprogressnote.FieldCriterionIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCriterionIndex(v)
+		return nil
+	case backlogprogressnote.FieldNote:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNote(v)
+		return nil
+	case backlogprogressnote.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case backlogprogressnote.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *BacklogProgressNoteMutation) AddedFields() []string {
+	var fields []string
+	if m.addcriterion_index != nil {
+		fields = append(fields, backlogprogressnote.FieldCriterionIndex)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *BacklogProgressNoteMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case backlogprogressnote.FieldCriterionIndex:
+		return m.AddedCriterionIndex()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogProgressNoteMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case backlogprogressnote.FieldCriterionIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCriterionIndex(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *BacklogProgressNoteMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(backlogprogressnote.FieldNote) {
+		fields = append(fields, backlogprogressnote.FieldNote)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *BacklogProgressNoteMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ClearField(name string) error {
+	switch name {
+	case backlogprogressnote.FieldNote:
+		m.ClearNote()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ResetField(name string) error {
+	switch name {
+	case backlogprogressnote.FieldItemID:
+		m.ResetItemID()
+		return nil
+	case backlogprogressnote.FieldCriterionIndex:
+		m.ResetCriterionIndex()
+		return nil
+	case backlogprogressnote.FieldNote:
+		m.ResetNote()
+		return nil
+	case backlogprogressnote.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case backlogprogressnote.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *BacklogProgressNoteMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.item != nil {
+		edges = append(edges, backlogprogressnote.EdgeItem)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *BacklogProgressNoteMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		if id := m.item; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *BacklogProgressNoteMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *BacklogProgressNoteMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *BacklogProgressNoteMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareditem {
+		edges = append(edges, backlogprogressnote.EdgeItem)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *BacklogProgressNoteMutation) EdgeCleared(name string) bool {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		return m.cleareditem
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ClearEdge(name string) error {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		m.ClearItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *BacklogProgressNoteMutation) ResetEdge(name string) error {
+	switch name {
+	case backlogprogressnote.EdgeItem:
+		m.ResetItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogProgressNote edge %s", name)
 }
 
 // BacklogStatusEventMutation represents an operation that mutates the BacklogStatusEvent nodes in the graph.
@@ -5444,6 +7124,849 @@ func (m *BacklogStatusEventMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogStatusEvent edge %s", name)
+}
+
+// BacklogStuckStateMutation represents an operation that mutates the BacklogStuckState nodes in the graph.
+type BacklogStuckStateMutation struct {
+	config
+	op                Op
+	typ               string
+	id                *uuid.UUID
+	reason            *string
+	first_detected_at *time.Time
+	last_checked_at   *time.Time
+	notified_at       *time.Time
+	resolved_at       *time.Time
+	snoozed_until     *time.Time
+	context           *string
+	clearedFields     map[string]struct{}
+	item              *uuid.UUID
+	cleareditem       bool
+	done              bool
+	oldValue          func(context.Context) (*BacklogStuckState, error)
+	predicates        []predicate.BacklogStuckState
+}
+
+var _ ent.Mutation = (*BacklogStuckStateMutation)(nil)
+
+// backlogstuckstateOption allows management of the mutation configuration using functional options.
+type backlogstuckstateOption func(*BacklogStuckStateMutation)
+
+// newBacklogStuckStateMutation creates new mutation for the BacklogStuckState entity.
+func newBacklogStuckStateMutation(c config, op Op, opts ...backlogstuckstateOption) *BacklogStuckStateMutation {
+	m := &BacklogStuckStateMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeBacklogStuckState,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withBacklogStuckStateID sets the ID field of the mutation.
+func withBacklogStuckStateID(id uuid.UUID) backlogstuckstateOption {
+	return func(m *BacklogStuckStateMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *BacklogStuckState
+		)
+		m.oldValue = func(ctx context.Context) (*BacklogStuckState, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().BacklogStuckState.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withBacklogStuckState sets the old BacklogStuckState of the mutation.
+func withBacklogStuckState(node *BacklogStuckState) backlogstuckstateOption {
+	return func(m *BacklogStuckStateMutation) {
+		m.oldValue = func(context.Context) (*BacklogStuckState, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m BacklogStuckStateMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m BacklogStuckStateMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of BacklogStuckState entities.
+func (m *BacklogStuckStateMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *BacklogStuckStateMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *BacklogStuckStateMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().BacklogStuckState.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetItemID sets the "item_id" field.
+func (m *BacklogStuckStateMutation) SetItemID(u uuid.UUID) {
+	m.item = &u
+}
+
+// ItemID returns the value of the "item_id" field in the mutation.
+func (m *BacklogStuckStateMutation) ItemID() (r uuid.UUID, exists bool) {
+	v := m.item
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldItemID returns the old "item_id" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldItemID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldItemID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldItemID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldItemID: %w", err)
+	}
+	return oldValue.ItemID, nil
+}
+
+// ResetItemID resets all changes to the "item_id" field.
+func (m *BacklogStuckStateMutation) ResetItemID() {
+	m.item = nil
+}
+
+// SetReason sets the "reason" field.
+func (m *BacklogStuckStateMutation) SetReason(s string) {
+	m.reason = &s
+}
+
+// Reason returns the value of the "reason" field in the mutation.
+func (m *BacklogStuckStateMutation) Reason() (r string, exists bool) {
+	v := m.reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReason returns the old "reason" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReason: %w", err)
+	}
+	return oldValue.Reason, nil
+}
+
+// ResetReason resets all changes to the "reason" field.
+func (m *BacklogStuckStateMutation) ResetReason() {
+	m.reason = nil
+}
+
+// SetFirstDetectedAt sets the "first_detected_at" field.
+func (m *BacklogStuckStateMutation) SetFirstDetectedAt(t time.Time) {
+	m.first_detected_at = &t
+}
+
+// FirstDetectedAt returns the value of the "first_detected_at" field in the mutation.
+func (m *BacklogStuckStateMutation) FirstDetectedAt() (r time.Time, exists bool) {
+	v := m.first_detected_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFirstDetectedAt returns the old "first_detected_at" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldFirstDetectedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFirstDetectedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFirstDetectedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFirstDetectedAt: %w", err)
+	}
+	return oldValue.FirstDetectedAt, nil
+}
+
+// ResetFirstDetectedAt resets all changes to the "first_detected_at" field.
+func (m *BacklogStuckStateMutation) ResetFirstDetectedAt() {
+	m.first_detected_at = nil
+}
+
+// SetLastCheckedAt sets the "last_checked_at" field.
+func (m *BacklogStuckStateMutation) SetLastCheckedAt(t time.Time) {
+	m.last_checked_at = &t
+}
+
+// LastCheckedAt returns the value of the "last_checked_at" field in the mutation.
+func (m *BacklogStuckStateMutation) LastCheckedAt() (r time.Time, exists bool) {
+	v := m.last_checked_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastCheckedAt returns the old "last_checked_at" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldLastCheckedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastCheckedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastCheckedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastCheckedAt: %w", err)
+	}
+	return oldValue.LastCheckedAt, nil
+}
+
+// ResetLastCheckedAt resets all changes to the "last_checked_at" field.
+func (m *BacklogStuckStateMutation) ResetLastCheckedAt() {
+	m.last_checked_at = nil
+}
+
+// SetNotifiedAt sets the "notified_at" field.
+func (m *BacklogStuckStateMutation) SetNotifiedAt(t time.Time) {
+	m.notified_at = &t
+}
+
+// NotifiedAt returns the value of the "notified_at" field in the mutation.
+func (m *BacklogStuckStateMutation) NotifiedAt() (r time.Time, exists bool) {
+	v := m.notified_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNotifiedAt returns the old "notified_at" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldNotifiedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNotifiedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNotifiedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNotifiedAt: %w", err)
+	}
+	return oldValue.NotifiedAt, nil
+}
+
+// ClearNotifiedAt clears the value of the "notified_at" field.
+func (m *BacklogStuckStateMutation) ClearNotifiedAt() {
+	m.notified_at = nil
+	m.clearedFields[backlogstuckstate.FieldNotifiedAt] = struct{}{}
+}
+
+// NotifiedAtCleared returns if the "notified_at" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) NotifiedAtCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldNotifiedAt]
+	return ok
+}
+
+// ResetNotifiedAt resets all changes to the "notified_at" field.
+func (m *BacklogStuckStateMutation) ResetNotifiedAt() {
+	m.notified_at = nil
+	delete(m.clearedFields, backlogstuckstate.FieldNotifiedAt)
+}
+
+// SetResolvedAt sets the "resolved_at" field.
+func (m *BacklogStuckStateMutation) SetResolvedAt(t time.Time) {
+	m.resolved_at = &t
+}
+
+// ResolvedAt returns the value of the "resolved_at" field in the mutation.
+func (m *BacklogStuckStateMutation) ResolvedAt() (r time.Time, exists bool) {
+	v := m.resolved_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResolvedAt returns the old "resolved_at" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldResolvedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResolvedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResolvedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResolvedAt: %w", err)
+	}
+	return oldValue.ResolvedAt, nil
+}
+
+// ClearResolvedAt clears the value of the "resolved_at" field.
+func (m *BacklogStuckStateMutation) ClearResolvedAt() {
+	m.resolved_at = nil
+	m.clearedFields[backlogstuckstate.FieldResolvedAt] = struct{}{}
+}
+
+// ResolvedAtCleared returns if the "resolved_at" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) ResolvedAtCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldResolvedAt]
+	return ok
+}
+
+// ResetResolvedAt resets all changes to the "resolved_at" field.
+func (m *BacklogStuckStateMutation) ResetResolvedAt() {
+	m.resolved_at = nil
+	delete(m.clearedFields, backlogstuckstate.FieldResolvedAt)
+}
+
+// SetSnoozedUntil sets the "snoozed_until" field.
+func (m *BacklogStuckStateMutation) SetSnoozedUntil(t time.Time) {
+	m.snoozed_until = &t
+}
+
+// SnoozedUntil returns the value of the "snoozed_until" field in the mutation.
+func (m *BacklogStuckStateMutation) SnoozedUntil() (r time.Time, exists bool) {
+	v := m.snoozed_until
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSnoozedUntil returns the old "snoozed_until" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldSnoozedUntil(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSnoozedUntil is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSnoozedUntil requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSnoozedUntil: %w", err)
+	}
+	return oldValue.SnoozedUntil, nil
+}
+
+// ClearSnoozedUntil clears the value of the "snoozed_until" field.
+func (m *BacklogStuckStateMutation) ClearSnoozedUntil() {
+	m.snoozed_until = nil
+	m.clearedFields[backlogstuckstate.FieldSnoozedUntil] = struct{}{}
+}
+
+// SnoozedUntilCleared returns if the "snoozed_until" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) SnoozedUntilCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldSnoozedUntil]
+	return ok
+}
+
+// ResetSnoozedUntil resets all changes to the "snoozed_until" field.
+func (m *BacklogStuckStateMutation) ResetSnoozedUntil() {
+	m.snoozed_until = nil
+	delete(m.clearedFields, backlogstuckstate.FieldSnoozedUntil)
+}
+
+// SetContext sets the "context" field.
+func (m *BacklogStuckStateMutation) SetContext(s string) {
+	m.context = &s
+}
+
+// Context returns the value of the "context" field in the mutation.
+func (m *BacklogStuckStateMutation) Context() (r string, exists bool) {
+	v := m.context
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContext returns the old "context" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldContext(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContext is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContext requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContext: %w", err)
+	}
+	return oldValue.Context, nil
+}
+
+// ClearContext clears the value of the "context" field.
+func (m *BacklogStuckStateMutation) ClearContext() {
+	m.context = nil
+	m.clearedFields[backlogstuckstate.FieldContext] = struct{}{}
+}
+
+// ContextCleared returns if the "context" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) ContextCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldContext]
+	return ok
+}
+
+// ResetContext resets all changes to the "context" field.
+func (m *BacklogStuckStateMutation) ResetContext() {
+	m.context = nil
+	delete(m.clearedFields, backlogstuckstate.FieldContext)
+}
+
+// ClearItem clears the "item" edge to the BacklogItem entity.
+func (m *BacklogStuckStateMutation) ClearItem() {
+	m.cleareditem = true
+	m.clearedFields[backlogstuckstate.FieldItemID] = struct{}{}
+}
+
+// ItemCleared reports if the "item" edge to the BacklogItem entity was cleared.
+func (m *BacklogStuckStateMutation) ItemCleared() bool {
+	return m.cleareditem
+}
+
+// ItemIDs returns the "item" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ItemID instead. It exists only for internal usage by the builders.
+func (m *BacklogStuckStateMutation) ItemIDs() (ids []uuid.UUID) {
+	if id := m.item; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetItem resets all changes to the "item" edge.
+func (m *BacklogStuckStateMutation) ResetItem() {
+	m.item = nil
+	m.cleareditem = false
+}
+
+// Where appends a list predicates to the BacklogStuckStateMutation builder.
+func (m *BacklogStuckStateMutation) Where(ps ...predicate.BacklogStuckState) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the BacklogStuckStateMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *BacklogStuckStateMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.BacklogStuckState, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *BacklogStuckStateMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *BacklogStuckStateMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (BacklogStuckState).
+func (m *BacklogStuckStateMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *BacklogStuckStateMutation) Fields() []string {
+	fields := make([]string, 0, 8)
+	if m.item != nil {
+		fields = append(fields, backlogstuckstate.FieldItemID)
+	}
+	if m.reason != nil {
+		fields = append(fields, backlogstuckstate.FieldReason)
+	}
+	if m.first_detected_at != nil {
+		fields = append(fields, backlogstuckstate.FieldFirstDetectedAt)
+	}
+	if m.last_checked_at != nil {
+		fields = append(fields, backlogstuckstate.FieldLastCheckedAt)
+	}
+	if m.notified_at != nil {
+		fields = append(fields, backlogstuckstate.FieldNotifiedAt)
+	}
+	if m.resolved_at != nil {
+		fields = append(fields, backlogstuckstate.FieldResolvedAt)
+	}
+	if m.snoozed_until != nil {
+		fields = append(fields, backlogstuckstate.FieldSnoozedUntil)
+	}
+	if m.context != nil {
+		fields = append(fields, backlogstuckstate.FieldContext)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *BacklogStuckStateMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case backlogstuckstate.FieldItemID:
+		return m.ItemID()
+	case backlogstuckstate.FieldReason:
+		return m.Reason()
+	case backlogstuckstate.FieldFirstDetectedAt:
+		return m.FirstDetectedAt()
+	case backlogstuckstate.FieldLastCheckedAt:
+		return m.LastCheckedAt()
+	case backlogstuckstate.FieldNotifiedAt:
+		return m.NotifiedAt()
+	case backlogstuckstate.FieldResolvedAt:
+		return m.ResolvedAt()
+	case backlogstuckstate.FieldSnoozedUntil:
+		return m.SnoozedUntil()
+	case backlogstuckstate.FieldContext:
+		return m.Context()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *BacklogStuckStateMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case backlogstuckstate.FieldItemID:
+		return m.OldItemID(ctx)
+	case backlogstuckstate.FieldReason:
+		return m.OldReason(ctx)
+	case backlogstuckstate.FieldFirstDetectedAt:
+		return m.OldFirstDetectedAt(ctx)
+	case backlogstuckstate.FieldLastCheckedAt:
+		return m.OldLastCheckedAt(ctx)
+	case backlogstuckstate.FieldNotifiedAt:
+		return m.OldNotifiedAt(ctx)
+	case backlogstuckstate.FieldResolvedAt:
+		return m.OldResolvedAt(ctx)
+	case backlogstuckstate.FieldSnoozedUntil:
+		return m.OldSnoozedUntil(ctx)
+	case backlogstuckstate.FieldContext:
+		return m.OldContext(ctx)
+	}
+	return nil, fmt.Errorf("unknown BacklogStuckState field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogStuckStateMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case backlogstuckstate.FieldItemID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetItemID(v)
+		return nil
+	case backlogstuckstate.FieldReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReason(v)
+		return nil
+	case backlogstuckstate.FieldFirstDetectedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFirstDetectedAt(v)
+		return nil
+	case backlogstuckstate.FieldLastCheckedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastCheckedAt(v)
+		return nil
+	case backlogstuckstate.FieldNotifiedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNotifiedAt(v)
+		return nil
+	case backlogstuckstate.FieldResolvedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResolvedAt(v)
+		return nil
+	case backlogstuckstate.FieldSnoozedUntil:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSnoozedUntil(v)
+		return nil
+	case backlogstuckstate.FieldContext:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContext(v)
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogStuckState field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *BacklogStuckStateMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *BacklogStuckStateMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *BacklogStuckStateMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown BacklogStuckState numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *BacklogStuckStateMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(backlogstuckstate.FieldNotifiedAt) {
+		fields = append(fields, backlogstuckstate.FieldNotifiedAt)
+	}
+	if m.FieldCleared(backlogstuckstate.FieldResolvedAt) {
+		fields = append(fields, backlogstuckstate.FieldResolvedAt)
+	}
+	if m.FieldCleared(backlogstuckstate.FieldSnoozedUntil) {
+		fields = append(fields, backlogstuckstate.FieldSnoozedUntil)
+	}
+	if m.FieldCleared(backlogstuckstate.FieldContext) {
+		fields = append(fields, backlogstuckstate.FieldContext)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *BacklogStuckStateMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *BacklogStuckStateMutation) ClearField(name string) error {
+	switch name {
+	case backlogstuckstate.FieldNotifiedAt:
+		m.ClearNotifiedAt()
+		return nil
+	case backlogstuckstate.FieldResolvedAt:
+		m.ClearResolvedAt()
+		return nil
+	case backlogstuckstate.FieldSnoozedUntil:
+		m.ClearSnoozedUntil()
+		return nil
+	case backlogstuckstate.FieldContext:
+		m.ClearContext()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogStuckState nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *BacklogStuckStateMutation) ResetField(name string) error {
+	switch name {
+	case backlogstuckstate.FieldItemID:
+		m.ResetItemID()
+		return nil
+	case backlogstuckstate.FieldReason:
+		m.ResetReason()
+		return nil
+	case backlogstuckstate.FieldFirstDetectedAt:
+		m.ResetFirstDetectedAt()
+		return nil
+	case backlogstuckstate.FieldLastCheckedAt:
+		m.ResetLastCheckedAt()
+		return nil
+	case backlogstuckstate.FieldNotifiedAt:
+		m.ResetNotifiedAt()
+		return nil
+	case backlogstuckstate.FieldResolvedAt:
+		m.ResetResolvedAt()
+		return nil
+	case backlogstuckstate.FieldSnoozedUntil:
+		m.ResetSnoozedUntil()
+		return nil
+	case backlogstuckstate.FieldContext:
+		m.ResetContext()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogStuckState field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *BacklogStuckStateMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.item != nil {
+		edges = append(edges, backlogstuckstate.EdgeItem)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *BacklogStuckStateMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case backlogstuckstate.EdgeItem:
+		if id := m.item; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *BacklogStuckStateMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *BacklogStuckStateMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *BacklogStuckStateMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareditem {
+		edges = append(edges, backlogstuckstate.EdgeItem)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *BacklogStuckStateMutation) EdgeCleared(name string) bool {
+	switch name {
+	case backlogstuckstate.EdgeItem:
+		return m.cleareditem
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *BacklogStuckStateMutation) ClearEdge(name string) error {
+	switch name {
+	case backlogstuckstate.EdgeItem:
+		m.ClearItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogStuckState unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *BacklogStuckStateMutation) ResetEdge(name string) error {
+	switch name {
+	case backlogstuckstate.EdgeItem:
+		m.ResetItem()
+		return nil
+	}
+	return fmt.Errorf("unknown BacklogStuckState edge %s", name)
 }
 
 // ClassificationAnalyticsMutation represents an operation that mutates the ClassificationAnalytics nodes in the graph.
@@ -10958,7 +13481,10 @@ type ItemSessionMutation struct {
 	started_at                  *time.Time
 	ended_at                    *time.Time
 	ac_snapshot                 *string
+	pipeline_mode_snapshot      *string
+	pipeline_mode_snapshot_hash *string
 	triage_result               *string
+	verification_notes          *string
 	last_commit_sha             *string
 	last_commit_at              *time.Time
 	last_commit_message         *string
@@ -11302,6 +13828,78 @@ func (m *ItemSessionMutation) ResetAcSnapshot() {
 	delete(m.clearedFields, itemsession.FieldAcSnapshot)
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (m *ItemSessionMutation) SetPipelineModeSnapshot(s string) {
+	m.pipeline_mode_snapshot = &s
+}
+
+// PipelineModeSnapshot returns the value of the "pipeline_mode_snapshot" field in the mutation.
+func (m *ItemSessionMutation) PipelineModeSnapshot() (r string, exists bool) {
+	v := m.pipeline_mode_snapshot
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPipelineModeSnapshot returns the old "pipeline_mode_snapshot" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldPipelineModeSnapshot(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPipelineModeSnapshot is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPipelineModeSnapshot requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPipelineModeSnapshot: %w", err)
+	}
+	return oldValue.PipelineModeSnapshot, nil
+}
+
+// ResetPipelineModeSnapshot resets all changes to the "pipeline_mode_snapshot" field.
+func (m *ItemSessionMutation) ResetPipelineModeSnapshot() {
+	m.pipeline_mode_snapshot = nil
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (m *ItemSessionMutation) SetPipelineModeSnapshotHash(s string) {
+	m.pipeline_mode_snapshot_hash = &s
+}
+
+// PipelineModeSnapshotHash returns the value of the "pipeline_mode_snapshot_hash" field in the mutation.
+func (m *ItemSessionMutation) PipelineModeSnapshotHash() (r string, exists bool) {
+	v := m.pipeline_mode_snapshot_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPipelineModeSnapshotHash returns the old "pipeline_mode_snapshot_hash" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldPipelineModeSnapshotHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPipelineModeSnapshotHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPipelineModeSnapshotHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPipelineModeSnapshotHash: %w", err)
+	}
+	return oldValue.PipelineModeSnapshotHash, nil
+}
+
+// ResetPipelineModeSnapshotHash resets all changes to the "pipeline_mode_snapshot_hash" field.
+func (m *ItemSessionMutation) ResetPipelineModeSnapshotHash() {
+	m.pipeline_mode_snapshot_hash = nil
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (m *ItemSessionMutation) SetTriageResult(s string) {
 	m.triage_result = &s
@@ -11349,6 +13947,55 @@ func (m *ItemSessionMutation) TriageResultCleared() bool {
 func (m *ItemSessionMutation) ResetTriageResult() {
 	m.triage_result = nil
 	delete(m.clearedFields, itemsession.FieldTriageResult)
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (m *ItemSessionMutation) SetVerificationNotes(s string) {
+	m.verification_notes = &s
+}
+
+// VerificationNotes returns the value of the "verification_notes" field in the mutation.
+func (m *ItemSessionMutation) VerificationNotes() (r string, exists bool) {
+	v := m.verification_notes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVerificationNotes returns the old "verification_notes" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldVerificationNotes(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVerificationNotes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVerificationNotes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVerificationNotes: %w", err)
+	}
+	return oldValue.VerificationNotes, nil
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (m *ItemSessionMutation) ClearVerificationNotes() {
+	m.verification_notes = nil
+	m.clearedFields[itemsession.FieldVerificationNotes] = struct{}{}
+}
+
+// VerificationNotesCleared returns if the "verification_notes" field was cleared in this mutation.
+func (m *ItemSessionMutation) VerificationNotesCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldVerificationNotes]
+	return ok
+}
+
+// ResetVerificationNotes resets all changes to the "verification_notes" field.
+func (m *ItemSessionMutation) ResetVerificationNotes() {
+	m.verification_notes = nil
+	delete(m.clearedFields, itemsession.FieldVerificationNotes)
 }
 
 // SetLastCommitSha sets the "last_commit_sha" field.
@@ -11870,7 +14517,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 17)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -11886,8 +14533,17 @@ func (m *ItemSessionMutation) Fields() []string {
 	if m.ac_snapshot != nil {
 		fields = append(fields, itemsession.FieldAcSnapshot)
 	}
+	if m.pipeline_mode_snapshot != nil {
+		fields = append(fields, itemsession.FieldPipelineModeSnapshot)
+	}
+	if m.pipeline_mode_snapshot_hash != nil {
+		fields = append(fields, itemsession.FieldPipelineModeSnapshotHash)
+	}
 	if m.triage_result != nil {
 		fields = append(fields, itemsession.FieldTriageResult)
+	}
+	if m.verification_notes != nil {
+		fields = append(fields, itemsession.FieldVerificationNotes)
 	}
 	if m.last_commit_sha != nil {
 		fields = append(fields, itemsession.FieldLastCommitSha)
@@ -11931,8 +14587,14 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.EndedAt()
 	case itemsession.FieldAcSnapshot:
 		return m.AcSnapshot()
+	case itemsession.FieldPipelineModeSnapshot:
+		return m.PipelineModeSnapshot()
+	case itemsession.FieldPipelineModeSnapshotHash:
+		return m.PipelineModeSnapshotHash()
 	case itemsession.FieldTriageResult:
 		return m.TriageResult()
+	case itemsession.FieldVerificationNotes:
+		return m.VerificationNotes()
 	case itemsession.FieldLastCommitSha:
 		return m.LastCommitSha()
 	case itemsession.FieldLastCommitAt:
@@ -11968,8 +14630,14 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldEndedAt(ctx)
 	case itemsession.FieldAcSnapshot:
 		return m.OldAcSnapshot(ctx)
+	case itemsession.FieldPipelineModeSnapshot:
+		return m.OldPipelineModeSnapshot(ctx)
+	case itemsession.FieldPipelineModeSnapshotHash:
+		return m.OldPipelineModeSnapshotHash(ctx)
 	case itemsession.FieldTriageResult:
 		return m.OldTriageResult(ctx)
+	case itemsession.FieldVerificationNotes:
+		return m.OldVerificationNotes(ctx)
 	case itemsession.FieldLastCommitSha:
 		return m.OldLastCommitSha(ctx)
 	case itemsession.FieldLastCommitAt:
@@ -12030,12 +14698,33 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetAcSnapshot(v)
 		return nil
+	case itemsession.FieldPipelineModeSnapshot:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPipelineModeSnapshot(v)
+		return nil
+	case itemsession.FieldPipelineModeSnapshotHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPipelineModeSnapshotHash(v)
+		return nil
 	case itemsession.FieldTriageResult:
 		v, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTriageResult(v)
+		return nil
+	case itemsession.FieldVerificationNotes:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVerificationNotes(v)
 		return nil
 	case itemsession.FieldLastCommitSha:
 		v, ok := value.(string)
@@ -12162,6 +14851,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldTriageResult) {
 		fields = append(fields, itemsession.FieldTriageResult)
 	}
+	if m.FieldCleared(itemsession.FieldVerificationNotes) {
+		fields = append(fields, itemsession.FieldVerificationNotes)
+	}
 	if m.FieldCleared(itemsession.FieldLastCommitSha) {
 		fields = append(fields, itemsession.FieldLastCommitSha)
 	}
@@ -12206,6 +14898,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 	case itemsession.FieldTriageResult:
 		m.ClearTriageResult()
 		return nil
+	case itemsession.FieldVerificationNotes:
+		m.ClearVerificationNotes()
+		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ClearLastCommitSha()
 		return nil
@@ -12247,8 +14942,17 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 	case itemsession.FieldAcSnapshot:
 		m.ResetAcSnapshot()
 		return nil
+	case itemsession.FieldPipelineModeSnapshot:
+		m.ResetPipelineModeSnapshot()
+		return nil
+	case itemsession.FieldPipelineModeSnapshotHash:
+		m.ResetPipelineModeSnapshotHash()
+		return nil
 	case itemsession.FieldTriageResult:
 		m.ResetTriageResult()
+		return nil
+	case itemsession.FieldVerificationNotes:
+		m.ResetVerificationNotes()
 		return nil
 	case itemsession.FieldLastCommitSha:
 		m.ResetLastCommitSha()
@@ -13314,6 +16018,1116 @@ func (m *ItemSourceMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown ItemSource edge %s", name)
+}
+
+// PipelineModeMutation represents an operation that mutates the PipelineMode nodes in the graph.
+type PipelineModeMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *uuid.UUID
+	slug                    *string
+	name                    *string
+	description             *string
+	enabled                 *bool
+	status_command_template *string
+	done_command_template   *string
+	fail_command_template   *string
+	review_command_template *string
+	ship_command_template   *string
+	help_command_template   *string
+	triage_prompt_template  *string
+	review_prompt_template  *string
+	initial_prompt_template *string
+	created_at              *time.Time
+	updated_at              *time.Time
+	clearedFields           map[string]struct{}
+	done                    bool
+	oldValue                func(context.Context) (*PipelineMode, error)
+	predicates              []predicate.PipelineMode
+}
+
+var _ ent.Mutation = (*PipelineModeMutation)(nil)
+
+// pipelinemodeOption allows management of the mutation configuration using functional options.
+type pipelinemodeOption func(*PipelineModeMutation)
+
+// newPipelineModeMutation creates new mutation for the PipelineMode entity.
+func newPipelineModeMutation(c config, op Op, opts ...pipelinemodeOption) *PipelineModeMutation {
+	m := &PipelineModeMutation{
+		config:        c,
+		op:            op,
+		typ:           TypePipelineMode,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withPipelineModeID sets the ID field of the mutation.
+func withPipelineModeID(id uuid.UUID) pipelinemodeOption {
+	return func(m *PipelineModeMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *PipelineMode
+		)
+		m.oldValue = func(ctx context.Context) (*PipelineMode, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().PipelineMode.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withPipelineMode sets the old PipelineMode of the mutation.
+func withPipelineMode(node *PipelineMode) pipelinemodeOption {
+	return func(m *PipelineModeMutation) {
+		m.oldValue = func(context.Context) (*PipelineMode, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m PipelineModeMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m PipelineModeMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of PipelineMode entities.
+func (m *PipelineModeMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *PipelineModeMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *PipelineModeMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().PipelineMode.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSlug sets the "slug" field.
+func (m *PipelineModeMutation) SetSlug(s string) {
+	m.slug = &s
+}
+
+// Slug returns the value of the "slug" field in the mutation.
+func (m *PipelineModeMutation) Slug() (r string, exists bool) {
+	v := m.slug
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSlug returns the old "slug" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldSlug(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSlug is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSlug requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSlug: %w", err)
+	}
+	return oldValue.Slug, nil
+}
+
+// ResetSlug resets all changes to the "slug" field.
+func (m *PipelineModeMutation) ResetSlug() {
+	m.slug = nil
+}
+
+// SetName sets the "name" field.
+func (m *PipelineModeMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *PipelineModeMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *PipelineModeMutation) ResetName() {
+	m.name = nil
+}
+
+// SetDescription sets the "description" field.
+func (m *PipelineModeMutation) SetDescription(s string) {
+	m.description = &s
+}
+
+// Description returns the value of the "description" field in the mutation.
+func (m *PipelineModeMutation) Description() (r string, exists bool) {
+	v := m.description
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDescription returns the old "description" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldDescription(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDescription is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDescription requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDescription: %w", err)
+	}
+	return oldValue.Description, nil
+}
+
+// ClearDescription clears the value of the "description" field.
+func (m *PipelineModeMutation) ClearDescription() {
+	m.description = nil
+	m.clearedFields[pipelinemode.FieldDescription] = struct{}{}
+}
+
+// DescriptionCleared returns if the "description" field was cleared in this mutation.
+func (m *PipelineModeMutation) DescriptionCleared() bool {
+	_, ok := m.clearedFields[pipelinemode.FieldDescription]
+	return ok
+}
+
+// ResetDescription resets all changes to the "description" field.
+func (m *PipelineModeMutation) ResetDescription() {
+	m.description = nil
+	delete(m.clearedFields, pipelinemode.FieldDescription)
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *PipelineModeMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *PipelineModeMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *PipelineModeMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetStatusCommandTemplate sets the "status_command_template" field.
+func (m *PipelineModeMutation) SetStatusCommandTemplate(s string) {
+	m.status_command_template = &s
+}
+
+// StatusCommandTemplate returns the value of the "status_command_template" field in the mutation.
+func (m *PipelineModeMutation) StatusCommandTemplate() (r string, exists bool) {
+	v := m.status_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatusCommandTemplate returns the old "status_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldStatusCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatusCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatusCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatusCommandTemplate: %w", err)
+	}
+	return oldValue.StatusCommandTemplate, nil
+}
+
+// ResetStatusCommandTemplate resets all changes to the "status_command_template" field.
+func (m *PipelineModeMutation) ResetStatusCommandTemplate() {
+	m.status_command_template = nil
+}
+
+// SetDoneCommandTemplate sets the "done_command_template" field.
+func (m *PipelineModeMutation) SetDoneCommandTemplate(s string) {
+	m.done_command_template = &s
+}
+
+// DoneCommandTemplate returns the value of the "done_command_template" field in the mutation.
+func (m *PipelineModeMutation) DoneCommandTemplate() (r string, exists bool) {
+	v := m.done_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDoneCommandTemplate returns the old "done_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldDoneCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDoneCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDoneCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDoneCommandTemplate: %w", err)
+	}
+	return oldValue.DoneCommandTemplate, nil
+}
+
+// ResetDoneCommandTemplate resets all changes to the "done_command_template" field.
+func (m *PipelineModeMutation) ResetDoneCommandTemplate() {
+	m.done_command_template = nil
+}
+
+// SetFailCommandTemplate sets the "fail_command_template" field.
+func (m *PipelineModeMutation) SetFailCommandTemplate(s string) {
+	m.fail_command_template = &s
+}
+
+// FailCommandTemplate returns the value of the "fail_command_template" field in the mutation.
+func (m *PipelineModeMutation) FailCommandTemplate() (r string, exists bool) {
+	v := m.fail_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFailCommandTemplate returns the old "fail_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldFailCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFailCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFailCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFailCommandTemplate: %w", err)
+	}
+	return oldValue.FailCommandTemplate, nil
+}
+
+// ResetFailCommandTemplate resets all changes to the "fail_command_template" field.
+func (m *PipelineModeMutation) ResetFailCommandTemplate() {
+	m.fail_command_template = nil
+}
+
+// SetReviewCommandTemplate sets the "review_command_template" field.
+func (m *PipelineModeMutation) SetReviewCommandTemplate(s string) {
+	m.review_command_template = &s
+}
+
+// ReviewCommandTemplate returns the value of the "review_command_template" field in the mutation.
+func (m *PipelineModeMutation) ReviewCommandTemplate() (r string, exists bool) {
+	v := m.review_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReviewCommandTemplate returns the old "review_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldReviewCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReviewCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReviewCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReviewCommandTemplate: %w", err)
+	}
+	return oldValue.ReviewCommandTemplate, nil
+}
+
+// ResetReviewCommandTemplate resets all changes to the "review_command_template" field.
+func (m *PipelineModeMutation) ResetReviewCommandTemplate() {
+	m.review_command_template = nil
+}
+
+// SetShipCommandTemplate sets the "ship_command_template" field.
+func (m *PipelineModeMutation) SetShipCommandTemplate(s string) {
+	m.ship_command_template = &s
+}
+
+// ShipCommandTemplate returns the value of the "ship_command_template" field in the mutation.
+func (m *PipelineModeMutation) ShipCommandTemplate() (r string, exists bool) {
+	v := m.ship_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShipCommandTemplate returns the old "ship_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldShipCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShipCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShipCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShipCommandTemplate: %w", err)
+	}
+	return oldValue.ShipCommandTemplate, nil
+}
+
+// ResetShipCommandTemplate resets all changes to the "ship_command_template" field.
+func (m *PipelineModeMutation) ResetShipCommandTemplate() {
+	m.ship_command_template = nil
+}
+
+// SetHelpCommandTemplate sets the "help_command_template" field.
+func (m *PipelineModeMutation) SetHelpCommandTemplate(s string) {
+	m.help_command_template = &s
+}
+
+// HelpCommandTemplate returns the value of the "help_command_template" field in the mutation.
+func (m *PipelineModeMutation) HelpCommandTemplate() (r string, exists bool) {
+	v := m.help_command_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHelpCommandTemplate returns the old "help_command_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldHelpCommandTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHelpCommandTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHelpCommandTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHelpCommandTemplate: %w", err)
+	}
+	return oldValue.HelpCommandTemplate, nil
+}
+
+// ResetHelpCommandTemplate resets all changes to the "help_command_template" field.
+func (m *PipelineModeMutation) ResetHelpCommandTemplate() {
+	m.help_command_template = nil
+}
+
+// SetTriagePromptTemplate sets the "triage_prompt_template" field.
+func (m *PipelineModeMutation) SetTriagePromptTemplate(s string) {
+	m.triage_prompt_template = &s
+}
+
+// TriagePromptTemplate returns the value of the "triage_prompt_template" field in the mutation.
+func (m *PipelineModeMutation) TriagePromptTemplate() (r string, exists bool) {
+	v := m.triage_prompt_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriagePromptTemplate returns the old "triage_prompt_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldTriagePromptTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriagePromptTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriagePromptTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriagePromptTemplate: %w", err)
+	}
+	return oldValue.TriagePromptTemplate, nil
+}
+
+// ResetTriagePromptTemplate resets all changes to the "triage_prompt_template" field.
+func (m *PipelineModeMutation) ResetTriagePromptTemplate() {
+	m.triage_prompt_template = nil
+}
+
+// SetReviewPromptTemplate sets the "review_prompt_template" field.
+func (m *PipelineModeMutation) SetReviewPromptTemplate(s string) {
+	m.review_prompt_template = &s
+}
+
+// ReviewPromptTemplate returns the value of the "review_prompt_template" field in the mutation.
+func (m *PipelineModeMutation) ReviewPromptTemplate() (r string, exists bool) {
+	v := m.review_prompt_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReviewPromptTemplate returns the old "review_prompt_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldReviewPromptTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReviewPromptTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReviewPromptTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReviewPromptTemplate: %w", err)
+	}
+	return oldValue.ReviewPromptTemplate, nil
+}
+
+// ResetReviewPromptTemplate resets all changes to the "review_prompt_template" field.
+func (m *PipelineModeMutation) ResetReviewPromptTemplate() {
+	m.review_prompt_template = nil
+}
+
+// SetInitialPromptTemplate sets the "initial_prompt_template" field.
+func (m *PipelineModeMutation) SetInitialPromptTemplate(s string) {
+	m.initial_prompt_template = &s
+}
+
+// InitialPromptTemplate returns the value of the "initial_prompt_template" field in the mutation.
+func (m *PipelineModeMutation) InitialPromptTemplate() (r string, exists bool) {
+	v := m.initial_prompt_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInitialPromptTemplate returns the old "initial_prompt_template" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldInitialPromptTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInitialPromptTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInitialPromptTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInitialPromptTemplate: %w", err)
+	}
+	return oldValue.InitialPromptTemplate, nil
+}
+
+// ResetInitialPromptTemplate resets all changes to the "initial_prompt_template" field.
+func (m *PipelineModeMutation) ResetInitialPromptTemplate() {
+	m.initial_prompt_template = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *PipelineModeMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *PipelineModeMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *PipelineModeMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *PipelineModeMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *PipelineModeMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the PipelineMode entity.
+// If the PipelineMode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PipelineModeMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *PipelineModeMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the PipelineModeMutation builder.
+func (m *PipelineModeMutation) Where(ps ...predicate.PipelineMode) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the PipelineModeMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *PipelineModeMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.PipelineMode, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *PipelineModeMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *PipelineModeMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (PipelineMode).
+func (m *PipelineModeMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *PipelineModeMutation) Fields() []string {
+	fields := make([]string, 0, 15)
+	if m.slug != nil {
+		fields = append(fields, pipelinemode.FieldSlug)
+	}
+	if m.name != nil {
+		fields = append(fields, pipelinemode.FieldName)
+	}
+	if m.description != nil {
+		fields = append(fields, pipelinemode.FieldDescription)
+	}
+	if m.enabled != nil {
+		fields = append(fields, pipelinemode.FieldEnabled)
+	}
+	if m.status_command_template != nil {
+		fields = append(fields, pipelinemode.FieldStatusCommandTemplate)
+	}
+	if m.done_command_template != nil {
+		fields = append(fields, pipelinemode.FieldDoneCommandTemplate)
+	}
+	if m.fail_command_template != nil {
+		fields = append(fields, pipelinemode.FieldFailCommandTemplate)
+	}
+	if m.review_command_template != nil {
+		fields = append(fields, pipelinemode.FieldReviewCommandTemplate)
+	}
+	if m.ship_command_template != nil {
+		fields = append(fields, pipelinemode.FieldShipCommandTemplate)
+	}
+	if m.help_command_template != nil {
+		fields = append(fields, pipelinemode.FieldHelpCommandTemplate)
+	}
+	if m.triage_prompt_template != nil {
+		fields = append(fields, pipelinemode.FieldTriagePromptTemplate)
+	}
+	if m.review_prompt_template != nil {
+		fields = append(fields, pipelinemode.FieldReviewPromptTemplate)
+	}
+	if m.initial_prompt_template != nil {
+		fields = append(fields, pipelinemode.FieldInitialPromptTemplate)
+	}
+	if m.created_at != nil {
+		fields = append(fields, pipelinemode.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, pipelinemode.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *PipelineModeMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case pipelinemode.FieldSlug:
+		return m.Slug()
+	case pipelinemode.FieldName:
+		return m.Name()
+	case pipelinemode.FieldDescription:
+		return m.Description()
+	case pipelinemode.FieldEnabled:
+		return m.Enabled()
+	case pipelinemode.FieldStatusCommandTemplate:
+		return m.StatusCommandTemplate()
+	case pipelinemode.FieldDoneCommandTemplate:
+		return m.DoneCommandTemplate()
+	case pipelinemode.FieldFailCommandTemplate:
+		return m.FailCommandTemplate()
+	case pipelinemode.FieldReviewCommandTemplate:
+		return m.ReviewCommandTemplate()
+	case pipelinemode.FieldShipCommandTemplate:
+		return m.ShipCommandTemplate()
+	case pipelinemode.FieldHelpCommandTemplate:
+		return m.HelpCommandTemplate()
+	case pipelinemode.FieldTriagePromptTemplate:
+		return m.TriagePromptTemplate()
+	case pipelinemode.FieldReviewPromptTemplate:
+		return m.ReviewPromptTemplate()
+	case pipelinemode.FieldInitialPromptTemplate:
+		return m.InitialPromptTemplate()
+	case pipelinemode.FieldCreatedAt:
+		return m.CreatedAt()
+	case pipelinemode.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *PipelineModeMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case pipelinemode.FieldSlug:
+		return m.OldSlug(ctx)
+	case pipelinemode.FieldName:
+		return m.OldName(ctx)
+	case pipelinemode.FieldDescription:
+		return m.OldDescription(ctx)
+	case pipelinemode.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case pipelinemode.FieldStatusCommandTemplate:
+		return m.OldStatusCommandTemplate(ctx)
+	case pipelinemode.FieldDoneCommandTemplate:
+		return m.OldDoneCommandTemplate(ctx)
+	case pipelinemode.FieldFailCommandTemplate:
+		return m.OldFailCommandTemplate(ctx)
+	case pipelinemode.FieldReviewCommandTemplate:
+		return m.OldReviewCommandTemplate(ctx)
+	case pipelinemode.FieldShipCommandTemplate:
+		return m.OldShipCommandTemplate(ctx)
+	case pipelinemode.FieldHelpCommandTemplate:
+		return m.OldHelpCommandTemplate(ctx)
+	case pipelinemode.FieldTriagePromptTemplate:
+		return m.OldTriagePromptTemplate(ctx)
+	case pipelinemode.FieldReviewPromptTemplate:
+		return m.OldReviewPromptTemplate(ctx)
+	case pipelinemode.FieldInitialPromptTemplate:
+		return m.OldInitialPromptTemplate(ctx)
+	case pipelinemode.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case pipelinemode.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown PipelineMode field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PipelineModeMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case pipelinemode.FieldSlug:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSlug(v)
+		return nil
+	case pipelinemode.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case pipelinemode.FieldDescription:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDescription(v)
+		return nil
+	case pipelinemode.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case pipelinemode.FieldStatusCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatusCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldDoneCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDoneCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldFailCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFailCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldReviewCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReviewCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldShipCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShipCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldHelpCommandTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHelpCommandTemplate(v)
+		return nil
+	case pipelinemode.FieldTriagePromptTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriagePromptTemplate(v)
+		return nil
+	case pipelinemode.FieldReviewPromptTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReviewPromptTemplate(v)
+		return nil
+	case pipelinemode.FieldInitialPromptTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInitialPromptTemplate(v)
+		return nil
+	case pipelinemode.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case pipelinemode.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown PipelineMode field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *PipelineModeMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *PipelineModeMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PipelineModeMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown PipelineMode numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *PipelineModeMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(pipelinemode.FieldDescription) {
+		fields = append(fields, pipelinemode.FieldDescription)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *PipelineModeMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *PipelineModeMutation) ClearField(name string) error {
+	switch name {
+	case pipelinemode.FieldDescription:
+		m.ClearDescription()
+		return nil
+	}
+	return fmt.Errorf("unknown PipelineMode nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *PipelineModeMutation) ResetField(name string) error {
+	switch name {
+	case pipelinemode.FieldSlug:
+		m.ResetSlug()
+		return nil
+	case pipelinemode.FieldName:
+		m.ResetName()
+		return nil
+	case pipelinemode.FieldDescription:
+		m.ResetDescription()
+		return nil
+	case pipelinemode.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case pipelinemode.FieldStatusCommandTemplate:
+		m.ResetStatusCommandTemplate()
+		return nil
+	case pipelinemode.FieldDoneCommandTemplate:
+		m.ResetDoneCommandTemplate()
+		return nil
+	case pipelinemode.FieldFailCommandTemplate:
+		m.ResetFailCommandTemplate()
+		return nil
+	case pipelinemode.FieldReviewCommandTemplate:
+		m.ResetReviewCommandTemplate()
+		return nil
+	case pipelinemode.FieldShipCommandTemplate:
+		m.ResetShipCommandTemplate()
+		return nil
+	case pipelinemode.FieldHelpCommandTemplate:
+		m.ResetHelpCommandTemplate()
+		return nil
+	case pipelinemode.FieldTriagePromptTemplate:
+		m.ResetTriagePromptTemplate()
+		return nil
+	case pipelinemode.FieldReviewPromptTemplate:
+		m.ResetReviewPromptTemplate()
+		return nil
+	case pipelinemode.FieldInitialPromptTemplate:
+		m.ResetInitialPromptTemplate()
+		return nil
+	case pipelinemode.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case pipelinemode.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown PipelineMode field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *PipelineModeMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *PipelineModeMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *PipelineModeMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *PipelineModeMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *PipelineModeMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *PipelineModeMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *PipelineModeMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown PipelineMode unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *PipelineModeMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown PipelineMode edge %s", name)
 }
 
 // ProjectMutation represents an operation that mutates the Project nodes in the graph.

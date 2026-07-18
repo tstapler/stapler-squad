@@ -17,10 +17,30 @@ package session
 import "time"
 
 // ---- MCPServerURL ----------------------------------------------------------------
+//
+// Every xxxLocked function below takes i.mu.Lock() around its field write(s)
+// AND the buildSnapshot() call, in one critical section (Store happens after
+// Unlock, since it targets a separate atomic.Pointer and doesn't need mu).
+//
+// buildSnapshot reads every mutable Instance field in one pass. These actor
+// commands otherwise mutate fields relying purely on actor-goroutine
+// confinement (no lock needed relative to OTHER actor commands, since the
+// mailbox serializes them onto one goroutine) — but a handful of legacy
+// setters (MarkViewed, MarkUserResponded, MarkAcknowledged,
+// SetLastMeaningfulOutput, RecoverFromStopped) still mutate fields directly
+// from arbitrary caller goroutines while holding i.mu.Lock(), bypassing the
+// actor entirely. Without taking i.mu here too, both the field write AND the
+// buildSnapshot read can race with one of those legacy writers even though
+// neither side is wrong by its own local contract — caught by -race via a
+// concurrent MarkViewed()/ForceStatus() call during CreateSession. See
+// runActor's doc comment in actor.go for the matching read-side fix.
 
 func setMCPServerURLLocked(s *instanceState, url string) {
+	s.inst.mu.Lock()
 	s.inst.MCPServerURL = url
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetMCPServerURL sets the MCP server URL on this instance.
@@ -52,9 +72,12 @@ func (i *Instance) SetCreationProgress(msg string) {
 // ---- AutonomousTurn + AutonomousMaxTurns ----------------------------------------
 
 func setAutonomousTurnLocked(s *instanceState, turn, maxTurns int32) {
+	s.inst.mu.Lock()
 	s.inst.AutonomousTurn = turn
 	s.inst.AutonomousMaxTurns = maxTurns
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetAutonomousTurn atomically updates the current turn counter and max-turns
@@ -69,9 +92,12 @@ func (i *Instance) SetAutonomousTurn(turn, maxTurns int32) {
 // ---- AutonomousMode toggle (UpdateSession RPC) -----------------------------------
 
 func setAutonomousModeLocked(s *instanceState, mode bool, outcome string) {
+	s.inst.mu.Lock()
 	s.inst.AutonomousMode = mode
 	s.inst.AutonomousOutcome = outcome
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetAutonomousMode sets the autonomous mode flag and outcome string atomically.
@@ -87,6 +113,7 @@ func (i *Instance) SetAutonomousMode(mode bool, outcome string) {
 // ---- Autonomous driver completion ------------------------------------------------
 
 func setAutonomousCompleteLocked(s *instanceState, done bool) {
+	s.inst.mu.Lock()
 	s.inst.AutonomousMode = false
 	s.inst.AutonomousTurn = 0
 	s.inst.AutonomousMaxTurns = 0
@@ -95,7 +122,9 @@ func setAutonomousCompleteLocked(s *instanceState, done bool) {
 	} else {
 		s.inst.AutonomousOutcome = "stuck"
 	}
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetAutonomousComplete clears the autonomous-mode flag and turn counters,
@@ -110,9 +139,12 @@ func (i *Instance) SetAutonomousComplete(done bool) {
 // ---- GitHubPRURL + GitHubPRNumber -----------------------------------------------
 
 func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {
+	s.inst.mu.Lock()
 	s.inst.GitHubPRURL = prURL
 	s.inst.GitHubPRNumber = prNumber
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetGitHubPR atomically sets the GitHub PR URL and PR number discovered after a
@@ -127,8 +159,11 @@ func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
 // ---- GitHubPRNumber only (PR-status-poller discovery) ---------------------------
 
 func setGitHubPRNumberLocked(s *instanceState, n int) {
+	s.inst.mu.Lock()
 	s.inst.GitHubPRNumber = n
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetGitHubPRNumber atomically updates the in-memory GitHubPRNumber field.
@@ -144,8 +179,11 @@ func (i *Instance) SetGitHubPRNumber(n int) {
 // ---- LastPRStatusCheck ----------------------------------------------------------
 
 func setLastPRStatusCheckLocked(s *instanceState, t time.Time) {
+	s.inst.mu.Lock()
 	s.inst.LastPRStatusCheck = t
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetLastPRStatusCheck records the time of the most recent PR-status fetch.
@@ -159,8 +197,11 @@ func (i *Instance) SetLastPRStatusCheck(t time.Time) {
 // ---- ArchivedAt -----------------------------------------------------------------
 
 func setArchivedAtLocked(s *instanceState, t *time.Time) {
+	s.inst.mu.Lock()
 	s.inst.ArchivedAt = t
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetArchivedAt sets or clears the ArchivedAt timestamp atomically.
@@ -177,11 +218,15 @@ func (i *Instance) SetArchivedAt(t *time.Time) {
 func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
 	var set bool
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
 		if s.inst.ArchivedAt != nil {
+			s.inst.mu.Unlock()
 			return nil
 		}
 		s.inst.ArchivedAt = &t
-		s.inst.snapshot.Store(buildSnapshot(s.inst))
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
 		set = true
 		return nil
 	})
@@ -191,8 +236,11 @@ func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
 // ---- Program --------------------------------------------------------------------
 
 func setProgramLocked(s *instanceState, program string) {
+	s.inst.mu.Lock()
 	s.inst.Program = program
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetProgram atomically updates the Program field during program-switch.
@@ -221,8 +269,11 @@ func (i *Instance) SetLastAddedToQueue(t time.Time) {
 // ---- AutoYes --------------------------------------------------------------------
 
 func setAutoYesLocked(s *instanceState, v bool) {
+	s.inst.mu.Lock()
 	s.inst.AutoYes = v
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetAutoYes sets the AutoYes flag. Used by daemon.go to opt in automated
@@ -237,8 +288,11 @@ func (i *Instance) SetAutoYes(v bool) {
 // ---- Title (direct/rollback path) -----------------------------------------------
 
 func setTitleDirectLocked(s *instanceState, title string) {
+	s.inst.mu.Lock()
 	s.inst.Title = title
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetTitleDirect sets the Title field directly without tmux-session constraints.
@@ -254,8 +308,11 @@ func (i *Instance) SetTitleDirect(title string) {
 // ---- Category -------------------------------------------------------------------
 
 func setCategoryLocked(s *instanceState, category string) {
+	s.inst.mu.Lock()
 	s.inst.Category = category
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetCategory sets the session category.
@@ -269,8 +326,11 @@ func (i *Instance) SetCategory(category string) {
 // ---- WorkingDir -----------------------------------------------------------------
 
 func setWorkingDirLocked(s *instanceState, dir string) {
+	s.inst.mu.Lock()
 	s.inst.WorkingDir = dir
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetWorkingDir sets the working directory for this session.
@@ -284,8 +344,11 @@ func (i *Instance) SetWorkingDir(dir string) {
 // ---- PauseReason ----------------------------------------------------------------
 
 func setPauseReasonLocked(s *instanceState, reason string) {
+	s.inst.mu.Lock()
 	s.inst.PauseReason = reason
-	s.inst.snapshot.Store(buildSnapshot(s.inst))
+	snap := buildSnapshot(s.inst)
+	s.inst.mu.Unlock()
+	s.inst.snapshot.Store(snap)
 }
 
 // SetPauseReason sets the reason this session was paused.

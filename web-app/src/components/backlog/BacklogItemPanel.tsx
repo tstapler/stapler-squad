@@ -24,14 +24,17 @@ export function BacklogItemPanel({
   });
   const [item, setItem] = useState<BacklogItem | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const loadItem = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const result = await getBacklogItem(backlogItemId);
       setItem(result);
     } catch (err) {
       console.error("Failed to load backlog item:", err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -139,8 +142,10 @@ export function BacklogItemPanel({
                 </AppLink>
               </div>
             </>
-          ) : (
+          ) : loadError ? (
             <div className={styles.error}>Failed to load item</div>
+          ) : (
+            <div className={styles.error}>Item not found</div>
           )}
         </div>
       )}

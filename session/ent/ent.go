@@ -15,7 +15,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
@@ -24,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -96,7 +99,9 @@ func checkColumn(t, c string) error {
 			analyticsevent.Table:          analyticsevent.ValidColumn,
 			approvalrule.Table:            approvalrule.ValidColumn,
 			backlogitem.Table:             backlogitem.ValidColumn,
+			backlogprogressnote.Table:     backlogprogressnote.ValidColumn,
 			backlogstatusevent.Table:      backlogstatusevent.ValidColumn,
+			backlogstuckstate.Table:       backlogstuckstate.ValidColumn,
 			classificationanalytics.Table: classificationanalytics.ValidColumn,
 			claudemetadata.Table:          claudemetadata.ValidColumn,
 			claudesession.Table:           claudesession.ValidColumn,
@@ -105,6 +110,7 @@ func checkColumn(t, c string) error {
 			escapeevent.Table:             escapeevent.ValidColumn,
 			itemsession.Table:             itemsession.ValidColumn,
 			itemsource.Table:              itemsource.ValidColumn,
+			pipelinemode.Table:            pipelinemode.ValidColumn,
 			project.Table:                 project.ValidColumn,
 			reviewverdict.Table:           reviewverdict.ValidColumn,
 			session.Table:                 session.ValidColumn,

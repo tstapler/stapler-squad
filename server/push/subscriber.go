@@ -122,12 +122,15 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	if sess == nil {
 		return DeliveryNotification{}, false
 	}
-	if sess.Status != session.Stopped {
+	// Read via the locked accessor, not the raw field: Status is written under
+	// Instance.stateMutex (see transitionTo), and this runs on the EventBus
+	// subscriber goroutine, concurrently with the instance's own goroutine.
+	if session.Status(sess.GetStatus()) != session.Stopped {
 		return DeliveryNotification{}, false
 	}
 
 	title := "Session Completed"
-	body := fmt.Sprintf("Session '%s' has completed", sess.Title)
+	body := fmt.Sprintf("Session '%s' has completed", sess.GetTitle())
 	tag := "session-completed-" + stableID(sess)
 	data := buildDataMap(sess, "SESSION_COMPLETE", false)
 
@@ -190,7 +193,7 @@ func buildNotificationForSession(sess *session.Instance, eventType events.EventT
 func buildApprovalNotification(sess *session.Instance) DeliveryNotification {
 	return DeliveryNotification{
 		Title:              "Approval Required",
-		Body:               fmt.Sprintf("Session '%s' requires approval", sess.Title),
+		Body:               fmt.Sprintf("Session '%s' requires approval", sess.GetTitle()),
 		Icon:               "/icons/icon-192.png",
 		Tag:                "approval-required-" + stableID(sess),
 		Data:               buildDataMap(sess, "APPROVAL_NEEDED", true),
@@ -203,7 +206,7 @@ func buildApprovalNotification(sess *session.Instance) DeliveryNotification {
 func buildCompletedNotification(sess *session.Instance) DeliveryNotification {
 	return DeliveryNotification{
 		Title:              "Session Completed",
-		Body:               fmt.Sprintf("Session '%s' has completed", sess.Title),
+		Body:               fmt.Sprintf("Session '%s' has completed", sess.GetTitle()),
 		Icon:               "/icons/icon-192.png",
 		Tag:                "session-completed-" + stableID(sess),
 		Data:               buildDataMap(sess, "SESSION_COMPLETE", false),
@@ -213,11 +216,13 @@ func buildCompletedNotification(sess *session.Instance) DeliveryNotification {
 }
 
 // stableID returns the stable identifier for a session: ID when non-empty, Title otherwise.
+// ID is set once at construction and never mutated, so it's safe to read directly; Title can
+// be changed via Rename() under Instance.stateMutex, so it's read via the locked accessor.
 func stableID(sess *session.Instance) string {
 	if sess.ID != "" {
 		return sess.ID
 	}
-	return sess.Title
+	return sess.GetTitle()
 }
 
 // buildDataMap builds the FCM-compatible data map for a notification.
@@ -225,7 +230,7 @@ func buildDataMap(sess *session.Instance, notifType string, isApproval bool) map
 	id := stableID(sess)
 	data := map[string]interface{}{
 		"sessionId":        id,
-		"sessionTitle":     sess.Title,
+		"sessionTitle":     sess.GetTitle(),
 		"notificationType": notifType,
 		"timestamp":        time.Now().Unix(),
 		"url":              buildSessionURL(id),

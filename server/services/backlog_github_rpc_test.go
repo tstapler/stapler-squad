@@ -178,7 +178,7 @@ func TestGetSessionBacklogIndex_EmptyDB(t *testing.T) {
 
 func TestGetSessionBacklogIndex_WithEntries(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	ctx := context.Background()
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{

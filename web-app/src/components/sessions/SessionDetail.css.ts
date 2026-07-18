@@ -330,6 +330,7 @@ export const infoGrid = style({
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
   gap: "1rem",
+  userSelect: "text",
   "@media": {
     "screen and (max-width: 768px)": {
       gridTemplateColumns: "1fr",

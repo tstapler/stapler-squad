@@ -97,6 +97,24 @@ func TestParseHeadlessTriageResult_StrayBraceInPreamble(t *testing.T) {
 // TestParseHeadlessTriageResult_MultipleStrayBracesPickLast verifies the parser
 // prefers the LAST balanced JSON object when multiple valid-looking candidates are
 // present, matching the prompt's instruction to emit the real result last.
+// TestParseHeadlessTriageResult_PriorResultEchoedThenRevised verifies that when a
+// refine prompt causes the model to quote the full prior HeadlessTriageResult JSON
+// (e.g. while explaining what it changed) before emitting the revised result, the
+// revised (last) object is the one returned — not the echoed prior one.
+func TestParseHeadlessTriageResult_PriorResultEchoedThenRevised(t *testing.T) {
+	raw := `Here was the prior result for reference:
+{"title":"old-title","summary":"old summary","suggestions":[],"tasks":[{"text":"old task","estimate":"1h","category":"backend"}]}
+
+Incorporating the feedback, here is the revised result:
+{"title":"new-title","summary":"new summary","suggestions":[],"tasks":[{"text":"new task","estimate":"2h","category":"frontend"}]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "new-title", result.Title)
+	assert.Equal(t, "new summary", result.Summary)
+	require.Len(t, result.Tasks, 1)
+	assert.Equal(t, "new task", result.Tasks[0].Text)
+}
+
 func TestParseHeadlessTriageResult_MultipleStrayBracesPickLast(t *testing.T) {
 	raw := `First I considered {"summary":"decoy one"} but discarded it.
 Then {"summary":"decoy two","suggestions":[]} also didn't fit.
@@ -193,7 +211,7 @@ func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 
 func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 	// ParseAcCriteria expects JSON-encoded criteria.
-	acJSON := `[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`
+	acJSON := AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
 	item := &BacklogItemData{
 		Title:              "AC Test",
 		ID:                 "id-2",
@@ -207,4 +225,28 @@ func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
 	item := &BacklogItemData{Title: "No AC", ID: "id-3"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.NotContains(t, prompt, "Acceptance Criteria")
+}
+
+// ─── BuildHeadlessRetriagePrompt ──────────────────────────────────────────────
+
+func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T) {
+	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
+	prior := HeadlessTriageResult{
+		Iteration: 1,
+		Summary:   "Original plan summary.",
+		Tasks:     []TriageTask{{Text: "Do the thing", Estimate: "2h", Category: "backend"}},
+	}
+	prompt := BuildHeadlessRetriagePrompt(item, "/tmp/artifacts", prior, "This missed the mobile case entirely.")
+
+	assert.Contains(t, prompt, "Original plan summary.")
+	assert.Contains(t, prompt, "Do the thing")
+	assert.Contains(t, prompt, "This missed the mobile case entirely.")
+	assert.Contains(t, prompt, "output ONLY a JSON object")
+}
+
+func TestBuildHeadlessRetriagePrompt_ReferencesExistingArtifacts(t *testing.T) {
+	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
+	prompt := BuildHeadlessRetriagePrompt(item, "/tmp/artifacts", HeadlessTriageResult{}, "feedback text")
+	assert.Contains(t, prompt, "/tmp/artifacts/plan.md")
+	assert.Contains(t, prompt, "do not start from scratch")
 }

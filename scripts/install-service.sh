@@ -31,6 +31,28 @@ log_success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
 log_warning() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 log_error()   { printf "${RED}✗${NC} %s\n" "$1" >&2; }
 
+# ── Log Rotation ──────────────────────────────────────────────────────────────
+# launchd/systemd just append() to StandardOutPath/StandardError forever — neither
+# rotates it. A crash-restart loop (e.g. ThrottleInterval-bounded respawns) can grow
+# service.log to millions of lines in minutes. Rotate on every install/restart so a
+# bad run doesn't silently fill the disk between installs.
+# Threshold: 20 MiB.
+LOG_ROTATE_MAX_BYTES=20971520
+
+rotate_log_if_large() {
+    log_file="$1"
+    [ -f "$log_file" ] || return 0
+
+    size=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')
+    [ -n "$size" ] || return 0
+
+    if [ "$size" -gt "$LOG_ROTATE_MAX_BYTES" ]; then
+        mv -f "$log_file" "$log_file.old"
+        : > "$log_file"
+        log_info "Rotated oversized log ($((size / 1048576)) MiB): $log_file -> $log_file.old"
+    fi
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -91,6 +113,18 @@ install_linux() {
     log_info "Creating systemd user service..."
     mkdir -p "$service_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
+
+    # Build a PATH that preserves the current shell's PATH first (so custom
+    # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
+    # but appends standard fallback locations, mirroring install_macos's
+    # LaunchAgent PATH below. Without this, the unit bakes in a raw PATH
+    # snapshot from install time with no fallback: if claude/tmux/git later
+    # move (nvm/asdf reinstall, a fresh `pip install --user`/npm global
+    # install to ~/.local/bin) without a subsequent `make install-service`,
+    # the headless LLM pool's exec.LookPath("claude") silently fails and
+    # backlog triage no-ops with only a log warning (see server/dependencies.go).
+    service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
     # Build a PATH that preserves the current shell's PATH first (so custom
     # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
@@ -214,6 +248,7 @@ install_macos() {
     log_info "Creating macOS LaunchAgent..."
     mkdir -p "$plist_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the user's shell PATH first (so custom tools,
     # go/bin, nvm, rbenv, etc. take precedence), then appends both Homebrew
@@ -394,55 +429,6 @@ health_check_and_rollback() {
             fi
         fi
 
-        printf "."
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    printf "\n"
-    log_error "Service did not respond within ${max_wait}s."
-
-    if [ ! -f "$prev_bin" ]; then
-        log_warning "No previous build found at $prev_bin — cannot auto-rollback."
-        log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
-        return 1
-    fi
-
-    log_info "Auto-rolling back to previous build..."
-    cp -f "$prev_bin" "$bin_path"
-    log_success "Binary restored from $prev_bin"
-
-    os=$(detect_os)
-    case "$os" in
-        linux)
-            systemctl --user restart stapler-squad
-            log_success "Service restarted with previous build."
-            ;;
-        macos)
-            launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || \
-                launchctl stop "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
-            log_success "Service restarted with previous build."
-            ;;
-    esac
-    log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
-    return 1
-}
-
-# ── Health Check + Auto-rollback ──────────────────────────────────────────────
-# Polls localhost:8543/health for up to 15s. On failure, restores the .prev
-# binary (if it exists) and restarts the service automatically.
-health_check_and_rollback() {
-    bin_path="$1"
-    prev_bin="${bin_path}.prev"
-    max_wait=15
-    elapsed=0
-    url="http://localhost:8543/health"
-    printf "==> Waiting for service to be healthy"
-    while [ "$elapsed" -lt "$max_wait" ]; do
-        if curl -sf "$url" >/dev/null 2>&1; then
-            printf "\n"
-            log_success "Service is healthy"
-            return 0
-        fi
         printf "."
         sleep 1
         elapsed=$((elapsed + 1))

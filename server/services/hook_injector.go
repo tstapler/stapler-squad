@@ -30,13 +30,35 @@ var hookEventName = map[HookName]string{
 	HookPromptSubmit:       "UserPromptSubmit",
 }
 
-// hookEndpoint maps a HookName to the server-side HTTP endpoint.
-var hookEndpoint = map[HookName]string{
-	HookPermissionApproval: hookApprovalURL,
-	HookStopNotification:   "http://localhost:8543/api/hooks/stop",
-	HookPreToolLogging:     "http://localhost:8543/api/hooks/pre-tool-use",
-	HookPostToolLogging:    "http://localhost:8543/api/hooks/post-tool-use",
-	HookPromptSubmit:       "http://localhost:8543/api/hooks/prompt-submit",
+// hookBaseURLFn resolves the base URL (scheme + host + port) used to build hook callback
+// endpoints. It defaults to the historical localhost:8543 address for backward compatibility
+// with callers that never wire a real server (e.g. existing unit tests), and is overridden via
+// SetHookBaseURLFn during real server wiring (server.go's wireDepsIntoServer) with a closure
+// that reads the server's real listen address lazily — e.g. via srv.GetAddr() — so hook URLs
+// are never snapshotted before the server has bound its real port (PORT=0 support).
+var hookBaseURLFn = func() string { return "http://localhost:8543" }
+
+// SetHookBaseURLFn overrides the base URL function used when building hook endpoint URLs via
+// hookEndpoints. Call once during server wiring; passing nil is a no-op.
+func SetHookBaseURLFn(fn func() string) {
+	if fn != nil {
+		hookBaseURLFn = fn
+	}
+}
+
+// hookEndpoints builds the HookName -> URL map fresh from baseURLFn() on every call (never
+// cached into a package-level map), so hook URLs written into a session's settings always
+// reflect the base URL current at hook-injection time rather than one baked in at server- or
+// package-construction time.
+func hookEndpoints(baseURLFn func() string) map[HookName]string {
+	base := baseURLFn()
+	return map[HookName]string{
+		HookPermissionApproval: base + "/api/hooks/permission-request",
+		HookStopNotification:   base + "/api/hooks/stop",
+		HookPreToolLogging:     base + "/api/hooks/pre-tool-use",
+		HookPostToolLogging:    base + "/api/hooks/post-tool-use",
+		HookPromptSubmit:       base + "/api/hooks/prompt-submit",
+	}
 }
 
 // InjectHooksConfig writes (or merges) hook entries into
@@ -85,9 +107,13 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 		_ = json.Unmarshal(hooksRaw, &hooksMap)
 	}
 
+	// Resolved once per InjectHooksConfig call (i.e. per-session, at hook-injection time), not
+	// cached at package-construction time, so it reflects the server's current base URL.
+	endpoints := hookEndpoints(hookBaseURLFn)
+
 	for hookName := range wanted {
 		eventKey := hookEventName[hookName]
-		url := hookEndpoint[hookName]
+		url := endpoints[hookName]
 		curlCmd := fmt.Sprintf(
 			"curl -s --max-time %d -X POST '%s' -H 'Content-Type: application/json' -H 'X-CS-Session-ID: %s' -d @-",
 			hookTimeout, url, sessionTitle,

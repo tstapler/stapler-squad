@@ -56,6 +56,50 @@ func TestNewWorktreeSetup_SetsBaseCommitSHA(t *testing.T) {
 	assert.Len(t, wt.GetBaseCommitSHA(), 40, "baseCommitSHA must be a full SHA-1")
 }
 
+// TestCleanup_PreservesBranchWithCommits verifies the fix for the branch-deletion bug: a
+// worktree branch with a commit that exists nowhere else must survive Cleanup(). Cleanup()
+// used to unconditionally delete the branch reference via go-git's RemoveReference, which
+// would silently destroy unpushed/unmerged work with no way to recover it (found live via
+// mcp__stapler-squad__stop_session — see docs/tasks/backlog-feature-improvement.md).
+func TestCleanup_PreservesBranchWithCommits(t *testing.T) {
+	repoDir := setupTestRepo(t)
+
+	wt, branchName, err := NewGitWorktree(repoDir, "test-cleanup-preserves-branch")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	// Make a commit inside the worktree that exists on this branch only.
+	worktreePath := wt.GetWorktreePath()
+	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "new-file.txt"), []byte("unpushed work"), 0644))
+	run := func(args ...string) {
+		t.Helper()
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = worktreePath
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
+	}
+	run("add", ".")
+	run("commit", "-m", "unpushed commit that must survive cleanup")
+
+	require.NoError(t, wt.Cleanup())
+
+	// The worktree directory must be gone...
+	_, statErr := os.Stat(worktreePath)
+	assert.True(t, os.IsNotExist(statErr), "worktree directory should be removed by Cleanup()")
+
+	// ...but the branch — and its commit — must still exist in the main repo.
+	branchCmd := safeexec.CommandContext(context.Background(), "git", "rev-parse", "--verify", branchName)
+	branchCmd.Dir = repoDir
+	out, err := branchCmd.CombinedOutput()
+	assert.NoError(t, err, "branch %s must still exist after Cleanup(): %s", branchName, out)
+
+	logCmd := safeexec.CommandContext(context.Background(), "git", "log", branchName, "--oneline")
+	logCmd.Dir = repoDir
+	logOut, err := logCmd.CombinedOutput()
+	require.NoError(t, err)
+	assert.Contains(t, string(logOut), "unpushed commit that must survive cleanup")
+}
+
 // TestNewWorktreeSetup_WorktreePathExists verifies that the worktree directory is created
 // on disk after Setup().
 func TestNewWorktreeSetup_WorktreePathExists(t *testing.T) {
@@ -241,6 +285,30 @@ func TestNewGitWorktreeFromExisting_DetectsBranchAndBase(t *testing.T) {
 	assert.NotEmpty(t, reopened.GetBaseCommitSHA(), "base commit SHA must be detected for existing worktree")
 	// The worktree path must match the path we passed in.
 	assert.Equal(t, wt.GetWorktreePath(), reopened.GetWorktreePath(), "worktree path must match")
+
+	// Regression guard: the resolved repo root must be the actual main repo, not the
+	// worktree's own directory. findGitRepoRoot (previously used here) misreads a
+	// worktree whose repo.Head() fails as "an uninitialized repo needing a fresh
+	// commit", plants a brand-new disconnected initial commit directly inside the
+	// worktree directory, and returns the worktree path itself as the "repo root" —
+	// severing the worktree from its real branch/history entirely.
+	assert.Equal(t, repoDir, reopened.GetRepoPath(),
+		"repo root must resolve to the main repo, not be conflated with the worktree's own path")
+
+	// Regression guard: the detected base SHA must resolve to a real object. In
+	// production, go-git's repo.Head() read (the previous implementation of
+	// getHeadCommitSHA) was observed returning a syntactically-valid 40-hex-char
+	// SHA that did not correspond to any object in the repository at all — not
+	// even a stale/unreachable one (absent from git cat-file -t, git rev-list
+	// --all, git reflog show --all, and git fsck --unreachable). getHeadCommitSHA
+	// now shells out to `git rev-parse HEAD` instead, which is what GetGitDiff
+	// later uses to actually consume this value, keeping producer and consumer
+	// in agreement.
+	catFileCmd := safeexec.CommandContext(context.Background(), "git", "cat-file", "-t", reopened.GetBaseCommitSHA())
+	catFileCmd.Dir = repoDir
+	out, catErr := catFileCmd.Output()
+	require.NoErrorf(t, catErr, "base commit SHA %q must resolve to a real object", reopened.GetBaseCommitSHA())
+	assert.Equal(t, "commit", strings.TrimSpace(string(out)))
 }
 
 // TestWorktreeSetup_BranchNameSet verifies that GetBranchName() returns the expected

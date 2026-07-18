@@ -19,13 +19,24 @@ import {
 
 // ---- Git status helpers ----
 
+// fileChangeToStatusLetter maps a FileStatus to the single-character badge
+// shown in the compact file-tree row.
+//
+// Note: the conflict glyph here ("U", for "Unmerged" — matching git's own
+// porcelain status char) intentionally differs from VcsPanel.tsx's
+// FILE_STATUS_META, which uses "!!" for the same status in its full-row
+// panel context where a louder glyph is appropriate. This is a deliberate,
+// documented divergence, not drift — see the matching comment in
+// VcsPanel.tsx.
 function fileChangeToStatusLetter(status: FileStatus): string {
   switch (status) {
     case FileStatus.MODIFIED:    return "M";
     case FileStatus.ADDED:       return "A";
     case FileStatus.DELETED:     return "D";
     case FileStatus.RENAMED:     return "R";
+    case FileStatus.COPIED:      return "C";
     case FileStatus.UNTRACKED:   return "?";
+    case FileStatus.IGNORED:     return "!";
     case FileStatus.CONFLICT:    return "U";
     default:                     return "";
   }

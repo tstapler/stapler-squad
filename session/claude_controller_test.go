@@ -714,9 +714,7 @@ func TestGetCurrentStatus_CacheHit(t *testing.T) {
 		t.Errorf("cache hit should return same result: (%v,%q) vs (%v,%q)", status1, desc1, status2, desc2)
 	}
 	// Verify the cache entry was actually populated.
-	var hash uint64
-	cc.cache.Read(func(c cacheState) { hash = c.status.tailHash })
-	if hash == 0 {
+	if sc := cc.statusCache.Load(); sc == nil || sc.tailHash == 0 {
 		t.Error("statusCache.tailHash should be non-zero after first call")
 	}
 }
@@ -725,7 +723,9 @@ func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetCurrentStatus()
 	var firstHash uint64
-	cc.cache.Read(func(c cacheState) { firstHash = c.status.tailHash })
+	if sc := cc.statusCache.Load(); sc != nil {
+		firstHash = sc.tailHash
+	}
 
 	// Update the PTY buffer directly — inst.preview is no longer read by GetCurrentStatus.
 	if pa := cc.ptyAccess.Load(); pa != nil {
@@ -734,7 +734,9 @@ func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
 	}
 	_, _ = cc.GetCurrentStatus()
 	var secondHash uint64
-	cc.cache.Read(func(c cacheState) { secondHash = c.status.tailHash })
+	if sc := cc.statusCache.Load(); sc != nil {
+		secondHash = sc.tailHash
+	}
 
 	if firstHash == secondHash {
 		t.Error("hash should change when content changes")
@@ -788,9 +790,7 @@ func TestGetIdleState_CacheHit(t *testing.T) {
 	if state1 != state2 {
 		t.Errorf("idle cache hit should return same state: %v vs %v", state1, state2)
 	}
-	var hash uint64
-	cc.cache.Read(func(c cacheState) { hash = c.idle.tailHash })
-	if hash == 0 {
+	if ic := cc.idleCache.Load(); ic == nil || ic.tailHash == 0 {
 		t.Error("idleCache.tailHash should be non-zero after first call")
 	}
 }
@@ -799,7 +799,9 @@ func TestGetIdleState_CacheMissOnChange(t *testing.T) {
 	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetIdleState()
 	var firstHash uint64
-	cc.cache.Read(func(c cacheState) { firstHash = c.idle.tailHash })
+	if ic := cc.idleCache.Load(); ic != nil {
+		firstHash = ic.tailHash
+	}
 
 	// Update the PTY buffer directly — inst.preview is no longer read by GetIdleState.
 	if pa := cc.ptyAccess.Load(); pa != nil {
@@ -808,7 +810,9 @@ func TestGetIdleState_CacheMissOnChange(t *testing.T) {
 	}
 	_, _ = cc.GetIdleState()
 	var secondHash uint64
-	cc.cache.Read(func(c cacheState) { secondHash = c.idle.tailHash })
+	if ic := cc.idleCache.Load(); ic != nil {
+		secondHash = ic.tailHash
+	}
 
 	if firstHash == secondHash {
 		t.Error("hash should change when content changes")

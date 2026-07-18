@@ -1,10 +1,42 @@
 // +feature: backlog:github-issue-picker
 "use client";
 
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState, Fragment } from "react";
 import { useBacklogService, type GitHubIssue } from "@/lib/hooks/useBacklogService";
 import { useGitHubIssuePicker } from "@/lib/hooks/useGitHubIssuePicker";
 import * as styles from "./GitHubIssuePicker.css";
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function highlightMatch(text: string, query: string): React.ReactNode {
+  const q = query.trim().toLowerCase();
+  if (!q) return text;
+  const idx = text.toLowerCase().indexOf(q);
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className={styles.matchHighlight}>{text.slice(idx, idx + q.length)}</mark>
+      {text.slice(idx + q.length)}
+    </>
+  );
+}
+
+function relativeTime(iso?: string): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +114,38 @@ function RepoPhase({
   picker: ReturnType<typeof useGitHubIssuePicker>;
   searchRef: React.RefObject<HTMLInputElement | null>;
 }) {
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const listRef = useRef<HTMLDivElement>(null);
+  const repos = picker.repos;
+
+  // Reset selection when the repo list changes (query update or initial load).
+  useEffect(() => {
+    setSelectedIndex(-1);
+  }, [repos]);
+
+  // Scroll keyboard-selected item into view.
+  useEffect(() => {
+    if (selectedIndex < 0 || !listRef.current) return;
+    const items = listRef.current.querySelectorAll<HTMLElement>('[role="option"]');
+    items[selectedIndex]?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (repos.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.min(i + 1, repos.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const idx = selectedIndex >= 0 ? selectedIndex : 0;
+      const repo = repos[idx];
+      if (repo) picker.selectRepo(repo);
+    }
+  };
+
   return (
     <>
       <div className={styles.phaseHeader}>
@@ -94,40 +158,54 @@ function RepoPhase({
         placeholder="Search repos…"
         value={picker.repoQuery}
         onChange={(e) => picker.setRepoQuery(e.target.value)}
+        onKeyDown={handleKeyDown}
         aria-label="Search GitHub repositories"
         aria-autocomplete="list"
         aria-controls="repo-list"
         autoComplete="off"
         autoFocus
       />
-      <div id="repo-list" role="listbox" aria-label="GitHub repositories" className={styles.listContainer}>
+      <div id="repo-list" ref={listRef} role="listbox" aria-label="GitHub repositories" className={styles.listContainer}>
         {picker.reposLoading ? (
           <div className={styles.loadingText}>Loading…</div>
-        ) : picker.repos.length === 0 ? (
+        ) : repos.length === 0 ? (
           <div className={styles.emptyState}>
             {picker.repoQuery ? "No repos found." : "No repos available."}
           </div>
         ) : (
-          picker.repos.map((repo) => (
-            <div
-              key={`${repo.owner}/${repo.repo}`}
-              role="option"
-              aria-selected={false}
-              className={styles.listItem}
-              onMouseDown={(e) => {
-                // Prevent onBlur on the input before click registers.
-                e.preventDefault();
-                picker.selectRepo(repo);
-              }}
-            >
-              <span className={styles.listItemName}>
-                {repo.owner}/{repo.repo}
-              </span>
-              {repo.isLocal && <span className={styles.localBadge}>local</span>}
-              {repo.description && (
-                <span className={styles.listItemMeta}>{repo.description}</span>
+          repos.map((repo, idx) => (
+            <Fragment key={`${repo.owner}/${repo.repo}`}>
+              {idx === picker.repoHistoryCount && picker.repoHistoryCount > 0 && (
+                <div className={styles.historyDivider} role="separator" />
               )}
-            </div>
+              <div
+                role="option"
+                aria-selected={idx === selectedIndex}
+                className={
+                  idx === selectedIndex
+                    ? `${styles.listItem} ${styles.listItemSelected}`
+                    : styles.listItem
+                }
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  picker.selectRepo(repo);
+                }}
+                onMouseEnter={() => setSelectedIndex(idx)}
+              >
+                {idx < picker.repoHistoryCount && (
+                  <span className={styles.historyIcon}>🕒</span>
+                )}
+                <span className={styles.listItemName}>
+                  {highlightMatch(`${repo.owner}/${repo.repo}`, picker.repoQuery)}
+                </span>
+                {repo.isLocal && <span className={styles.localBadge}>local</span>}
+                {repo.description && (
+                  <span className={styles.listItemMeta}>
+                    {highlightMatch(repo.description, picker.repoQuery)}
+                  </span>
+                )}
+              </div>
+            </Fragment>
           ))
         )}
       </div>
@@ -212,6 +290,7 @@ function IssuePhase({
 // ─── Issue row ────────────────────────────────────────────────────────────────
 
 function IssueRow({ issue, onSelect }: { issue: GitHubIssue; onSelect: (i: GitHubIssue) => void }) {
+  const age = relativeTime(issue.updatedAt || issue.createdAt);
   return (
     <div
       role="option"
@@ -222,13 +301,17 @@ function IssueRow({ issue, onSelect }: { issue: GitHubIssue; onSelect: (i: GitHu
         onSelect(issue);
       }}
     >
-      <span className={styles.issueNumber}>#{issue.number}</span>
+      <span className={issue.isPR ? styles.prTypeBadge : styles.issueTypeBadge}>
+        {issue.isPR ? "PR" : "#"}
+      </span>
+      <span className={styles.issueNumber}>{issue.number}</span>
       <span className={styles.listItemName}>{issue.title}</span>
       {issue.labels.slice(0, 2).map((label) => (
         <span key={label} className={styles.labelBadge} title={label}>
           {label}
         </span>
       ))}
+      {age && <span className={styles.relativeDate}>{age}</span>}
     </div>
   );
 }

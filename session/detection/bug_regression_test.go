@@ -772,6 +772,33 @@ func TestBug5_CharsetDesignator_Stripped(t *testing.T) {
 	}
 }
 
+// TestBug6_CSINonLetterTerminator_Stripped verifies that ansiStripRegex strips CSI
+// sequences terminated by a non-letter final byte (e.g. '@' Insert Character, '~').
+// The CSI final-byte range is 0x40-0x7E per ECMA-48, not just A-Z/a-z; a letter-only
+// class leaves these sequences' raw bytes in the text, breaking word-boundary matches
+// the same way the unstripped \x1b(B charset designators did (TestBug5, above).
+func TestBug6_CSINonLetterTerminator_Stripped(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "insert_character_at_sign", input: "esc\x1b[5@ to interrupt"},
+		{name: "tilde_terminator", input: "esc\x1b[3~ to interrupt"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripANSI(tc.input)
+			if strings.ContainsRune(got, '\x1b') {
+				t.Errorf("stripANSI(%q) = %q, still contains ESC; non-letter CSI terminator must be stripped",
+					tc.input, got)
+			}
+			if !strings.Contains(got, "esc") || !strings.Contains(got, "to interrupt") {
+				t.Errorf("stripANSI(%q) = %q, surrounding text not preserved", tc.input, got)
+			}
+		})
+	}
+}
+
 // TestBug5_SpinnerVerbFallback_FilteredEmpty verifies HasClaudeSpinnerActivity detects an
 // active spinner when the tail starts with a tmux status bar "[staplersq …]" (which
 // filterTmuxMetadata would remove) but contains spinner verb text interleaved on the

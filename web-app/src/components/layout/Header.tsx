@@ -8,6 +8,7 @@ import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
 import { MemoryNavBadge } from "@/components/sessions/MemoryNavBadge";
 import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
+import { StuckNavBadge } from "@/components/backlog-stuck/StuckNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
 import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -89,7 +90,7 @@ export function Header() {
                   aria-current={isActive ? "page" : undefined}
                 >
                   {page.href === routes.unfinished ? (
-                    <><span>{page.label}</span><UnfinishedNavBadge inline={true} /></>
+                    <><span>{page.label}</span><UnfinishedNavBadge inline={true} /><StuckNavBadge inline={true} /></>
                   ) : page.href === routes.reviewQueue ? (
                     <><span>{page.label}</span><ReviewQueueNavBadge inline={true} /></>
                   ) : page.href === routes.notifications ? (

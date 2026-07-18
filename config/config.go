@@ -54,6 +54,25 @@ func IsTestMode() bool {
 	return false
 }
 
+// IsNamedInstance reports whether this process is running as an explicitly
+// named, non-default instance (STAPLER_SQUAD_INSTANCE set to anything other
+// than "" or "shared" — see GetConfigDirForDir's priority hierarchy above).
+// A named instance gets its own isolated DB/config directory but does NOT get
+// its own tmux socket — it shares the default tmux server with every other
+// instance on the machine, including the real production one. IsTestMode()
+// alone doesn't catch this: this repo's own E2E harness (tests/e2e, per
+// CLAUDE.md: "STAPLER_SQUAD_INSTANCE=e2e-local ./stapler-squad
+// --tmux-keep-server") runs the real production binary, not a `go test`
+// binary, so IsTestMode() returns false for it even though it has exactly the
+// same "small, isolated instance list vs. the shared tmux socket" hazard a
+// `go test` binary does. Confirmed live: an e2e-local run's orphan sweep
+// killed 5 unrelated production tmux sessions it had never heard of,
+// including the interactive session this very fix was written in.
+func IsNamedInstance() bool {
+	instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	return instanceID != "" && instanceID != "shared"
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -200,9 +219,6 @@ type Config struct {
 	PerformBackgroundHealthChecks bool `json:"perform_background_health_checks"`
 	// KeyCategories defines custom category mappings for key bindings in help system
 	KeyCategories map[string]string `json:"key_categories"`
-	// TerminalStreamingMode controls how terminal output is streamed to the client
-	// Options: "raw" (direct PTY streaming), "state" (MOSH-style state sync), "hybrid" (both)
-	TerminalStreamingMode string `json:"terminal_streaming_mode"`
 	// VCSPreference controls which version control system to prefer when both are available
 	// Options: "auto" (prefer JJ if available), "jj" (always use JJ), "git" (always use Git)
 	VCSPreference string `json:"vcs_preference"`
@@ -228,6 +244,11 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
+	// loop will spawn for a single item before leaving it for manual review. 0 = use the
+	// default (3).
+	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
 	// Default: 100_000.
@@ -246,6 +267,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
+	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 
 	// Escape analytics configuration
 
@@ -285,15 +308,34 @@ func DefaultConfig() *Config {
 	return defaultConfigWithExecutor(nil)
 }
 
+// testModeSentinelProgram replaces the real default program whenever a Config is
+// auto-constructed (no explicit executor) under `go test`. Without this,
+// GetClaudeCommand's PATH fallback (lookPathOnlyExecutor.LookPath, which is a real
+// exec.LookPath) finds and returns the genuine, locally-installed "claude" binary --
+// so a test that forgets to isolate its config/cleanup doesn't just leak an idle
+// process, it leaks a live, authenticated, tool-wielding Claude Code agent (with its
+// own MCP server tree) running indefinitely. "true" exits immediately, so a leaked
+// tmux pane closes itself instead of staying up forever.
+const testModeSentinelProgram = "true"
+
 // defaultConfigWithExecutor creates the default Config using the provided executor.
 // Pass nil to use the default timeout executor.
 func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg := NewConfigWithExecutor(exec)
 
-	program, err := cfg.GetClaudeCommand()
-	if err != nil {
-		log.Error("failed to get claude command", "err", err)
-		program = defaultProgram
+	var program string
+	if exec == nil && IsTestMode() {
+		// Auto-constructed (DefaultConfig()/LoadConfig()) and running under go test:
+		// never resolve to a real launchable program. Tests that intentionally need
+		// real program resolution pass an explicit executor (see TestDefaultConfig).
+		program = testModeSentinelProgram
+	} else {
+		var err error
+		program, err = cfg.GetClaudeCommand()
+		if err != nil {
+			log.Error("failed to get claude command", "err", err)
+			program = defaultProgram
+		}
 	}
 
 	availablePrograms := cfg.GetAvailablePrograms()
@@ -323,9 +365,11 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
 	cfg.PerformBackgroundHealthChecks = true // Enabled by default for automated session maintenance
 	cfg.KeyCategories = getDefaultKeyCategories()
-	cfg.TerminalStreamingMode = "raw" // Default to raw streaming (simpler, more reliable)
-	cfg.VCSPreference = "auto"        // Default to auto-detection (prefer JJ if available)
+	cfg.VCSPreference = "auto" // Default to auto-detection (prefer JJ if available)
 	cfg.AvailablePrograms = availablePrograms
+	cfg.TmuxExecGate = TmuxExecGateConfig{
+		Slots: defaultTmuxExecGateSlots,
+	}
 	cfg.Hibernation = HibernationConfig{
 		Enabled:                   true,
 		IdleTimeoutMinutes:        20,
@@ -458,6 +502,15 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 		return 100_000
 	}
 	return c.AnalyticsMaxRows
+}
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 3
+// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
+func (c *Config) MaxAutoReworkIterationsOrDefault() int {
+	if c == nil || c.MaxAutoReworkIterations <= 0 {
+		return 3
+	}
+	return c.MaxAutoReworkIterations
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,

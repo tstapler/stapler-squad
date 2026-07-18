@@ -1,17 +1,48 @@
 "use client";
 // +feature: backlog:item-form
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus } from "@/lib/hooks/useBacklogService";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { RadioGroup } from "@/components/ui/RadioGroup";
+import type { RadioGroupOption } from "@/components/ui/RadioGroup";
+import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
 import { getApiBaseUrl } from "@/lib/config";
 import * as styles from "./BacklogItemForm.css";
 import * as markdownStyles from "./markdownBody.css";
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
+
+// The 9 content-template fields on PipelineMode — used to detect whether the
+// selected mode's rendered content depends on {{repo_path}} (G-1).
+const CONTENT_TEMPLATE_KEYS = [
+  "statusCommandTemplate",
+  "doneCommandTemplate",
+  "failCommandTemplate",
+  "reviewCommandTemplate",
+  "shipCommandTemplate",
+  "helpCommandTemplate",
+  "triagePromptTemplate",
+  "reviewPromptTemplate",
+  "initialPromptTemplate",
+] as const;
+
+const DEFAULT_PIPELINE_MODE_OPTION: RadioGroupOption<string> = {
+  value: "",
+  label: "Default",
+  description: "Built-in default pipeline",
+  dataTestId: "backlog-pipeline-mode-default",
+};
+
+const PIPELINE_MODE_FETCH_ERROR_NOTICE =
+  "Couldn't load pipeline modes — you can still save with Default.";
+
+const PIPELINE_MODE_UNKNOWN_HINT =
+  "This item references a pipeline mode that no longer exists or is disabled. Choosing a different mode below will replace it when you save.";
 
 interface BacklogItemFormProps {
   initialValues?: Partial<BacklogItem>;
@@ -44,9 +75,12 @@ export function BacklogItemForm({
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
+  const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
+  const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
   const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
     initialValues?.acCriteria ?? []
   );
+  const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
@@ -54,6 +88,101 @@ export function BacklogItemForm({
   const [uploading, setUploading] = useState(false);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { listPipelineModes } = useBacklogService();
+  const [availableModes, setAvailableModes] = useState<PipelineMode[]>([]);
+  const [modesLoading, setModesLoading] = useState(true);
+  const [modesError, setModesError] = useState(false);
+
+  // Story 3.2.1 / G-4 / G-3: fetch enabled pipeline modes on mount. While
+  // pending or on failure, the RadioGroup below falls back to only the
+  // hardcoded "Default" option — never blocking the form.
+  useEffect(() => {
+    let cancelled = false;
+    setModesLoading(true);
+    setModesError(false);
+    listPipelineModes()
+      .then((modes) => {
+        if (cancelled) return;
+        setAvailableModes(modes.filter((m) => m.enabled));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setModesError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setModesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listPipelineModes]);
+
+  // Options offered by the RadioGroup: "Default" is always first and always
+  // present. While the fetch is pending or failed, no other options render —
+  // this alone satisfies G-4/G-3's "only Default selectable" requirement.
+  const pipelineModeOptions = useMemo<RadioGroupOption<string>[]>(() => {
+    if (modesLoading || modesError) {
+      return [DEFAULT_PIPELINE_MODE_OPTION];
+    }
+    return [
+      DEFAULT_PIPELINE_MODE_OPTION,
+      ...availableModes.map((m) => ({
+        value: m.slug,
+        label: m.name,
+        description: m.description || undefined,
+        dataTestId: `backlog-pipeline-mode-${m.slug}`,
+      })),
+    ];
+  }, [modesLoading, modesError, availableModes]);
+
+  // G-2: an item's stored pipelineMode may reference a mode that's since been
+  // deleted or disabled. Only evaluate once the fetch has actually succeeded —
+  // during loading/error we can't yet tell "unresolvable" apart from
+  // "haven't checked yet".
+  const unresolvedPipelineMode = useMemo(() => {
+    if (modesLoading || modesError) return null;
+    if (!pipelineMode) return null;
+    if (pipelineModeOptions.some((o) => o.value === pipelineMode)) return null;
+    return pipelineMode;
+  }, [modesLoading, modesError, pipelineMode, pipelineModeOptions]);
+
+  const pipelineModeHintForValue = useCallback(
+    (v: string) => {
+      if (unresolvedPipelineMode && v === unresolvedPipelineMode) {
+        return PIPELINE_MODE_UNKNOWN_HINT;
+      }
+      return pipelineModeOptions.find((o) => o.value === v)?.description;
+    },
+    [unresolvedPipelineMode, pipelineModeOptions]
+  );
+
+  const unresolvedPipelineModeOption = unresolvedPipelineMode ? (
+    <button
+      type="button"
+      role="radio"
+      aria-checked="true"
+      aria-disabled="true"
+      disabled
+      tabIndex={-1}
+      className={[radioBtn, radioBtnActive].join(" ")}
+      data-testid={`backlog-pipeline-mode-unknown-${unresolvedPipelineMode}`}
+    >
+      {`Unknown mode ('${unresolvedPipelineMode}')`}
+    </button>
+  ) : undefined;
+
+  // G-1: the selected mode's own content-template fields may assume a
+  // repo path is present. Non-blocking — warns, never disables.
+  const selectedPipelineMode = useMemo(
+    () => availableModes.find((m) => m.slug === pipelineMode) ?? null,
+    [availableModes, pipelineMode]
+  );
+  const selectedModeRequiresRepoPath = useMemo(() => {
+    if (!selectedPipelineMode) return false;
+    return CONTENT_TEMPLATE_KEYS.some((key) => selectedPipelineMode[key]?.includes("{{repo_path}}"));
+  }, [selectedPipelineMode]);
+  const showRepoPathPrerequisiteWarning = selectedModeRequiresRepoPath && !repoPath.trim();
 
   const validate = useCallback((): FormErrors => {
     const errs: FormErrors = {};
@@ -87,14 +216,17 @@ export function BacklogItemForm({
           priority,
           skipPlanning,
           skipReviewGate,
+          autoSpawnSession,
+          autoCreatePR,
           acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
+          pipelineMode,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, acCriteria, onSubmit, validate]
+    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, onSubmit, validate]
   );
 
   const addCriterion = useCallback(() => {
@@ -357,44 +489,106 @@ export function BacklogItemForm({
         </div>
       </div>
 
-      {/* Flags */}
-      <div className={styles.twoColumn}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
-            <input
-              id="backlog-skip-planning"
-              type="checkbox"
-              className={styles.checkboxInput}
-              checked={skipPlanning}
-              onChange={(e) => setSkipPlanning(e.target.checked)}
-              disabled={busy}
-              data-testid="backlog-skip-planning-checkbox"
-            />
-            <span className={styles.checkboxLabel}>Skip planning phase</span>
-          </label>
-          <span className={styles.checkboxHint}>
-            Go straight to triage without a separate planning pass.
+      {/* Pipeline mode selector (Epic 3.2) */}
+      <div className={styles.fieldGroup}>
+        <RadioGroup
+          options={pipelineModeOptions}
+          value={pipelineMode}
+          onChange={setPipelineMode}
+          groupLabel="Pipeline mode"
+          hintForValue={pipelineModeHintForValue}
+          trailingContent={unresolvedPipelineModeOption}
+        />
+        {modesError && (
+          <span role="status" className={styles.checkboxHint} data-testid="backlog-pipeline-mode-fetch-error">
+            {PIPELINE_MODE_FETCH_ERROR_NOTICE}
           </span>
-        </div>
-
-        <div className={styles.fieldGroup}>
-          <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
-            <input
-              id="backlog-skip-review"
-              type="checkbox"
-              className={styles.checkboxInput}
-              checked={skipReviewGate}
-              onChange={(e) => setSkipReviewGate(e.target.checked)}
-              disabled={busy}
-              data-testid="backlog-skip-review-checkbox"
-            />
-            <span className={styles.checkboxLabel}>Skip review gate</span>
-          </label>
-          <span className={styles.checkboxHint}>
-            Mark work done without an automated review pass first.
-          </span>
-        </div>
+        )}
       </div>
+
+      {/* Flags */}
+      <fieldset className={styles.fieldGroup} data-testid="backlog-overrides-fieldset">
+        <legend className={styles.label}>Overrides (independent of pipeline mode)</legend>
+        <div className={styles.twoColumn}>
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
+              <input
+                id="backlog-skip-planning"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={skipPlanning}
+                onChange={(e) => setSkipPlanning(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-skip-planning-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Skip planning phase</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Go straight to triage without a separate planning pass.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
+              <input
+                id="backlog-skip-review"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={skipReviewGate}
+                onChange={(e) => setSkipReviewGate(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-skip-review-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Skip review gate</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Mark work done without an automated review pass first.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-spawn-session">
+              <input
+                id="backlog-auto-spawn-session"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoSpawnSession}
+                onChange={(e) => setAutoSpawnSession(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-spawn-session-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-spawn work session</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual &quot;Spawn Session&quot; click — start work automatically once triage marks the item ready.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-create-pr">
+              <input
+                id="backlog-auto-create-pr"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoCreatePR}
+                onChange={(e) => setAutoCreatePR(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-create-pr-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-create PR on completion</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
+            </span>
+          </div>
+        </div>
+      </fieldset>
+
+      {showRepoPathPrerequisiteWarning && selectedPipelineMode && (
+        <span role="alert" className={styles.errorMessage} data-testid="backlog-pipeline-mode-repo-path-warning">
+          {`⚠ ${selectedPipelineMode.name} mode requires a repository path — add one above.`}
+        </span>
+      )}
 
       {/* Acceptance Criteria */}
       <div className={styles.acSection}>

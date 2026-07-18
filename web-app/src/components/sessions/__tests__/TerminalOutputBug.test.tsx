@@ -109,13 +109,10 @@ type StreamMock = {
   connect: jest.Mock;
   disconnect: jest.Mock;
   sendInput: jest.Mock;
-  sendInputWithEcho: jest.Mock;
   resize: jest.Mock;
   scrollbackLoaded: boolean;
   requestScrollback: jest.Mock;
   sendFlowControl: jest.Mock;
-  getIsApplyingState: jest.Mock;
-  sspNegotiated: boolean;
   startRecording: jest.Mock;
   stopRecording: jest.Mock;
   output: string;
@@ -130,13 +127,10 @@ function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
     connect: mockConnect,
     disconnect: jest.fn(),
     sendInput: jest.fn(),
-    sendInputWithEcho: jest.fn().mockReturnValue(BigInt(0)),
     resize: jest.fn(),
     scrollbackLoaded: false,
     requestScrollback: jest.fn(),
     sendFlowControl: jest.fn(),
-    getIsApplyingState: jest.fn().mockReturnValue(false),
-    sspNegotiated: false,
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
     output: '',

@@ -212,7 +212,8 @@ func (i *Instance) KillExternalSession() error {
 	// Kill the tmux session
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
+	//nolint:tmuxsocketscope targets a user-created external session; no isolated variant exists to target
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to kill tmux session '%s': %w", i.ExternalMetadata.TmuxSessionName, err)
 	}
@@ -223,7 +224,7 @@ func (i *Instance) KillExternalSession() error {
 // HasUpdated reports whether terminal content has changed since the last check.
 // Returns (updated, hasPrompt) and side-effects terminal timestamps on change.
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return false, false
 	}
 
@@ -246,7 +247,7 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 func (i *Instance) TapEnter() {
-	if !i.started || !i.AutoYes {
+	if !i.started.Load() || !i.AutoYes {
 		return
 	}
 	if err := i.pm().TapEnter(); err != nil {
@@ -256,7 +257,7 @@ func (i *Instance) TapEnter() {
 
 // Attach attaches to the tmux session and returns a done channel.
 func (i *Instance) Attach() (chan struct{}, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
 	return i.pm().Attach()
@@ -264,7 +265,7 @@ func (i *Instance) Attach() (chan struct{}, error) {
 
 // SetPreviewSize sets the detached terminal dimensions for preview rendering.
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -306,15 +307,39 @@ func (i *Instance) TmuxSessionExists() bool {
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
-	if i.Status == Paused || i.Status == Stopped || !i.started || !i.pm().HasSession() {
+	if i.Status == Paused || i.Status == Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
 	}
 	return i.pm().IsAlive()
 }
 
+// PaneProcessDead reports whether the tmux session is alive (TmuxAlive()==true)
+// but the wrapped program running in the pane has already exited. remain-on-exit
+// keeps the tmux session/pane around as a "Pane is dead (signal N, ...)"
+// placeholder after the wrapped program is killed (e.g. OOM SIGKILL) or crashes,
+// rather than tearing the session down -- so TmuxAlive() alone reports this
+// session as healthy forever. Health checks must consult this in addition to
+// TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
+// (e.g. native process manager), which have no equivalent placeholder state.
+func (i *Instance) PaneProcessDead() bool {
+	if !i.TmuxAlive() {
+		return false
+	}
+	tb, ok := i.pm().(*TmuxBackend)
+	if !ok {
+		return false
+	}
+	tm := tb.TmuxManager()
+	if tm == nil {
+		return false
+	}
+	_, _, dead := tm.PaneExitStatus()
+	return dead
+}
+
 // GetPTYReader returns the PTY file handle for the tmux session.
 func (i *Instance) GetPTYReader() (*os.File, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("session not started")
 	}
 	return i.pm().GetPTY()
@@ -323,7 +348,7 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 // WriteToPTY writes data to the PTY, sending input to the terminal session.
 // This is used for forwarding client input to the tmux session.
 func (i *Instance) WriteToPTY(data []byte) (int, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return 0, fmt.Errorf("session not started")
 	}
 	return i.pm().SendKeys(string(data))
@@ -332,7 +357,7 @@ func (i *Instance) WriteToPTY(data []byte) (int, error) {
 // ResizePTY resizes the terminal dimensions.
 // This is used when clients resize their terminal windows.
 func (i *Instance) ResizePTY(cols, rows int) error {
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("session not started")
 	}
 	if err := i.pm().SetWindowSize(cols, rows); err != nil {
@@ -345,7 +370,7 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 // This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return "", fmt.Errorf("session not started or paused")
 	}
 	return i.pm().CapturePaneContent()
@@ -354,7 +379,7 @@ func (i *Instance) CapturePaneContent() (string, error) {
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return "", fmt.Errorf("session not started or paused")
 	}
 
@@ -393,7 +418,7 @@ func (i *Instance) GetScrollbackHistory(startLine, endLine string) (string, erro
 
 // SendPrompt sends a prompt to the tmux session. Delegates to processManager.SendPromptWithEnter.
 func (i *Instance) SendPrompt(prompt string) error {
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("instance not started")
 	}
 	return i.pm().SendPromptWithEnter(prompt)
@@ -439,7 +464,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)
 	}
-	i.started = session != nil
+	i.started.Store(session != nil)
 }
 
 // SetWindowSize propagates window size changes to the tmux session.
@@ -460,7 +485,7 @@ func (i *Instance) RefreshTmuxClient() error {
 
 // SendKeys sends keys to the tmux session.
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	_, err := i.pm().SendKeys(keys)
@@ -470,7 +495,7 @@ func (i *Instance) SendKeys(keys string) error {
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)
@@ -480,7 +505,10 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 // The DoesSessionExist guard is omitted here: TmuxSession.GetPanePID already uses
 // the CM fast path (no subprocess) and falls back to display-message which returns
 // an error if the session is gone. Avoiding a separate list-sessions call per instance
-// prevents N concurrent tmux list-sessions subprocesses during HistoryLinker.ScanAll.
+// keeps this cheap for HistoryLinker.ScanAll, which calls this sequentially (not
+// fanned out) per session anyway -- and the display-message subprocess fallback is
+// itself gated (session/tmux's exec gate), so there's no need for a second guard
+// here even if that ever changes.
 func (i *Instance) GetPanePID() (int32, error) {
 	return i.pm().GetPanePID()
 }
