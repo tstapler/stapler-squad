@@ -533,4 +533,92 @@ test.describe('Backlog', () => {
       );
     });
   });
+
+  test.describe('Sort and Group by Repository', () => {
+    const runId = Date.now();
+    const titleA = `repo-sort-a-${runId}`; // repoPath: aaa-repo (alphabetically first)
+    const titleB = `repo-sort-b-${runId}`; // repoPath: zzz-repo (alphabetically last)
+    const titleC = `repo-sort-c-${runId}`; // repoPath: '' (No Repository bucket)
+    const createdItemIds: string[] = [];
+
+    test.beforeAll(async ({ request }) => {
+      // Create items directly via the API so repoPath (including empty) is
+      // controlled precisely — the "New Item" modal enforces repoPath
+      // client-side, so it cannot produce a no-repoPath item.
+      for (const [title, repoPath] of [
+        [titleA, `aaa-repo-${runId}`],
+        [titleB, `zzz-repo-${runId}`],
+        [titleC, ''],
+      ] as const) {
+        const res = await request.post(
+          `${BASE_URL}/api/session.v1.BacklogService/CreateBacklogItem`,
+          {
+            headers: { 'Content-Type': 'application/json' },
+            data: { title, priority: 3, repoPath, skipTriage: true },
+          }
+        );
+        const body = await res.json() as { item?: { id: string } };
+        if (body.item?.id) createdItemIds.push(body.item.id);
+      }
+    });
+
+    test.afterAll(async ({ request }) => {
+      for (const id of createdItemIds) {
+        try {
+          await request.post(`${BASE_URL}/api/session.v1.BacklogService/ArchiveBacklogItem`, {
+            headers: { 'Content-Type': 'application/json' },
+            data: { id },
+          });
+        } catch {
+          // Best-effort cleanup — do not fail the test on cleanup errors.
+        }
+      }
+    });
+
+    test.beforeEach(async ({ page }) => {
+      // Isolate to just this test's items via the search filter so assertions
+      // are not affected by other items already in the backlog.
+      await page.locator('[data-testid="backlog-search-input"]').fill(`repo-sort-`);
+      await page.waitForSelector('[data-testid="backlog-table-row"]', { timeout: 10000 });
+    });
+
+    test('e2e:backlog-sort-by-repository-path-toggles-direction - Clicking the Repository header sorts ascending then descending', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+      const header = backlogPage.getRepositoryColumnHeader();
+
+      await expect(header).toHaveAttribute('aria-sort', 'none');
+      await header.click();
+      await expect(header).toHaveAttribute('aria-sort', 'descending');
+
+      let repoPaths = await backlogPage.getRowRepoPaths();
+      // Descending: zzz-repo, aaa-repo, then the empty-repoPath item ("—") last
+      // among these three under simple string descending order.
+      expect(repoPaths[0]).toContain(`zzz-repo-${runId}`);
+
+      await header.click();
+      await expect(header).toHaveAttribute('aria-sort', 'ascending');
+      repoPaths = await backlogPage.getRowRepoPaths();
+      expect(repoPaths[repoPaths.length - 1]).toContain(`zzz-repo-${runId}`);
+    });
+
+    test('e2e:backlog-group-by-repository-buckets-items - Selecting Group by: Repository buckets items with No Repository sorted last', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+
+      await backlogPage.selectGroupBy('repoPath');
+      const groupHeaders = backlogPage.getGroupHeaders();
+      await expect(groupHeaders).toHaveCount(3, { timeout: 10000 });
+
+      const groupTexts = await groupHeaders.allTextContents();
+      expect(groupTexts[groupTexts.length - 1]).toContain('No Repository');
+      expect(groupTexts.some((t) => t.includes(`aaa-repo-${runId}`))).toBe(true);
+      expect(groupTexts.some((t) => t.includes(`zzz-repo-${runId}`))).toBe(true);
+
+      // All three test items are still present across the groups (not dropped).
+      const rows = backlogPage.getTableRows();
+      await expect(rows).toHaveCount(3);
+
+      // Reset to no grouping so this test doesn't leak state into others.
+      await backlogPage.selectGroupBy('none');
+    });
+  });
 });
