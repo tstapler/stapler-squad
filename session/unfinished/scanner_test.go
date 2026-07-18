@@ -1,11 +1,13 @@
 package unfinished
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -244,4 +246,78 @@ func TestCircuitBreaker_ResetOnSuccess(t *testing.T) {
 
 	s.resetBreaker(repoPath)
 	assert.True(t, s.shouldScan(repoPath), "should allow scan after reset")
+}
+
+// ---- removeStaleResult ---------------------------------------------------
+
+// staleTestReader lets a single worktree flip from dirty to clean between
+// two scanRepo calls, simulating "the only uncommitted file was deleted".
+type staleTestReader struct {
+	worktreePath   string
+	hasUncommitted bool
+}
+
+func (r *staleTestReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
+	return []WorktreeInfo{{Path: r.worktreePath, Branch: "feature-x"}}, nil
+}
+func (r *staleTestReader) ResolveDefaultBranch(repoPath string) string { return "" }
+func (r *staleTestReader) HasUncommitted(worktreePath string) (bool, error) {
+	return r.hasUncommitted, nil
+}
+func (r *staleTestReader) AheadBehind(worktreePath, base string) (int, int, error) {
+	return 0, 0, nil
+}
+func (r *staleTestReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+	return nil, nil
+}
+func (r *staleTestReader) DiffShortstat(worktreePath string) (DiffStat, error) {
+	return DiffStat{}, nil
+}
+
+func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
+	repoPath := t.TempDir()
+	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
+	bus := pkgevents.NewEventBus(10)
+	s := NewScannerWithReader(bus, nil, reader)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, _ := bus.Subscribe(ctx)
+
+	// First scan: dirty worktree is stored as an unfinished result.
+	results := s.scanRepo(repoPath)
+	require.Len(t, results, 1)
+	s.publishResults(results)
+	key := repoPath + "|feature-x"
+	_, ok := s.resultStore.Load(key)
+	require.True(t, ok, "dirty result should be stored")
+
+	// Drain events from the first scan (work_updated + scan_completed) so
+	// only the removal event is left to observe below.
+	drain := true
+	for drain {
+		select {
+		case <-sub:
+		default:
+			drain = false
+		}
+	}
+
+	// The worktree goes clean (e.g. the uncommitted file was deleted).
+	reader.hasUncommitted = false
+	s.InvalidateCache(repoPath)
+
+	results = s.scanRepo(repoPath)
+	assert.Empty(t, results, "clean worktree should not be returned")
+
+	_, ok = s.resultStore.Load(key)
+	assert.False(t, ok, "stale result should be removed from resultStore")
+
+	select {
+	case evt := <-sub:
+		assert.Equal(t, EventUnfinishedWorkRemoved, evt.Type)
+		assert.Equal(t, key, evt.Context)
+	case <-time.After(time.Second):
+		t.Fatal("expected EventUnfinishedWorkRemoved to be published")
+	}
 }
