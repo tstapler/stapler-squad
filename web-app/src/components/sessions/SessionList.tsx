@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { GroupedVirtuoso } from "react-virtuoso";
 import { createClient } from "@connectrpc/connect";
@@ -45,6 +46,7 @@ import {
   sortDirButton,
   checkboxLabel,
   categoryTitle,
+  collapseToggle,
   empty,
   clearButton,
   newSessionHeaderButton,
@@ -179,6 +181,36 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   );
 });
 
+// Toggle button rendered inside a group header to collapse/expand its sessions.
+// Shared between row-mode and card-mode header render sites.
+const CategoryCollapseToggle = React.memo(function CategoryCollapseToggle({
+  groupKey,
+  displayName,
+  collapsed,
+  onToggle,
+}: {
+  groupKey: string;
+  displayName: string;
+  collapsed: boolean;
+  onToggle: (groupKey: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="category-collapse-toggle"
+      className={collapseToggle}
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? "Expand" : "Collapse"} ${displayName} category`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle(groupKey);
+      }}
+    >
+      {collapsed ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+    </button>
+  );
+});
+
 const BASE_STORAGE_KEYS = {
   SEARCH_QUERY: 'stapler-squad-search-query',
   SELECTED_STATUS: 'stapler-squad-selected-status',
@@ -187,6 +219,7 @@ const BASE_STORAGE_KEYS = {
   HIDE_PAUSED: 'stapler-squad-hide-paused',
   FILTER_NEEDS_APPROVAL: 'stapler-squad-filter-needs-approval',
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
+  COLLAPSED_GROUPS: 'stapler-squad-collapsed-groups',
   SORT_FIELD: 'stapler-squad-sort-field',
   SORT_DIR: 'stapler-squad-sort-dir',
   VISIBLE_COLUMNS: 'stapler-squad-visible-columns',
@@ -290,6 +323,11 @@ export function SessionList({
   );
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, GroupingStrategy.Category)
+  );
+  // Collapsed group keys — flat set shared across grouping strategies (a key that
+  // recurs after switching strategies, e.g. "Backlog", stays collapsed).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(loadFromStorage<string[]>(STORAGE_KEYS.COLLAPSED_GROUPS, []))
   );
   const [sortField, setSortField] = useState<SortField>(() =>
     loadFromStorage(STORAGE_KEYS.SORT_FIELD, 'lastActivity')
@@ -418,6 +456,10 @@ export function SessionList({
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy);
   }, [STORAGE_KEYS, groupingStrategy]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.COLLAPSED_GROUPS, Array.from(collapsedGroups));
+  }, [STORAGE_KEYS, collapsedGroups]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField);
@@ -568,12 +610,14 @@ export function SessionList({
         : undefined;
       const isUngrouped = groupKey === "No Project";
       items.push({ kind: "header", groupKey, displayName, groupSessions: grpSessions, projectData, isProjectGrouping, isUngrouped });
-      for (const s of grpSessions) {
-        items.push({ kind: "session", session: s });
+      if (!collapsedGroups.has(groupKey)) {
+        for (const s of grpSessions) {
+          items.push({ kind: "session", session: s });
+        }
       }
     }
     return items;
-  }, [groupedSessions, groupingStrategy, projects, viewMode]);
+  }, [groupedSessions, groupingStrategy, projects, viewMode, collapsedGroups]);
 
   const flatItemsRef = useRef(flatItems);
   flatItemsRef.current = flatItems;
@@ -583,12 +627,19 @@ export function SessionList({
     if (viewMode !== "card") return { cardFlatSessions: [] as Session[], cardGroupCounts: [] as number[] };
     const flat: Session[] = [];
     const counts: number[] = [];
-    for (const { sessions: grpSessions } of groupedSessions) {
+    // Collapsed groups keep their slot in cardGroupCounts (count 0) rather than being
+    // removed — this preserves the groupIndex → groupedSessions[groupIndex] mapping
+    // GroupedVirtuoso's groupContent callback relies on, with no index remap needed.
+    for (const { groupKey, sessions: grpSessions } of groupedSessions) {
+      if (collapsedGroups.has(groupKey)) {
+        counts.push(0);
+        continue;
+      }
       counts.push(grpSessions.length);
       for (const s of grpSessions) flat.push(s);
     }
     return { cardFlatSessions: flat, cardGroupCounts: counts };
-  }, [groupedSessions, viewMode]);
+  }, [groupedSessions, viewMode, collapsedGroups]);
 
   const rowVirtualizer = useVirtualizer({
     count: viewMode === "row" ? flatItems.length : 0,
@@ -602,6 +653,18 @@ export function SessionList({
   const handleCycleGrouping = () => {
     setGroupingStrategy(cycleGroupingStrategy(groupingStrategy));
   };
+
+  const toggleGroupCollapsed = useCallback((groupKey: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  }, []);
 
   // Bulk actions handlers
   const handleToggleSelectMode = () => {
@@ -1157,6 +1220,14 @@ export function SessionList({
                       </form>
                     ) : (
                       <>
+                        {groupingStrategy !== GroupingStrategy.None && (
+                          <CategoryCollapseToggle
+                            groupKey={item.groupKey}
+                            displayName={item.displayName}
+                            collapsed={collapsedGroups.has(item.groupKey)}
+                            onToggle={toggleGroupCollapsed}
+                          />
+                        )}
                         <span>{item.displayName} ({item.groupSessions.length})</span>
                         {item.isProjectGrouping && item.projectData && (
                           <>
@@ -1307,6 +1378,14 @@ export function SessionList({
                   </form>
                 ) : (
                   <>
+                    {groupingStrategy !== GroupingStrategy.None && (
+                      <CategoryCollapseToggle
+                        groupKey={groupKey}
+                        displayName={displayName}
+                        collapsed={collapsedGroups.has(groupKey)}
+                        onToggle={toggleGroupCollapsed}
+                      />
+                    )}
                     <span>{displayName} ({grpSessions.length})</span>
                     {isProjectGrouping && projectData && (
                       <>
