@@ -163,6 +163,88 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 	require.NotNil(t, fetchedIS.EndedAt)
 }
 
+// fakeQueueDequeuer is a test double implementing QueueDequeuer, recording every
+// call and signaling on a channel so async callers (onSessionExited invokes it
+// in a goroutine) can be synchronized with in tests.
+type fakeQueueDequeuer struct {
+	called chan struct{}
+}
+
+func newFakeQueueDequeuer() *fakeQueueDequeuer {
+	return &fakeQueueDequeuer{called: make(chan struct{}, 8)}
+}
+
+func (f *fakeQueueDequeuer) DequeueNextQueuedItems(ctx context.Context) error {
+	f.called <- struct{}{}
+	return nil
+}
+
+// TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue
+// verifies that once a work session exit frees a WIP slot (item leaves
+// in_progress), onSessionExited invokes the wired QueueDequeuer immediately
+// rather than waiting for the next ReconcileStuck tick.
+func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Test Item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via onSessionExited")
+	}
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue verifies the
+// safety-net path: the periodic ReconcileStuck sweep invokes the wired
+// QueueDequeuer on every tick (not just onSessionExited), so a missed exit
+// hook or a concurrency limit raised while items were queued still gets
+// picked up.
+func TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	listener.ReconcileStuck(context.Background())
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via ReconcileStuck")
+	}
+}
+
 // TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_WhenSkipReviewGate
 // verifies that when SkipReviewGate=true, item transitions directly to done.
 func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_WhenSkipReviewGate(t *testing.T) {

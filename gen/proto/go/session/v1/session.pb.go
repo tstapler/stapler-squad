@@ -7476,8 +7476,11 @@ type SessionDefaultsConfig struct {
 	// leaves it in review for manual action. 0 in a request means "use the
 	// server default (3)"; the response always echoes the resolved value.
 	MaxAutoReworkIterations int32 `protobuf:"varint,10,opt,name=max_auto_rework_iterations,json=maxAutoReworkIterations,proto3" json:"max_auto_rework_iterations,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Max backlog items that may be in_progress at once. 0 in a request means
+	// "use the server default (2)"; the response always echoes the resolved value.
+	MaxConcurrentBacklogWorkItems int32 `protobuf:"varint,11,opt,name=max_concurrent_backlog_work_items,json=maxConcurrentBacklogWorkItems,proto3" json:"max_concurrent_backlog_work_items,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *SessionDefaultsConfig) Reset() {
@@ -7576,6 +7579,13 @@ func (x *SessionDefaultsConfig) GetNewProjectBaseDir() string {
 func (x *SessionDefaultsConfig) GetMaxAutoReworkIterations() int32 {
 	if x != nil {
 		return x.MaxAutoReworkIterations
+	}
+	return 0
+}
+
+func (x *SessionDefaultsConfig) GetMaxConcurrentBacklogWorkItems() int32 {
+	if x != nil {
+		return x.MaxConcurrentBacklogWorkItems
 	}
 	return 0
 }
@@ -7833,8 +7843,10 @@ type UpdateGlobalDefaultsRequest struct {
 	NewProjectBaseDir string `protobuf:"bytes,7,opt,name=new_project_base_dir,json=newProjectBaseDir,proto3" json:"new_project_base_dir,omitempty"`
 	// 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
 	MaxAutoReworkIterations int32 `protobuf:"varint,8,opt,name=max_auto_rework_iterations,json=maxAutoReworkIterations,proto3" json:"max_auto_rework_iterations,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
+	MaxConcurrentBacklogWorkItems int32 `protobuf:"varint,9,opt,name=max_concurrent_backlog_work_items,json=maxConcurrentBacklogWorkItems,proto3" json:"max_concurrent_backlog_work_items,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *UpdateGlobalDefaultsRequest) Reset() {
@@ -7919,6 +7931,13 @@ func (x *UpdateGlobalDefaultsRequest) GetNewProjectBaseDir() string {
 func (x *UpdateGlobalDefaultsRequest) GetMaxAutoReworkIterations() int32 {
 	if x != nil {
 		return x.MaxAutoReworkIterations
+	}
+	return 0
+}
+
+func (x *UpdateGlobalDefaultsRequest) GetMaxConcurrentBacklogWorkItems() int32 {
+	if x != nil {
+		return x.MaxConcurrentBacklogWorkItems
 	}
 	return 0
 }
@@ -15693,7 +15712,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x12DirectoryRuleProto\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12>\n" +
-	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\x90\x05\n" +
+	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\xda\x05\n" +
 	"\x15SessionDefaultsConfig\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
@@ -15705,7 +15724,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x10one_off_base_dir\x18\b \x01(\tR\roneOffBaseDir\x12/\n" +
 	"\x14new_project_base_dir\x18\t \x01(\tR\x11newProjectBaseDir\x12;\n" +
 	"\x1amax_auto_rework_iterations\x18\n" +
-	" \x01(\x05R\x17maxAutoReworkIterations\x1a:\n" +
+	" \x01(\x05R\x17maxAutoReworkIterations\x12H\n" +
+	"!max_concurrent_backlog_work_items\x18\v \x01(\x05R\x1dmaxConcurrentBacklogWorkItems\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a]\n" +
@@ -15732,7 +15752,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11matched_directory\x18\t \x01(\tR\x10matchedDirectory\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf1\x03\n" +
 	"\x1bUpdateGlobalDefaultsRequest\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
@@ -15741,7 +15761,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\tcli_flags\x18\x05 \x01(\tR\bcliFlags\x12'\n" +
 	"\x10one_off_base_dir\x18\x06 \x01(\tR\roneOffBaseDir\x12/\n" +
 	"\x14new_project_base_dir\x18\a \x01(\tR\x11newProjectBaseDir\x12;\n" +
-	"\x1amax_auto_rework_iterations\x18\b \x01(\x05R\x17maxAutoReworkIterations\x1a:\n" +
+	"\x1amax_auto_rework_iterations\x18\b \x01(\x05R\x17maxAutoReworkIterations\x12H\n" +
+	"!max_concurrent_backlog_work_items\x18\t \x01(\x05R\x1dmaxConcurrentBacklogWorkItems\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"]\n" +

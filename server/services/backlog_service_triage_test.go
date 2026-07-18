@@ -2,10 +2,12 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,6 +113,189 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 	require.Len(t, open, 1)
 	assert.Equal(t, itemID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
+}
+
+// --- Backlog work-item queue: DequeueNextQueuedItems ---
+
+// TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst verifies that once a
+// WIP slot frees up, the oldest (by QueuedAt) queued item is claimed and
+// spawned — a newer queued item must stay queued until its own slot frees.
+func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the (default, cfg=nil) WIP cap of 2.
+	inProgressIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		inProgressIDs = append(inProgressIDs, id)
+	}
+
+	// Queue two more items with a small gap so QueuedAt ordering is deterministic.
+	olderID := createReadyItemForSpawn(t, svc, repoPath, "older queued")
+	resp, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: olderID}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Queued)
+
+	time.Sleep(5 * time.Millisecond)
+
+	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
+	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Queued)
+
+	// Free exactly one slot: end the first in_progress item's work session and
+	// transition it out of in_progress (mirrors what onSessionExited does).
+	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	olderItem, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: olderID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", olderItem.Msg.Item.Status, "the older queued item must be dequeued first")
+
+	newerItem, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: newerID}))
+	require.NoError(t, err)
+	assert.Equal(t, "queued", newerItem.Msg.Item.Status, "only one slot freed — the newer item must stay queued")
+}
+
+// TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure verifies that when
+// the claim (queued->in_progress) succeeds but the spawn itself fails (here:
+// missing repo_path), the item is rolled back to queued rather than stranded
+// in_progress with no session.
+func TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:              "no repo path",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+		SkipTriage:         true,
+		SkipPlanning:       true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: itemID, TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	item, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	_, err = svc.queueBacklogItem(t.Context(), item, false)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "queued", getResp.Msg.Item.Status, "spawn failure must roll the item back to queued, not strand it in_progress")
+	assert.Empty(t, creator.calls)
+}
+
+// TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance
+// verifies that "queued" status and queued_at are durable ent state, not
+// in-memory — a simulated server restart (DB close/reopen from the same file,
+// fresh BacklogService instance) still dequeues and spawns the item once a
+// slot is free, exactly like the live process would on its first reconcile
+// tick after boot.
+func TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "queue-restart.db")
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	var itemID string
+	func() {
+		repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+		require.NoError(t, err)
+		defer repo.Close()
+		storage, err := session.NewStorageWithRepository(repo)
+		require.NoError(t, err)
+
+		svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+		itemID = createReadyItemForSpawn(t, svc, repoPath, "restart-surviving queued item")
+		item, err := storage.GetBacklogItem(t.Context(), itemID)
+		require.NoError(t, err)
+		_, err = svc.queueBacklogItem(t.Context(), item, false)
+		require.NoError(t, err)
+	}()
+
+	// Simulate a server restart: fresh repo/storage/service against the same DB file.
+	repo2, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	defer repo2.Close()
+	storage2, err := session.NewStorageWithRepository(repo2)
+	require.NoError(t, err)
+
+	fetched, err := storage2.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "queued", fetched.Status, "queued status must survive a restart")
+	require.NotNil(t, fetched.QueuedAt, "queued_at must survive a restart")
+
+	creator2 := &mockSessionCreator{}
+	svc2 := NewBacklogService(storage2, creator2, nil, nil, nil, nil)
+	require.NoError(t, svc2.DequeueNextQueuedItems(context.Background()))
+
+	final, err := storage2.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", final.Status, "a fresh service instance must dequeue the restart-surviving item")
+	assert.Len(t, creator2.calls, 1)
+}
+
+// TestDequeue_ConcurrentClaimsAreExclusive races two concurrent calls to
+// TransitionBacklogItemStatus with the same ExpectedStatus=queued precondition
+// against the same item — the SQL-level compare-and-swap (Update().Where(...),
+// not a read-then-write check) must let exactly one caller win. Run with -race.
+func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "concurrent claim item",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
+
+	const attempts = 8
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	for err := range results {
+		if err == nil {
+			successCount++
+		}
+	}
+	assert.Equal(t, 1, successCount, "exactly one concurrent claim must win")
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status)
 }
 
 // --- AutoReopenForPRFix: live-bug regression (ReconcilePRPending churn) ---

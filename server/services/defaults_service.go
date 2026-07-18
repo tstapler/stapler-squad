@@ -20,11 +20,27 @@ import (
 var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
 
 // DefaultsService handles session defaults RPC methods.
-type DefaultsService struct{}
+type DefaultsService struct {
+	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
+	// successful UpdateGlobalDefaults save. Wired in server/dependencies.go to
+	// trigger an immediate backlog-queue dequeue sweep when the concurrency
+	// limit is raised, rather than waiting up to 60s for the next
+	// ReconcileStuck tick (AC: raising the limit dequeues eligible items
+	// without a manual retry). Fires unconditionally rather than only when the
+	// limit increased — DequeueNextQueuedItems is a cheap no-op when there's
+	// nothing to dequeue.
+	onGlobalDefaultsUpdated func()
+}
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
 	return &DefaultsService{}
+}
+
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save.
+func (d *DefaultsService) SetOnGlobalDefaultsUpdated(fn func()) {
+	d.onGlobalDefaultsUpdated = fn
 }
 
 // GetSessionDefaults returns the full session defaults configuration.
@@ -77,6 +93,7 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
 	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
+	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -88,6 +105,11 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	}
 
 	log.Info("updated global session defaults", "program", cfg.SessionDefaults.Program, "tags", cfg.SessionDefaults.Tags)
+
+	if d.onGlobalDefaultsUpdated != nil {
+		go d.onGlobalDefaultsUpdated()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateGlobalDefaultsResponse{
 		Defaults: sessionDefaultsToProto(cfg),
 	}), nil
@@ -428,15 +450,16 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:                 sd.Program,
-		AutoYes:                 sd.AutoYes,
-		Tags:                    sd.Tags,
-		EnvVars:                 sd.EnvVars,
-		CliFlags:                sd.CLIFlags,
-		Profiles:                make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules:          make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:           cfg.OneOffBaseDir,
-		MaxAutoReworkIterations: int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		Program:                       sd.Program,
+		AutoYes:                       sd.AutoYes,
+		Tags:                          sd.Tags,
+		EnvVars:                       sd.EnvVars,
+		CliFlags:                      sd.CLIFlags,
+		Profiles:                      make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules:                make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:                 cfg.OneOffBaseDir,
+		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

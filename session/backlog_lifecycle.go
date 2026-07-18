@@ -62,6 +62,14 @@ type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
 }
 
+// QueueDequeuer claims and spawns as many queued backlog items as there are
+// free WIP slots, oldest-queued first. Called the moment a slot frees up
+// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
+// for a missed exit hook or a concurrency limit raised while items were queued.
+type QueueDequeuer interface {
+	DequeueNextQueuedItems(ctx context.Context) error
+}
+
 // prPendingChecker is the subset of GitWorktree's PR-status behavior that
 // ReconcilePRPending depends on. Defined here (the consumer) rather than in
 // package git, scoped to exactly what's called.
@@ -129,6 +137,10 @@ type BacklogLifecycleListener struct {
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
+
+	// dequeuerMu guards dequeuer for concurrent Set/get access.
+	dequeuerMu sync.RWMutex
+	dequeuer   QueueDequeuer
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
@@ -252,6 +264,34 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	l.reviewRespawnMu.RLock()
 	defer l.reviewRespawnMu.RUnlock()
 	return l.reviewRespawner
+}
+
+// SetDequeuer wires in the spawner used to dequeue queued backlog items once a
+// WIP slot frees up.
+func (l *BacklogLifecycleListener) SetDequeuer(d QueueDequeuer) {
+	l.dequeuerMu.Lock()
+	defer l.dequeuerMu.Unlock()
+	l.dequeuer = d
+}
+
+// getDequeuer returns the current dequeuer under a read lock.
+func (l *BacklogLifecycleListener) getDequeuer() QueueDequeuer {
+	l.dequeuerMu.RLock()
+	defer l.dequeuerMu.RUnlock()
+	return l.dequeuer
+}
+
+// triggerDequeue best-effort dequeues queued items on the current goroutine. It
+// swallows and logs errors — a failed dequeue attempt must never block or fail
+// the caller (a session-exit transition or the periodic stuck sweep).
+func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
+	d := l.getDequeuer()
+	if d == nil {
+		return
+	}
+	if err := d.DequeueNextQueuedItems(ctx); err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
+	}
 }
 
 // SetPRPendingCheckerFactory overrides the factory used to construct the
@@ -496,6 +536,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	}
 
 	log.InfoLog.Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
+
+	// The item just left in_progress, freeing a WIP slot — dequeue immediately
+	// rather than waiting for the next ReconcileStuck tick (safety-net only).
+	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
 	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
@@ -943,6 +987,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// and (Story 2.1.1) flag/resolve pr_ready_unmerged.
 	l.runStuckDetector("pr_ready+merge_detection", &okNames, &panickedNames, func() {
 		l.ReconcilePRPending(ctx, er)
+	})
+
+	// Safety net for the backlog work-item queue: dequeues queued items whose
+	// exit-hook trigger was missed (server restart mid-transition, panic in the
+	// hook's own goroutine) or whose slot was freed by the concurrency limit
+	// being raised via Settings while items were queued (not itself a session
+	// exit, so onSessionExited never fires for it).
+	l.runStuckDetector("dequeue_backlog_items", &okNames, &panickedNames, func() {
+		l.triggerDequeue(ctx)
 	})
 
 	openRows, countErr := er.FindOpenStuckStates(ctx)

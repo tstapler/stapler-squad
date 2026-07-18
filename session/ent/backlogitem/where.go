@@ -121,6 +121,16 @@ func PlanApprovedAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanApprovedAt, v))
 }
 
+// QueuedAt applies equality check predicate on the "queued_at" field. It's identical to QueuedAtEQ.
+func QueuedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAt, v))
+}
+
+// QueuedAutonomous applies equality check predicate on the "queued_autonomous" field. It's identical to QueuedAutonomousEQ.
+func QueuedAutonomous(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAutonomous, v))
+}
+
 // PlanArtifactsPath applies equality check predicate on the "plan_artifacts_path" field. It's identical to PlanArtifactsPathEQ.
 func PlanArtifactsPath(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanArtifactsPath, v))
@@ -759,6 +769,66 @@ func PlanApprovedAtIsNil() predicate.BacklogItem {
 // PlanApprovedAtNotNil applies the NotNil predicate on the "plan_approved_at" field.
 func PlanApprovedAtNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldPlanApprovedAt))
+}
+
+// QueuedAtEQ applies the EQ predicate on the "queued_at" field.
+func QueuedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAt, v))
+}
+
+// QueuedAtNEQ applies the NEQ predicate on the "queued_at" field.
+func QueuedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldQueuedAt, v))
+}
+
+// QueuedAtIn applies the In predicate on the "queued_at" field.
+func QueuedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldQueuedAt, vs...))
+}
+
+// QueuedAtNotIn applies the NotIn predicate on the "queued_at" field.
+func QueuedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldQueuedAt, vs...))
+}
+
+// QueuedAtGT applies the GT predicate on the "queued_at" field.
+func QueuedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldQueuedAt, v))
+}
+
+// QueuedAtGTE applies the GTE predicate on the "queued_at" field.
+func QueuedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldQueuedAt, v))
+}
+
+// QueuedAtLT applies the LT predicate on the "queued_at" field.
+func QueuedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldQueuedAt, v))
+}
+
+// QueuedAtLTE applies the LTE predicate on the "queued_at" field.
+func QueuedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldQueuedAt, v))
+}
+
+// QueuedAtIsNil applies the IsNil predicate on the "queued_at" field.
+func QueuedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldQueuedAt))
+}
+
+// QueuedAtNotNil applies the NotNil predicate on the "queued_at" field.
+func QueuedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldQueuedAt))
+}
+
+// QueuedAutonomousEQ applies the EQ predicate on the "queued_autonomous" field.
+func QueuedAutonomousEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAutonomous, v))
+}
+
+// QueuedAutonomousNEQ applies the NEQ predicate on the "queued_autonomous" field.
+func QueuedAutonomousNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldQueuedAutonomous, v))
 }
 
 // PlanArtifactsPathEQ applies the EQ predicate on the "plan_artifacts_path" field.

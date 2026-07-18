@@ -56,6 +56,7 @@ export default function BacklogBoardPage() {
       }
       setPending((prev) => ({ ...prev, [itemId]: action }));
       const toastKey = `${itemId}:${action}`;
+      let successMessage = ACTION_SUCCESS_MESSAGES[action] ?? "Done.";
       try {
         switch (action) {
           case "mark_ready":
@@ -64,16 +65,18 @@ export default function BacklogBoardPage() {
           case "trigger_triage":
             await triggerTriage(itemId);
             break;
-          case "spawn_session":
-            await spawnSessionFromItem(itemId);
+          case "spawn_session": {
+            const resp = await spawnSessionFromItem(itemId);
+            if (resp?.queued) successMessage = "At capacity — item queued, will start automatically.";
             break;
+          }
           case "cancel_triage":
             await cancelTriage(itemId);
             break;
           default:
             return;
         }
-        showActionToast(ACTION_SUCCESS_MESSAGES[action] ?? "Done.", "success", toastKey);
+        showActionToast(successMessage, "success", toastKey);
         await load();
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Action failed.";

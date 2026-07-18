@@ -33,6 +33,7 @@ const ALL_STATUSES: BacklogItemStatus[] = [
   "idea",
   "refining",
   "ready",
+  "queued",
   "in_progress",
   "review",
   "pr_pending",
@@ -44,6 +45,7 @@ const STATUS_CSS: Record<string, string> = {
   idea: styles.statusIdea,
   refining: styles.statusRefining,
   ready: styles.statusReady,
+  queued: styles.statusQueued,
   in_progress: styles.statusInProgress,
   review: styles.statusReview,
   pr_pending: styles.statusReview,
@@ -475,6 +477,7 @@ function BacklogPageInner() {
                         <span
                           className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
                           aria-label={`Status: ${getStatusLabel(item.status)}`}
+                          data-testid={item.status === "queued" ? "backlog-status-queued" : undefined}
                         >
                           {getStatusLabel(item.status)}
                         </span>

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -139,16 +140,16 @@ const (
 // Configurable via config.Config.MaxAutoReworkIterationsOrDefault() (Settings → Defaults,
 // default 3) — call sites read s.cfg.MaxAutoReworkIterationsOrDefault(), not a constant.
 
-// maxConcurrentBacklogWorkItems caps how many distinct backlog items may be
-// "in_progress" (i.e. have a live work session) at the same time. Fresh spawns
-// beyond this cap are rejected with CodeResourceExhausted; reopen/revision
-// spawns for an item that's already in_progress don't count against it, since
-// they don't add a new concurrent item. Adjust this constant directly — it's
-// an operational tuning knob, not a correctness invariant.
+// The backlog work-item concurrency cap is configurable via
+// config.Config.MaxConcurrentBacklogWorkItemsOrDefault() (Settings → Defaults,
+// default 2) — call sites read s.cfg.MaxConcurrentBacklogWorkItemsOrDefault(),
+// not a constant. Fresh spawns beyond the cap are queued (BacklogStatusQueued)
+// instead of rejected; reopen/revision spawns for an item that's already
+// in_progress don't count against it, since they don't add a new concurrent
+// item.
 //
 // Added 2026-07-12 after a kernel OOM caused by too many concurrent agent
 // sessions (backlog-spawned and otherwise) exhausting system memory.
-const maxConcurrentBacklogWorkItems = 2
 
 // defaultTriageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes
 // after its headless LLM call returns (persist result, update plan_artifacts_path,
@@ -242,18 +243,21 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// 3b. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
 	// item — it's already counted as in_progress). Not bypassed by Autonomous: the
 	// point is to cap total concurrent agent load regardless of how a spawn was
-	// triggered.
+	// triggered. At the cap, the item is queued (BacklogStatusQueued) rather than
+	// rejected — BacklogLifecycleListener.onSessionExited and the periodic
+	// ReconcileStuck sweep dequeue it once a slot frees up (DequeueNextQueuedItems).
 	if !isReopen {
 		inProgress, wipErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
 			Statuses: []string{string(session.BacklogStatusInProgress)},
 		})
 		if wipErr != nil {
 			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
-		} else if len(inProgress) >= maxConcurrentBacklogWorkItems {
-			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit blocked spawn item=%s in_progress=%d cap=%d", item.ID, len(inProgress), maxConcurrentBacklogWorkItems)
-			return nil, connect.NewError(connect.CodeResourceExhausted,
-				fmt.Errorf("%d backlog items are already in progress (cap %d) — wait for one to finish or review/ship it first",
-					len(inProgress), maxConcurrentBacklogWorkItems))
+		} else if wipCap := s.cfg.MaxConcurrentBacklogWorkItemsOrDefault(); len(inProgress) >= wipCap {
+			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit hit item=%s in_progress=%d cap=%d — queueing", item.ID, len(inProgress), wipCap)
+			if _, queueErr := s.queueBacklogItem(ctx, item, req.Msg.Autonomous); queueErr != nil {
+				return nil, queueErr
+			}
+			return connect.NewResponse(&sessionv1.SpawnSessionFromItemResponse{Queued: true}), nil
 		}
 	}
 
@@ -265,6 +269,114 @@ func (s *BacklogService) SpawnSessionFromItem(
 			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
 	}
 
+	return s.spawnSessionAfterGates(ctx, item, isReopen, req.Msg.Autonomous)
+}
+
+// queueBacklogItem transitions item from ready to queued after a fresh spawn hit
+// the concurrency cap. queued_at (FIFO dequeue order) and the autonomous flag the
+// original request carried are written BEFORE the status transition so no reader
+// ever observes status=queued with queue metadata still unset.
+func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.BacklogItemData, autonomous bool) (*session.BacklogItemData, error) {
+	now := time.Now()
+	if _, err := s.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		QueuedAt:         &now,
+		QueuedAutonomous: &autonomous,
+	}, nil); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to record queue metadata: %w", err))
+	}
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued, precondition)
+	if err != nil {
+		if errors.Is(err, session.ErrPreconditionFailed) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to queue item: %w", err))
+	}
+	return updated, nil
+}
+
+// DequeueNextQueuedItems implements session.QueueDequeuer. It claims and spawns as
+// many queued items as there are free WIP slots, oldest-queued (FIFO) first. Called
+// from BacklogLifecycleListener.onSessionExited (immediate dequeue the moment a slot
+// frees up) and the periodic ReconcileStuck sweep (safety net for a missed hook or a
+// concurrency limit raised while items were queued) — see session/backlog_lifecycle.go.
+//
+// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress,
+// ExpectedStatus=queued) before spawning, so concurrent callers (this method running
+// from both the exit hook and the sweep, or multiple server processes sharing one DB)
+// cannot double-claim the same item — see TransitionBacklogItemStatus's doc comment.
+// If the claim succeeds but the spawn itself fails (missing repo_path, stale plan
+// approval, SessionCreator error), the item is rolled back to queued rather than left
+// stranded in_progress with no session.
+func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+	inProgress, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: []string{string(session.BacklogStatusInProgress)},
+	})
+	if err != nil {
+		return fmt.Errorf("list in_progress items: %w", err)
+	}
+	freeSlots := s.cfg.MaxConcurrentBacklogWorkItemsOrDefault() - len(inProgress)
+	if freeSlots <= 0 {
+		return nil
+	}
+
+	queued, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: []string{string(session.BacklogStatusQueued)},
+	})
+	if err != nil {
+		return fmt.Errorf("list queued items: %w", err)
+	}
+	sort.Slice(queued, func(i, j int) bool {
+		ai, aj := queued[i].QueuedAt, queued[j].QueuedAt
+		if ai == nil || aj == nil {
+			return aj == nil && ai != nil
+		}
+		return ai.Before(*aj)
+	})
+
+	spawned := 0
+	for _, item := range queued {
+		if spawned >= freeSlots {
+			break
+		}
+		claimed, claimErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued), Note: "dequeued: WIP slot freed"})
+		if claimErr != nil {
+			if !errors.Is(claimErr, session.ErrPreconditionFailed) {
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s: %v", item.ID, claimErr)
+			}
+			continue
+		}
+
+		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
+		if spawnErr != nil {
+			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to queued", item.ID, spawnErr)
+			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued,
+				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"}); rbErr != nil {
+				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to queued failed item=%s: %v", item.ID, rbErr)
+			}
+			continue
+		}
+		spawned++
+		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s session=%s", item.ID, resp.Msg.SessionUuid)
+	}
+	return nil
+}
+
+// spawnSessionAfterGates performs the actual session spawn for item once all gating
+// checks (status, WIP cap, planning approval) have passed. Used by SpawnSessionFromItem
+// (fresh spawn / manual reopen) and by DequeueNextQueuedItems — in the dequeue case
+// isReopen is always true, since the item's status has already been CAS-transitioned to
+// in_progress by the caller before this runs, and step 13 below must not re-transition it.
+func (s *BacklogService) spawnSessionAfterGates(
+	ctx context.Context,
+	item *session.BacklogItemData,
+	isReopen bool,
+	autonomous bool,
+) (*connect.Response[sessionv1.SpawnSessionFromItemResponse], error) {
 	// 5. Repo path required.
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -337,7 +449,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if isReopen {
 		spawnTags = append(spawnTags, session.TagBacklogRevision)
 	}
-	if req.Msg.Autonomous {
+	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
 	var inst *session.Instance
@@ -362,7 +474,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 		log.WarningLog.Printf("[SpawnSessionFromItem] failed to persist instance immediately after spawn item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 	}
 
-	if req.Msg.Autonomous {
+	if autonomous {
 		if s.autonomousStarter != nil {
 			log.InfoLog.Printf("[SpawnSessionFromItem] starting autonomous driver item=%s session=%s", item.ID, inst.UUID)
 			s.autonomousStarter.StartAutonomousDriverForInstance(inst)
@@ -405,7 +517,9 @@ func (s *BacklogService) SpawnSessionFromItem(
 		s.cleanupItemWorktrees(ctx, priorSessions)
 	}
 
-	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
+	// 13. Transition item to in_progress. No-op for isReopen: a manual reopen is
+	// already in_progress, and a dequeue claim already CAS'd the item to in_progress
+	// before calling this helper.
 	if !isReopen {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
 			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)

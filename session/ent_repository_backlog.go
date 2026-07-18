@@ -147,6 +147,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		PipelineMode:                 item.PipelineMode,
 		PlanApproved:                 item.PlanApproved,
 		PlanApprovedAt:               item.PlanApprovedAt,
+		QueuedAt:                     item.QueuedAt,
+		QueuedAutonomous:             item.QueuedAutonomous,
 		PlanArtifactsPath:            item.PlanArtifactsPath,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
@@ -219,6 +221,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetPipelineMode(data.PipelineMode).
 		SetPlanApproved(data.PlanApproved).
 		SetNillablePlanApprovedAt(data.PlanApprovedAt).
+		SetNillableQueuedAt(data.QueuedAt).
+		SetQueuedAutonomous(data.QueuedAutonomous).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
@@ -466,6 +470,12 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanApprovedAt != nil {
 		u.SetPlanApprovedAt(*update.PlanApprovedAt)
 	}
+	if update.QueuedAt != nil {
+		u.SetQueuedAt(*update.QueuedAt)
+	}
+	if update.QueuedAutonomous != nil {
+		u.SetQueuedAutonomous(*update.QueuedAutonomous)
+	}
 	if update.PlanArtifactsPath != nil {
 		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
 	}
@@ -567,6 +577,17 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
+//
+// The precondition is enforced as a genuine SQL-level compare-and-swap — the
+// UPDATE statement itself carries a WHERE status = ? / updated_at = ? clause
+// (via the bulk Update().Where(...) builder, not UpdateOneID, which cannot
+// scope beyond id) — rather than a read-then-write check in Go. A prior
+// version read the current row, checked the precondition in application code,
+// then issued an unconditional UpdateOneID(id) write; two concurrent callers
+// could both pass the check and both write, double-claiming the same item
+// (found via the concurrent-dequeue-claim test for the backlog queue
+// feature). Save() on a bulk update returns the affected row count instead of
+// the updated entity, so the row is re-fetched after a successful write.
 func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
@@ -580,32 +601,41 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
-
-	if precondition != nil {
-		if precondition.ExpectedStatus != "" && current.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, current.Status)
-		}
-		if precondition.ExpectedUpdatedAt != nil && !current.UpdatedAt.Equal(*precondition.ExpectedUpdatedAt) {
-			return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
-		}
-	}
+	fromStatus := current.Status
 
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	updateQuery := r.client.BacklogItem.Update().Where(backlogitem.IDEQ(parsedID))
+	if precondition != nil {
+		if precondition.ExpectedStatus != "" {
+			updateQuery = updateQuery.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+		}
+		if precondition.ExpectedUpdatedAt != nil {
+			updateQuery = updateQuery.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+		}
+	}
+	affected, err := updateQuery.
 		SetStatus(string(toStatus)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to transition backlog item %s status: %w", id, err)
+	}
+	if affected == 0 {
+		if precondition != nil && (precondition.ExpectedStatus != "" || precondition.ExpectedUpdatedAt != nil) {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, fromStatus)
+		}
+		return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+	}
+
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after transition: %w", id, err)
 	}
 
 	// Append an immutable audit record for this transition.
 	evCreate := r.client.BacklogStatusEvent.Create().
 		SetItemID(parsedID).
-		SetFromStatus(current.Status).
+		SetFromStatus(fromStatus).
 		SetToStatus(string(toStatus)).
 		SetTriggeredBy(TriggeredBySystem)
 	if precondition != nil && precondition.Note != "" {

@@ -45,6 +45,10 @@ type BacklogItem struct {
 	PlanApproved bool `json:"plan_approved,omitempty"`
 	// PlanApprovedAt holds the value of the "plan_approved_at" field.
 	PlanApprovedAt *time.Time `json:"plan_approved_at,omitempty"`
+	// Set when a fresh spawn hits the concurrency cap and the item is queued instead of rejected. Drives FIFO dequeue ordering.
+	QueuedAt *time.Time `json:"queued_at,omitempty"`
+	// Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully.
+	QueuedAutonomous bool `json:"queued_autonomous,omitempty"`
 	// PlanArtifactsPath holds the value of the "plan_artifacts_path" field.
 	PlanArtifactsPath string `json:"plan_artifacts_path,omitempty"`
 	// JSON set of field names modified by the user
@@ -164,13 +168,13 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldShippedSnapshotCaptureFailed:
+		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed:
 			values[i] = new(sql.NullBool)
 		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount:
 			values[i] = new(sql.NullInt64)
 		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -275,6 +279,19 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PlanApprovedAt = new(time.Time)
 				*_m.PlanApprovedAt = value.Time
+			}
+		case backlogitem.FieldQueuedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field queued_at", values[i])
+			} else if value.Valid {
+				_m.QueuedAt = new(time.Time)
+				*_m.QueuedAt = value.Time
+			}
+		case backlogitem.FieldQueuedAutonomous:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field queued_autonomous", values[i])
+			} else if value.Valid {
+				_m.QueuedAutonomous = value.Bool
 			}
 		case backlogitem.FieldPlanArtifactsPath:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -488,6 +505,14 @@ func (_m *BacklogItem) String() string {
 		builder.WriteString("plan_approved_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	if v := _m.QueuedAt; v != nil {
+		builder.WriteString("queued_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("queued_autonomous=")
+	builder.WriteString(fmt.Sprintf("%v", _m.QueuedAutonomous))
 	builder.WriteString(", ")
 	builder.WriteString("plan_artifacts_path=")
 	builder.WriteString(_m.PlanArtifactsPath)

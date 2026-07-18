@@ -36,10 +36,61 @@ func NewBacklogDebugSeedHandler(storage *session.Storage) *BacklogDebugSeedHandl
 	return &BacklogDebugSeedHandler{storage: storage}
 }
 
-// RegisterRoutes registers the debug seed endpoint on the given mux. Callers
+// RegisterRoutes registers the debug seed endpoints on the given mux. Callers
 // MUST only invoke this when running as the e2e-local instance.
 func (h *BacklogDebugSeedHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/seed-stuck", h.handleSeed)
+	mux.HandleFunc("/api/debug/backlog/seed-queued", h.handleSeedQueued)
+}
+
+type seedQueuedItemRequest struct {
+	Title string `json:"title"`
+}
+
+type seedQueuedItemResponse struct {
+	ItemID string `json:"itemId"`
+}
+
+// handleSeedQueued creates a backlog item directly in "queued" status, bypassing
+// the real WIP-cap gate so the e2e suite can assert on the queued badge/section
+// without first spawning enough real sessions to fill the concurrency cap.
+func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.storage == nil {
+		http.Error(w, "storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req seedQueuedItemRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	now := time.Now()
+	item, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    req.Title,
+		Status:   string(session.BacklogStatusQueued),
+		QueuedAt: &now,
+	})
+	if err != nil {
+		log.Error("backlog debug seed: create queued item failed", "err", err)
+		http.Error(w, "failed to create backlog item: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(seedQueuedItemResponse{ItemID: item.ID}); err != nil {
+		log.Error("backlog debug seed: encode response failed", "err", err)
+	}
 }
 
 type seedStuckStateRequest struct {

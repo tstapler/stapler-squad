@@ -907,11 +907,15 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	return itemID
 }
 
-// TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap verifies that a fresh spawn
-// is rejected with CodeResourceExhausted once maxConcurrentBacklogWorkItems items
-// are already in_progress, and that the blocked item is left untouched (still
-// "ready", no session created for it).
-func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
+// testWIPCap mirrors config.Config.MaxConcurrentBacklogWorkItemsOrDefault's
+// default (cfg=nil in these tests, so the default applies).
+const testWIPCap = 2
+
+// TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting verifies that a
+// fresh spawn is queued (not rejected) once testWIPCap items are already
+// in_progress: the response carries Queued=true with no error, and the item
+// transitions to "queued" with QueuedAt set.
+func TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting(t *testing.T) {
 	storage := createTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
@@ -920,24 +924,24 @@ func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
 	initGitRepoWithCommit(t, repoPath)
 
 	// Fill the WIP cap with successful spawns.
-	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+	for i := 0; i < testWIPCap; i++ {
 		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
 		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
 		require.NoError(t, err, "spawn %d must succeed while under the cap", i)
 	}
-	require.Len(t, creator.calls, maxConcurrentBacklogWorkItems)
+	require.Len(t, creator.calls, testWIPCap)
 
-	// One more fresh spawn, at cap, must be rejected.
+	// One more fresh spawn, at cap, must be queued rather than rejected.
 	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
-	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
-	require.Error(t, err, "spawn at the WIP cap must be rejected")
-	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
-	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems, "no session should have been spawned for the over-cap item")
+	resp, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.NoError(t, err, "spawn at the WIP cap must not return an error")
+	assert.True(t, resp.Msg.Queued, "response must indicate the item was queued")
+	assert.Len(t, creator.calls, testWIPCap, "no session should have been spawned for the queued item")
 
-	// The rejected item must be untouched — still "ready", not silently advanced.
+	// The queued item must reflect the new status and have queued_at set.
 	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: overCapID}))
 	require.NoError(t, err)
-	assert.Equal(t, "ready", getResp.Msg.Item.Status)
+	assert.Equal(t, "queued", getResp.Msg.Item.Status)
 }
 
 // TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap verifies that a reopen
@@ -953,7 +957,7 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 
 	// Fill the WIP cap.
 	var reopenTargetID string
-	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+	for i := 0; i < testWIPCap; i++ {
 		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
 		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
 		require.NoError(t, err)
@@ -971,7 +975,7 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 	// succeed even though the cap is reached.
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
 	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
-	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
+	assert.Len(t, creator.calls, testWIPCap+1)
 }
 
 // TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn is the regression
