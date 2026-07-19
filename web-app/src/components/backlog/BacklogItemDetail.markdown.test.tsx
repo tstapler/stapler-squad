@@ -23,8 +23,12 @@ jest.mock("@/lib/hooks/usePathCompletions", () => ({
 jest.mock("@/lib/hooks/useSessionService", () => ({
   useSessionService: () => ({ deleteSession: jest.fn() }),
 }));
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
 
 const getBacklogItem = jest.fn();
+const listPipelineModes = jest.fn().mockResolvedValue([]);
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
@@ -38,6 +42,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     archiveBacklogItem: jest.fn(),
     deleteBacklogItem: jest.fn(),
     updateBacklogItem: jest.fn().mockResolvedValue(null),
+    listPipelineModes,
     lastError: null,
   }),
 }));
