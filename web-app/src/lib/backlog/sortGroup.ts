@@ -39,6 +39,6 @@ export function groupByRepoPath(items: BacklogItem[]): RepoGroup[] {
   return keys.map((key) => ({
     groupKey: key,
     displayName: key,
-    items: grouped.get(key)!,
+    items: grouped.get(key) ?? [],
   }));
 }
