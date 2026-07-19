@@ -1577,20 +1577,22 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// issue (auth, network, branch protection) and let the next review pass retry.
 	stayInReviewAndNotify := func(reason string, err error) {
 		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s: %s: %v — leaving in review, code is committed but not shipped", item.ID, reason, err)
-		l.notify(item.ID,
-			"PR creation failed",
-			fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-		)
 
-		// Durable push_failed row (Story 2.1.6) — the ephemeral ERROR toast above
-		// is exactly what this feature exists to supersede for restart-surviving
-		// visibility. Event-shaped like rework_cap: written at the failure site,
-		// immediate (threshold 0), additive to the notification above (a durable
-		// write failure here must never suppress the toast that already fired).
+		notifyToast := func() {
+			l.notify(item.ID,
+				"PR creation failed",
+				fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
+				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			)
+		}
+
+		// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
+		// toast's dedup key below — without a durable repo to gate on, fall back
+		// to the old always-notify behavior rather than silently dropping the toast.
 		er, ok := l.storage.repo.(*EntRepository)
 		if !ok {
+			notifyToast()
 			return
 		}
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
@@ -1602,9 +1604,24 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		if !applied {
 			return
 		}
-		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed); notifyErr != nil {
+
+		// Notify-once dedup (same pattern as markAbandonedReview and the other
+		// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
+		// once per open stuck-state row, so repeated calls for the same
+		// still-open failure (e.g. a non-fast-forward push retried every
+		// reconciliation tick) skip the ephemeral ERROR toast after the first —
+		// this is what was previously firing a fresh "PR creation failed" toast
+		// every few seconds with no dedup. The toast fires again only once the
+		// row is resolved (push/PR succeeds) and later reopens on a new failure.
+		notifiedNow, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed)
+		if notifyErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuckNotified(push_failed) item=%s: %v", item.ID, notifyErr)
+			return
 		}
+		if !notifiedNow {
+			return
+		}
+		notifyToast()
 	}
 
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)

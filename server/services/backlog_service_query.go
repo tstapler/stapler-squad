@@ -327,11 +327,28 @@ func (s *BacklogService) GetBacklogItemDiff(
 	diffBaseSHA := "HEAD~1"
 	var headRef string
 	if mostRecentWorkSession != nil {
-		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.BaseCommitSHA != "" {
-			diffBaseSHA = wt.BaseCommitSHA
-		}
-		if mostRecentWorkSession.LastCommitSha != "" {
-			headRef = mostRecentWorkSession.LastCommitSha
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil {
+			if wt.BaseCommitSHA != "" {
+				diffBaseSHA = wt.BaseCommitSHA
+			}
+			// Prefer the branch name over the session's LastCommitSha. LastCommitSha
+			// is only ever written once, at session spawn, to the PRE-work base
+			// commit (see AttachSessionToItem / SpawnSessionFromItem step 12b) —
+			// nothing updates it as the agent makes further commits during the
+			// session, so in practice it is usually identical to diffBaseSHA itself,
+			// producing a spurious empty base..head diff ("No changes to display")
+			// for items that genuinely have real, already-reviewed work on their
+			// branch (e.g. a Review-status item with a full Gate Verdict on record).
+			// wt.BranchName always resolves to the branch's actual current tip —
+			// worktrees share one object store, so this works whether or not the
+			// session's own worktree directory still exists — the same fallback
+			// review_gate.go's spawnReviewGate already relies on via
+			// GetGitDiffRef(item.RepoPath, wt.BaseCommitSHA, wt.BranchName).
+			if wt.BranchName != "" {
+				headRef = wt.BranchName
+			} else if mostRecentWorkSession.LastCommitSha != "" {
+				headRef = mostRecentWorkSession.LastCommitSha
+			}
 		}
 	}
 

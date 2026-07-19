@@ -1264,6 +1264,41 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 	assert.Contains(t, notifier.titles(), "PR creation failed")
 }
 
+// TestPushAndCreatePR_RepeatedPushFailure_DedupsToast verifies the fix for a
+// runaway duplicate "PR creation failed" toast: when the same item's push keeps
+// failing across repeated pushAndCreatePR calls (e.g. a non-fast-forward
+// rejection retried every reconciliation tick), only the FIRST failure fires the
+// ephemeral ERROR toast. Subsequent failures on the same still-open push_failed
+// stuck row must not re-fire it — this is the notify-once dedup used by every
+// other stuck reason (see markAbandonedReview).
+func TestPushAndCreatePR_RepeatedPushFailure_DedupsToast(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	ctx := context.Background()
+	listener.pushAndCreatePR(ctx, item, is)
+	listener.pushAndCreatePR(ctx, item, is)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	toastCount := 0
+	for _, title := range notifier.titles() {
+		if title == "PR creation failed" {
+			toastCount++
+		}
+	}
+	assert.Equal(t, 1, toastCount, "repeated failures on the same open stuck row must not re-fire the toast")
+}
+
 // TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies verifies that a
 // failed `gh pr create` call (push already succeeded) does NOT transition the item
 // to done, for the same reason as the push-failure case above.
