@@ -1468,9 +1468,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         )}
 
         {/* Workflow / Status History */}
-        {item.statusEvents.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Workflow</h3>
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Workflow</h3>
+          {item.statusEvents.length > 0 ? (
             <div className={styles.workflowTimeline} role="list" aria-label="Status history">
               {item.statusEvents.map((ev) => (
                 <div key={ev.id} className={styles.workflowEvent} role="listitem">
@@ -1487,8 +1487,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <p className={styles.emptyText}>No status history recorded.</p>
+          )}
+        </div>
 
         {/* Progress History — the implementer's report_progress audit trail */}
         {item.progressNotes.length > 0 && (
