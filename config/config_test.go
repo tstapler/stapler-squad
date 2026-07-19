@@ -868,3 +868,42 @@ func TestIsNamedInstance_should_ReturnTrue_When_InstanceIsExplicitlyNamed(t *tes
 
 	assert.True(t, IsNamedInstance())
 }
+
+// ─── IsIsolatedInstance ─────────────────────────────────────────────────────
+
+// TestIsIsolatedInstance_should_ReturnTrue_When_TestDirOverrideSet is the
+// regression test for the incident this function exists to prevent: the demo
+// server harness (tests/demo/helpers.go StartDemoServer) launches the real
+// production binary with --test-mode --test-dir, setting STAPLER_SQUAD_TEST_DIR
+// but neither STAPLER_SQUAD_INSTANCE nor a `go test` binary suffix — so neither
+// IsTestMode() nor IsNamedInstance() alone caught it, and its startup orphan
+// sweep killed real production tmux sessions on the shared default socket.
+func TestIsIsolatedInstance_should_ReturnTrue_When_TestDirOverrideSet(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+	os.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		} else {
+			os.Setenv("STAPLER_SQUAD_TEST_DIR", original)
+		}
+	}()
+
+	assert.True(t, IsIsolatedInstance())
+}
+
+// TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet covers the
+// pre-existing IsNamedInstance mechanism composing correctly into the umbrella check.
+func TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "e2e-local")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.True(t, IsIsolatedInstance())
+}
