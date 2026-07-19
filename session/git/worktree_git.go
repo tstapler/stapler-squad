@@ -147,14 +147,20 @@ func (g *GitWorktree) IsDirty() (bool, error) {
 	return g.IsDirtyWithHint(false)
 }
 
-// isDirtyCacheTTL returns the TTL to apply based on the current cached dirty state.
+// isDirtyCacheTTL returns the TTL to apply based on the current cached state.
 // Clean worktrees use a longer TTL because they won't change while the session is idle,
-// and InvalidateDirtyCache() fires on every code path that could make them dirty.
-func isDirtyCacheTTL(dirty bool) time.Duration {
-	if dirty {
+// and InvalidateDirtyCache() fires on every code path that could make them dirty. A
+// cached error (e.g. worktree directory missing) gets its own short backoff so a broken
+// worktree isn't re-checked on every poller tick.
+func isDirtyCacheTTL(state dirtyCacheState) time.Duration {
+	switch {
+	case state.err != nil:
+		return IsDirtyErrorCacheTTL
+	case state.dirty:
 		return IsDirtyCacheTTL
+	default:
+		return IsDirtyCleanCacheTTL
 	}
-	return IsDirtyCleanCacheTTL
 }
 
 // IsDirtyWithHint checks if the worktree has uncommitted changes.
@@ -162,11 +168,14 @@ func isDirtyCacheTTL(dirty bool) time.Duration {
 // (or false if no cached value is available yet), because Claude never modifies worktree state
 // while it is actively generating output.
 func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
-	// Fast path: lock-free atomic load; TTL varies by dirty state.
-	// dirty → IsDirtyCacheTTL (30s); clean → IsDirtyCleanCacheTTL (5min).
+	// Fast path: lock-free atomic load; TTL varies by cached state (dirty/clean/error).
+	// dirty → IsDirtyCacheTTL (30s); clean → IsDirtyCleanCacheTTL (5min); error → IsDirtyErrorCacheTTL (60s).
 	if v := g.isDirtyCache.Load(); v != nil {
 		state := v.(dirtyCacheState)
-		if claudeActive || (!state.time.IsZero() && time.Since(state.time) < isDirtyCacheTTL(state.dirty)) {
+		if claudeActive || (!state.time.IsZero() && time.Since(state.time) < isDirtyCacheTTL(state)) {
+			if state.err != nil {
+				return false, state.err
+			}
 			return state.dirty, nil
 		}
 	} else if claudeActive {
@@ -186,7 +195,14 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	})
 	res := v.(dirtyResult)
 	if res.err != nil {
-		return false, fmt.Errorf("failed to check worktree status: %w", res.err)
+		// Cache the failure with a backoff TTL (isDirtyCacheTTL routes err!=nil to
+		// IsDirtyErrorCacheTTL) so a worktree with a stale/missing path — e.g. left
+		// behind by a rework/reopen cycle — doesn't get re-checked on every poller
+		// tick (previously: a fresh subprocess spawn roughly every few seconds,
+		// indefinitely, for a directory that will never come back on its own).
+		wrapped := fmt.Errorf("failed to check worktree status: %w", res.err)
+		g.isDirtyCache.Store(dirtyCacheState{time: time.Now(), err: wrapped})
+		return false, wrapped
 	}
 	dirty := res.dirty
 

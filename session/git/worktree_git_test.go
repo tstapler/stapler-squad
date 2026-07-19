@@ -62,6 +62,45 @@ func TestIsDirtyWithHint_ReturnsLocallyComputedValue_WhenCacheIsWrittenByRacingG
 	}
 }
 
+// countingErrExecutor always fails CombinedOutput and counts how many times it was
+// invoked, simulating `git status` against a worktree directory that no longer exists.
+type countingErrExecutor struct {
+	calls int
+}
+
+func (e *countingErrExecutor) Run(_ *exec.Cmd) error              { return nil }
+func (e *countingErrExecutor) Output(_ *exec.Cmd) ([]byte, error) { return nil, nil }
+func (e *countingErrExecutor) CombinedOutput(_ *exec.Cmd) ([]byte, error) {
+	e.calls++
+	return []byte("fatal: cannot change to '/fake/worktree': No such file or directory"), exec.ErrNotFound
+}
+
+// TestIsDirtyWithHint_BacksOffAfterError proves that a failing `git status` (e.g. the
+// worktree directory is missing — the stale-path-after-rework bug) is cached with a
+// backoff TTL rather than re-run on every call: a second call made immediately after a
+// failure must return the same error without spawning another subprocess.
+func TestIsDirtyWithHint_BacksOffAfterError(t *testing.T) {
+	mock := &countingErrExecutor{}
+	g := NewGitWorktreeFromStorageWithExecutor(
+		"/fake/repo", "/fake/worktree", "test-session", "test-branch", "", mock,
+	)
+	g.isDirtyCache.Store(dirtyCacheState{}) // zero time = cache invalid
+
+	if _, err := g.IsDirtyWithHint(false); err == nil {
+		t.Fatalf("IsDirtyWithHint() error = nil; want an error from the failing git command")
+	}
+	if mock.calls != 1 {
+		t.Fatalf("calls after first (failing) check = %d; want 1", mock.calls)
+	}
+
+	if _, err := g.IsDirtyWithHint(false); err == nil {
+		t.Fatalf("second IsDirtyWithHint() error = nil; want the cached error")
+	}
+	if mock.calls != 1 {
+		t.Errorf("calls after second check within backoff TTL = %d; want still 1 (no new subprocess spawned)", mock.calls)
+	}
+}
+
 // TestParsePRStatusPayload_ConflictDetection is a table-driven test over the
 // documented mergeable/mergeStateStatus enum combinations (plan.md Story 1.3.1),
 // proving the HasConflicts OR condition is correct for both the trigger cases
