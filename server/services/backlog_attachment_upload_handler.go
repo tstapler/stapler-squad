@@ -31,6 +31,12 @@ var backlogAttachmentAllowedTypes = map[string]string{
 
 // BacklogAttachmentUploadHandler saves uploaded images for backlog item
 // descriptions to a durable directory, independent of any session.
+//
+// ponytail: uploads aren't tracked by item ID, so a file can outlive its
+// backlog item (upload succeeds, item creation fails/is deleted) and become
+// an orphan on disk. Accepted as YAGNI until proven — add a tracked
+// attachment list + delete-on-item-delete wiring if orphan growth becomes a
+// real problem.
 type BacklogAttachmentUploadHandler struct {
 	dir string
 }
