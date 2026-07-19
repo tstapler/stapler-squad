@@ -467,6 +467,10 @@ func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
+		// SkipTriage prevents CreateBacklogItem's auto-triage goroutine from racing
+		// this test's own explicit idea->ready->in_progress->review transitions below
+		// (both would otherwise try to move idea->ready concurrently).
+		SkipTriage:   true,
 		SkipPlanning: true,
 	}))
 	require.NoError(t, err)
