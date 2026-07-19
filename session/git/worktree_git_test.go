@@ -7,6 +7,44 @@ import (
 	"time"
 )
 
+// TestPrNumberFromURLRe_ExtractsTrailingNumber is the regression test for
+// CreatePR's number-resolution fix: prNumber must be derived from the PR URL
+// (a plain string operation) rather than solely from a second `gh pr view`
+// subprocess call whose failure was previously silently swallowed, leaving
+// prNumber at 0 even though prURL had already resolved correctly — which then
+// made EnablePRAutoMerge fail with "no pull requests found" for a PR that
+// otherwise pushed and tracked fine. See CreatePR in worktree_git.go.
+func TestPrNumberFromURLRe_ExtractsTrailingNumber(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string // "" means no match
+	}{
+		{"plain URL", "https://github.com/tstapler/stapler-squad/pull/172", "172"},
+		{"trailing slash", "https://github.com/tstapler/stapler-squad/pull/172/", "172"},
+		{"single digit", "https://github.com/owner/repo/pull/9", "9"},
+		{"not a PR URL", "https://github.com/tstapler/stapler-squad/issues/172", ""},
+		{"empty string", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := prNumberFromURLRe.FindStringSubmatch(tt.url)
+			if tt.want == "" {
+				if m != nil {
+					t.Errorf("FindStringSubmatch(%q) = %v; want no match", tt.url, m)
+				}
+				return
+			}
+			if m == nil {
+				t.Fatalf("FindStringSubmatch(%q) = nil; want match with group %q", tt.url, tt.want)
+			}
+			if m[1] != tt.want {
+				t.Errorf("FindStringSubmatch(%q) group = %q; want %q", tt.url, m[1], tt.want)
+			}
+		})
+	}
+}
+
 // raceSimulatorExecutor implements executor.Executor for testing the double-checked
 // locking invariant in IsDirtyWithHint.  When CombinedOutput is called it runs
 // raceSetup first (simulating a concurrent goroutine updating the cache), then
