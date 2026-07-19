@@ -65,6 +65,7 @@ const baseItem: BacklogItem = {
   updatedAt: "2026-07-01T00:00:00Z",
   statusEvents: [],
   totalEstimatedCostUsd: 0,
+  progressNotes: [],
 };
 
 describe("BacklogItemDetail — description markdown rendering", () => {
