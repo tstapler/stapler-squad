@@ -219,7 +219,12 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // two rework loops — actually stops it.
 func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	// Explicit cap (rather than relying on the nil-config default, which is 20 —
+	// raised from 3 since real, ultimately-fixable items were routinely tripping
+	// the old default before they were actually stuck) so this test's intent
+	// (verify the cap-hit behavior itself) stays independent of that default's
+	// exact value.
+	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
 
 	repoPath := t.TempDir()
 	initGitRepoWithCommit(t, repoPath)

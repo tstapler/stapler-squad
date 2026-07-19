@@ -246,7 +246,9 @@ type Config struct {
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
 	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
 	// loop will spawn for a single item before leaving it for manual review. 0 = use the
-	// default (3).
+	// default (20). Individual items can also override this via
+	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
+	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
@@ -492,11 +494,17 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 	return c.AnalyticsMaxRows
 }
 
-// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 3
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
 // if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
+// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
+// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
+// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
+// for otherwise-recoverable items. Genuinely stuck items still get caught — just
+// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
+// that need to go further still.
 func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 	if c == nil || c.MaxAutoReworkIterations <= 0 {
-		return 3
+		return 20
 	}
 	return c.MaxAutoReworkIterations
 }
