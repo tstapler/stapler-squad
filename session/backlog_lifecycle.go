@@ -1555,6 +1555,32 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 	}
 }
 
+// buildFallbackPRBody composes a PR body from the backlog item's own data —
+// used when no headless pool is configured, GetGitDiff fails, or
+// headless.DraftPRDescription errors out. Previously this fallback was a bare
+// "Automated PR for backlog item: X\n\nItem ID: Y" one-liner (see PRs #147/#148
+// on this repo), which explains nothing about why the change was made and gives
+// a reviewer no verification checklist. Description ties the PR back to the
+// item's own problem statement (the "why"); the item's acceptance criteria
+// double as a test plan checklist since they are the only verification steps
+// this code path has available without an LLM call.
+func buildFallbackPRBody(item *BacklogItemData) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## Summary\n%s\n\n(Backlog item: %s)\n", sanitizeField(item.Description, 1000), item.ID)
+
+	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
+		sb.WriteString("\n## Test plan\n")
+		for _, c := range criteria {
+			box := "[ ]"
+			if c.Status == domain.AcStatusDone {
+				box = "[x]"
+			}
+			fmt.Fprintf(&sb, "- %s %s\n", box, sanitizeField(c.Text, 300))
+		}
+	}
+	return sb.String()
+}
+
 // pushAndCreatePR commits any dirty state, pushes the branch, creates a GitHub PR,
 // stores the PR URL and number on the item, then transitions to pr_pending.
 // Falls back to a direct done transition only when there was genuinely nothing to
@@ -1637,13 +1663,13 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s reusing existing PR #%d", item.ID, prNumber)
 	} else {
 		prTitle := item.Title
-		prBody := fmt.Sprintf("Automated PR for backlog item: %s\n\nItem ID: %s", item.Title, item.ID)
+		prBody := buildFallbackPRBody(item)
 		if pool := l.getHeadlessPool(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using boilerplate body", item.ID, diffErr)
-			} else if drafted, draftErr := headless.DraftPRDescription(ctx, pool, diff, wt.BranchName); draftErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using boilerplate body", item.ID, draftErr)
+				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using fallback body", item.ID, diffErr)
+			} else if drafted, draftErr := headless.DraftPRDescription(ctx, pool, item.Title, item.Description, diff, wt.BranchName); draftErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 			} else if drafted != "" {
 				prBody = drafted
 			}
