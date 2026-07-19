@@ -57,6 +57,20 @@ const (
 	FieldPrURL = "pr_url"
 	// FieldPrNumber holds the string denoting the pr_number field in the database.
 	FieldPrNumber = "pr_number"
+	// FieldShippedCheckConclusion holds the string denoting the shipped_check_conclusion field in the database.
+	FieldShippedCheckConclusion = "shipped_check_conclusion"
+	// FieldShippedApprovedCount holds the string denoting the shipped_approved_count field in the database.
+	FieldShippedApprovedCount = "shipped_approved_count"
+	// FieldShippedChangesReqCount holds the string denoting the shipped_changes_req_count field in the database.
+	FieldShippedChangesReqCount = "shipped_changes_req_count"
+	// FieldShippedSnapshotAt holds the string denoting the shipped_snapshot_at field in the database.
+	FieldShippedSnapshotAt = "shipped_snapshot_at"
+	// FieldShippedFileStats holds the string denoting the shipped_file_stats field in the database.
+	FieldShippedFileStats = "shipped_file_stats"
+	// FieldShippedSnapshotCaptureFailed holds the string denoting the shipped_snapshot_capture_failed field in the database.
+	FieldShippedSnapshotCaptureFailed = "shipped_snapshot_capture_failed"
+	// FieldReworkCapOverride holds the string denoting the rework_cap_override field in the database.
+	FieldReworkCapOverride = "rework_cap_override"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -141,6 +155,13 @@ var Columns = []string{
 	FieldArchivedAt,
 	FieldPrURL,
 	FieldPrNumber,
+	FieldShippedCheckConclusion,
+	FieldShippedApprovedCount,
+	FieldShippedChangesReqCount,
+	FieldShippedSnapshotAt,
+	FieldShippedFileStats,
+	FieldShippedSnapshotCaptureFailed,
+	FieldReworkCapOverride,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -195,6 +216,12 @@ var (
 	DefaultPlanApproved bool
 	// DefaultPrNumber holds the default value on creation for the "pr_number" field.
 	DefaultPrNumber int
+	// DefaultShippedApprovedCount holds the default value on creation for the "shipped_approved_count" field.
+	DefaultShippedApprovedCount int
+	// DefaultShippedChangesReqCount holds the default value on creation for the "shipped_changes_req_count" field.
+	DefaultShippedChangesReqCount int
+	// DefaultShippedSnapshotCaptureFailed holds the default value on creation for the "shipped_snapshot_capture_failed" field.
+	DefaultShippedSnapshotCaptureFailed bool
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -316,6 +343,41 @@ func ByPrURL(opts ...sql.OrderTermOption) OrderOption {
 // ByPrNumber orders the results by the pr_number field.
 func ByPrNumber(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPrNumber, opts...).ToFunc()
+}
+
+// ByShippedCheckConclusion orders the results by the shipped_check_conclusion field.
+func ByShippedCheckConclusion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedCheckConclusion, opts...).ToFunc()
+}
+
+// ByShippedApprovedCount orders the results by the shipped_approved_count field.
+func ByShippedApprovedCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedApprovedCount, opts...).ToFunc()
+}
+
+// ByShippedChangesReqCount orders the results by the shipped_changes_req_count field.
+func ByShippedChangesReqCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedChangesReqCount, opts...).ToFunc()
+}
+
+// ByShippedSnapshotAt orders the results by the shipped_snapshot_at field.
+func ByShippedSnapshotAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedSnapshotAt, opts...).ToFunc()
+}
+
+// ByShippedFileStats orders the results by the shipped_file_stats field.
+func ByShippedFileStats(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedFileStats, opts...).ToFunc()
+}
+
+// ByShippedSnapshotCaptureFailed orders the results by the shipped_snapshot_capture_failed field.
+func ByShippedSnapshotCaptureFailed(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShippedSnapshotCaptureFailed, opts...).ToFunc()
+}
+
+// ByReworkCapOverride orders the results by the rework_cap_override field.
+func ByReworkCapOverride(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldReworkCapOverride, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

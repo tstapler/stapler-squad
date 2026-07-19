@@ -69,8 +69,12 @@ type BacklogService struct {
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
 	autonomousStarter AutonomousDriverStarter
-	cfg               *config.Config
-	engine            session.WorkflowEngine
+	// oneShotRunner drives TriggerShipPR (backlog_service_ship.go) — the
+	// self-service "Ship PR" action on the item detail page. nil (the default)
+	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
+	oneShotRunner PRRunner
+	cfg           *config.Config
+	engine        session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
@@ -517,6 +521,10 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
+	if item.ReworkCapOverride != nil {
+		override := int32(*item.ReworkCapOverride)
+		p.ReworkCapOverride = &override
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
@@ -557,9 +565,26 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 				ToStatus:    ev.ToStatus,
 				TriggeredBy: ev.TriggeredBy,
 				CreatedAt:   timestamppb.New(ev.CreatedAt),
+				Note:        ev.Note,
 			}
 		}
 		p.StatusEvents = protoEvents
+	}
+
+	// Populate progress notes (the implementer's report_progress audit trail)
+	// when they were eagerly loaded.
+	if len(item.ProgressNotes) > 0 {
+		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
+		for i, n := range item.ProgressNotes {
+			protoNotes[i] = &sessionv1.BacklogProgressNote{
+				Id:             n.ID,
+				CriterionIndex: int32(n.CriterionIndex),
+				Note:           n.Note,
+				Status:         n.Status,
+				CreatedAt:      timestamppb.New(n.CreatedAt),
+			}
+		}
+		p.ProgressNotes = protoNotes
 	}
 
 	return p
@@ -609,6 +634,21 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 // Call commitAndPushItemWorktrees first to ensure changes are durable.
 // Errors are logged but do not fail the caller — cleanup is best-effort.
 func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) {
+	s.cleanupItemWorktreesExcept(ctx, sessions, "")
+}
+
+// cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
+// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
+// creating a fresh one, so a prior work session's worktree row can point at the exact
+// path the brand-new session just started using. Cleaning that up unconditionally —
+// as every caller used to — deleted the directory out from under the session that
+// just reused it, leaving a still-in_progress/review item with no worktree at all
+// (diffs and re-review's codebase-read verification both came up empty). exceptPath
+// lets the reopen call site keep that one path alive while still clearing out any
+// genuinely stale worktree from an earlier, differently-named revision (e.g. the
+// item's title changed between rework rounds).
+func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) {
 	for _, is := range sessions {
 		if is.SessionUUID == "" {
 			continue
@@ -618,6 +658,9 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 		if err != nil || wt.WorktreePath == "" {
+			continue
+		}
+		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)

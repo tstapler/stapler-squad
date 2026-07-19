@@ -3,8 +3,13 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	stdlog "log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1782,4 +1787,234 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	for _, s := range sessions {
 		assert.NotEqual(t, SessionRoleReview, s.Role, "no review ItemSession should be created when only a headless pool (no session creator) is configured")
 	}
+}
+
+// --- Story 3.3.1: CaptureShipSnapshot ---
+
+// runGitTestCmd runs `git <args...>` in dir, failing the test on error. Test-only
+// helper — CaptureShipSnapshot itself never shells out (it calls
+// git.FileStatsBetween, which is go-git-based per
+// .claude/rules/prefer-go-git-over-subshells.md); this just builds fixture repo
+// data for FileStatsBetween to read.
+func runGitTestCmd(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	fullArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.Command("git", fullArgs...) //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}
+
+// setupShipSnapshotTestRepo creates a minimal two-commit git repository on disk
+// and returns its path plus the base and head commit SHAs, so
+// git.FileStatsBetween(repoPath, baseSHA, headSHA) has real diff data to compute
+// stats from. The second commit adds one new file (feature.txt), giving
+// FileStatsBetween exactly one FileStat entry to report.
+func setupShipSnapshotTestRepo(t *testing.T) (repoPath, baseSHA, headSHA string) {
+	t.Helper()
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	baseSHA = strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("line1\nline2\nline3\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature commit")
+	headSHA = strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	return dir, baseSHA, headSHA
+}
+
+// newShipSnapshotTestItem creates a pr_pending BacklogItem with repoPath and a
+// PR number set, mirroring newPRPendingTestItem but parameterized on repoPath
+// so CaptureShipSnapshot tests can point it at a real fixture git repo (unlike
+// newPRPendingTestItem's placeholder "/tmp/fake-repo", which is fine for tests
+// that never reach FileStatsBetween but not for these).
+func newShipSnapshotTestItem(t *testing.T, storage *Storage, repoPath string, prNumber int) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Ship snapshot test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           repoPath,
+	})
+	require.NoError(t, err)
+
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/9001"
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	return updated
+}
+
+// TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBothGroupsSucceed
+// verifies the happy path (Task 3.3.1a/b/c): when both the GitHub-data group
+// (from prStatus) and the file-stats group (from FileStatsBetween) succeed,
+// CaptureShipSnapshot writes all 6 durable snapshot fields via a single
+// UpdateBacklogItem call, with ShippedSnapshotCaptureFailed left false.
+// "BeforeDoneTransition" ordering itself is covered directly by
+// TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged
+// below; this test locks in CaptureShipSnapshot's own field-writing contract.
+func TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBothGroupsSucceed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoPath, baseSHA, headSHA := setupShipSnapshotTestRepo(t)
+	item := newShipSnapshotTestItem(t, storage, repoPath, 9001)
+
+	prStatus := &git.PRStatus{ApprovedCount: 2, ChangesRequestedCount: 0, CIFailing: false}
+	lastWork := &ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
+	wt := &GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
+
+	err := CaptureShipSnapshot(ctx, storage, item, prStatus, lastWork, wt)
+	require.NoError(t, err, "CaptureShipSnapshot must never return an error")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
+	assert.Equal(t, 2, fetched.ShippedApprovedCount)
+	assert.Equal(t, 0, fetched.ShippedChangesReqCount)
+	require.NotNil(t, fetched.ShippedSnapshotAt, "ShippedSnapshotAt must be set when at least one group succeeds")
+	assert.False(t, fetched.ShippedSnapshotCaptureFailed, "both groups succeeded — capture-failed must be false")
+	require.NotEmpty(t, fetched.ShippedFileStats)
+
+	var stats []git.FileStat
+	require.NoError(t, json.Unmarshal([]byte(fetched.ShippedFileStats), &stats))
+	require.Len(t, stats, 1, "only feature.txt changed between base and head")
+	assert.Equal(t, "feature.txt", stats[0].Path)
+}
+
+// TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBetweenFailsIndependently
+// is a table test covering Task 3.3.1e's three independent-failure rows: (1)
+// FileStatsBetween fails but prStatus maps successfully — the GitHub fields must
+// survive; (2) the mirror case, prStatus == nil but FileStatsBetween succeeds —
+// the file-stats field must survive; (3) both groups fail — the done transition
+// (exercised separately by the integration test) is still never blocked, and
+// ShippedSnapshotCaptureFailed is set with no field ever holding the string
+// "failed".
+func TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBetweenFailsIndependently(t *testing.T) {
+	repoPath, baseSHA, headSHA := setupShipSnapshotTestRepo(t)
+	const badSHA = "0000000000000000000000000000000000000000"
+
+	tests := []struct {
+		name                 string
+		prStatus             *git.PRStatus
+		baseSHA              string
+		wantGithubWritten    bool
+		wantFileStatsWritten bool
+	}{
+		{
+			name:                 "FileStatsBetween fails, github group succeeds",
+			prStatus:             &git.PRStatus{ApprovedCount: 3, ChangesRequestedCount: 1, CIFailing: true},
+			baseSHA:              badSHA,
+			wantGithubWritten:    true,
+			wantFileStatsWritten: false,
+		},
+		{
+			name:                 "prStatus nil, file-stats group succeeds",
+			prStatus:             nil,
+			baseSHA:              baseSHA,
+			wantGithubWritten:    false,
+			wantFileStatsWritten: true,
+		},
+		{
+			name:                 "both groups fail",
+			prStatus:             nil,
+			baseSHA:              badSHA,
+			wantGithubWritten:    false,
+			wantFileStatsWritten: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			item := newShipSnapshotTestItem(t, storage, repoPath, 9002)
+			lastWork := &ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
+			wt := &GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
+
+			err := CaptureShipSnapshot(ctx, storage, item, tt.prStatus, lastWork, wt)
+			require.NoError(t, err, "CaptureShipSnapshot must never return an error, even when both groups fail")
+
+			fetched, ferr := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, ferr)
+
+			if tt.wantGithubWritten {
+				assert.Equal(t, "failure", fetched.ShippedCheckConclusion)
+				assert.Equal(t, tt.prStatus.ApprovedCount, fetched.ShippedApprovedCount)
+				assert.Equal(t, tt.prStatus.ChangesRequestedCount, fetched.ShippedChangesReqCount)
+			} else {
+				assert.Empty(t, fetched.ShippedCheckConclusion, "github group failed — ShippedCheckConclusion must stay unset")
+				assert.Zero(t, fetched.ShippedApprovedCount)
+				assert.Zero(t, fetched.ShippedChangesReqCount)
+			}
+			// Never a sentinel string — reserved for genuine CI-conclusion values.
+			assert.NotEqual(t, "failed", fetched.ShippedCheckConclusion)
+
+			if tt.wantFileStatsWritten {
+				require.NotEmpty(t, fetched.ShippedFileStats)
+				var stats []git.FileStat
+				require.NoError(t, json.Unmarshal([]byte(fetched.ShippedFileStats), &stats))
+				require.Len(t, stats, 1)
+			} else {
+				assert.Empty(t, fetched.ShippedFileStats, "file-stats group failed — ShippedFileStats must stay unset")
+			}
+
+			// This test's every row has at least one group fail, so
+			// ShippedSnapshotCaptureFailed must always be true here.
+			assert.True(t, fetched.ShippedSnapshotCaptureFailed)
+
+			// ShippedSnapshotAt is set whenever at least one group succeeded
+			// (Task 3.3.1c); only the both-fail row has neither succeed.
+			if tt.wantGithubWritten || tt.wantFileStatsWritten {
+				assert.NotNil(t, fetched.ShippedSnapshotAt, "at least one group succeeded — ShippedSnapshotAt must be set")
+			}
+		})
+	}
+}
+
+// TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged
+// is the integration test: a real ent-backed Storage, a seeded pr_pending item,
+// and a merged PR faked at the existing prPendingChecker seam
+// (SetPRPendingCheckerFactory). After ReconcilePRPending returns,
+// BacklogItem.ShippedSnapshotAt must be non-nil and Status must be
+// BacklogStatusDone — asserted structurally (no time.Sleep/polling), since
+// CaptureShipSnapshot runs synchronously on the same goroutine, strictly before
+// the TransitionBacklogItemStatus call in the same `if merged` block.
+func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9003)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: true,
+		status: &git.PRStatus{ApprovedCount: 1, ChangesRequestedCount: 0, CIFailing: false},
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+	require.NotNil(t, fetched.ShippedSnapshotAt, "CaptureShipSnapshot must have run and captured at least the GitHub group before the done transition")
+	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
+	assert.Equal(t, 1, fetched.ShippedApprovedCount)
 }

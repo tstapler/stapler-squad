@@ -63,6 +63,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     approvePlan: jest.fn(),
     overrideVerdict: jest.fn(),
     triggerReReview: jest.fn(),
+    triggerShipPR: jest.fn(),
     archiveBacklogItem: jest.fn(),
     updateBacklogItem: jest.fn().mockResolvedValue(null),
     listPipelineModes,
@@ -90,6 +91,7 @@ const baseItem: BacklogItem = {
   createdAt: "2026-07-01T00:00:00Z",
   updatedAt: "2026-07-01T00:00:00Z",
   statusEvents: [],
+  progressNotes: [],
   totalEstimatedCostUsd: 0,
 };
 

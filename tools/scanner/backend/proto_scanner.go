@@ -146,6 +146,7 @@ var methodToID = map[string]string{
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerShipPR":               "backlog:trigger-ship-pr",
 	"TriggerSync":                 "backlog:trigger-sync",
 	"CreateItemSource":            "backlog:create-source",
 	"ListItemSources":             "backlog:list-sources",

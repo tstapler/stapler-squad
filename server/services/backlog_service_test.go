@@ -22,6 +22,25 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
+// TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
+// runs. NewBacklogService defaults every instance's capabilityCheck field to that
+// package-level singleton (guarded by sync.Once, deliberately cached for the whole
+// process lifetime in production — see capability_check.go). Left unseeded, the
+// first test in this binary to reach the codebase-read gate without calling
+// SetCapabilityCheck "wins" the once.Do race and permanently resolves the
+// singleton based on whether ITS OWN fakeHeadlessPool response happens to contain
+// the capability marker string (it doesn't — the fakes return scripted verdict
+// JSON) — poisoning it to failed for every other test in the package for the rest
+// of the process, regardless of test order or -count. That was the actual root
+// cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
+// order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
+// -count=N in one process). Tests that specifically exercise the capability-check
+// failure/success path still override it per-instance via SetCapabilityCheck.
+func TestMain(m *testing.M) {
+	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
+	os.Exit(m.Run())
+}
+
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
 
 // fakeHeadlessPool is a test stub implementing headless.PoolClient.
@@ -544,6 +563,40 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 	assert.Equal(t, "quick", *p.PipelineMode)
 }
 
+// TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent
+// is the regression test for closing the "reviewer/implementer decisions must be visible
+// in detail" gap: BacklogStatusEvent.Note (the human-readable reason for a transition,
+// e.g. "auto-reopened after FAIL verdict") and the BacklogProgressNote history (the
+// implementer's report_progress audit trail) were both durably persisted already but
+// never made it onto the wire — backlogItemToProto must now include both.
+func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
+	note := "auto-reopened after FAIL verdict"
+	item := &session.BacklogItemData{
+		ID:    "item-1",
+		Title: "item with audit history",
+		StatusEvents: []session.BacklogStatusEventData{
+			{ID: "ev-1", FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "system", Note: &note},
+			{ID: "ev-2", FromStatus: "ready", ToStatus: "in_progress", TriggeredBy: "user"},
+		},
+		ProgressNotes: []session.ProgressNoteData{
+			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+	}
+
+	p := backlogItemToProto(item, nil)
+
+	require.Len(t, p.StatusEvents, 2)
+	require.NotNil(t, p.StatusEvents[0].Note)
+	assert.Equal(t, note, *p.StatusEvents[0].Note)
+	assert.Nil(t, p.StatusEvents[1].Note, "an event with no recorded reason must not synthesize one")
+
+	require.Len(t, p.ProgressNotes, 1)
+	assert.Equal(t, "pn-1", p.ProgressNotes[0].Id)
+	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
+	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
+	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition
@@ -836,6 +889,94 @@ func TestSpawnSessionFromItem_Reopen_SetsBacklogCategory(t *testing.T) {
 		"backlog revision-reopen session should have Category == Backlog")
 }
 
+// TestSpawnSessionFromItem_Reopen_ReusesBranch is the regression test for the bug
+// where every reopen/rework spawn minted a brand-new "backlog/<slug>-rN" branch off
+// current HEAD instead of resuming the item's existing branch — see the -rN suffix
+// in buildRevisionTitle leaking into the worktree/branch slug. The fix derives the
+// worktree slug from baseTitle (stable across reopens), not title (which varies).
+// This test drives two real spawns through the real git worktree path (not mocked)
+// and asserts both land on the identical branch.
+func TestSpawnSessionFromItem_Reopen_ReusesBranch(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "reuse branch item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstBranch := currentBranch(t, creator.calls[0].path)
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondBranch := currentBranch(t, creator.calls[1].path)
+
+	assert.Equal(t, firstBranch, secondBranch, "reopen must reuse the same branch, not mint a new -rN branch")
+	assert.NotContains(t, secondBranch, "-r2", "branch name must not pick up the session title's revision suffix")
+}
+
+// TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
+// real bug: reopen used to force-remove and recreate the worktree at the reused
+// path (git.GitWorktree.setupFromExistingBranch always ran `worktree remove -f`
+// before `worktree add`), and cleanupItemWorktrees then ran a second time against
+// that same identical path via priorSessions — either step alone could wipe the
+// worktree the brand-new session had just started using, leaving a still
+// in_progress/review item with no worktree on disk at all (empty diffs, degraded
+// re-review). Both the worktree path and an uncommitted file written before reopen
+// must survive a reopen unchanged.
+func TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "reuse worktree item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstPath := creator.calls[0].path
+
+	uncommitted := filepath.Join(firstPath, "uncommitted.txt")
+	require.NoError(t, os.WriteFile(uncommitted, []byte("not yet committed\n"), 0o644))
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondPath := creator.calls[1].path
+
+	assert.Equal(t, firstPath, secondPath, "reopen must reuse the same worktree path, not mint a new one")
+	assert.FileExists(t, uncommitted, "reopen must not wipe the existing worktree — the file written before reopen must survive")
+}
+
+// currentBranch returns the checked-out branch name at path via the real git CLI.
+func currentBranch(t *testing.T, path string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD") //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git rev-parse failed: %s", out)
+	return strings.TrimSpace(string(out))
+}
+
 // createReadyItemForSpawn creates a SkipPlanning backlog item and advances it to
 // "ready", returning its ID. Reduces boilerplate for WIP-limit and spawn tests
 // that don't care about the triage/planning flow.
@@ -926,6 +1067,46 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
 	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
 	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
+}
+
+// TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions is the regression test for
+// the "WIP limit now undercounts live sessions" gap (docs/tasks/backlog-feature-improvement.md):
+// AutoReopenAfterFailedReview intentionally leaves a work session running (polling for a
+// verdict) after the item's status flips back to "review". A WIP count that only looks at
+// "in_progress" status items misses this live session entirely, letting an operator exceed
+// the cap the 2026-07-12 OOM incident motivated. countLiveBacklogWorkSessions must count it.
+func TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the cap with one item still genuinely in_progress...
+	inProgressID := createReadyItemForSpawn(t, svc, repoPath, "still in progress")
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: inProgressID}))
+	require.NoError(t, err)
+
+	// ...and one item whose work session is still alive but whose status has moved to
+	// "review" (the AutoReopenAfterFailedReview live-session-reuse case) — this must
+	// still count toward the cap even though it is no longer "in_progress".
+	reviewID := createReadyItemForSpawn(t, svc, repoPath, "alive but in review")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reviewID}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       reviewID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 2, maxConcurrentBacklogWorkItems, "test assumes the default cap of 2; update the fixture if this changes")
+
+	// A fresh spawn for a third item must now be rejected: two agents (one in_progress,
+	// one live-in-review) are already running, at the cap.
+	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.Error(t, err, "spawn must be rejected — the review-status session is still live")
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
 }
 
 // TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn is the regression
@@ -1316,6 +1497,72 @@ func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
 		"PASS verdict from headless re-review should auto-transition item to done")
+}
+
+// TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR is the
+// regression test for the 2026-07-18 finding (docs/tasks/backlog-feature-improvement.md):
+// TriggerReReview's headless-PASS branch transitions review->done via the storage
+// layer directly, which bypasses the TransitionBacklogItemStatus RPC handler's
+// ErrPRRequired guard entirely. Before this fix, a PASS verdict here could mark an
+// item "done" even though its work session had committed code that was never
+// pushed or turned into a PR — silently losing the ship step. The item must now
+// stay in review so the "Ship PR" action can recover it.
+func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: repoDir,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	for _, status := range []string{
+		string(session.BacklogStatusReady),
+		string(session.BacklogStatusInProgress),
+	} {
+		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: status,
+		}))
+		require.NoError(t, err)
+	}
+
+	// Seed a work session with committed-but-unpushed code — the scenario the
+	// ErrPRRequired guard (and this replicated check) exists for.
+	workIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionGitActivity(t.Context(), workIS.ID, "abc123", "wip", time.Now(), 1))
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+
+	updated, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), updated.Msg.Item.Status,
+		"PASS verdict with unshipped work-session code and no PR must stay in review for the Ship PR action, not silently transition to done")
 }
 
 // TestTriggerReReview_SetsBacklogCategory verifies that TriggerReReview with a

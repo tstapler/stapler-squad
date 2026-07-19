@@ -9,10 +9,10 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
-import { VcsStatusDisplay } from "@/components/shared/VcsStatusDisplay";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
-import { ShipStatusDisplay } from "./ShipStatusDisplay";
 import { getApiBaseUrl } from "@/lib/config";
+import { VcsWidget } from "@/components/shared/VcsWidget";
+import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { SessionMonitor } from "./SessionMonitor";
@@ -53,6 +53,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   mark_done: "Marked done.",
   override_done: "Overridden to done.",
   re_review: "Re-review triggered.",
+  ship_pr: "PR created.",
   archive: "Archived.",
   reopen: "Reopened for review.",
   send_back_idea: "Sent back to triage.",
@@ -130,6 +131,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     approvePlan,
     overrideVerdict,
     triggerReReview,
+    triggerShipPR,
     submitManualReview,
     archiveBacklogItem,
     deleteBacklogItem,
@@ -182,23 +184,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [triageElapsedSeconds, setTriageElapsedSeconds] = useState(0);
 
   // Version control state for the most recent work session's worktree.
-  const [copiedWorktreePath, setCopiedWorktreePath] = useState(false);
   const latestWorkSession = [...(item?.linkedSessions ?? [])].reverse().find((s) => s.role === "work");
+  // Surfaces the "most recent work session" heuristic's ambiguity when more than
+  // one work session is currently active — the heuristic above is unchanged, this
+  // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
+  const activeWorkSessionCount = (item?.linkedSessions ?? []).filter((s) => s.role === "work" && !s.endedAt).length;
   const { data: vcsStatus } = useVcsStatus(latestWorkSession?.sessionId ?? "", getApiBaseUrl());
   // Fallback for once the live session's worktree has been cleaned up (the normal
   // state for a done item) — vcsStatus above comes back null in that case since
   // useVcsStatus needs a live in-memory Instance to query.
   const { data: shipStatus } = useBacklogItemShipStatus(!vcsStatus && item ? item.id : "");
-  const handleCopyWorktreePath = useCallback((path: string) => {
-    navigator.clipboard.writeText(path)
-      .then(() => {
-        setCopiedWorktreePath(true);
-        setTimeout(() => setCopiedWorktreePath(false), 1500);
-      })
-      .catch((err) => {
-        console.warn("[BacklogItemDetail] clipboard write failed", err);
-      });
-  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -311,6 +306,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "re_review":
             await triggerReReview(item.id);
             break;
+          case "ship_pr":
+            await triggerShipPR(item.id);
+            break;
           case "manual_review":
             setShowManualReview(true);
             return;
@@ -347,7 +345,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
@@ -643,6 +641,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // Autonomous mode does its own planning — no plan-approval gate needed.
   const canRunAutonomously = item.status === "ready";
 
+  // Self-service "Ship PR" action: only makes sense for an item sitting in
+  // review with no PR yet — the exact gap this closes (see
+  // docs/tasks/backlog-feature-improvement.md, 2026-07-18 update). All AC
+  // criteria must be complete before shipping; a gate verdict of PASS is
+  // encouraged (via the button's title) but not required — same
+  // human-override philosophy as the existing "Override → Done" action.
+  const acAllComplete =
+    item.acCriteria.length > 0 && item.acCriteria.every((c) => c.status === "done");
+  const canShipPR = item.status === "review" && !item.prUrl;
+
   if (editMode) {
     return (
       <article
@@ -877,17 +885,30 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 />
               </div>
 
-              {showChangesModal && workSession && (
-                <ReviewChangesModal
-                  itemId={item.id}
-                  sessionId={workSession.sessionId}
-                  sessionTitle={item.title}
-                  onClose={() => setShowChangesModal(false)}
-                />
-              )}
             </>
           );
         })()}
+
+        {/* Diff modal — reused by the review-flow "View Changes" button above and
+            the Version Control section's "View Diff" button below; works for any
+            status since GetBacklogItemDiff resolves the shipped range from durable
+            git history, not a live session. */}
+        {showChangesModal && (
+          <ReviewChangesModal
+            itemId={item.id}
+            sessionId={latestWorkSession?.sessionId}
+            sessionTitle={item.title}
+            onClose={() => setShowChangesModal(false)}
+          />
+        )}
+
+        {showFileBrowser && latestWorkSession && (
+          <BacklogFileBrowserModal
+            sessionId={latestWorkSession.sessionId}
+            sessionTitle={item.title}
+            onClose={() => setShowFileBrowser(false)}
+          />
+        )}
 
         {/* PR Pending */}
         {item.status === "pr_pending" && (
@@ -1060,6 +1081,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
             {item.status === "review" && (
               <>
+                {canShipPR && (
+                  <button
+                    className={styles.actionButton}
+                    onClick={() => handleAction("ship_pr")}
+                    disabled={actionLoading !== null || !acAllComplete}
+                    aria-disabled={!acAllComplete}
+                    aria-busy={actionLoading === "ship_pr"}
+                    title={
+                      !acAllComplete
+                        ? "All acceptance criteria must be complete before shipping a PR."
+                        : "Ask the agent to push the branch and open a pull request for this item."
+                    }
+                    data-testid="backlog-action-ship-pr"
+                  >
+                    <ActionButtonLabel pending={actionLoading === "ship_pr"} label="🚀 Ship PR" />
+                  </button>
+                )}
                 <button
                   className={`${styles.actionButton} ${styles.actionButtonDanger}`}
                   onClick={() => handleAction("override_done")}
@@ -1236,40 +1274,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </div>
         )}
 
-        {/* Version Control — live VCS state + worktree path for the most recent work
-            session, falling back to the durable ship-status check once the live
-            worktree is gone (the normal state for a done item — see
-            useBacklogItemShipStatus). */}
-        {latestWorkSession && (vcsStatus || shipStatus || latestWorkSession.worktreePath) && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Version Control</h3>
-            {latestWorkSession.worktreePath && (
-              <div className={styles.worktreePathRow}>
-                <code className={styles.artifactsPath}>{latestWorkSession.worktreePath}</code>
-                <button
-                  className={styles.editButton}
-                  onClick={() => handleCopyWorktreePath(latestWorkSession.worktreePath!)}
-                  title="Copy worktree path"
-                >
-                  {copiedWorktreePath ? "✓" : "📋"}
-                </button>
-                <button
-                  className={styles.editButton}
-                  onClick={() => setShowFileBrowser(true)}
-                  title="Browse files in this worktree"
-                  data-testid="backlog-browse-files"
-                >
-                  📁 Browse
-                </button>
+        {/* Version Control — live VCS state for the most recent work session, falling
+            back to the durable ship-status check once the live worktree is gone (the
+            normal state for a done item — see useBacklogItemShipStatus). The
+            fallback-by-data-presence rule (vcsStatus wins when both resolve non-null)
+            is preserved exactly from the pre-VcsWidget implementation. */}
+        {(() => {
+          const widgetData = vcsStatus ? fromSessionVcs(vcsStatus) : shipStatus ? fromShipStatus(shipStatus) : null;
+          return (
+            widgetData && (
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Version Control</h3>
+                <VcsWidget
+                  data={widgetData}
+                  mode="full"
+                  onViewDiff={() => setShowChangesModal(true)}
+                  activeSessionCount={activeWorkSessionCount}
+                  worktreePath={latestWorkSession?.worktreePath}
+                  onBrowseFiles={() => setShowFileBrowser(true)}
+                />
               </div>
-            )}
-            {vcsStatus ? (
-              <VcsStatusDisplay status={vcsStatus} />
-            ) : (
-              shipStatus && <ShipStatusDisplay status={shipStatus} />
-            )}
-          </div>
-        )}
+            )
+          );
+        })()}
 
         {/* Linked Sessions */}
         {item.linkedSessions.length > 0 && (
@@ -1384,6 +1411,21 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                       </>
                     )}
                   </div>
+                  {s.reviewVerdict && (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
+                    <div className={styles.verdictDetail} aria-label="Review verdict detail">
+                      {s.reviewVerdict.summary && (
+                        <span className={styles.verdictSummary}>
+                          <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
+                        </span>
+                      )}
+                      {s.reviewVerdict.perCriterion?.map((c) => (
+                        <div key={c.criterionIndex} className={styles.verdictCriterion}>
+                          <span>#{c.criterionIndex} {c.outcome}</span>
+                          {c.evidence && <span>— {c.evidence}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   </div>
                 );
               })}
@@ -1427,13 +1469,41 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <div className={styles.workflowTimeline} role="list" aria-label="Status history">
               {item.statusEvents.map((ev) => (
                 <div key={ev.id} className={styles.workflowEvent} role="listitem">
-                  <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
-                  <span className={styles.workflowEventArrow}>→</span>
-                  <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
-                  <span className={styles.workflowEventMeta}>
-                    {ev.createdAt ? formatDate(ev.createdAt) : ""}
-                    {ev.triggeredBy === "user" ? " · user" : ""}
-                  </span>
+                  <div className={styles.workflowEventRow}>
+                    <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
+                    <span className={styles.workflowEventArrow}>→</span>
+                    <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
+                    <span className={styles.workflowEventMeta}>
+                      {ev.createdAt ? formatDate(ev.createdAt) : ""}
+                      {" · "}{ev.triggeredBy}
+                    </span>
+                  </div>
+                  {ev.note && <span className={styles.workflowEventNote}>{ev.note}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Progress History — the implementer's report_progress audit trail */}
+        {item.progressNotes.length > 0 && (
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Progress History</h3>
+            <div className={styles.progressNoteList} role="list" aria-label="Implementer progress history">
+              {item.progressNotes.map((n) => (
+                <div key={n.id} className={styles.progressNoteItem} role="listitem">
+                  <div className={styles.progressNoteMeta}>
+                    <span>Criterion #{n.criterionIndex}</span>
+                    <span>·</span>
+                    <span>{n.status}</span>
+                    {n.createdAt && (
+                      <>
+                        <span>·</span>
+                        <span>{formatDate(n.createdAt)}</span>
+                      </>
+                    )}
+                  </div>
+                  {n.note && <span>{n.note}</span>}
                 </div>
               ))}
             </div>
@@ -1492,13 +1562,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
       </div>
 
-      {showFileBrowser && latestWorkSession && (
-        <BacklogFileBrowserModal
-          sessionId={latestWorkSession.sessionId}
-          sessionTitle={item.title}
-          onClose={() => setShowFileBrowser(false)}
-        />
-      )}
     </article>
   );
 }

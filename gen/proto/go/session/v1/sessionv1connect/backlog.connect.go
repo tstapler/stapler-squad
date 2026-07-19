@@ -81,6 +81,9 @@ const (
 	// BacklogServiceTriggerReReviewProcedure is the fully-qualified name of the BacklogService's
 	// TriggerReReview RPC.
 	BacklogServiceTriggerReReviewProcedure = "/session.v1.BacklogService/TriggerReReview"
+	// BacklogServiceTriggerShipPRProcedure is the fully-qualified name of the BacklogService's
+	// TriggerShipPR RPC.
+	BacklogServiceTriggerShipPRProcedure = "/session.v1.BacklogService/TriggerShipPR"
 	// BacklogServiceTriggerSyncProcedure is the fully-qualified name of the BacklogService's
 	// TriggerSync RPC.
 	BacklogServiceTriggerSyncProcedure = "/session.v1.BacklogService/TriggerSync"
@@ -180,6 +183,11 @@ type BacklogServiceClient interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -335,6 +343,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
 			connect.WithClientOptions(opts...),
 		),
+		triggerShipPR: connect.NewClient[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerShipPRProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
+			connect.WithClientOptions(opts...),
+		),
 		triggerSync: connect.NewClient[v1.TriggerSyncRequest, v1.TriggerSyncResponse](
 			httpClient,
 			baseURL+BacklogServiceTriggerSyncProcedure,
@@ -476,6 +490,7 @@ type backlogServiceClient struct {
 	suggestNextItem             *connect.Client[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse]
 	overrideVerdict             *connect.Client[v1.OverrideVerdictRequest, v1.OverrideVerdictResponse]
 	triggerReReview             *connect.Client[v1.TriggerReReviewRequest, v1.TriggerReReviewResponse]
+	triggerShipPR               *connect.Client[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse]
 	triggerSync                 *connect.Client[v1.TriggerSyncRequest, v1.TriggerSyncResponse]
 	createItemSource            *connect.Client[v1.CreateItemSourceRequest, v1.CreateItemSourceResponse]
 	listItemSources             *connect.Client[v1.ListItemSourcesRequest, v1.ListItemSourcesResponse]
@@ -576,6 +591,11 @@ func (c *backlogServiceClient) OverrideVerdict(ctx context.Context, req *connect
 // TriggerReReview calls session.v1.BacklogService.TriggerReReview.
 func (c *backlogServiceClient) TriggerReReview(ctx context.Context, req *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error) {
 	return c.triggerReReview.CallUnary(ctx, req)
+}
+
+// TriggerShipPR calls session.v1.BacklogService.TriggerShipPR.
+func (c *backlogServiceClient) TriggerShipPR(ctx context.Context, req *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return c.triggerShipPR.CallUnary(ctx, req)
 }
 
 // TriggerSync calls session.v1.BacklogService.TriggerSync.
@@ -715,6 +735,11 @@ type BacklogServiceHandler interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -864,6 +889,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		BacklogServiceTriggerReReviewProcedure,
 		svc.TriggerReReview,
 		connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceTriggerShipPRHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerShipPRProcedure,
+		svc.TriggerShipPR,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
 		connect.WithHandlerOptions(opts...),
 	)
 	backlogServiceTriggerSyncHandler := connect.NewUnaryHandler(
@@ -1020,6 +1051,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceOverrideVerdictHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerReReviewProcedure:
 			backlogServiceTriggerReReviewHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerShipPRProcedure:
+			backlogServiceTriggerShipPRHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerSyncProcedure:
 			backlogServiceTriggerSyncHandler.ServeHTTP(w, r)
 		case BacklogServiceCreateItemSourceProcedure:
@@ -1131,6 +1164,10 @@ func (UnimplementedBacklogServiceHandler) OverrideVerdict(context.Context, *conn
 
 func (UnimplementedBacklogServiceHandler) TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerReReview is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerShipPR is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error) {

@@ -415,6 +415,167 @@ func (_u *BacklogItemUpdate) ClearPrNumber() *BacklogItemUpdate {
 	return _u
 }
 
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdate) SetShippedCheckConclusion(v string) *BacklogItemUpdate {
+	_u.mutation.SetShippedCheckConclusion(v)
+	return _u
+}
+
+// SetNillableShippedCheckConclusion sets the "shipped_check_conclusion" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedCheckConclusion(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedCheckConclusion(*v)
+	}
+	return _u
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdate) ClearShippedCheckConclusion() *BacklogItemUpdate {
+	_u.mutation.ClearShippedCheckConclusion()
+	return _u
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) SetShippedApprovedCount(v int) *BacklogItemUpdate {
+	_u.mutation.ResetShippedApprovedCount()
+	_u.mutation.SetShippedApprovedCount(v)
+	return _u
+}
+
+// SetNillableShippedApprovedCount sets the "shipped_approved_count" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedApprovedCount(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedApprovedCount(*v)
+	}
+	return _u
+}
+
+// AddShippedApprovedCount adds value to the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) AddShippedApprovedCount(v int) *BacklogItemUpdate {
+	_u.mutation.AddShippedApprovedCount(v)
+	return _u
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) ClearShippedApprovedCount() *BacklogItemUpdate {
+	_u.mutation.ClearShippedApprovedCount()
+	return _u
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) SetShippedChangesReqCount(v int) *BacklogItemUpdate {
+	_u.mutation.ResetShippedChangesReqCount()
+	_u.mutation.SetShippedChangesReqCount(v)
+	return _u
+}
+
+// SetNillableShippedChangesReqCount sets the "shipped_changes_req_count" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedChangesReqCount(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedChangesReqCount(*v)
+	}
+	return _u
+}
+
+// AddShippedChangesReqCount adds value to the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) AddShippedChangesReqCount(v int) *BacklogItemUpdate {
+	_u.mutation.AddShippedChangesReqCount(v)
+	return _u
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) ClearShippedChangesReqCount() *BacklogItemUpdate {
+	_u.mutation.ClearShippedChangesReqCount()
+	return _u
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdate) SetShippedSnapshotAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetShippedSnapshotAt(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotAt sets the "shipped_snapshot_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedSnapshotAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedSnapshotAt(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdate) ClearShippedSnapshotAt() *BacklogItemUpdate {
+	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (_u *BacklogItemUpdate) SetShippedFileStats(v string) *BacklogItemUpdate {
+	_u.mutation.SetShippedFileStats(v)
+	return _u
+}
+
+// SetNillableShippedFileStats sets the "shipped_file_stats" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedFileStats(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedFileStats(*v)
+	}
+	return _u
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (_u *BacklogItemUpdate) ClearShippedFileStats() *BacklogItemUpdate {
+	_u.mutation.ClearShippedFileStats()
+	return _u
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdate) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpdate {
+	_u.mutation.SetShippedSnapshotCaptureFailed(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedSnapshotCaptureFailed(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedSnapshotCaptureFailed(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdate) ClearShippedSnapshotCaptureFailed() *BacklogItemUpdate {
+	_u.mutation.ClearShippedSnapshotCaptureFailed()
+	return _u
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) SetReworkCapOverride(v int) *BacklogItemUpdate {
+	_u.mutation.ResetReworkCapOverride()
+	_u.mutation.SetReworkCapOverride(v)
+	return _u
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableReworkCapOverride(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetReworkCapOverride(*v)
+	}
+	return _u
+}
+
+// AddReworkCapOverride adds value to the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) AddReworkCapOverride(v int) *BacklogItemUpdate {
+	_u.mutation.AddReworkCapOverride(v)
+	return _u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) ClearReworkCapOverride() *BacklogItemUpdate {
+	_u.mutation.ClearReworkCapOverride()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdate) SetUpdatedAt(v time.Time) *BacklogItemUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -798,6 +959,57 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.PrNumberCleared() {
 		_spec.ClearField(backlogitem.FieldPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedCheckConclusion(); ok {
+		_spec.SetField(backlogitem.FieldShippedCheckConclusion, field.TypeString, value)
+	}
+	if _u.mutation.ShippedCheckConclusionCleared() {
+		_spec.ClearField(backlogitem.FieldShippedCheckConclusion, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedApprovedCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedApprovedCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedApprovedCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedApprovedCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedChangesReqCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedChangesReqCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedChangesReqCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedChangesReqCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotAt(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
+	}
+	if _u.mutation.ShippedSnapshotAtCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ShippedFileStats(); ok {
+		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
+	}
+	if _u.mutation.ShippedFileStatsCleared() {
+		_spec.ClearField(backlogitem.FieldShippedFileStats, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotCaptureFailed(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
+	}
+	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
+	}
+	if value, ok := _u.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReworkCapOverride(); ok {
+		_spec.AddField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if _u.mutation.ReworkCapOverrideCleared() {
+		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
@@ -1456,6 +1668,167 @@ func (_u *BacklogItemUpdateOne) ClearPrNumber() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdateOne) SetShippedCheckConclusion(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedCheckConclusion(v)
+	return _u
+}
+
+// SetNillableShippedCheckConclusion sets the "shipped_check_conclusion" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedCheckConclusion(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedCheckConclusion(*v)
+	}
+	return _u
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdateOne) ClearShippedCheckConclusion() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedCheckConclusion()
+	return _u
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) SetShippedApprovedCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetShippedApprovedCount()
+	_u.mutation.SetShippedApprovedCount(v)
+	return _u
+}
+
+// SetNillableShippedApprovedCount sets the "shipped_approved_count" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedApprovedCount(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedApprovedCount(*v)
+	}
+	return _u
+}
+
+// AddShippedApprovedCount adds value to the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) AddShippedApprovedCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddShippedApprovedCount(v)
+	return _u
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) ClearShippedApprovedCount() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedApprovedCount()
+	return _u
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) SetShippedChangesReqCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetShippedChangesReqCount()
+	_u.mutation.SetShippedChangesReqCount(v)
+	return _u
+}
+
+// SetNillableShippedChangesReqCount sets the "shipped_changes_req_count" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedChangesReqCount(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedChangesReqCount(*v)
+	}
+	return _u
+}
+
+// AddShippedChangesReqCount adds value to the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) AddShippedChangesReqCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddShippedChangesReqCount(v)
+	return _u
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) ClearShippedChangesReqCount() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedChangesReqCount()
+	return _u
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdateOne) SetShippedSnapshotAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedSnapshotAt(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotAt sets the "shipped_snapshot_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedSnapshotAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedSnapshotAt(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdateOne) ClearShippedSnapshotAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (_u *BacklogItemUpdateOne) SetShippedFileStats(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedFileStats(v)
+	return _u
+}
+
+// SetNillableShippedFileStats sets the "shipped_file_stats" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedFileStats(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedFileStats(*v)
+	}
+	return _u
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (_u *BacklogItemUpdateOne) ClearShippedFileStats() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedFileStats()
+	return _u
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdateOne) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedSnapshotCaptureFailed(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedSnapshotCaptureFailed(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedSnapshotCaptureFailed(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdateOne) ClearShippedSnapshotCaptureFailed() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedSnapshotCaptureFailed()
+	return _u
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) SetReworkCapOverride(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetReworkCapOverride()
+	_u.mutation.SetReworkCapOverride(v)
+	return _u
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableReworkCapOverride(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetReworkCapOverride(*v)
+	}
+	return _u
+}
+
+// AddReworkCapOverride adds value to the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) AddReworkCapOverride(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddReworkCapOverride(v)
+	return _u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) ClearReworkCapOverride() *BacklogItemUpdateOne {
+	_u.mutation.ClearReworkCapOverride()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdateOne) SetUpdatedAt(v time.Time) *BacklogItemUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -1869,6 +2242,57 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.PrNumberCleared() {
 		_spec.ClearField(backlogitem.FieldPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedCheckConclusion(); ok {
+		_spec.SetField(backlogitem.FieldShippedCheckConclusion, field.TypeString, value)
+	}
+	if _u.mutation.ShippedCheckConclusionCleared() {
+		_spec.ClearField(backlogitem.FieldShippedCheckConclusion, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedApprovedCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedApprovedCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedApprovedCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedApprovedCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedChangesReqCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedChangesReqCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedChangesReqCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedChangesReqCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotAt(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
+	}
+	if _u.mutation.ShippedSnapshotAtCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ShippedFileStats(); ok {
+		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
+	}
+	if _u.mutation.ShippedFileStatsCleared() {
+		_spec.ClearField(backlogitem.FieldShippedFileStats, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotCaptureFailed(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
+	}
+	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
+	}
+	if value, ok := _u.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReworkCapOverride(); ok {
+		_spec.AddField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if _u.mutation.ReworkCapOverrideCleared() {
+		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)

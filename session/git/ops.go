@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -169,6 +170,174 @@ func countCommitsNotAncestorOf(from, target *object.Commit) (int, error) {
 		}
 	}
 	return count, nil
+}
+
+// FileStat describes one file's change between two commits, as returned by
+// FileStatsBetween. Path is the file's path as of headSHA — for a rename
+// this is the new path, not the old one. Status is one of "added",
+// "deleted", "renamed", or "modified".
+type FileStat struct {
+	Path      string
+	Status    string
+	Additions int
+	Deletions int
+}
+
+// ShippedCommit describes one commit in the range shipped by a work session.
+type ShippedCommit struct {
+	SHA        string
+	Summary    string // first line of the commit message
+	AuthorAt   time.Time
+	AuthorName string
+}
+
+// listShippedCommitsCap bounds ListShippedCommits the same way
+// countCommitsNotAncestorOfCap bounds the ahead/behind walk — a UI commit list
+// only ever needs "the last several", not an unbounded history dump.
+const listShippedCommitsCap = 100
+
+// ListShippedCommits returns the commits reachable from headSHA but not from
+// baseSHA — i.e. what a work session's commit range actually shipped — newest
+// first, like a PR's "Commits" tab. Both SHAs must already be resolved commit
+// hashes (not branch names): the caller typically has these directly from
+// GitWorktreeData.BaseCommitSHA and the work session's LastCommitSha, which
+// remain valid even after the branch itself has been deleted post-merge.
+func ListShippedCommits(repoPath, baseSHA, headSHA string) ([]ShippedCommit, error) {
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+
+	head, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s: %w", headSHA, err)
+	}
+	base, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s: %w", baseSHA, err)
+	}
+
+	var commits []ShippedCommit
+	seen := map[plumbing.Hash]bool{head.Hash: true}
+	queue := []*object.Commit{head}
+	for len(queue) > 0 && len(commits) < listShippedCommitsCap {
+		c := queue[0]
+		queue = queue[1:]
+		isAncestor, err := c.IsAncestor(base)
+		if err != nil {
+			return commits, err
+		}
+		if isAncestor {
+			continue
+		}
+		summary, _, _ := strings.Cut(c.Message, "\n")
+		commits = append(commits, ShippedCommit{
+			SHA:        c.Hash.String(),
+			Summary:    strings.TrimSpace(summary),
+			AuthorAt:   c.Author.When,
+			AuthorName: c.Author.Name,
+		})
+		if err := c.Parents().ForEach(func(p *object.Commit) error {
+			if !seen[p.Hash] {
+				seen[p.Hash] = true
+				queue = append(queue, p)
+			}
+			return nil
+		}); err != nil {
+			return commits, err
+		}
+	}
+	return commits, nil
+}
+
+// FileStatsBetween returns the per-file diff-stat summary (path, status,
+// additions, deletions) for every file that changed between baseSHA and
+// headSHA in the repo at repoPath, using go-git's typed diff API — no
+// safeexec shell-out (.claude/rules/prefer-go-git-over-subshells.md).
+//
+// Renames are reported as a single entry keyed by the file's new path, not a
+// delete+add pair: go-git's FilePatch.Files() already exposes the from/to
+// path pair needed to detect this directly, so unlike object.Patch.Stats()
+// (whose FileStat.Name collapses a rename into a single "old => new" display
+// string) this walks Patch.FilePatches() itself to keep the old and new
+// paths distinct. Binary files are silently omitted — go-git produces zero
+// diff chunks for them (the same signal it uses to skip submodule-ref-only
+// changes), so there is no meaningful addition/deletion count to report;
+// this mirrors go-git's own Stats() behavior rather than the "0/0 entry"
+// shape one might expect, a discrepancy confirmed against go-git v5.14.0's
+// source (getFileStatsFromFilePatches in plumbing/object/patch.go) and a
+// throwaway spike before this function was written.
+func FileStatsBetween(repoPath, baseSHA, headSHA string) ([]FileStat, error) {
+	if baseSHA == headSHA {
+		return nil, nil
+	}
+
+	repo, err := git.PlainOpenWithOptions(repoPath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repo at %s: %w", repoPath, err)
+	}
+
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(baseSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", baseSHA, repoPath, err)
+	}
+	headCommit, err := repo.CommitObject(plumbing.NewHash(headSHA))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit %s in %s: %w", headSHA, repoPath, err)
+	}
+
+	patch, err := baseCommit.Patch(headCommit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to diff %s..%s in %s: %w", baseSHA, headSHA, repoPath, err)
+	}
+
+	var stats []FileStat
+	for _, fp := range patch.FilePatches() {
+		chunks := fp.Chunks()
+		if len(chunks) == 0 {
+			// Binary file (or submodule ref update) — no line-level diff to
+			// report; see the doc comment above.
+			continue
+		}
+
+		from, to := fp.Files()
+		stat := FileStat{}
+		switch {
+		case from == nil:
+			stat.Status = "added"
+			stat.Path = to.Path()
+		case to == nil:
+			stat.Status = "deleted"
+			stat.Path = from.Path()
+		case from.Path() != to.Path():
+			stat.Status = "renamed"
+			stat.Path = to.Path()
+		default:
+			stat.Status = "modified"
+			stat.Path = to.Path()
+		}
+
+		for _, chunk := range chunks {
+			content := chunk.Content()
+			if content == "" {
+				continue
+			}
+			lines := strings.Count(content, "\n")
+			if content[len(content)-1] != '\n' {
+				lines++
+			}
+			switch chunk.Type() {
+			case fdiff.Add:
+				stat.Additions += lines
+			case fdiff.Delete:
+				stat.Deletions += lines
+			}
+		}
+
+		stats = append(stats, stat)
+	}
+
+	return stats, nil
 }
 
 // CheckoutBranch checks out a branch in an existing repository.

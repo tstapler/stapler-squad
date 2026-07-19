@@ -1,0 +1,19 @@
+{
+  "id": "backlog:trigger-ship-pr",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "TriggerShipPR",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_ship.go",
+  "tested": true,
+  "testIds": [
+    "TestTriggerShipPR_HappyPath_RunsOneShotForMostRecentWorkSession",
+    "TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition",
+    "TestTriggerShipPR_AlreadyHasPR_ReturnsFailedPrecondition",
+    "TestTriggerShipPR_NoWorkSession_ReturnsFailedPrecondition",
+    "TestTriggerShipPR_NoOneShotRunnerWired_ReturnsUnimplemented",
+    "TestTriggerShipPR_RunnerError_ReturnsFailedPrecondition"
+  ],
+  "lastModified": "2026-07-18T09:54:00.881911857-07:00"
+}

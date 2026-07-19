@@ -11,7 +11,10 @@
     "TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL",
     "TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerged",
     "TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged",
-    "TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted"
+    "TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted",
+    "TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil",
+    "TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt",
+    "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage"
   ],
-  "lastModified": "2026-07-17T21:20:00.618410479-07:00"
+  "lastModified": "2026-07-18T00:00:00Z"
 }

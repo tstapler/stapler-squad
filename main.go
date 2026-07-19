@@ -90,7 +90,11 @@ var (
 				if mcpErr != nil {
 					return fmt.Errorf("mcp: init deps: %w", mcpErr)
 				}
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil)
+				// The stdio MCP server is a short-lived subprocess per session, so a
+				// load-time read of the flag (rather than a live BacklogController,
+				// which BuildCoreDeps doesn't construct) is sufficient.
+				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
 			}
 
 			// Enable test mode if flag is set

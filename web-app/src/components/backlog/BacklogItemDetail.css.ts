@@ -498,8 +498,9 @@ export const workflowTimeline = style({
 
 export const workflowEvent = style({
   display: "flex",
-  alignItems: "baseline",
-  gap: vars.space["3"],
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["1"],
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   position: "relative",
   fontSize: vars.fontSize.sm,
@@ -515,6 +516,21 @@ export const workflowEvent = style({
     background: vars.color.borderSubtle,
     border: `2px solid ${vars.color.modalBackground}`,
   },
+});
+
+export const workflowEventRow = style({
+  display: "flex",
+  alignItems: "baseline",
+  gap: vars.space["3"],
+  flexWrap: "wrap",
+  width: "100%",
+});
+
+export const workflowEventNote = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontStyle: "italic",
+  width: "100%",
 });
 
 export const workflowEventFrom = style({
@@ -600,6 +616,56 @@ export const workflowEventMeta = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.xs,
   whiteSpace: "nowrap",
+});
+
+export const progressNoteList = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 0,
+});
+
+export const progressNoteItem = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} ${vars.space["2"]}`,
+  borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  fontSize: vars.fontSize.sm,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+    },
+  },
+});
+
+export const progressNoteMeta = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const verdictDetail = style({
+  marginTop: vars.space["1"],
+  padding: vars.space["2"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+});
+
+export const verdictSummary = style({
+  color: vars.color.textPrimary,
+});
+
+export const verdictCriterion = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "flex-start",
+  color: vars.color.textMuted,
 });
 
 export const loadingState = style({

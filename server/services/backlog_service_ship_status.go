@@ -10,11 +10,13 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -85,7 +87,8 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}
 	}
 
-	if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID); wtErr == nil && wt.BranchName != "" {
+	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr == nil && wt.BranchName != "" {
 		status.BranchName = wt.BranchName
 		branchStatus, branchErr := git.BranchAheadBehind(item.RepoPath, wt.BranchName, prFixMainBranch)
 		if branchErr != nil {
@@ -97,5 +100,75 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}
 	}
 
+	if wtErr == nil && wt.BaseCommitSHA != "" {
+		shipped, commitsErr := git.ListShippedCommits(item.RepoPath, wt.BaseCommitSHA, lastWork.LastCommitSha)
+		if commitsErr != nil {
+			// Non-fatal: the badge/branch info above is still valid even if the
+			// commit list itself can't be resolved (e.g. the base SHA has since
+			// been pruned) — don't let this clobber status.Error's more useful
+			// message from the branch-status check above.
+			if status.Error == "" {
+				status.Error = fmt.Sprintf("failed to list shipped commits: %v", commitsErr)
+			}
+		} else {
+			for _, c := range shipped {
+				commit := &sessionv1.ShippedCommit{
+					Sha:        c.SHA,
+					Summary:    c.Summary,
+					AuthorName: c.AuthorName,
+				}
+				if !c.AuthorAt.IsZero() {
+					commit.AuthoredAt = timestamppb.New(c.AuthorAt)
+				}
+				status.Commits = append(status.Commits, commit)
+			}
+		}
+	}
+
+	if item.ShippedSnapshotAt != nil {
+		status.ShippedCheckConclusion = item.ShippedCheckConclusion
+		status.ShippedApprovedCount = int32(item.ShippedApprovedCount)     //#nosec G115 -- bounded by GitHub review count, always small
+		status.ShippedChangesReqCount = int32(item.ShippedChangesReqCount) //#nosec G115 -- bounded by GitHub review count, always small
+		status.SnapshotAt = timestamppb.New(*item.ShippedSnapshotAt)
+		status.SnapshotCaptureFailed = item.ShippedSnapshotCaptureFailed
+
+		if item.ShippedFileStats != "" {
+			var decoded []git.FileStat
+			if unmarshalErr := json.Unmarshal([]byte(item.ShippedFileStats), &decoded); unmarshalErr != nil {
+				// Degrade gracefully: a corrupt/truncated snapshot blob must not
+				// fail the whole RPC — every other populated field above is still
+				// valid and useful on its own.
+				log.WarningLog.Printf("[BacklogService] GetBacklogItemShipStatus item=%s: failed to decode ShippedFileStats: %v", item.ID, unmarshalErr)
+			} else {
+				for _, fs := range decoded {
+					status.FileStats = append(status.FileStats, &sessionv1.ShippedFileStat{
+						Path:      fs.Path,
+						Status:    fileStatStatusToProto(fs.Status),
+						Additions: int32(fs.Additions), //#nosec G115 -- bounded diff-stat count
+						Deletions: int32(fs.Deletions), //#nosec G115 -- bounded diff-stat count
+					})
+				}
+			}
+		}
+	}
+
 	return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{Status: status}), nil
+}
+
+// fileStatStatusToProto maps git.FileStatsBetween's plain-string status
+// ("added", "deleted", "renamed", "modified") onto the shared FileStatus
+// proto enum used elsewhere for live file-change status.
+func fileStatStatusToProto(s string) sessionv1.FileStatus {
+	switch s {
+	case "added":
+		return sessionv1.FileStatus_FILE_STATUS_ADDED
+	case "deleted":
+		return sessionv1.FileStatus_FILE_STATUS_DELETED
+	case "renamed":
+		return sessionv1.FileStatus_FILE_STATUS_RENAMED
+	case "modified":
+		return sessionv1.FileStatus_FILE_STATUS_MODIFIED
+	default:
+		return sessionv1.FileStatus_FILE_STATUS_UNSPECIFIED
+	}
 }

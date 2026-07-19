@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -259,6 +260,23 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 				if itemErr != nil || item == nil {
 					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: failed to load linked backlog item", "itemSession", is.ID, "item", is.BacklogItemID, "err", itemErr)
 				} else {
+					// Write a durable autonomous_stuck row so a turn-cap stop is visible in
+					// the Unfinished tab, not just the ephemeral "Autonomous fix stuck"
+					// notification published below — previously invisible to the whole
+					// stuck-reason/recovery system every other detector in
+					// session/backlog_lifecycle.go participates in. Additive, never a gate:
+					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
+					// role-specific status handling below.
+					if !outcome.Done {
+						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
+							session.BacklogStatus(item.Status),
+							fmt.Sprintf("autonomous driver stopped after %d turns without a DONE signal (%s)", outcome.Turns, outcome.Reason)); markErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
+						} else if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
+						}
+					}
+
 					var toStatus session.BacklogStatus
 					var expectedStatus string
 					switch is.Role {

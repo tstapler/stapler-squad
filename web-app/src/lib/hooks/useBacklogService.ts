@@ -11,6 +11,7 @@ import {
   ItemSession as ItemSessionProto,
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
+  BacklogProgressNote as BacklogProgressNoteProto,
   PipelineMode as PipelineModeProto,
 } from "@/gen/session/v1/backlog_pb";
 
@@ -119,6 +120,8 @@ export interface BacklogItem {
   triageResult?: TriageResult;
   /** Status transition history for this item (audit log) */
   statusEvents: StatusEvent[];
+  /** Implementer's report_progress audit trail (audit log) */
+  progressNotes: ProgressNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -127,6 +130,12 @@ export interface BacklogItem {
   prNumber?: number;
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
+  /**
+   * Per-item override for the auto-rework cap. Undefined = use the global
+   * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
+   * this item's own cap, replacing the global value.
+   */
+  reworkCapOverride?: number;
 }
 
 /**
@@ -189,6 +198,17 @@ export interface StatusEvent {
   toStatus: string;
   triggeredBy: string;
   createdAt?: string;
+  /** Human-readable reason for this transition, e.g. "auto-reopened after FAIL verdict". */
+  note?: string;
+}
+
+/** A single report_progress call — the implementer's append-only decision history. */
+export interface ProgressNote {
+  id: string;
+  criterionIndex: number;
+  note: string;
+  status: string;
+  createdAt?: string;
 }
 
 export interface BacklogItemInput {
@@ -205,6 +225,8 @@ export interface BacklogItemInput {
   skipTriage?: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode?: string;
+  /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
+  reworkCapOverride?: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -289,6 +311,17 @@ function mapStatusEvent(e: BacklogStatusEventProto): StatusEvent {
     toStatus: e.toStatus,
     triggeredBy: e.triggeredBy,
     createdAt: e.createdAt ? new Date(Number(e.createdAt.seconds) * 1000).toISOString() : undefined,
+    note: e.note,
+  };
+}
+
+function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
+  return {
+    id: n.id,
+    criterionIndex: n.criterionIndex,
+    note: n.note,
+    status: n.status,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
   };
 }
 
@@ -380,10 +413,12 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageStatus,
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
+    progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
+    reworkCapOverride: p.reworkCapOverride,
   };
 }
 
@@ -455,6 +490,8 @@ interface UseBacklogServiceReturn {
   approvePlan: (id: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
+  /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
+  triggerShipPR: (id: string) => Promise<{ prUrl: string } | null>;
   submitManualReview: (id: string, overallOutcome: string, summary: string) => Promise<BacklogItem | null>;
   /**
    * Fetches all pipeline modes (enabled AND disabled — callers that only want
@@ -584,6 +621,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
+          reworkCapOverride: data.reworkCapOverride,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
@@ -729,6 +767,27 @@ export function useBacklogService(): UseBacklogServiceReturn {
       return true;
     } catch (err) {
       console.error("[useBacklogService] triggerReReview:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  /**
+   * Runs the same one-shot PR-creation prompt the opt-in AutoCreatePR policy
+   * uses automatically, for an item in review with no PR yet — the
+   * self-service "Ship PR" action on the item detail page. Can take a while
+   * (the underlying RunOneShot call may run for several minutes), matching
+   * ReviewQueuePanel's existing manual "Create PR" flow. Rethrows on failure
+   * so the caller can show the specific error (e.g. "work session not
+   * running") rather than a generic failure state.
+   */
+  const triggerShipPR = useCallback(async (id: string): Promise<{ prUrl: string } | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.triggerShipPR({ itemId: id });
+      return { prUrl: resp.prUrl };
+    } catch (err) {
+      console.error("[useBacklogService] triggerShipPR:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     }
@@ -941,6 +1000,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       approvePlan,
       overrideVerdict,
       triggerReReview,
+      triggerShipPR,
       submitManualReview,
       listPipelineModes,
       getPipelineMode,

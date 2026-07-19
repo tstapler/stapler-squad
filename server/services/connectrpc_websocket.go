@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -566,6 +567,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		log.Info("[streamViaControlMode] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
+				// Its working directory is gone (e.g. a pruned worktree) — fail the
+				// session with a visible status instead of leaving it "Active" with a
+				// terminal that can never reconnect.
+				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
+				instance.ForceStatus(session.Stopped)
+			}
 			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
 		}
 	}

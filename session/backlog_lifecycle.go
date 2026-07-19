@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -917,6 +919,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileStuckReviewItems(ctx, er)
 	})
 
+	// Apply a review verdict that was recorded but never actioned because the
+	// review session died before its exit event fired — distinct from the
+	// zombie detection above (see reconcileUnprocessedReviewVerdicts doc comment).
+	l.runStuckDetector("unprocessed_review_verdict", &okNames, &panickedNames, func() {
+		l.reconcileUnprocessedReviewVerdicts(ctx, er)
+	})
+
 	// Bouncing (non-converging in_progress<->review cycle) detector — wired
 	// before merge detection per Task 2.1.4b so a panic here can't skip it
 	// (also guarded by its own recover() below regardless of ordering).
@@ -995,6 +1004,16 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 				if !allDead {
 					continue // at least one active session is genuinely alive
 				}
+				// Tombstone the confirmed-dead rows now, not just flag them. Without
+				// this, AutoRespawnReview's hasActiveWorkSession/hasActiveReviewSession
+				// guard (server/services/backlog_service_triage.go) still sees these
+				// EndedAt-nil rows as "active" and silently skips the respawn it was
+				// just dispatched to perform — the zombie detection fired for nothing.
+				for _, is := range item.Edges.ItemSessions {
+					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, is.ID, endErr)
+					}
+				}
 				seen[item.ID.String()] = true
 				l.markAbandonedReview(ctx, er, item.ID.String(), item.Title, "review session process is gone (zombie)")
 			}
@@ -1022,6 +1041,71 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 			continue // still abandoned this tick
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonAbandonedReview, "reconcileStuckReviewItems")
+	}
+}
+
+// reconcileUnprocessedReviewVerdicts closes the gap where a review session
+// submitted its verdict (PASS/FAIL/PARTIAL/UNVERIFIABLE) but died — crash, OOM,
+// server restart — before its exit event ever reached handleReviewSessionExited,
+// the one place that acts on a verdict (push+PR on PASS, auto-reopen otherwise).
+// The item is left stuck in "review" with a recorded verdict nothing ever
+// processes.
+//
+// This is deliberately separate from reconcileStuckReviewItems' zombie detection:
+// that path requires EVERY open review-or-work session on the item to be
+// confirmed dead, but AutoReopenAfterFailedReview intentionally leaves a work
+// session alive polling for the verdict once the item is back in "review" (see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live
+// sessions" finding) — so the item never looks like a full zombie even though
+// the review session itself is the one that died with unactioned output. Found
+// live: a work session correctly detected its own item had an already-recorded
+// PASS verdict and all criteria done, but had no way to force the review→done
+// transition itself (by design — that's this function's job, not a work
+// session's), so it looped forever re-requesting a review the backlog system
+// correctly rejected (item already past "in_progress").
+//
+// Acts on the most recent review-role session only, once it is confirmed not
+// still wrapping up on its own (EndedAt already set, or the liveness checker
+// says it's dead) — a session that's merely slow to exit is left alone.
+// Best-effort: query/tombstone failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx context.Context, er *EntRepository) {
+	items, err := er.FindReviewItemsWithUnprocessedVerdict(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts query error: %v", err)
+		return
+	}
+	checker := l.getSessionLivenessChecker()
+	for _, item := range items {
+		if len(item.Edges.ItemSessions) == 0 {
+			continue
+		}
+		latest := item.Edges.ItemSessions[0] // most recent review-role session (query orders desc)
+		if latest.Edges.ReviewVerdict == nil {
+			continue // defensive: query already filters on HasReviewVerdict()
+		}
+
+		dead := latest.EndedAt != nil
+		if !dead && checker != nil {
+			dead = !checker(latest.SessionUUID)
+		}
+		if !dead {
+			continue // still plausibly wrapping up on its own — leave it alone
+		}
+
+		if latest.EndedAt == nil {
+			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
+			}
+		}
+
+		log.WarningLog.Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
+			item.ID, latest.SessionUUID, latest.Edges.ReviewVerdict.OverallOutcome)
+		l.handleReviewSessionExited(ctx, ItemSessionSummary{
+			ID:            latest.ID.String(),
+			BacklogItemID: item.ID.String(),
+			SessionUUID:   latest.SessionUUID,
+			Role:          string(SessionRoleReview),
+		})
 	}
 }
 
@@ -1145,6 +1229,25 @@ func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason doma
 // magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
 const maxWorkSessionStaleness = 2 * time.Hour
 
+// headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
+// headlessTriageUUIDPrefix constant (duplicated here rather than imported: server/services
+// imports this package, so the reverse import would cycle). Headless triage sessions have
+// no live in-memory Instance to check liveness against — per that file's
+// tombstoneOrphanTriageSessions, an "open" (EndedAt nil) row found later means the call
+// that would have closed it on completion already finished or crashed, not that it's
+// genuinely still running — so they warrant a much shorter staleness threshold than the
+// general 2h ceiling below.
+const headlessTriageSessionUUIDPrefix = "headless-triage-"
+
+// maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
+// trusted before reconcileOrphanedTriageItems flags it as orphaned. Headless triage calls
+// routinely run 7-15 minutes (see that function's doc comment); 30 minutes gives 2x margin
+// over that ceiling while closing the "triage session died before submit_triage_result,
+// item silently stuck in idea" gap (docs/tasks/triage-validation-*/research/pitfalls.md,
+// GAP-20/21) far faster than waiting out the general-purpose 2h threshold, which was tuned
+// for interactive/foreground triage sessions where a liveness signal isn't available here.
+const maxHeadlessTriageSessionStaleness = 30 * time.Minute
+
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
 // active work session has gone longer than maxWorkSessionStaleness without progress.
 // Notify-once dedup and "since when" are DB-backed (durable BacklogStuckState
@@ -1249,7 +1352,10 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 // Pure staleness gate — no liveness checker — matching reconcileStaleWorkSessions'
 // established pattern for the closest analogous detector in this file: a headless
 // triage call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-// here; maxWorkSessionStaleness (2h) alone is the reliable signal. Best-effort:
+// here; staleness alone is the reliable signal. Headless-triage sessions (the common
+// case) get the much shorter maxHeadlessTriageSessionStaleness (30m) rather than the
+// general-purpose maxWorkSessionStaleness (2h): an open headless row found later
+// reliably means dead, not slow (see that constant's doc comment). Best-effort:
 // query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
@@ -1272,8 +1378,25 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				latestTriage = &sessions[i]
 			}
 		}
-		if latestTriage == nil || time.Since(latestTriage.CreatedAt) <= maxWorkSessionStaleness {
-			continue // no open triage session, or still plausibly running
+		if latestTriage == nil {
+			continue // no open triage session
+		}
+		staleness := maxWorkSessionStaleness
+		if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
+			staleness = maxHeadlessTriageSessionStaleness
+		}
+		if time.Since(latestTriage.CreatedAt) <= staleness {
+			continue // still plausibly running
+		}
+
+		// Tombstone the dead row now rather than leaving it open until a human
+		// manually re-triggers triage (the only other path that closes it, via
+		// tombstoneOrphanTriageSessions in server/services). Staleness past
+		// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
+		// (see doc comment above: no liveness checker, headless calls don't run
+		// this long) — nothing left to preserve by keeping the row open.
+		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
 		}
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea,
@@ -1412,8 +1535,16 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed:
-			continue // event-shaped: resolved only at their explicit call sites
+		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed, domain.StuckReasonAutonomousStuck:
+			// Event-shaped: resolved only at an explicit call site, not by anchoring
+			// on item status. autonomous_stuck specifically cannot anchor on the
+			// item's status at mark-time: onAutonomousDriverComplete's SessionRoleWork
+			// case transitions in_progress->review even when the driver is stuck (a
+			// separate, flagged behavior — see that function's doc comment), so an
+			// in_progress anchor would immediately false-resolve on the very next
+			// tick once the status-transition below it runs, before an operator ever
+			// sees the row.
+			continue
 		default:
 			continue
 		}
@@ -1663,6 +1794,105 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 	log.InfoLog.Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand item=%s session=%s → pr_pending (PR #%d %s, via manual RunOneShot flow)", item.ID, workSessionUUID, prNumber, prURL)
 }
 
+// CaptureShipSnapshot durably captures the GitHub PR/review/CI state and the
+// per-file diff stats for item at the moment its PR merges, so that data
+// survives worktree cleanup once the item reaches "done" — the core
+// unified-vcs-widget requirement. It is a free function, not a method on
+// BacklogLifecycleListener: it needs no state from that type beyond
+// *Storage, which is passed explicitly here (per
+// .claude/rules/interface-pollution-checklist.md, a method only earns its
+// receiver when it genuinely needs the type's other state).
+//
+// Two data groups are captured independently — a failure in one must never
+// discard a success in the other:
+//   - Group A (GitHub): mapped from the already-fetched prStatus.
+//     CaptureShipSnapshot makes no GitHub call of its own. prStatus == nil
+//     means group A already failed before this function was even called
+//     (e.g. the caller's own GetPRStatus errored) — that's a valid input,
+//     not a bug. PRStatus does not expose a raw CI-conclusion string
+//     (worktree_git.go:330-345's field list), so ShippedCheckConclusion is
+//     derived from CIFailing as "failure"/"success" — a minor, accepted
+//     fidelity gap versus Session.githubCheckConclusion.
+//   - Group B (file stats): computed independently via
+//     git.FileStatsBetween(item.RepoPath, wt.BaseCommitSHA, lastWork.LastCommitSha),
+//     JSON-encoded into ShippedFileStats.
+//
+// Whichever group(s) succeed are written via one storage.UpdateBacklogItem
+// call. ShippedSnapshotCaptureFailed is set true whenever either group
+// failed; ShippedSnapshotAt is set whenever at least one group succeeded.
+// ShippedCheckConclusion is never written as "failed" — that field holds
+// only genuine CI-conclusion values; ShippedSnapshotCaptureFailed is the
+// dedicated signal for a capture failure.
+//
+// CaptureShipSnapshot always returns nil: it never blocks the pr_pending →
+// done transition, regardless of how many groups failed. Blocking done on a
+// GitHub API hiccup or a pruned base SHA would leave a genuinely-merged item
+// stuck in pr_pending forever, so this fails closed on data completeness,
+// not on the workflow itself.
+//
+// No in-process cache/memoization is introduced here — every call is a
+// direct write-through via UpdateBacklogItem. If a future caching layer is
+// added on top of this function, it must return the locally-computed
+// snapshot value rather than re-reading a cache slot after a lock is
+// released, per .claude/rules/go-double-checked-locking.md.
+func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogItemData, prStatus *git.PRStatus, lastWork *ItemSessionSummary, wt *GitWorktreeData) error {
+	var update BacklogItemUpdate
+	groupAFailed := false
+	groupBFailed := false
+	anySucceeded := false
+
+	// Group A: GitHub PR/CI/review state, from the already-fetched prStatus.
+	if prStatus != nil {
+		approvedCount := prStatus.ApprovedCount
+		changesReqCount := prStatus.ChangesRequestedCount
+		conclusion := "success"
+		if prStatus.CIFailing {
+			conclusion = "failure"
+		}
+		update.ShippedApprovedCount = &approvedCount
+		update.ShippedChangesReqCount = &changesReqCount
+		update.ShippedCheckConclusion = &conclusion
+		anySucceeded = true
+	} else {
+		groupAFailed = true
+		log.WarningLog.Printf("[BacklogLifecycle] CaptureShipSnapshot item=%s pr=%d group=github: prStatus unavailable", item.ID, item.PrNumber)
+	}
+
+	// Group B: per-file diff stats, independent of group A's outcome.
+	if lastWork != nil && wt != nil {
+		stats, statsErr := git.FileStatsBetween(item.RepoPath, wt.BaseCommitSHA, lastWork.LastCommitSha)
+		if statsErr != nil {
+			groupBFailed = true
+			log.WarningLog.Printf("[BacklogLifecycle] CaptureShipSnapshot item=%s pr=%d group=file-stats: %v", item.ID, item.PrNumber, statsErr)
+		} else if encoded, jsonErr := json.Marshal(stats); jsonErr != nil {
+			groupBFailed = true
+			log.WarningLog.Printf("[BacklogLifecycle] CaptureShipSnapshot item=%s pr=%d group=file-stats: marshal: %v", item.ID, item.PrNumber, jsonErr)
+		} else {
+			encodedStr := string(encoded)
+			update.ShippedFileStats = &encodedStr
+			anySucceeded = true
+		}
+	} else {
+		groupBFailed = true
+		log.WarningLog.Printf("[BacklogLifecycle] CaptureShipSnapshot item=%s pr=%d group=file-stats: worktree/last-work data unavailable", item.ID, item.PrNumber)
+	}
+
+	if groupAFailed || groupBFailed {
+		captureFailed := true
+		update.ShippedSnapshotCaptureFailed = &captureFailed
+	}
+	if anySucceeded {
+		now := time.Now()
+		update.ShippedSnapshotAt = &now
+	}
+
+	if _, updateErr := storage.UpdateBacklogItem(ctx, item.ID, update, nil); updateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] CaptureShipSnapshot item=%s pr=%d: UpdateBacklogItem failed: %v", item.ID, item.PrNumber, updateErr)
+	}
+
+	return nil
+}
+
 // ReconcilePRPending polls items in pr_pending status. It transitions to done
 // when the PR is merged, and spawns a fix session when CI fails or reviewers
 // request changes.
@@ -1689,6 +1919,54 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			continue
 		}
 		if merged {
+			// Capture the durable ship snapshot (GitHub PR/CI/review state +
+			// per-file diff stats) synchronously, before the done transition —
+			// never as a background goroutine — so the data is written before
+			// the worktree is eligible for cleanup (Story 3.3.1). prStatus is
+			// fetched here at the merge-detection point specifically for the
+			// snapshot; a fetch error is passed through as prStatus == nil
+			// rather than skipping capture entirely, since CaptureShipSnapshot
+			// treats a nil prStatus as "group A already failed" and still
+			// captures group B (file stats) independently.
+			snapshotPRStatus, snapshotStatusErr := g.GetPRStatus(item.PrNumber)
+			if snapshotStatusErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending GetPRStatus (ship snapshot) item=%s pr=%d: %v", item.ID, item.PrNumber, snapshotStatusErr)
+				snapshotPRStatus = nil
+			}
+
+			itemData := backlogItemToData(item)
+
+			var lastWork *ItemSessionSummary
+			if sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID.String()); sessErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending ListItemSessions (ship snapshot) item=%s: %v", item.ID, sessErr)
+			} else {
+				for i := range sessions {
+					// Ascending by CreatedAt (ListItemSessions' query order) —
+					// keep overwriting so this ends up holding the *most
+					// recent* work session, mirroring
+					// backlog_service_ship_status.go:51-58.
+					if sessions[i].Role == SessionRoleWork {
+						lastWork = &sessions[i]
+					}
+				}
+			}
+
+			var wt *GitWorktreeData
+			if lastWork != nil {
+				if wtData, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID); wtErr != nil {
+					log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending GetWorktreeDataBySessionUUID (ship snapshot) item=%s session=%s: %v", item.ID, lastWork.SessionUUID, wtErr)
+				} else {
+					wt = &wtData
+				}
+			}
+
+			if capErr := CaptureShipSnapshot(ctx, l.storage, &itemData, snapshotPRStatus, lastWork, wt); capErr != nil {
+				// CaptureShipSnapshot always returns nil today; this branch
+				// exists defensively in case that contract ever changes, and
+				// must never block the done transition below.
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CaptureShipSnapshot item=%s pr=%d: %v", item.ID, item.PrNumber, capErr)
+			}
+
 			precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
 			if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition); transErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)

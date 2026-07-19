@@ -892,6 +892,14 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 				i.claudeSession.ConversationUUID = ""
 				i.HistoryFilePath = ""
 			}
+			// Re-detect immediately from the freshly-started process's open files rather
+			// than leaving these blank until some unrelated caller happens to trigger
+			// detection later (ClaudeAdapter.Import, SwitchWorkspace, ...). Left blank, a
+			// second crash/restart before that lazy trigger fires would fall into the "no
+			// conversation UUID, starting fresh" branch above and lose the conversation
+			// entirely — even though the resumed process (or its jsonl history file) is
+			// right there to detect from.
+			i.tryExtractConversationUUID()
 		} else {
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
@@ -1092,6 +1100,12 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				i.claudeSession.ConversationUUID = ""
 				i.HistoryFilePath = ""
 			}
+			// Re-detect immediately (see the identical comment in startLocked's cold
+			// restore path) instead of leaving these blank until some unrelated lazy
+			// caller triggers detection — otherwise a second crash before that happens
+			// loses conversation resumability entirely, even though the resumed
+			// process/jsonl file is right there to detect from right now.
+			i.tryExtractConversationUUID()
 		} else {
 			// Hot restore: tmux session is alive — attach to it.
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.

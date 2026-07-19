@@ -27,7 +27,11 @@ const abandonedReviewGrace = 15 * time.Minute
 
 // bounceThreshold is the minimum number of in_progress->review round trips
 // within bounceLookback (with no PASS verdict) that flags an item bouncing.
-// Reuses maxAutoReworkIterations' established "we've tried enough" value.
+// Chosen to match server/services/backlog_service_triage.go's default rework
+// cap (3), but is an independent constant, NOT read from config.Config — the
+// rework cap is now user-configurable (Settings → Defaults) while this one
+// isn't, so the two can drift. Session-package reconcilers have no config.Config
+// plumbed in today; wire that through if this ever needs to move in lockstep.
 const bounceThreshold = 3
 
 // bounceLookback bounds the bouncing detector to *active* thrashing.

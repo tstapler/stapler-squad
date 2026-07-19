@@ -25,6 +25,7 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
@@ -584,8 +585,8 @@ func TestGoGitVCSReader_DiffShortstat_blobCache_populatedWithCorrectContent(t *t
 	entry := entryVal.(*cachedRepo)
 
 	found := false
-	entry.blobCache.Range(func(_, v any) bool {
-		if string(v.([]byte)) == "hello\n" {
+	entry.blobCache.forEach(func(_ plumbing.Hash, data []byte) bool {
+		if string(data) == "hello\n" {
 			found = true
 			return false
 		}
@@ -611,6 +612,74 @@ func TestGoGitVCSReader_DiffShortstat_blobCache_populatedWithCorrectContent(t *t
 	}
 	if d2.Insertions != 2 || d2.Deletions != 0 {
 		t.Errorf("second call: Insertions=%d Deletions=%d, want 2/0 (HEAD \"hello\\n\" -> WT \"hello\\nchanged\\nagain\\n\"): cached HEAD blob must still be compared correctly on reuse", d2.Insertions, d2.Deletions)
+	}
+}
+
+// TestBlobCacheLRU_EvictsLeastRecentlyUsed_WhenOverCap asserts blobCacheLRU
+// evicts the least-recently-touched entry first once its maxBytes argument
+// is exceeded (PerfFix-3), and that a get() counts as a touch — the whole
+// point of using LRU over FIFO/LIFO for a cache whose callers re-poll the
+// same worktree every 30s (see blobCacheLRU's doc comment).
+func TestBlobCacheLRU_EvictsLeastRecentlyUsed_WhenOverCap(t *testing.T) {
+	const maxBytes = 30 // bytes: small enough that a couple of 10-byte blobs blow the cap
+
+	hashOf := func(b byte) plumbing.Hash {
+		var h plumbing.Hash
+		h[0] = b
+		return h
+	}
+	ten := func(b byte) []byte { return []byte{b, b, b, b, b, b, b, b, b, b} } // 10 bytes
+
+	var c blobCacheLRU
+	c.put(hashOf(1), ten(1), maxBytes)
+	c.put(hashOf(2), ten(2), maxBytes)
+	c.put(hashOf(3), ten(3), maxBytes) // now at cap (30 bytes): 1, 2, 3 all present
+
+	// Touch hash 1 so it's most-recently-used; hash 2 is now the LRU entry.
+	if _, ok := c.get(hashOf(1)); !ok {
+		t.Fatal("expected hash 1 to still be cached before the cap is exceeded")
+	}
+
+	c.put(hashOf(4), ten(4), maxBytes) // pushes over cap: must evict hash 2 (LRU), not hash 1 (just touched) or hash 3
+
+	if _, ok := c.get(hashOf(2)); ok {
+		t.Error("hash 2 should have been evicted as the least-recently-used entry")
+	}
+	if _, ok := c.get(hashOf(1)); !ok {
+		t.Error("hash 1 should still be cached: it was touched via get() right before the eviction")
+	}
+	if _, ok := c.get(hashOf(3)); !ok {
+		t.Error("hash 3 should still be cached: it was never evicted")
+	}
+	if _, ok := c.get(hashOf(4)); !ok {
+		t.Error("hash 4 should be cached: it was just inserted")
+	}
+	if c.size > maxBytes {
+		t.Errorf("cache size = %d, want <= %d (maxBytes)", c.size, maxBytes)
+	}
+}
+
+// TestGoGitVCSReader_EffectiveBlobCacheMaxBytes_ScalesWithRepoCount asserts
+// the per-repo blobCache cap shrinks as more repos are cached (fair-share
+// sizing, PerfFix-3 follow-up) and stays within
+// [blobCacheMaxBytesFloor, blobCacheMaxBytesCeiling] at the extremes.
+func TestGoGitVCSReader_EffectiveBlobCacheMaxBytes_ScalesWithRepoCount(t *testing.T) {
+	g := &GoGitVCSReader{}
+
+	g.repoCacheSize = 1
+	oneRepo := g.effectiveBlobCacheMaxBytes()
+
+	g.repoCacheSize = 1000 // far more than repoCacheMaxEntries would ever allow, to hit the floor
+	manyRepos := g.effectiveBlobCacheMaxBytes()
+
+	if manyRepos >= oneRepo {
+		t.Errorf("effectiveBlobCacheMaxBytes with 1000 repos (%d) should be smaller than with 1 repo (%d): cap must shrink as more repos share the budget", manyRepos, oneRepo)
+	}
+	if oneRepo > blobCacheMaxBytesCeiling {
+		t.Errorf("effectiveBlobCacheMaxBytes with 1 repo = %d, want <= ceiling %d", oneRepo, blobCacheMaxBytesCeiling)
+	}
+	if manyRepos < blobCacheMaxBytesFloor {
+		t.Errorf("effectiveBlobCacheMaxBytes with 1000 repos = %d, want >= floor %d", manyRepos, blobCacheMaxBytesFloor)
 	}
 }
 

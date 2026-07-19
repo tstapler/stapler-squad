@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -152,8 +153,8 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 		testSessionRecoveryWithExistingChanges(t)
 	})
 
-	t.Run("FallbackBehaviorWhenWorktreePathMissing", func(t *testing.T) {
-		testFallbackBehaviorWhenWorktreePathMissing(t)
+	t.Run("FailsLoudlyWhenWorktreePathMissing", func(t *testing.T) {
+		testFailsLoudlyWhenWorktreePathMissing(t)
 	})
 
 	t.Run("ExistingSessionResumption", func(t *testing.T) {
@@ -438,11 +439,13 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 	require.NoError(t, err, "Test file should exist in worktree")
 }
 
-// testFallbackBehaviorWhenWorktreePathMissing tests backward compatibility
-func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
-	tempRepo := setupTestRepository(t)
-	defer os.RemoveAll(tempRepo)
-
+// testFailsLoudlyWhenWorktreePathMissing verifies RestoreWithWorkDir("") hard-fails
+// with tmux.ErrWorkDirMissing instead of silently falling back to the server
+// process's own cwd (which for a long-running server resolves to $HOME) -- see
+// commit 6fc7ce96 ("fail sessions loudly instead of silently landing in $HOME").
+// This test previously asserted the opposite (silent fallback + success); that
+// behavior was deliberately removed, so the test now asserts the new contract.
+func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 	// Create a tmux session without specifying worktree path (using test prefix for isolation)
 	session, cleanup := tmux.NewTmuxSessionWithPrefixAndCleanup("test-fallback-session", "bash", "staplersquad_test_")
 	defer func() {
@@ -451,26 +454,12 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 		}
 	}()
 
-	// Test fallback behavior - should use current directory
-	originalDir, _ := os.Getwd()
-
-	// Change to temp directory
-	err := os.Chdir(tempRepo)
-	require.NoError(t, err)
-	defer os.Chdir(originalDir)
-
-	// Use RestoreWithWorkDir with empty path (should fallback to current dir)
-	err = session.RestoreWithWorkDir("")
-	require.NoError(t, err)
-
-	// Wait for session to be ready and contain temp repo basename in prompt
-	tempRepoBasename := filepath.Base(tempRepo)
-	content := waitForContent(t,
-		func() (string, error) { return session.CapturePaneContent() },
-		tempRepoBasename,
-		10*time.Second,
-		"session to have content containing temp repo basename")
-	require.NotEmpty(t, content, "Captured content should not be empty")
+	// RestoreWithWorkDir with an empty path must fail loudly, not silently fall
+	// back to whatever directory the test process happens to be in.
+	err := session.RestoreWithWorkDir("")
+	require.Error(t, err, "RestoreWithWorkDir(\"\") must fail instead of falling back to a guessed directory")
+	require.True(t, errors.Is(err, tmux.ErrWorkDirMissing),
+		"expected error to match tmux.ErrWorkDirMissing, got: %v", err)
 }
 
 // setupTestRepository creates a temporary git repository for testing

@@ -2980,55 +2980,65 @@ func (m *ApprovalRuleMutation) ResetEdge(name string) error {
 // BacklogItemMutation represents an operation that mutates the BacklogItem nodes in the graph.
 type BacklogItemMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *uuid.UUID
-	title                   *string
-	description             *string
-	acceptance_criteria     *string
-	priority                *int
-	addpriority             *int
-	status                  *string
-	repo_path               *string
-	skip_review_gate        *bool
-	skip_planning           *bool
-	auto_spawn_session      *bool
-	auto_create_pr          *bool
-	pipeline_mode           *string
-	plan_approved           *bool
-	plan_approved_at        *time.Time
-	plan_artifacts_path     *string
-	user_modified_fields    *string
-	notes                   *string
-	external_id             *string
-	user_modified_status_at *time.Time
-	archived_at             *time.Time
-	pr_url                  *string
-	pr_number               *int
-	addpr_number            *int
-	created_at              *time.Time
-	updated_at              *time.Time
-	clearedFields           map[string]struct{}
-	item_sessions           map[uuid.UUID]struct{}
-	removeditem_sessions    map[uuid.UUID]struct{}
-	cleareditem_sessions    bool
-	sessions                map[int]struct{}
-	removedsessions         map[int]struct{}
-	clearedsessions         bool
-	status_events           map[uuid.UUID]struct{}
-	removedstatus_events    map[uuid.UUID]struct{}
-	clearedstatus_events    bool
-	stuck_states            map[uuid.UUID]struct{}
-	removedstuck_states     map[uuid.UUID]struct{}
-	clearedstuck_states     bool
-	progress_notes          map[uuid.UUID]struct{}
-	removedprogress_notes   map[uuid.UUID]struct{}
-	clearedprogress_notes   bool
-	source                  *uuid.UUID
-	clearedsource           bool
-	done                    bool
-	oldValue                func(context.Context) (*BacklogItem, error)
-	predicates              []predicate.BacklogItem
+	op                              Op
+	typ                             string
+	id                              *uuid.UUID
+	title                           *string
+	description                     *string
+	acceptance_criteria             *string
+	priority                        *int
+	addpriority                     *int
+	status                          *string
+	repo_path                       *string
+	skip_review_gate                *bool
+	skip_planning                   *bool
+	auto_spawn_session              *bool
+	auto_create_pr                  *bool
+	pipeline_mode                   *string
+	plan_approved                   *bool
+	plan_approved_at                *time.Time
+	plan_artifacts_path             *string
+	user_modified_fields            *string
+	notes                           *string
+	external_id                     *string
+	user_modified_status_at         *time.Time
+	archived_at                     *time.Time
+	pr_url                          *string
+	pr_number                       *int
+	addpr_number                    *int
+	shipped_check_conclusion        *string
+	shipped_approved_count          *int
+	addshipped_approved_count       *int
+	shipped_changes_req_count       *int
+	addshipped_changes_req_count    *int
+	shipped_snapshot_at             *time.Time
+	shipped_file_stats              *string
+	shipped_snapshot_capture_failed *bool
+	rework_cap_override             *int
+	addrework_cap_override          *int
+	created_at                      *time.Time
+	updated_at                      *time.Time
+	clearedFields                   map[string]struct{}
+	item_sessions                   map[uuid.UUID]struct{}
+	removeditem_sessions            map[uuid.UUID]struct{}
+	cleareditem_sessions            bool
+	sessions                        map[int]struct{}
+	removedsessions                 map[int]struct{}
+	clearedsessions                 bool
+	status_events                   map[uuid.UUID]struct{}
+	removedstatus_events            map[uuid.UUID]struct{}
+	clearedstatus_events            bool
+	stuck_states                    map[uuid.UUID]struct{}
+	removedstuck_states             map[uuid.UUID]struct{}
+	clearedstuck_states             bool
+	progress_notes                  map[uuid.UUID]struct{}
+	removedprogress_notes           map[uuid.UUID]struct{}
+	clearedprogress_notes           bool
+	source                          *uuid.UUID
+	clearedsource                   bool
+	done                            bool
+	oldValue                        func(context.Context) (*BacklogItem, error)
+	predicates                      []predicate.BacklogItem
 }
 
 var _ ent.Mutation = (*BacklogItemMutation)(nil)
@@ -4088,6 +4098,412 @@ func (m *BacklogItemMutation) ResetPrNumber() {
 	delete(m.clearedFields, backlogitem.FieldPrNumber)
 }
 
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) SetShippedCheckConclusion(s string) {
+	m.shipped_check_conclusion = &s
+}
+
+// ShippedCheckConclusion returns the value of the "shipped_check_conclusion" field in the mutation.
+func (m *BacklogItemMutation) ShippedCheckConclusion() (r string, exists bool) {
+	v := m.shipped_check_conclusion
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedCheckConclusion returns the old "shipped_check_conclusion" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedCheckConclusion(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedCheckConclusion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedCheckConclusion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedCheckConclusion: %w", err)
+	}
+	return oldValue.ShippedCheckConclusion, nil
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) ClearShippedCheckConclusion() {
+	m.shipped_check_conclusion = nil
+	m.clearedFields[backlogitem.FieldShippedCheckConclusion] = struct{}{}
+}
+
+// ShippedCheckConclusionCleared returns if the "shipped_check_conclusion" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedCheckConclusionCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedCheckConclusion]
+	return ok
+}
+
+// ResetShippedCheckConclusion resets all changes to the "shipped_check_conclusion" field.
+func (m *BacklogItemMutation) ResetShippedCheckConclusion() {
+	m.shipped_check_conclusion = nil
+	delete(m.clearedFields, backlogitem.FieldShippedCheckConclusion)
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (m *BacklogItemMutation) SetShippedApprovedCount(i int) {
+	m.shipped_approved_count = &i
+	m.addshipped_approved_count = nil
+}
+
+// ShippedApprovedCount returns the value of the "shipped_approved_count" field in the mutation.
+func (m *BacklogItemMutation) ShippedApprovedCount() (r int, exists bool) {
+	v := m.shipped_approved_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedApprovedCount returns the old "shipped_approved_count" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedApprovedCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedApprovedCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedApprovedCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedApprovedCount: %w", err)
+	}
+	return oldValue.ShippedApprovedCount, nil
+}
+
+// AddShippedApprovedCount adds i to the "shipped_approved_count" field.
+func (m *BacklogItemMutation) AddShippedApprovedCount(i int) {
+	if m.addshipped_approved_count != nil {
+		*m.addshipped_approved_count += i
+	} else {
+		m.addshipped_approved_count = &i
+	}
+}
+
+// AddedShippedApprovedCount returns the value that was added to the "shipped_approved_count" field in this mutation.
+func (m *BacklogItemMutation) AddedShippedApprovedCount() (r int, exists bool) {
+	v := m.addshipped_approved_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (m *BacklogItemMutation) ClearShippedApprovedCount() {
+	m.shipped_approved_count = nil
+	m.addshipped_approved_count = nil
+	m.clearedFields[backlogitem.FieldShippedApprovedCount] = struct{}{}
+}
+
+// ShippedApprovedCountCleared returns if the "shipped_approved_count" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedApprovedCountCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedApprovedCount]
+	return ok
+}
+
+// ResetShippedApprovedCount resets all changes to the "shipped_approved_count" field.
+func (m *BacklogItemMutation) ResetShippedApprovedCount() {
+	m.shipped_approved_count = nil
+	m.addshipped_approved_count = nil
+	delete(m.clearedFields, backlogitem.FieldShippedApprovedCount)
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) SetShippedChangesReqCount(i int) {
+	m.shipped_changes_req_count = &i
+	m.addshipped_changes_req_count = nil
+}
+
+// ShippedChangesReqCount returns the value of the "shipped_changes_req_count" field in the mutation.
+func (m *BacklogItemMutation) ShippedChangesReqCount() (r int, exists bool) {
+	v := m.shipped_changes_req_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedChangesReqCount returns the old "shipped_changes_req_count" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedChangesReqCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedChangesReqCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedChangesReqCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedChangesReqCount: %w", err)
+	}
+	return oldValue.ShippedChangesReqCount, nil
+}
+
+// AddShippedChangesReqCount adds i to the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) AddShippedChangesReqCount(i int) {
+	if m.addshipped_changes_req_count != nil {
+		*m.addshipped_changes_req_count += i
+	} else {
+		m.addshipped_changes_req_count = &i
+	}
+}
+
+// AddedShippedChangesReqCount returns the value that was added to the "shipped_changes_req_count" field in this mutation.
+func (m *BacklogItemMutation) AddedShippedChangesReqCount() (r int, exists bool) {
+	v := m.addshipped_changes_req_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) ClearShippedChangesReqCount() {
+	m.shipped_changes_req_count = nil
+	m.addshipped_changes_req_count = nil
+	m.clearedFields[backlogitem.FieldShippedChangesReqCount] = struct{}{}
+}
+
+// ShippedChangesReqCountCleared returns if the "shipped_changes_req_count" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedChangesReqCountCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedChangesReqCount]
+	return ok
+}
+
+// ResetShippedChangesReqCount resets all changes to the "shipped_changes_req_count" field.
+func (m *BacklogItemMutation) ResetShippedChangesReqCount() {
+	m.shipped_changes_req_count = nil
+	m.addshipped_changes_req_count = nil
+	delete(m.clearedFields, backlogitem.FieldShippedChangesReqCount)
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) SetShippedSnapshotAt(t time.Time) {
+	m.shipped_snapshot_at = &t
+}
+
+// ShippedSnapshotAt returns the value of the "shipped_snapshot_at" field in the mutation.
+func (m *BacklogItemMutation) ShippedSnapshotAt() (r time.Time, exists bool) {
+	v := m.shipped_snapshot_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedSnapshotAt returns the old "shipped_snapshot_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedSnapshotAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedSnapshotAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedSnapshotAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedSnapshotAt: %w", err)
+	}
+	return oldValue.ShippedSnapshotAt, nil
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) ClearShippedSnapshotAt() {
+	m.shipped_snapshot_at = nil
+	m.clearedFields[backlogitem.FieldShippedSnapshotAt] = struct{}{}
+}
+
+// ShippedSnapshotAtCleared returns if the "shipped_snapshot_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedSnapshotAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedSnapshotAt]
+	return ok
+}
+
+// ResetShippedSnapshotAt resets all changes to the "shipped_snapshot_at" field.
+func (m *BacklogItemMutation) ResetShippedSnapshotAt() {
+	m.shipped_snapshot_at = nil
+	delete(m.clearedFields, backlogitem.FieldShippedSnapshotAt)
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (m *BacklogItemMutation) SetShippedFileStats(s string) {
+	m.shipped_file_stats = &s
+}
+
+// ShippedFileStats returns the value of the "shipped_file_stats" field in the mutation.
+func (m *BacklogItemMutation) ShippedFileStats() (r string, exists bool) {
+	v := m.shipped_file_stats
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedFileStats returns the old "shipped_file_stats" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedFileStats(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedFileStats is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedFileStats requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedFileStats: %w", err)
+	}
+	return oldValue.ShippedFileStats, nil
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (m *BacklogItemMutation) ClearShippedFileStats() {
+	m.shipped_file_stats = nil
+	m.clearedFields[backlogitem.FieldShippedFileStats] = struct{}{}
+}
+
+// ShippedFileStatsCleared returns if the "shipped_file_stats" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedFileStatsCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedFileStats]
+	return ok
+}
+
+// ResetShippedFileStats resets all changes to the "shipped_file_stats" field.
+func (m *BacklogItemMutation) ResetShippedFileStats() {
+	m.shipped_file_stats = nil
+	delete(m.clearedFields, backlogitem.FieldShippedFileStats)
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) SetShippedSnapshotCaptureFailed(b bool) {
+	m.shipped_snapshot_capture_failed = &b
+}
+
+// ShippedSnapshotCaptureFailed returns the value of the "shipped_snapshot_capture_failed" field in the mutation.
+func (m *BacklogItemMutation) ShippedSnapshotCaptureFailed() (r bool, exists bool) {
+	v := m.shipped_snapshot_capture_failed
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShippedSnapshotCaptureFailed returns the old "shipped_snapshot_capture_failed" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldShippedSnapshotCaptureFailed(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShippedSnapshotCaptureFailed is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShippedSnapshotCaptureFailed requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShippedSnapshotCaptureFailed: %w", err)
+	}
+	return oldValue.ShippedSnapshotCaptureFailed, nil
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) ClearShippedSnapshotCaptureFailed() {
+	m.shipped_snapshot_capture_failed = nil
+	m.clearedFields[backlogitem.FieldShippedSnapshotCaptureFailed] = struct{}{}
+}
+
+// ShippedSnapshotCaptureFailedCleared returns if the "shipped_snapshot_capture_failed" field was cleared in this mutation.
+func (m *BacklogItemMutation) ShippedSnapshotCaptureFailedCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldShippedSnapshotCaptureFailed]
+	return ok
+}
+
+// ResetShippedSnapshotCaptureFailed resets all changes to the "shipped_snapshot_capture_failed" field.
+func (m *BacklogItemMutation) ResetShippedSnapshotCaptureFailed() {
+	m.shipped_snapshot_capture_failed = nil
+	delete(m.clearedFields, backlogitem.FieldShippedSnapshotCaptureFailed)
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (m *BacklogItemMutation) SetReworkCapOverride(i int) {
+	m.rework_cap_override = &i
+	m.addrework_cap_override = nil
+}
+
+// ReworkCapOverride returns the value of the "rework_cap_override" field in the mutation.
+func (m *BacklogItemMutation) ReworkCapOverride() (r int, exists bool) {
+	v := m.rework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReworkCapOverride returns the old "rework_cap_override" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldReworkCapOverride(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReworkCapOverride is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReworkCapOverride requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReworkCapOverride: %w", err)
+	}
+	return oldValue.ReworkCapOverride, nil
+}
+
+// AddReworkCapOverride adds i to the "rework_cap_override" field.
+func (m *BacklogItemMutation) AddReworkCapOverride(i int) {
+	if m.addrework_cap_override != nil {
+		*m.addrework_cap_override += i
+	} else {
+		m.addrework_cap_override = &i
+	}
+}
+
+// AddedReworkCapOverride returns the value that was added to the "rework_cap_override" field in this mutation.
+func (m *BacklogItemMutation) AddedReworkCapOverride() (r int, exists bool) {
+	v := m.addrework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (m *BacklogItemMutation) ClearReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	m.clearedFields[backlogitem.FieldReworkCapOverride] = struct{}{}
+}
+
+// ReworkCapOverrideCleared returns if the "rework_cap_override" field was cleared in this mutation.
+func (m *BacklogItemMutation) ReworkCapOverrideCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldReworkCapOverride]
+	return ok
+}
+
+// ResetReworkCapOverride resets all changes to the "rework_cap_override" field.
+func (m *BacklogItemMutation) ResetReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	delete(m.clearedFields, backlogitem.FieldReworkCapOverride)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -4503,7 +4919,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 30)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -4567,6 +4983,27 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.pr_number != nil {
 		fields = append(fields, backlogitem.FieldPrNumber)
 	}
+	if m.shipped_check_conclusion != nil {
+		fields = append(fields, backlogitem.FieldShippedCheckConclusion)
+	}
+	if m.shipped_approved_count != nil {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.shipped_changes_req_count != nil {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
+	if m.shipped_snapshot_at != nil {
+		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
+	}
+	if m.shipped_file_stats != nil {
+		fields = append(fields, backlogitem.FieldShippedFileStats)
+	}
+	if m.shipped_snapshot_capture_failed != nil {
+		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
+	}
+	if m.rework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
 	}
@@ -4623,6 +5060,20 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.PrURL()
 	case backlogitem.FieldPrNumber:
 		return m.PrNumber()
+	case backlogitem.FieldShippedCheckConclusion:
+		return m.ShippedCheckConclusion()
+	case backlogitem.FieldShippedApprovedCount:
+		return m.ShippedApprovedCount()
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.ShippedChangesReqCount()
+	case backlogitem.FieldShippedSnapshotAt:
+		return m.ShippedSnapshotAt()
+	case backlogitem.FieldShippedFileStats:
+		return m.ShippedFileStats()
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		return m.ShippedSnapshotCaptureFailed()
+	case backlogitem.FieldReworkCapOverride:
+		return m.ReworkCapOverride()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -4678,6 +5129,20 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldPrURL(ctx)
 	case backlogitem.FieldPrNumber:
 		return m.OldPrNumber(ctx)
+	case backlogitem.FieldShippedCheckConclusion:
+		return m.OldShippedCheckConclusion(ctx)
+	case backlogitem.FieldShippedApprovedCount:
+		return m.OldShippedApprovedCount(ctx)
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.OldShippedChangesReqCount(ctx)
+	case backlogitem.FieldShippedSnapshotAt:
+		return m.OldShippedSnapshotAt(ctx)
+	case backlogitem.FieldShippedFileStats:
+		return m.OldShippedFileStats(ctx)
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		return m.OldShippedSnapshotCaptureFailed(ctx)
+	case backlogitem.FieldReworkCapOverride:
+		return m.OldReworkCapOverride(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -4838,6 +5303,55 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetPrNumber(v)
 		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedCheckConclusion(v)
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedApprovedCount(v)
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedChangesReqCount(v)
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedSnapshotAt(v)
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedFileStats(v)
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShippedSnapshotCaptureFailed(v)
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReworkCapOverride(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -4866,6 +5380,15 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addpr_number != nil {
 		fields = append(fields, backlogitem.FieldPrNumber)
 	}
+	if m.addshipped_approved_count != nil {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.addshipped_changes_req_count != nil {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
+	if m.addrework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	return fields
 }
 
@@ -4878,6 +5401,12 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPriority()
 	case backlogitem.FieldPrNumber:
 		return m.AddedPrNumber()
+	case backlogitem.FieldShippedApprovedCount:
+		return m.AddedShippedApprovedCount()
+	case backlogitem.FieldShippedChangesReqCount:
+		return m.AddedShippedChangesReqCount()
+	case backlogitem.FieldReworkCapOverride:
+		return m.AddedReworkCapOverride()
 	}
 	return nil, false
 }
@@ -4900,6 +5429,27 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPrNumber(v)
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddShippedApprovedCount(v)
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddShippedChangesReqCount(v)
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReworkCapOverride(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -4944,6 +5494,27 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldPrNumber) {
 		fields = append(fields, backlogitem.FieldPrNumber)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedCheckConclusion) {
+		fields = append(fields, backlogitem.FieldShippedCheckConclusion)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedApprovedCount) {
+		fields = append(fields, backlogitem.FieldShippedApprovedCount)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedChangesReqCount) {
+		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedSnapshotAt) {
+		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedFileStats) {
+		fields = append(fields, backlogitem.FieldShippedFileStats)
+	}
+	if m.FieldCleared(backlogitem.FieldShippedSnapshotCaptureFailed) {
+		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
+	}
+	if m.FieldCleared(backlogitem.FieldReworkCapOverride) {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
 	return fields
 }
@@ -4994,6 +5565,27 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldPrNumber:
 		m.ClearPrNumber()
+		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		m.ClearShippedCheckConclusion()
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		m.ClearShippedApprovedCount()
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		m.ClearShippedChangesReqCount()
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		m.ClearShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		m.ClearShippedFileStats()
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		m.ClearShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ClearReworkCapOverride()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
@@ -5065,6 +5657,27 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldPrNumber:
 		m.ResetPrNumber()
+		return nil
+	case backlogitem.FieldShippedCheckConclusion:
+		m.ResetShippedCheckConclusion()
+		return nil
+	case backlogitem.FieldShippedApprovedCount:
+		m.ResetShippedApprovedCount()
+		return nil
+	case backlogitem.FieldShippedChangesReqCount:
+		m.ResetShippedChangesReqCount()
+		return nil
+	case backlogitem.FieldShippedSnapshotAt:
+		m.ResetShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldShippedFileStats:
+		m.ResetShippedFileStats()
+		return nil
+	case backlogitem.FieldShippedSnapshotCaptureFailed:
+		m.ResetShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ResetReworkCapOverride()
 		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()

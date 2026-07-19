@@ -122,7 +122,10 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       if (isDuplicate) return;
       addToHistoryOnly({
         sessionId: event.sessionId,
-        sessionName: event.sessionName || "Unknown Session",
+        // Empty, not "Unknown Session": a placeholder here would win the
+        // NotificationPanel fallback chain over the event's real title for
+        // sessionless events (e.g. notifyReworkCapHit).
+        sessionName: event.sessionName || "",
         title: event.title,
         message: event.message,
         priority: mapPriority(event.priority),
@@ -145,7 +148,8 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     // Build the notification data with all available fields
     const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
       sessionId: event.sessionId,
-      sessionName: event.sessionName || "Unknown Session",
+      // See the comment on the history-only branch above.
+      sessionName: event.sessionName || "",
       title: event.title,
       message: event.message,
       priority: mapPriority(event.priority),

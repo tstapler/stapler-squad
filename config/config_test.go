@@ -815,3 +815,56 @@ func TestGetFeatureFlag_knownKeyReturnsValue(t *testing.T) {
 	cfg := &Config{FeatureFlags: map[string]bool{"backlog": true}}
 	assert.True(t, cfg.GetFeatureFlag("backlog"))
 }
+
+// ─── IsNamedInstance ────────────────────────────────────────────────────────
+
+// TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset covers the
+// default production case: no STAPLER_SQUAD_INSTANCE set at all.
+func TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.False(t, IsNamedInstance())
+}
+
+// TestIsNamedInstance_should_ReturnFalse_When_InstanceIsShared verifies "shared"
+// is treated the same as unset — GetConfigDirForDir's own backward-compat special case.
+func TestIsNamedInstance_should_ReturnFalse_When_InstanceIsShared(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.False(t, IsNamedInstance())
+}
+
+// TestIsNamedInstance_should_ReturnTrue_When_InstanceIsExplicitlyNamed is the
+// regression test for the incident this function exists to prevent: the E2E test
+// harness runs with STAPLER_SQUAD_INSTANCE=e2e-local (real production binary, not a
+// `go test` binary — IsTestMode() alone doesn't catch it) and must be recognized as
+// unsafe for a shared-tmux-socket orphan sweep.
+func TestIsNamedInstance_should_ReturnTrue_When_InstanceIsExplicitlyNamed(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "e2e-local")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.True(t, IsNamedInstance())
+}

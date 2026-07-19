@@ -65,6 +65,10 @@ type ServerDependencies struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag. See RuntimeDeps.BacklogEnabledCheck.
+	BacklogEnabledCheck func() bool
+
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
@@ -118,6 +122,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
 		SyncLoop:                rt.SyncLoop,
+		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
 		VNCDeps:                 rt.VNCDeps,
 		CDPDeps:                 rt.CDPDeps,
@@ -394,6 +399,11 @@ type RuntimeDeps struct {
 	SyncLoop       *session.SyncLoop
 	Config         *config.Config // Used for encryption of sensitive data
 
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
+	// tool calls are gated by the same source of truth as the ConnectRPC interceptor.
+	BacklogEnabledCheck func() bool
+
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
 
@@ -616,16 +626,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// available to call Destroy(). Must run after 6/6b so re-adopted sessions
 		// are already registered and won't be mistaken for orphans.
 		//
-		// SKIP in test mode: ReconcileOrphanedTmuxSessions calls plain `tmux
-		// list-sessions` with no socket isolation -- it always targets the shared
-		// default tmux socket, regardless of the test's own (test-isolated) DB/config
-		// directory. A test's `instances` list only ever contains that test's own
-		// handful of sessions, so every real session on the machine's shared tmux
-		// server -- including production sessions from an entirely separate
-		// stapler-squad process -- looks like an orphan and gets killed. This was the
-		// root cause of production sessions dying in tight clusters whenever any
-		// integration test called BuildDependencies() on the same machine.
-		if !config.IsTestMode() {
+		// SKIP in test mode AND for any other named instance: ReconcileOrphanedTmuxSessions
+		// calls plain `tmux list-sessions` with no socket isolation -- it always targets the
+		// shared default tmux socket, regardless of this process's own (isolated) DB/config
+		// directory. This process's `instances` list only ever contains its own handful of
+		// sessions, so every real session on the machine's shared tmux server -- including
+		// production sessions from an entirely separate stapler-squad process -- looks like
+		// an orphan and gets killed. This was the root cause of production sessions dying in
+		// tight clusters whenever any integration test called BuildDependencies() on the same
+		// machine -- and, confirmed live, the E2E test harness's real-binary invocation
+		// (STAPLER_SQUAD_INSTANCE=e2e-local, not caught by IsTestMode()) hits the exact same
+		// hazard. See config.IsNamedInstance's doc comment.
+		if !config.IsTestMode() && !config.IsNamedInstance() {
 			session.ReconcileOrphanedTmuxSessions(instances)
 		}
 
@@ -820,6 +832,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
+			if err := unfinished.RegisterMetrics(); err != nil {
+				log.Warn("failed to register unfinished OTel metrics", "err", err)
+			}
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
@@ -908,6 +923,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
+	// Wires the self-service "Ship PR" action (TriggerShipPR) — sessionService
+	// is available this early (constructed in BuildCoreDepsWithOptions, aliased
+	// above), so no setter-injection race window, mirroring
+	// reactiveQueueMgr.SetOneShotRunner(sessionService) below.
+	backlogSvc.SetOneShotRunner(sessionService)
 	if headlessPool != nil {
 		backlogSvc.SetHeadlessPool(headlessPool)
 	}
@@ -1078,6 +1098,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
 		SyncLoop:                nil, // managed by BacklogController
+		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
 		Config:                  cfg,
 		AnalyticsEntClient:      analyticsClient,
 		VNCDeps:                 vncDeps,

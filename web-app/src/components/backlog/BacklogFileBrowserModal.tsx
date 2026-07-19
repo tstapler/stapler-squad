@@ -1,11 +1,13 @@
 "use client";
 // +feature: backlog:file-browser-modal
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileTree } from "@/components/sessions/FileTree";
 import { FileContentViewer } from "@/components/sessions/FileContentViewer";
 import { getApiBaseUrl } from "@/lib/config";
+import { useSessionVcs } from "@/lib/hooks/useSessionVcs";
+import { buildGitStatusMap } from "@/lib/utils/gitStatus";
 import {
   backdrop,
   modal,
@@ -36,6 +38,14 @@ export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose }: Ba
   const modalRef = useRef<HTMLDivElement>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const baseUrl = getApiBaseUrl();
+
+  // Own lightweight VCS status fetch — this modal has no SessionVcsProvider ancestor.
+  const { status } = useSessionVcs(sessionId, baseUrl);
+  const gitStatusMap = useMemo(() => {
+    if (!status) return new Map<string, string>();
+    const { stagedFiles, unstagedFiles, untrackedFiles } = status;
+    return buildGitStatusMap([...stagedFiles, ...unstagedFiles, ...untrackedFiles]);
+  }, [status]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -89,6 +99,7 @@ export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose }: Ba
               baseUrl={baseUrl}
               selectedPath={selectedPath}
               onFileSelect={setSelectedPath}
+              gitStatusMap={gitStatusMap}
             />
           </div>
           <div className={contentPane}>

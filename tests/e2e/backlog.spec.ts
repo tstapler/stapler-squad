@@ -622,3 +622,26 @@ test.describe('Backlog', () => {
     });
   });
 });
+
+// Separate top-level describe (not nested under `Backlog`) so it does not
+// inherit that suite's beforeAll, which force-enables the flag for its tests.
+test.describe('Backlog - feature flag off', () => {
+  test.beforeAll(async ({ request }) => {
+    await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { name: 'backlog', enabled: false },
+    });
+  });
+
+  test('e2e:backlog-flag-off-redirects - Direct navigation to /backlog redirects to / when the flag is off', async ({ page }) => {
+    await page.goto(`${BASE_URL}/backlog`, { waitUntil: 'domcontentloaded' });
+    await page.waitForURL(`${BASE_URL}/`, { timeout: 10000 });
+    await expect(page).toHaveURL(`${BASE_URL}/`);
+  });
+
+  test('e2e:backlog-board-flag-off-redirects - Direct navigation to /backlog/board redirects to / when the flag is off', async ({ page }) => {
+    await page.goto(`${BASE_URL}/backlog/board`, { waitUntil: 'domcontentloaded' });
+    await page.waitForURL(`${BASE_URL}/`, { timeout: 10000 });
+    await expect(page).toHaveURL(`${BASE_URL}/`);
+  });
+});

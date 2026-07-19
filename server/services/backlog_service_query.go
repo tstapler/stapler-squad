@@ -313,8 +313,8 @@ func (s *BacklogService) GetBacklogItemDiff(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
 	}
 
-	// Use the most recent work session's dedicated worktree and its base SHA so
-	// the diff reflects what the current iteration of work actually changed.
+	// Use the most recent work session's base SHA so the diff reflects what the
+	// current iteration of work actually changed.
 	var mostRecentWorkSession *session.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
@@ -324,19 +324,25 @@ func (s *BacklogService) GetBacklogItemDiff(
 			}
 		}
 	}
-	diffDir := item.RepoPath
 	diffBaseSHA := "HEAD~1"
+	var headRef string
 	if mostRecentWorkSession != nil {
-		wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID)
-		if wtErr == nil && wt.WorktreePath != "" {
-			diffDir = wt.WorktreePath
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.BaseCommitSHA != "" {
 			diffBaseSHA = wt.BaseCommitSHA
-		} else if mostRecentWorkSession.LastCommitSha != "" {
-			diffBaseSHA = mostRecentWorkSession.LastCommitSha
+		}
+		if mostRecentWorkSession.LastCommitSha != "" {
+			headRef = mostRecentWorkSession.LastCommitSha
 		}
 	}
 
-	diffContent, _, diffErr := session.GetGitDiff(ctx, diffDir, diffBaseSHA)
+	// Always diff from item.RepoPath (the shared, stable checkout) with an
+	// explicit headRef, never the work session's own worktree path — worktrees
+	// share the same object store, so any commit sha reachable from any
+	// worktree of the repo resolves correctly regardless of dir. This is what
+	// makes the diff work identically whether the work session's worktree
+	// directory still exists or has already been cleaned up (the normal state
+	// once an item is done) — see GetGitDiffRef's doc comment.
+	diffContent, _, diffErr := session.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
 	if diffErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to compute diff: %w", diffErr))
 	}
