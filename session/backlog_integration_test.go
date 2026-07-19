@@ -689,4 +689,11 @@ func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
 	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Equal(t, AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
+
+	// 5. GetBacklogItem must also eagerly load ProgressNotes (mirrors StatusEvents'
+	// eager-load) so the audit trail is available wherever an item is fetched, not
+	// just via the dedicated ListProgressNotesForItem call.
+	require.Len(t, fetchedItem.ProgressNotes, 2, "GetBacklogItem must eagerly load the progress note history")
+	require.Equal(t, "started investigating", fetchedItem.ProgressNotes[0].Note)
+	require.Equal(t, "compiled successfully", fetchedItem.ProgressNotes[1].Note)
 }

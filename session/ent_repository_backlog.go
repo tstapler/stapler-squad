@@ -109,6 +109,7 @@ func backlogStatusEventToData(e *ent.BacklogStatusEvent) BacklogStatusEventData 
 // progressNoteToData maps an *ent.BacklogProgressNote to a ProgressNoteData DTO.
 func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
 	return ProgressNoteData{
+		ID:             n.ID.String(),
 		CriterionIndex: n.CriterionIndex,
 		Note:           n.Note,
 		Status:         n.Status,
@@ -171,6 +172,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.StatusEvents = make([]BacklogStatusEventData, len(item.Edges.StatusEvents))
 		for i, ev := range item.Edges.StatusEvents {
 			data.StatusEvents[i] = backlogStatusEventToData(ev)
+		}
+	}
+	// Propagate eagerly-loaded progress notes when present (see StatusEvents above).
+	if item.Edges.ProgressNotes != nil {
+		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
+		for i, n := range item.Edges.ProgressNotes {
+			data.ProgressNotes[i] = progressNoteToData(n)
 		}
 	}
 	return data
@@ -251,6 +259,9 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		WithSource().
 		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
 			q.Order(ent.Asc(backlogstatusevent.FieldCreatedAt))
+		}).
+		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
+			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
 		}).
 		Only(ctx)
 	if err != nil {

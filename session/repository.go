@@ -319,6 +319,7 @@ type BacklogStatusEventData struct {
 // Unlike the current-note-per-criterion stored on BacklogItem.AcceptanceCriteria, this
 // represents a single append-only history entry from one report_progress call.
 type ProgressNoteData struct {
+	ID             string
 	CriterionIndex int
 	Note           string
 	Status         string
@@ -407,6 +408,10 @@ type BacklogItemData struct {
 	// StatusEvents holds the eagerly-loaded status transition history.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	StatusEvents []BacklogStatusEventData
+	// ProgressNotes holds the eagerly-loaded report_progress audit trail (the
+	// implementer's decision history). Only populated when explicitly loaded by
+	// the caller (e.g. GetBacklogItem) — see StatusEvents for the same pattern.
+	ProgressNotes []ProgressNoteData
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.

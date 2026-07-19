@@ -90,6 +90,23 @@ message BacklogStatusEvent {
   string to_status = 3;
   string triggered_by = 4; // "user" or "system"
   google.protobuf.Timestamp created_at = 5;
+  // note is the human-readable reason for this transition, e.g. "auto-reopened
+  // after FAIL verdict" or "PASS verdict — pushed branch and opened PR". Already
+  // captured durably (session.BacklogStatusEventData.Note) but previously never
+  // surfaced over the wire — the "why" behind reviewer/system decisions.
+  optional string note = 6;
+}
+
+// BacklogProgressNote records a single report_progress call against one of a
+// backlog item's acceptance criteria — the implementer's audit trail. Unlike
+// AcCriterion.status (current status per criterion, overwritten on each call),
+// this is an append-only history: every call is preserved.
+message BacklogProgressNote {
+  string id = 1;
+  int32 criterion_index = 2;
+  string note = 3;
+  string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
 }
 
 // BacklogItem represents a unit of work in the backlog.
@@ -120,6 +137,9 @@ message BacklogItem {
   bool auto_spawn_session = 24;
   optional string pipeline_mode = 25;
   bool auto_create_pr = 26;
+  // progress_notes is the implementer's append-only report_progress audit
+  // trail — eagerly loaded alongside status_events (see GetBacklogItem).
+  repeated BacklogProgressNote progress_notes = 27;
 }
 
 // ItemSource represents an external plugin source that syncs items into the

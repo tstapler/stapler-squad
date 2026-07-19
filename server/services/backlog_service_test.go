@@ -563,6 +563,40 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 	assert.Equal(t, "quick", *p.PipelineMode)
 }
 
+// TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent
+// is the regression test for closing the "reviewer/implementer decisions must be visible
+// in detail" gap: BacklogStatusEvent.Note (the human-readable reason for a transition,
+// e.g. "auto-reopened after FAIL verdict") and the BacklogProgressNote history (the
+// implementer's report_progress audit trail) were both durably persisted already but
+// never made it onto the wire — backlogItemToProto must now include both.
+func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
+	note := "auto-reopened after FAIL verdict"
+	item := &session.BacklogItemData{
+		ID:    "item-1",
+		Title: "item with audit history",
+		StatusEvents: []session.BacklogStatusEventData{
+			{ID: "ev-1", FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "system", Note: &note},
+			{ID: "ev-2", FromStatus: "ready", ToStatus: "in_progress", TriggeredBy: "user"},
+		},
+		ProgressNotes: []session.ProgressNoteData{
+			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+	}
+
+	p := backlogItemToProto(item, nil)
+
+	require.Len(t, p.StatusEvents, 2)
+	require.NotNil(t, p.StatusEvents[0].Note)
+	assert.Equal(t, note, *p.StatusEvents[0].Note)
+	assert.Nil(t, p.StatusEvents[1].Note, "an event with no recorded reason must not synthesize one")
+
+	require.Len(t, p.ProgressNotes, 1)
+	assert.Equal(t, "pn-1", p.ProgressNotes[0].Id)
+	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
+	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
+	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition
@@ -1033,6 +1067,46 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
 	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
 	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
+}
+
+// TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions is the regression test for
+// the "WIP limit now undercounts live sessions" gap (docs/tasks/backlog-feature-improvement.md):
+// AutoReopenAfterFailedReview intentionally leaves a work session running (polling for a
+// verdict) after the item's status flips back to "review". A WIP count that only looks at
+// "in_progress" status items misses this live session entirely, letting an operator exceed
+// the cap the 2026-07-12 OOM incident motivated. countLiveBacklogWorkSessions must count it.
+func TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the cap with one item still genuinely in_progress...
+	inProgressID := createReadyItemForSpawn(t, svc, repoPath, "still in progress")
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: inProgressID}))
+	require.NoError(t, err)
+
+	// ...and one item whose work session is still alive but whose status has moved to
+	// "review" (the AutoReopenAfterFailedReview live-session-reuse case) — this must
+	// still count toward the cap even though it is no longer "in_progress".
+	reviewID := createReadyItemForSpawn(t, svc, repoPath, "alive but in review")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reviewID}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       reviewID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 2, maxConcurrentBacklogWorkItems, "test assumes the default cap of 2; update the fixture if this changes")
+
+	// A fresh spawn for a third item must now be rejected: two agents (one in_progress,
+	// one live-in-review) are already running, at the cap.
+	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.Error(t, err, "spawn must be rejected — the review-status session is still live")
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
 }
 
 // TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn is the regression

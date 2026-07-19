@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -133,9 +135,45 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 	}
 
 	assert.True(t, extractionAttempted,
-		"extraction must be attempted when claudeSession is nil")
-	// claudeSession remains nil because tmux was not running.
-	assert.Nil(t, inst.claudeSession)
+		"tryExtractConversationUUID must be reachable when SwitchWorkspace's guard fires")
+}
+
+// TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear is the
+// regression test for the cold-restore hardening in startLocked/start
+// (instance.go): after a cold restore clears claudeSession.ConversationUUID
+// (to avoid blindly trusting a possibly-stale ID — see the "source of truth"
+// comment there), tryExtractConversationUUID must be able to immediately
+// repopulate it via the path-based fallback (no live tmux pane required),
+// which is exactly what the fix now calls synchronously right after clearing.
+// Without this, an item whose conversation UUID sits blank waiting on some
+// unrelated lazy caller (ClaudeAdapter.Import, SwitchWorkspace, ...) would
+// lose resumability entirely if the process crashed a second time first.
+func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing.T) {
+	tempHome := t.TempDir()
+	projectPath := "/fake/project/path"
+	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
+
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(projectPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	jsonlPath := filepath.Join(projectDir, conversationUUID+".jsonl")
+	require.NoError(t, os.WriteFile(jsonlPath, []byte(`{"type":"user"}`+"\n"), 0o644))
+
+	inst := &Instance{
+		Title:           "test-path-fallback-repopulate",
+		Path:            projectPath,
+		historyDetector: NewHistoryFileDetectorWithHomeDir(nil, tempHome),
+		// Simulates the state right after a cold restore clears the old ID —
+		// no live tmux pane, so the fast path is skipped and DetectByPath runs.
+		claudeSession: &ClaudeSessionData{ConversationUUID: ""},
+	}
+
+	inst.tryExtractConversationUUID()
+
+	require.NotNil(t, inst.claudeSession)
+	assert.Equal(t, conversationUUID, inst.claudeSession.ConversationUUID,
+		"ConversationUUID must be repopulated from the jsonl file discovered via path fallback")
+	assert.Equal(t, jsonlPath, inst.HistoryFilePath,
+		"HistoryFilePath must point at the discovered jsonl file")
 }
 
 // TestSwitchWorkspace_DoesNotDeadlockOnStartCall is a regression test ensuring

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -397,6 +398,71 @@ func TestReconcileStuckReviewItems_should_notMarkAbandoned_When_ActiveSessionSti
 	assert.Empty(t, open, "a genuinely-alive active session must not be flagged")
 }
 
+// --- reconcileUnprocessedReviewVerdicts: verdict recorded but never actioned ---
+
+// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive
+// is the regression test for the exact live bug reported: a work session left
+// alive polling for a verdict (AutoReopenAfterFailedReview's live-session-reuse)
+// makes reconcileStuckReviewItems' zombie check skip the item entirely (it only
+// looks for ALL sessions dead), even though the review session itself died with
+// a PASS verdict nobody ever actioned. This detector must apply that verdict —
+// here, falling back to a direct "done" transition since the test's work
+// session has no real git worktree — regardless of the still-alive work session.
+func TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// endReviewSession=false (crashed before its exit event fired),
+	// withActiveWorkSession=true (the live-session-reuse shape that fools the
+	// zombie detector above).
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, true)
+
+	listener := NewBacklogLifecycleListener(storage)
+	// Only the review session (headless-review- prefixed) is dead; the work
+	// session is genuinely alive — the zombie detector would skip this item.
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool {
+		return !strings.HasPrefix(sessionUUID, "headless-review-")
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"the unactioned PASS verdict must be applied even though a work session is still alive")
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	for _, is := range sessions {
+		if is.Role == string(SessionRoleReview) {
+			assert.NotNil(t, is.EndedAt, "the dead review session must be tombstoned")
+		}
+	}
+}
+
+// TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive
+// verifies a review session that hasn't ended yet and isn't confirmed dead is left
+// alone — it may simply be doing its own post-verdict cleanup.
+func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStillAlive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, false, false)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive
+
+	er := storage.repo.(*EntRepository)
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session must not be acted on")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still
@@ -563,6 +629,36 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "a recently-started triage session must not be flagged as orphaned")
+}
+
+// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min is the
+// regression test for closing the "triage session died before submit_triage_result,
+// item silently stuck in idea for up to 2h" gap (GAP-20/21): a headless-triage session
+// (the common execution path) must be flagged well before the general-purpose 2h
+// staleness ceiling, since an open headless row reliably means dead, not slow.
+func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	// 45 minutes: past maxHeadlessTriageSessionStaleness (30m) but nowhere near the
+	// general-purpose maxWorkSessionStaleness (2h) — would NOT have been flagged
+	// before this fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a headless triage session at 45m must be flagged, not held to the 2h general-purpose threshold")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
 }
 
 func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *testing.T) {
