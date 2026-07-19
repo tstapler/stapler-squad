@@ -10,6 +10,7 @@
 //   - hotpolllog: detects DebugLog/InfoLog calls inside select-case of for loops
 //   - nocommandpattern: requires //nolint:commandpattern comment on CommandPattern fields
 //   - norawexec: detects direct os/exec.Command calls outside approved wrapper packages
+//   - tmuxsocketscope: detects tmux command construction that bypasses socket resolution
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
+	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
 
 func main() {
@@ -25,5 +27,6 @@ func main() {
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
 		norawexec.Analyzer,
+		tmuxsocketscope.Analyzer,
 	)
 }

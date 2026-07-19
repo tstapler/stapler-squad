@@ -10,6 +10,8 @@ interface BacklogItemCardProps {
   item: BacklogItem;
   onAction: (action: string, itemId: string) => void;
   onClick: (itemId: string) => void;
+  /** The action key currently in flight for this card, or null when idle. */
+  pendingAction?: string | null;
 }
 
 interface ActionSpec {
@@ -66,9 +68,10 @@ const PRIORITY_LABELS: Record<number, string> = {
   5: "P5",
 };
 
-export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProps) {
+export function BacklogItemCard({ item, onAction, onClick, pendingAction = null }: BacklogItemCardProps) {
   const actionSpec = getActionSpec(item);
   const isTriageRunning = item.triageStatus === "running";
+  const isActionPending = pendingAction === actionSpec.action;
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't open detail if the action button was clicked
@@ -113,7 +116,7 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
         <TriageLoadingIndicator
           elapsedSeconds={0}
           context="list"
-          onCancel={handleCancelTriage}
+          onCancel={pendingAction !== null ? () => {} : handleCancelTriage}
           compact
         />
       )}
@@ -122,18 +125,25 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
         <AcSummary item={item} />
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || isTriageRunning}
-          aria-label={isTriageRunning ? "Triage in progress" : actionSpec.label}
+          disabled={actionSpec.disabled || isTriageRunning || pendingAction !== null}
+          aria-label={isActionPending ? "Running…" : isTriageRunning ? "Triage in progress" : actionSpec.label}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (!actionSpec.disabled && !actionSpec.isDone && !isTriageRunning) {
+            if (!actionSpec.disabled && !actionSpec.isDone && !isTriageRunning && pendingAction === null) {
               onAction(actionSpec.action, item.id);
             }
           }}
         >
-          {actionSpec.label}
+          {isActionPending ? (
+            <>
+              <span className={styles.buttonSpinner} aria-hidden="true" />
+              Running…
+            </>
+          ) : (
+            actionSpec.label
+          )}
         </button>
       </div>
     </div>

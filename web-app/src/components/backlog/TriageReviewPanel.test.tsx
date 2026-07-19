@@ -36,6 +36,8 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     priority: 3,
     skipPlanning: false,
     skipReviewGate: false,
+    autoSpawnSession: false,
+    autoCreatePR: false,
     planApproved: false,
     acCriteria: [],
     linkedSessions: [],
@@ -272,6 +274,80 @@ describe("TriageReviewPanel_shows_undo_toast_on_apply_success", () => {
         expect.objectContaining({ text: "Original AC" }),
       ])
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TriageReviewPanel_refine_with_feedback
+// ---------------------------------------------------------------------------
+
+describe("TriageReviewPanel_refine_with_feedback", () => {
+  it("does not show the refine toggle when onRefine is not provided", () => {
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId("triage-refine-toggle-button")).not.toBeInTheDocument();
+  });
+
+  it("submits typed feedback via onRefine when Refine triage is clicked", async () => {
+    const onRefine = jest.fn().mockResolvedValue(undefined);
+
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+        onRefine={onRefine}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("triage-refine-toggle-button"));
+    fireEvent.change(screen.getByTestId("triage-refine-textarea"), {
+      target: { value: "Missed the mobile case entirely." },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("triage-refine-submit-button"));
+    });
+
+    await waitFor(() => {
+      expect(onRefine).toHaveBeenCalledWith("Missed the mobile case entirely.");
+    });
+  });
+
+  it("disables the refine submit button until feedback is typed", () => {
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+        onRefine={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("triage-refine-toggle-button"));
+    expect(screen.getByTestId("triage-refine-submit-button")).toBeDisabled();
+  });
+
+  it("shows an iteration badge when triageResult.iteration is greater than 1", () => {
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={{ ...TRIAGE_RESULT_WITH_SUGGESTIONS, iteration: 2 }}
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Iteration 2/)).toBeInTheDocument();
   });
 });
 

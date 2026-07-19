@@ -1,7 +1,10 @@
 package services
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -176,6 +179,17 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 
+	// The first "dup" passes validation and reaches real session creation.
+	// Isolate config to this test and use a trivial program so it doesn't spawn
+	// the real "claude" binary (and everything it starts: MCP tool subprocesses,
+	// subagents) as an orphaned, unbounded background process.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	if err := os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
 	resp, err := svc.BatchCreateSessions(t.Context(), connect.NewRequest(&sessionv1.BatchCreateSessionsRequest{
 		Sessions: []*sessionv1.BatchSessionRequest{
 			{Title: "dup", Path: "/tmp"},
@@ -190,6 +204,13 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	for _, r := range resp.Msg.Results {
 		if !r.Success && strings.Contains(r.Error, "duplicate") {
 			dupErrors++
+		}
+		if r.Success {
+			t.Cleanup(func(id string) func() {
+				return func() {
+					_, _ = svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
+				}
+			}(r.SessionId))
 		}
 	}
 	if dupErrors == 0 {

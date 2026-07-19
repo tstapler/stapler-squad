@@ -21,22 +21,22 @@ import (
 // UserPR is an open GitHub pull request authored by the authenticated user,
 // optionally annotated with local session IDs and worktree paths.
 type UserPR struct {
-	Owner            string
-	Repo             string
-	Number           int
-	Title            string
-	URL              string
-	HeadRef          string
-	BaseRef          string
-	State            string
-	IsDraft          bool
-	UpdatedAt        time.Time
-	ClosedAt         time.Time
-	MergedAt         time.Time
-	ApprovedCount    int
-	ChangesReqCount  int
-	CheckConclusion  string // "success" / "failure" / "pending" / ""
-	SessionIDs       []string
+	Owner             string
+	Repo              string
+	Number            int
+	Title             string
+	URL               string
+	HeadRef           string
+	BaseRef           string
+	State             string
+	IsDraft           bool
+	UpdatedAt         time.Time
+	ClosedAt          time.Time
+	MergedAt          time.Time
+	ApprovedCount     int
+	ChangesReqCount   int
+	CheckConclusion   string // "success" / "failure" / "pending" / ""
+	SessionIDs        []string
 	LocalWorktreePath string
 }
 
@@ -109,13 +109,13 @@ type onUpdatedFn struct {
 
 type UserPRCache struct {
 	config       UserPRCacheConfig
-	snapshot     atomic.Value // stores *userPRSnapshot
-	subscribers  sync.Map     // maps string ID → chan []UserPR
-	onUpdated    atomic.Value // stores onUpdatedFn
-	cachedLogin  atomic.Value // stores string (first connected login; backward compat)
-	cachedLogins atomic.Value // stores []string (all connected logins)
-	loginState   atomic.Value // stores loginResult (single-account; backward compat)
-	multiLogin   atomic.Value // stores *multiLoginState (multi-account)
+	snapshot     atomic.Value       // stores *userPRSnapshot
+	subscribers  sync.Map           // maps string ID → chan []UserPR
+	onUpdated    atomic.Value       // stores onUpdatedFn
+	cachedLogin  atomic.Value       // stores string (first connected login; backward compat)
+	cachedLogins atomic.Value       // stores []string (all connected logins)
+	loginState   atomic.Value       // stores loginResult (single-account; backward compat)
+	multiLogin   atomic.Value       // stores *multiLoginState (multi-account)
 	loginGroup   singleflight.Group //nolint:exhaustruct
 	refreshGroup singleflight.Group //nolint:exhaustruct
 	ctx          context.Context
@@ -524,8 +524,10 @@ type graphQLPRNode struct {
 	ClosedAt    string `json:"closedAt"`
 	MergedAt    string `json:"mergedAt"`
 	Repository  struct {
-		Owner struct{ Login string `json:"login"` } `json:"owner"`
-		Name  string                                `json:"name"`
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+		Name string `json:"name"`
 	} `json:"repository"`
 	ReviewDecision string `json:"reviewDecision"`
 	Reviews        struct {

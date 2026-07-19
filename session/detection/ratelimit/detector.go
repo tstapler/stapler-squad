@@ -9,6 +9,7 @@ import (
 	_ "time/tzdata" // Embed IANA timezone database (~500KB); needed for time.LoadLocation on systems without system tzdata.
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 )
 
 const (
@@ -423,14 +424,8 @@ func (d *Detector) GetResetTime() time.Time {
 	return d.currentResetTime
 }
 
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
 func stripANSI(input string) string {
-	// Fast path: AI output is usually plain text; avoid regexp allocation.
-	if !strings.ContainsRune(input, '\x1b') {
-		return input
-	}
-	return ansiRegex.ReplaceAllString(input, "")
+	return ansi.StripCSI(input)
 }
 
 func init() {

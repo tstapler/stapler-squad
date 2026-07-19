@@ -51,7 +51,7 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	createdIS, err := storage.CreateItemSession(ctx, isData)
 	require.NoError(t, err)
 	require.NotNil(t, createdIS)
-	require.Equal(t, "work", createdIS.SessionRole)
+	require.Equal(t, "work", createdIS.Role)
 
 	// 5. Verify state
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -105,7 +105,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 
 	// 6. Reload ItemSession, assert ended_at is set
 	repo := storage.repo.(*EntRepository)
-	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID.String())
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt, "ItemSession should have EndedAt set")
 }
@@ -152,7 +152,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 
 	// 5. Verify ItemSession.EndedAt is set
 	repo := storage.repo.(*EntRepository)
-	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID.String())
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt)
 }
@@ -195,8 +195,8 @@ func TestBacklogIntegration_IT004_AcCriterionUpdateRoundtrip(t *testing.T) {
 	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Len(t, parsedCriteria, 2)
-	require.Equal(t, "done", parsedCriteria[0].Status)
-	require.Equal(t, "pending", parsedCriteria[1].Status)
+	require.Equal(t, AcStatusDone, parsedCriteria[0].Status)
+	require.Equal(t, AcStatusPending, parsedCriteria[1].Status)
 }
 
 // IT-005: ReconcileStuckItems finds and transitions stuck item
@@ -231,7 +231,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 	// 3. Manually end the ItemSession (simulate abnormal exit)
 	pastTime := time.Now().Add(-5 * time.Minute)
-	err = storage.UpdateItemSessionEnded(ctx, createdIS.ID.String(), pastTime)
+	err = storage.UpdateItemSessionEnded(ctx, createdIS.ID, pastTime)
 	require.NoError(t, err)
 
 	// 4. Call ReconcileStuckItems via listener
@@ -290,7 +290,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 
 	// 5. Verify ItemSession.EndedAt IS set (exit is recorded for all roles)
 	repo := storage.repo.(*EntRepository)
-	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID.String())
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt, "review session exit should set EndedAt")
 }
@@ -347,20 +347,20 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 	// 5. Verify all three ItemSessions exist and have their session UUIDs
 	repo := storage.repo.(*EntRepository)
 
-	fetchedIS1, err := repo.GetItemSession(ctx, is1.ID.String())
+	fetchedIS1, err := repo.GetItemSession(ctx, is1.ID)
 	require.NoError(t, err)
 	require.Equal(t, workSession1UUID, fetchedIS1.SessionUUID)
-	require.Equal(t, "work", fetchedIS1.SessionRole)
+	require.Equal(t, "work", fetchedIS1.Role)
 
-	fetchedIS2, err := repo.GetItemSession(ctx, is2.ID.String())
+	fetchedIS2, err := repo.GetItemSession(ctx, is2.ID)
 	require.NoError(t, err)
 	require.Equal(t, reviewSessionUUID, fetchedIS2.SessionUUID)
-	require.Equal(t, "review", fetchedIS2.SessionRole)
+	require.Equal(t, "review", fetchedIS2.Role)
 
-	fetchedIS3, err := repo.GetItemSession(ctx, is3.ID.String())
+	fetchedIS3, err := repo.GetItemSession(ctx, is3.ID)
 	require.NoError(t, err)
 	require.Equal(t, workSession2UUID, fetchedIS3.SessionUUID)
-	require.Equal(t, "work", fetchedIS3.SessionRole)
+	require.Equal(t, "work", fetchedIS3.Role)
 }
 
 // IT-008: ItemSession.AcSnapshot captures AC at time of session creation
@@ -401,10 +401,10 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 
 	// 3. Reload ItemSession, verify AcSnapshot still has the snapshot content
 	repo := storage.repo.(*EntRepository)
-	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID.String())
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 
-	snapshotCriteria, err := ParseAcCriteria(fetchedIS.AcSnapshot)
+	snapshotCriteria, err := ParseAcCriteria(AcCriteriaJSON(fetchedIS.AcSnapshot))
 	require.NoError(t, err)
 	require.Len(t, snapshotCriteria, 1, "AcSnapshot should preserve original AC at session creation time")
 	require.Equal(t, "initial requirement", snapshotCriteria[0].Text)
@@ -452,7 +452,7 @@ func TestBacklogIntegration_IT009_GetItemSessionBySessionAndItem(t *testing.T) {
 	// 3. Verify session is linked to item1
 	linkedIS, err := storage.GetItemSessionBySessionAndItem(ctx, sessionUUID, item1.ID)
 	require.NoError(t, err)
-	require.Equal(t, createdIS.ID.String(), linkedIS.ID.String())
+	require.Equal(t, createdIS.ID, linkedIS.ID)
 
 	// 4. Verify session is NOT linked to item2
 	_, err = storage.GetItemSessionBySessionAndItem(ctx, sessionUUID, item2.ID)
@@ -491,13 +491,202 @@ func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
 	repo := storage.repo.(*EntRepository)
 	testSha := "abc123def456"
 
-	_, err = repo.client.ItemSession.UpdateOne(createdIS).
+	parsedUUID, err := uuid.Parse(createdIS.ID)
+	require.NoError(t, err)
+	_, err = repo.client.ItemSession.UpdateOneID(parsedUUID).
 		SetLastCommitSha(testSha).
 		Save(ctx)
 	require.NoError(t, err)
 
 	// 3. Reload and verify LastCommitSha
-	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID.String())
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.Equal(t, testSha, fetchedIS.LastCommitSha)
+}
+
+// TestListBacklogItemSummaries verifies that ListBacklogItemSummaries returns
+// lightweight projections with ItemSessions eagerly loaded and status filters applied.
+func TestListBacklogItemSummaries(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Create two items — one in_progress, one done.
+	activeItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Active Item",
+		AcceptanceCriteria: `[{"index":0,"text":"Ship it","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	doneItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Done Item",
+		Priority: 2,
+		Status:   string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	// 2. Add two ItemSessions to the active item.
+	s1UUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      activeItem.ID,
+		SessionUUID: s1UUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+
+	s2UUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      activeItem.ID,
+		SessionUUID: s2UUID,
+		SessionRole: "review",
+	})
+	require.NoError(t, err)
+
+	t.Run("returns both items when IncludeTerminal", func(t *testing.T) {
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 2)
+	})
+
+	t.Run("ExcludeTerminal omits done item", func(t *testing.T) {
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			ExcludeTerminal: true,
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+		require.Equal(t, activeItem.ID, summaries[0].ID)
+	})
+
+	t.Run("active item has lightweight scalar fields and ItemSessions loaded", func(t *testing.T) {
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusInProgress)},
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+
+		s := summaries[0]
+		require.Equal(t, activeItem.ID, s.ID)
+		require.Equal(t, "Active Item", s.Title)
+		require.Equal(t, BacklogStatusInProgress, s.Status)
+		require.Equal(t, 1, s.Priority)
+		require.NotZero(t, s.CreatedAt)
+		require.NotZero(t, s.UpdatedAt)
+		require.Nil(t, s.ArchivedAt)
+
+		// AcceptanceCriteria round-trips.
+		require.NotEmpty(t, s.AcceptanceCriteria)
+
+		// Both item sessions are loaded.
+		require.Len(t, s.ItemSessions, 2)
+		roles := make([]string, len(s.ItemSessions))
+		for i, is := range s.ItemSessions {
+			roles[i] = is.Role
+		}
+		require.ElementsMatch(t, []string{"work", "review"}, roles)
+	})
+
+	t.Run("done item has no ItemSessions", func(t *testing.T) {
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusDone)},
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+		require.Equal(t, doneItem.ID, summaries[0].ID)
+		require.Empty(t, summaries[0].ItemSessions)
+	})
+
+	t.Run("limit and offset work", func(t *testing.T) {
+		// Both items visible — limit 1 returns one.
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+			Limit:    1,
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+
+		// Offset 1 returns the second.
+		summaries2, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+			Limit:    1,
+			Offset:   1,
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries2, 1)
+		require.NotEqual(t, summaries[0].ID, summaries2[0].ID)
+	})
+
+	// Ensure timestamps are populated (guards against nullable-time scan bugs).
+	t.Run("timestamps are not zero", func(t *testing.T) {
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			Statuses: []string{string(BacklogStatusInProgress)},
+		})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+		require.False(t, summaries[0].CreatedAt.IsZero(), "CreatedAt must not be zero")
+		require.False(t, summaries[0].UpdatedAt.IsZero(), "UpdatedAt must not be zero")
+	})
+}
+
+// IT-011: AppendProgressNote is append-only — two notes for the same criterion both
+// survive and are returned in created_at order, proving the second append does NOT
+// overwrite the first (unlike UpdateAcCriterionStatus, which is overwrite-in-place).
+func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	criteria := []AcCriterion{
+		{Index: 0, Text: "must compile", Status: "pending"},
+	}
+	rawCriteria, err := SerializeAcCriteria(criteria)
+	require.NoError(t, err)
+
+	itemData := BacklogItemData{
+		Title:              "Build feature",
+		Description:        "New feature implementation",
+		AcceptanceCriteria: rawCriteria,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	// 1. Append a first note.
+	err = storage.AppendProgressNote(ctx, createdItem.ID, 0, "started investigating", "in_progress")
+	require.NoError(t, err)
+
+	// 2. Append a second note for the SAME criterion.
+	err = storage.AppendProgressNote(ctx, createdItem.ID, 0, "compiled successfully", "done")
+	require.NoError(t, err)
+
+	// 3. List — both notes must be present, ordered oldest-first, neither overwriting the other.
+	notes, err := storage.ListProgressNotesForItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "both appends must be preserved — history must not overwrite in place")
+
+	require.Equal(t, 0, notes[0].CriterionIndex)
+	require.Equal(t, "started investigating", notes[0].Note)
+	require.Equal(t, "in_progress", notes[0].Status)
+	require.False(t, notes[0].CreatedAt.IsZero())
+
+	require.Equal(t, 0, notes[1].CriterionIndex)
+	require.Equal(t, "compiled successfully", notes[1].Note)
+	require.Equal(t, "done", notes[1].Status)
+	require.False(t, notes[1].CreatedAt.IsZero())
+
+	require.False(t, notes[1].CreatedAt.Before(notes[0].CreatedAt), "notes must be ordered oldest-first")
+
+	// 4. The current-note-per-criterion (existing overwrite behavior) is untouched by
+	// AppendProgressNote — it stays whatever UpdateAcCriterionStatus last set it to.
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Equal(t, AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
 }

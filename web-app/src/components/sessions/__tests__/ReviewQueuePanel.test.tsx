@@ -20,12 +20,28 @@ import { ReviewQueuePanel } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
+afterEach(() => {
+  mockSearchParams = new URLSearchParams();
+});
+
 // ---------------------------------------------------------------------------
 // Mock context hooks — ReviewQueuePanel depends on three context providers
 // ---------------------------------------------------------------------------
 
 const mockRefresh = jest.fn();
 const mockAcknowledge = jest.fn().mockResolvedValue(undefined);
+
+// Overrides the global next/navigation stub (jest.setup.js) so URL-persisted filter
+// state (useFilterState) can be seeded and asserted on.
+let mockSearchParams = new URLSearchParams();
+const mockReplace = jest.fn();
+
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), replace: mockReplace, back: jest.fn(), forward: jest.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => mockSearchParams,
+  useParams: () => ({}),
+}));
 
 jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
   useReviewQueueContext: jest.fn(),
@@ -99,9 +115,12 @@ const mockUseReviewQueueContext = useReviewQueueContext as jest.Mock;
 function makeReviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
   return {
     sessionId: "session-abc",
-    sessionTitle: "My Session",
+    sessionName: "My Session",
     reason: AttentionReason.TASK_COMPLETE,
     priority: Priority.MEDIUM,
+    program: "",
+    branch: "",
+    category: "",
     tags: [],
     diffAdded: 0,
     diffRemoved: 0,
@@ -111,14 +130,23 @@ function makeReviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
   } as unknown as ReviewItem;
 }
 
+function countBy<T>(items: ReviewItem[], pick: (item: ReviewItem) => T): Map<T, number> {
+  const counts = new Map<T, number>();
+  for (const item of items) {
+    const key = pick(item);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function makeContextValue(items: ReviewItem[] = []) {
   return {
     items,
     totalItems: items.length,
     loading: false,
     error: null,
-    byPriority: new Map(),
-    byReason: new Map(),
+    byPriority: countBy(items, (i) => i.priority),
+    byReason: countBy(items, (i) => i.reason),
     averageAgeSeconds: 0,
     oldestAgeSeconds: 0,
     refresh: mockRefresh,
@@ -474,5 +502,431 @@ describe("ReviewQueuePanel — Create Rule modal", () => {
     // Modal should close
     expect(screen.queryByTestId("create-rule-modal")).not.toBeInTheDocument();
     expect(mockClear).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Combinable multi-select filters + new dimensions + search + sort
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — combinable filters", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  function openFilters() {
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+  }
+
+  it("keeps priority and reason filters active simultaneously (combinable, not exclusive)", () => {
+    const urgent = makeReviewItem({
+      sessionId: "s-urgent",
+      sessionName: "First Item",
+      priority: Priority.URGENT,
+      reason: AttentionReason.ERROR_STATE,
+    });
+    const other = makeReviewItem({
+      sessionId: "s-other",
+      sessionName: "Second Item",
+      priority: Priority.LOW,
+      reason: AttentionReason.IDLE,
+    });
+    mockUseReviewQueueContext.mockReturnValue(
+      makeContextValue([urgent, other])
+    );
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Error (1)" }));
+
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Error (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-item-s-urgent")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s-other")).not.toBeInTheDocument();
+  });
+
+  it("filters by program", () => {
+    const claude = makeReviewItem({ sessionId: "s1", sessionName: "First Item", program: "claude" });
+    const aider = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", program: "aider" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([claude, aider]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "aider (1)" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters by category", () => {
+    const bugfix = makeReviewItem({ sessionId: "s1", sessionName: "First Item", category: "bugfix" });
+    const feature = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", category: "feature" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([bugfix, feature]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "feature (1)" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters by tag", () => {
+    const backend = makeReviewItem({ sessionId: "s1", sessionName: "First Item", tags: ["backend"] });
+    const frontend = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", tags: ["frontend"] });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([backend, frontend]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "frontend (1)" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters to items with a GitHub PR when Has PR is selected", () => {
+    const withPr = makeReviewItem({ sessionId: "s1", sessionName: "S1", githubPrUrl: "https://github.com/org/repo/pull/1" });
+    const withoutPr = makeReviewItem({ sessionId: "s2", sessionName: "S2", githubPrUrl: "" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withPr, withoutPr]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "Has PR" }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("filters to items without a GitHub PR when No PR is selected", () => {
+    const withPr = makeReviewItem({ sessionId: "s1", sessionName: "S1", githubPrUrl: "https://github.com/org/repo/pull/1" });
+    const withoutPr = makeReviewItem({ sessionId: "s2", sessionName: "S2", githubPrUrl: "" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([withPr, withoutPr]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "No PR" }));
+
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("filters to items diverged from base when Diverged from base is selected", () => {
+    const diverged = makeReviewItem({ sessionId: "s1", sessionName: "S1", branchDivergedFromBase: true });
+    const notDiverged = makeReviewItem({ sessionId: "s2", sessionName: "S2", branchDivergedFromBase: false });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([diverged, notDiverged]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "Diverged from base" }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("filters by free-text search across session name and branch", () => {
+    const match = makeReviewItem({ sessionId: "s1", sessionName: "Fix login bug", branch: "fix/login" });
+    const noMatch = makeReviewItem({ sessionId: "s2", sessionName: "Add feature", branch: "feat/x" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([match, noMatch]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByTestId("review-queue-search"), { target: { value: "login" } });
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-item-s2")).not.toBeInTheDocument();
+  });
+
+  it("sorts by name ascending when selected", () => {
+    const b = makeReviewItem({ sessionId: "s-b", sessionName: "Bravo" });
+    const a = makeReviewItem({ sessionId: "s-a", sessionName: "Alpha" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([b, a]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-a", "s-b"]);
+  });
+
+  it("sorts by name descending when the direction is toggled", () => {
+    const b = makeReviewItem({ sessionId: "s-b", sessionName: "Bravo" });
+    const a = makeReviewItem({ sessionId: "s-a", sessionName: "Alpha" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([b, a]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
+    fireEvent.click(screen.getByRole("button", { name: /sort direction/i }));
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-b", "s-a"]);
+  });
+
+  it("sorts by priority ascending when selected", () => {
+    const low = makeReviewItem({ sessionId: "s-low", sessionName: "Low Item", priority: Priority.LOW });
+    const urgent = makeReviewItem({ sessionId: "s-urgent", sessionName: "Urgent Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([low, urgent]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "priority" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-urgent", "s-low"]);
+  });
+
+  it("sorts by last activity (age) ascending when selected", () => {
+    const older = makeReviewItem({
+      sessionId: "s-older",
+      sessionName: "Older Item",
+      lastActivity: { seconds: BigInt(100), nanos: 0 } as unknown as ReviewItem["lastActivity"],
+    });
+    const newer = makeReviewItem({
+      sessionId: "s-newer",
+      sessionName: "Newer Item",
+      lastActivity: { seconds: BigInt(200), nanos: 0 } as unknown as ReviewItem["lastActivity"],
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([newer, older]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "age" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-older", "s-newer"]);
+  });
+
+  it("sorts by diff size ascending when selected", () => {
+    const large = makeReviewItem({
+      sessionId: "s-large",
+      sessionName: "Large Diff",
+      diffStats: { added: 100, removed: 50, content: "" } as unknown as ReviewItem["diffStats"],
+    });
+    const small = makeReviewItem({
+      sessionId: "s-small",
+      sessionName: "Small Diff",
+      diffStats: { added: 1, removed: 0, content: "" } as unknown as ReviewItem["diffStats"],
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([large, small]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "diffSize" } });
+
+    const ids = Array.from(document.querySelectorAll("[data-session-id]")).map((el) =>
+      el.getAttribute("data-session-id")
+    );
+    expect(ids).toEqual(["s-small", "s-large"]);
+  });
+
+  it("clear-all resets every filter dimension and search text", () => {
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "S1", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+    openFilters();
+
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+    fireEvent.change(screen.getByTestId("review-queue-search"), { target: { value: "nomatch" } });
+    expect(screen.queryByTestId("review-item-s1")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /clear active filter/i }));
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group by (reuses groupSessions()) + URL-persisted filter state (reuses useFilterState)
+// ---------------------------------------------------------------------------
+
+describe("ReviewQueuePanel — group by", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("groups items under group headers when a Group by strategy is selected", () => {
+    const claude = makeReviewItem({ sessionId: "s1", sessionName: "First Item", program: "claude" });
+    const aider = makeReviewItem({ sessionId: "s2", sessionName: "Second Item", program: "aider" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([claude, aider]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+
+    expect(screen.getByTestId("review-group-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s2")).toBeInTheDocument();
+  });
+
+  it("falls back to a flat list when Group by is left at the default (None)", () => {
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item" });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId(/^review-group-/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+  });
+
+  it("keeps action buttons and current-item highlighting intact when items are grouped", () => {
+    const onRunOneShot = jest.fn();
+    const first = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      program: "claude",
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+    });
+    const second = makeReviewItem({
+      sessionId: "s2",
+      sessionName: "Second Item",
+      program: "aider",
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([first, second]));
+
+    renderPanel({ onRunOneShot });
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+
+    expect(screen.getByTestId("review-group-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-aider")).toBeInTheDocument();
+
+    // Action buttons (Create PR) render correctly for both items despite grouping.
+    expect(screen.getByTestId("create-pr-s1")).toBeInTheDocument();
+    expect(screen.getByTestId("create-pr-s2")).toBeInTheDocument();
+
+    // useReviewQueueNavigation is mocked with currentIndex: 0, which maps to the first
+    // item in the (pre-group) flat items array — "s1" here. Its wrapper must still be
+    // rendered as the highlighted "current" item even though it's nested under a group.
+    expect(screen.getByTestId("current-item")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-s1")).toHaveAttribute("data-current", "true");
+    expect(screen.getByTestId("review-item-s2")).not.toHaveAttribute("data-current");
+  });
+});
+
+describe("ReviewQueuePanel — URL-persisted filter state", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
+  });
+
+  it("hydrates active filters from the URL on mount", () => {
+    mockSearchParams = new URLSearchParams({
+      priority: String(Priority.URGENT),
+      q: "login",
+      category: "bugfix",
+      tag: "backend",
+      sort: "name",
+      group: "program",
+    });
+    const item = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      priority: Priority.URGENT,
+      category: "bugfix",
+      tags: ["backend"],
+      program: "claude",
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("review-queue-search")).toHaveValue("login");
+    expect(screen.getByRole("button", { name: "bugfix (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "backend (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText(/sort by/i)).toHaveValue("name");
+    expect(screen.getByLabelText(/group by/i)).toHaveValue("program");
+  });
+
+  it("writes filter changes through to the URL via useFilterState", () => {
+    const item = makeReviewItem({
+      sessionId: "s1",
+      sessionName: "First Item",
+      priority: Priority.URGENT,
+      category: "bugfix",
+      tags: ["backend"],
+      program: "claude",
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Urgent (1)" }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining(`priority=${Priority.URGENT}`),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "bugfix (1)" }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("category=bugfix"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "backend (1)" }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("tag=backend"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.change(screen.getByLabelText(/sort by/i), { target: { value: "name" } });
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("sort=name"),
+      expect.objectContaining({ scroll: false })
+    );
+
+    fireEvent.change(screen.getByLabelText(/group by/i), { target: { value: "program" } });
+    expect(mockReplace).toHaveBeenCalledWith(
+      expect.stringContaining("group=program"),
+      expect.objectContaining({ scroll: false })
+    );
+  });
+
+  it("ignores non-numeric priority values in the URL instead of filtering out every item", () => {
+    // Regression test: parseNumSet previously kept NaN when hydrating from a non-numeric
+    // URL value (e.g. ?priority=abc), producing a non-empty Set(NaN). Since no item's
+    // priority ever equals NaN, priorityFilter.size > 0 caused every item to be filtered out.
+    mockSearchParams = new URLSearchParams({ priority: "abc" });
+    const item = makeReviewItem({ sessionId: "s1", sessionName: "First Item", priority: Priority.URGENT });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("review-item-s1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Filter/ }));
+    expect(screen.getByRole("button", { name: "Urgent (1)" })).toHaveAttribute("aria-pressed", "false");
   });
 });

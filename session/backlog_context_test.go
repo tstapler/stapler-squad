@@ -1,33 +1,31 @@
 package session
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session/ent"
 )
 
-// makeTestBacklogItem creates a minimal *ent.BacklogItem for unit tests.
-func makeTestBacklogItem(title, description, acJSON, status string, priority int, notes string) *ent.BacklogItem {
-	return &ent.BacklogItem{
-		ID:                 uuid.New(),
+// makeTestBacklogItem creates a minimal *BacklogItemData for unit tests.
+func makeTestBacklogItem(title, description, acJSON, status string, priority int, notes string) *BacklogItemData {
+	return &BacklogItemData{
+		ID:                 "test-item-ctx-1",
 		Title:              title,
 		Description:        description,
-		AcceptanceCriteria: acJSON,
+		AcceptanceCriteria: AcCriteriaJSON(acJSON),
 		Status:             status,
 		Priority:           priority,
 		Notes:              notes,
 	}
 }
 
-// makeEndedItemSession creates a minimal *ent.ItemSession with EndedAt set.
-func makeEndedItemSession(role string, commitCount int, lastMsg string) *ent.ItemSession {
+// makeEndedItemSession creates a minimal ItemSessionSummary with EndedAt set.
+func makeEndedItemSession(role string, commitCount int, lastMsg string) ItemSessionSummary {
 	now := time.Now()
-	return &ent.ItemSession{
-		ID:                    uuid.New(),
-		SessionRole:           role,
+	return ItemSessionSummary{
+		ID:                    "test-session-1",
+		Role:                  role,
 		CommitCountSinceSpawn: commitCount,
 		LastCommitMessage:     lastMsg,
 		EndedAt:               &now,
@@ -62,7 +60,7 @@ func TestBuildSessionInitialPrompt_WithPriorAttempts_ContainsHandoffSection(t *t
 	s := makeEndedItemSession("work", 3, "fix: implement handler")
 
 	// With a prior session that has ended.
-	outWith := BuildSessionInitialPrompt(item, []*ent.ItemSession{s})
+	outWith := BuildSessionInitialPrompt(item, []ItemSessionSummary{s})
 	if !strings.Contains(outWith, "Prior Attempts") {
 		t.Errorf("expected 'Prior Attempts' section when prior sessions present\nOutput:\n%s", outWith)
 	}
@@ -74,13 +72,108 @@ func TestBuildSessionInitialPrompt_WithPriorAttempts_ContainsHandoffSection(t *t
 	}
 
 	// With a session that has NOT ended (EndedAt == nil) → should not appear.
-	notEnded := &ent.ItemSession{
-		ID:          uuid.New(),
-		SessionRole: "work",
+	notEnded := ItemSessionSummary{
+		ID:   "test-session-2",
+		Role: "work",
 	}
-	outNotEnded := BuildSessionInitialPrompt(item, []*ent.ItemSession{notEnded})
+	outNotEnded := BuildSessionInitialPrompt(item, []ItemSessionSummary{notEnded})
 	if strings.Contains(outNotEnded, "Prior Attempts") {
 		t.Errorf("did not expect 'Prior Attempts' when no sessions have ended\nOutput:\n%s", outNotEnded)
+	}
+}
+
+// UT-039a: a prior FAILed session with a Summary and per-criterion evidence surfaces both
+// the reviewer summary and the evidence for FAILed criteria, but omits evidence for PASSed
+// criteria (that context isn't useful for what needs fixing).
+func TestBuildSessionInitialPrompt_WithReviewVerdict_ContainsSummaryAndFailedCriterionEvidence(t *testing.T) {
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	s := makeEndedItemSession("work", 3, "fix: implement handler")
+	perCriterion := `[` +
+		`{"criterion_index":0,"outcome":"FAIL","evidence":"handler does not validate input, causing a panic on empty body"},` +
+		`{"criterion_index":1,"outcome":"PASS","evidence":"tests pass and cover the happy path"}` +
+		`]`
+	s.ReviewVerdict = &ReviewVerdictSummary{
+		ID:             "test-verdict-1",
+		OverallOutcome: string(ReviewOutcomeFail),
+		Summary:        "Handler crashes on empty request body; missing input validation.",
+		PerCriterion:   perCriterion,
+	}
+
+	out := BuildSessionInitialPrompt(item, []ItemSessionSummary{s})
+
+	mustContain := []string{
+		"Verdict: FAIL",
+		"Reviewer summary: Handler crashes on empty request body; missing input validation.",
+		"handler does not validate input, causing a panic on empty body",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q\nOutput:\n%s", want, out)
+		}
+	}
+
+	mustNotContain := "tests pass and cover the happy path"
+	if strings.Contains(out, mustNotContain) {
+		t.Errorf("did not expect PASSed criterion evidence %q in output\nOutput:\n%s", mustNotContain, out)
+	}
+}
+
+// UT-039b: a prior session with no ReviewVerdict (never reviewed) must not break rendering
+// and must not emit any per-criterion evidence lines.
+func TestBuildSessionInitialPrompt_WithoutReviewVerdict_DoesNotPanicOrRenderEvidence(t *testing.T) {
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	s := makeEndedItemSession("work", 1, "wip")
+	s.ReviewVerdict = nil
+
+	out := BuildSessionInitialPrompt(item, []ItemSessionSummary{s})
+
+	if !strings.Contains(out, "Prior Attempts") {
+		t.Errorf("expected 'Prior Attempts' section\nOutput:\n%s", out)
+	}
+	if strings.Contains(out, "Reviewer summary:") {
+		t.Errorf("did not expect a reviewer summary line with no ReviewVerdict\nOutput:\n%s", out)
+	}
+	if strings.Contains(out, "Criterion ") {
+		t.Errorf("did not expect per-criterion evidence lines with no ReviewVerdict\nOutput:\n%s", out)
+	}
+}
+
+// UT-039c: only the most recent maxPriorAttemptsWithFullEvidence sessions get full
+// reviewer summary + evidence; older sessions keep the one-line outcome only.
+func TestBuildSessionInitialPrompt_OlderPriorAttempts_OmitFullEvidence(t *testing.T) {
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
+
+	var sessions []ItemSessionSummary
+	for i := 0; i < maxPriorAttemptsWithFullEvidence+2; i++ {
+		s := makeEndedItemSession("work", i, "wip")
+		s.ID = fmt.Sprintf("test-session-%d", i)
+		s.ReviewVerdict = &ReviewVerdictSummary{
+			OverallOutcome: string(ReviewOutcomeFail),
+			Summary:        fmt.Sprintf("summary-marker-%d", i),
+			PerCriterion:   `[{"criterion_index":0,"outcome":"FAIL","evidence":"evidence-marker"}]`,
+		}
+		sessions = append(sessions, s)
+	}
+
+	out := BuildSessionInitialPrompt(item, sessions)
+
+	// The oldest two sessions (index 0 and 1) are beyond the full-evidence window and
+	// should not have their summary rendered.
+	if strings.Contains(out, "summary-marker-0") {
+		t.Errorf("did not expect full evidence for oldest prior attempt\nOutput:\n%s", out)
+	}
+	if strings.Contains(out, "summary-marker-1") {
+		t.Errorf("did not expect full evidence for second-oldest prior attempt\nOutput:\n%s", out)
+	}
+	// The most recent maxPriorAttemptsWithFullEvidence sessions should have their summary rendered.
+	lastIdx := len(sessions) - 1
+	if !strings.Contains(out, fmt.Sprintf("summary-marker-%d", lastIdx)) {
+		t.Errorf("expected full evidence for most recent prior attempt\nOutput:\n%s", out)
 	}
 }
 

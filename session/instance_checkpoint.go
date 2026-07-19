@@ -40,7 +40,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 // old "before stateMutex" comment in the public method).
 func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*Checkpoint, error) {
 	i := s.inst
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
 	}
 
@@ -125,9 +125,15 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 		CanonicalPath:      canonicalPath,
 	}
 
+	// i.mu guards the write + buildSnapshot together: legacy setters (MarkViewed
+	// & co.) mutate other fields directly under i.mu.Lock() from outside the
+	// actor — see runActor's doc comment in actor.go for the full explanation.
+	i.mu.Lock()
 	i.Checkpoints = append(i.Checkpoints, cp)
 	i.ActiveCheckpoint = cp.ID
-	i.snapshot.Store(buildSnapshot(i))
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 
 	return &cp, nil
 }

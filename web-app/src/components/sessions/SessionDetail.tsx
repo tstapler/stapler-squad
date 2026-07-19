@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import dynamic from "next/dynamic";
 import { Session } from "@/gen/session/v1/types_pb";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { SessionVcsProvider } from "@/lib/contexts/SessionVcsContext";
@@ -8,7 +9,21 @@ import { prefetchVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { getApiBaseUrl } from "@/lib/config";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
-import { SessionDetailView } from "./SessionDetailView";
+
+// Dynamically import SessionDetailView (and its heavy transitive deps: CodeMirror,
+// XtermTerminal, syntax-highlight packs, WASM) so they are NOT in the initial bundle.
+// This defers ~2MB of JS parse/eval until the user actually opens a session.
+const SessionDetailView = dynamic(
+  () => import("./SessionDetailView").then((m) => ({ default: m.SessionDetailView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ padding: "20px", textAlign: "center", color: "var(--text-secondary)" }}>
+        Loading...
+      </div>
+    ),
+  }
+);
 
 export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts";
 

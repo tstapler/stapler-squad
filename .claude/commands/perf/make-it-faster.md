@@ -16,23 +16,50 @@ prompt: |
   curl -s http://localhost:6060/debug/pprof/ | head -5
   ```
 
-  If it returns HTML, capture all four profiles:
+  **Context budget: do NOT curl mutex/block/heap/allocs to raw text files.** Those endpoints
+  return address-only stacks (100K+ lines for allocs/heap on a long-running process) that must
+  be manually symbolized and aggregated — that parsing work (grep/awk/python over raw pprof
+  text) is expensive in tokens and error-prone (cycles/counts misaligning with the wrong stack
+  frame). `go tool pprof` does the fetch, symbolization, and aggregation in one step and prints
+  only the ranked top-N, typically 20-30 lines total. Find the binary once per session:
 
   ```bash
-  # Goroutine states (qualitative: what are all goroutines doing right now?)
+  systemctl --user show stapler-squad -p ExecStart | grep -oP '(?<=path=)\S+'
+  ```
+
+  Then, for mutex/block/allocs/heap, go straight to ranked output instead of a raw capture:
+
+  ```bash
+  cd /path/to/stapler-squad  # repo root containing the binary above
+
+  # Mutex contention — output is pre-converted to ms/%, no manual cycle math needed
+  go tool pprof -top -nodecount=15 ./stapler-squad http://localhost:6060/debug/pprof/mutex
+
+  # Scheduler blocking
+  go tool pprof -top -nodecount=15 ./stapler-squad http://localhost:6060/debug/pprof/block
+
+  # Allocation rate, filtered to your own packages, in MB
+  go tool pprof -top -alloc_space -unit=mb -nodecount=20 \
+    -focus='github.com/tstapler/stapler-squad' ./stapler-squad http://localhost:6060/debug/pprof/allocs
+
+  # Live heap (in-use, not cumulative)
+  go tool pprof -top -inuse_space -unit=mb -nodecount=20 \
+    -focus='github.com/tstapler/stapler-squad' ./stapler-squad http://localhost:6060/debug/pprof/heap
+  ```
+
+  Once the top function is identified, get its line-level breakdown directly instead of grepping
+  raw stacks for it — this is the fastest way to find the exact allocating/blocking line:
+
+  ```bash
+  go tool pprof -list='FunctionName$' -alloc_space -unit=mb ./stapler-squad http://localhost:6060/debug/pprof/allocs
+  ```
+
+  Goroutine states are the one profile still worth a raw capture, since the qualitative
+  state-count grep below only needs debug=2's per-goroutine header lines, not symbolized stacks:
+
+  ```bash
   curl -s "http://localhost:6060/debug/pprof/goroutine?debug=2" > /tmp/goroutines.txt
-
-  # Mutex contention (quantitative: which mutexes are hot?)
-  curl -s "http://localhost:6060/debug/pprof/mutex?debug=1" > /tmp/mutex.txt
-
-  # Scheduler blocking (quantitative: which goroutines block the scheduler longest?)
-  curl -s "http://localhost:6060/debug/pprof/block?debug=1" > /tmp/block.txt
-
-  # In-use heap allocations (what is alive right now?)
-  curl -s "http://localhost:6060/debug/pprof/heap?debug=1" > /tmp/heap.txt
-
-  # Allocation rate (what allocates most often, even if short-lived?)
-  curl -s "http://localhost:6060/debug/pprof/allocs?debug=1" > /tmp/allocs.txt
+  grep "^goroutine" /tmp/goroutines.txt | sed 's/goroutine [0-9]* //' | sort | uniq -c | sort -rn
   ```
 
   If the server is not running with `--profile`, restart it:
@@ -46,25 +73,25 @@ prompt: |
 
   ### How to interpret each profile
 
+  All four are read via `go tool pprof -top` per Phase 0 — the flat/cum % columns already do the
+  ranking, so treat "high in the `-top` output" as the signal rather than re-deriving it from raw
+  cycles/byte counts.
+
   **mutex** — the most actionable for latency.
-  - Format: `<cycles> <count> @ <addrs>`
-  - `cycles` = total CPU cycles spent waiting on this lock (higher → more contention)
-  - `count` = how many times goroutines waited (high count at low cycles = many short waits; low count at high cycles = long waits)
+  - `-top` output columns are `flat flat% sum% cum cum%`, already in wall-time (ms), not raw cycles.
   - Look for: your own packages (`github.com/tstapler/stapler-squad`) in the stack, especially inside loops or hot-path handlers.
   - Red flag: `log.(*Logger).output` in the stack — stdlib log holds a mutex per write; any hot-path debug `Printf` call serializes every goroutine that hits it.
 
   **block** — scheduler delays from channel/select operations.
-  - Same format as mutex.
-  - High `cycles` on `runtime.selectgo` inside event loops is normal (timer fires). Abnormally high `count` (>10K) on a per-connection goroutine is a sign of excessive goroutine wake-ups.
+  - Same column format as mutex.
+  - High `cum` on `runtime.selectgo` inside long-lived event loops (per-session control loops, streaming goroutines) is normal — it's just the goroutine idling on its next event, not contention. Judge it by `count` from the raw profile instead: abnormally high `count` (>10K) on a goroutine with a *short* lifetime is the actual signal.
   - Red flag: >10K blocks on a `streamVia*` or `handleClient` goroutine with a short lifetime.
 
-  **allocs** — allocation rate (lifetime may be short).
-  - Format: `<in-use-count>: <in-use-bytes> [<total-count>: <total-bytes>]`
-  - Second pair `[total-count: total-bytes]` is the rate metric — even if objects are freed quickly, allocating millions of them adds GC pressure.
+  **allocs** — allocation rate (lifetime may be short). Use `-alloc_space` (total bytes ever allocated) to catch high-churn code, not just what's currently live.
   - Red flag: proto `Marshal`/`Unmarshal` allocating on every streaming frame, or ORM queries returning full rows when only one field is needed.
+  - Red flag: a background poller/scanner whose `-focus`'d cumulative % is disproportionate to its purpose (e.g. a single function accounting for >20% of all allocations app-wide) — that's a sign it's redoing full-cost work on every poll instead of caching or narrowing scope.
 
-  **heap** — live allocations at snapshot time.
-  - Same format; first pair is the rate metric here.
+  **heap** — live allocations at snapshot time. Use `-inuse_space`.
   - Red flag: compression encoder `blockEnc.init` without a `sync.Pool` — should show pool-resident objects, not fresh allocations.
 
   **goroutines** — qualitative health check.
@@ -79,31 +106,32 @@ prompt: |
 
   ## Phase 2 — Rank Bottlenecks
 
-  Extract the top-5 stacks from mutex and block profiles, filtering to stapler-squad frames:
+  The `-top -focus='github.com/tstapler/stapler-squad'` commands from Phase 0 already rank
+  candidates by weight — this phase is about turning the top 3-5 lines of each into a table, not
+  re-extracting from raw text. For each candidate that clears a red flag from Phase 1, drill into
+  its exact line with `-list='<FuncName>$'` (Phase 0) and copy the `file:line` and metric it shows.
 
-  ```bash
-  grep -E "^[0-9]+ [0-9]+ @|#.*github.com/tstapler" /tmp/mutex.txt | head -60
-  grep -E "^[0-9]+ [0-9]+ @|#.*github.com/tstapler" /tmp/block.txt | head -60
-  grep -E "^[0-9]+: [0-9]+ \[[0-9]+:|#.*github.com/tstapler" /tmp/allocs.txt | head -60
-  ```
+  Fill in this table (mutex/block ranked by `-top`'s cum ms; allocs/heap by cum MB or cum%):
 
-  Fill in this table (sort by cycles × count for mutex; by count for block):
+  | Rank | Profile | Location | Metric | Root cause hypothesis |
+  |------|---------|----------|--------|-----------------------|
+  | 1 | mutex | file:line | X ms | ... |
+  | 2 | allocs | file:line | X MB cum, Y% of total | ... |
+  | … | … | … | … | … |
 
-  | Rank | Profile | Location | cycles | count | Root cause hypothesis |
-  |------|---------|----------|--------|-------|-----------------------|
-  | 1 | mutex | file:line | ... | ... | ... |
-  | 2 | block | file:line | ... | ... | ... |
-  | … | … | … | … | … | … |
+  ### Known recurring hotspots — verify before trusting, prune what's gone
 
-  ### Known recurring hotspots in this codebase (as of 2026-05-02 profiling session)
+  This table is a memory aid, not ground truth — it goes stale the moment a listed fix ships.
+  Before using an entry to prioritize work, re-check it against this run's fresh `-top` output;
+  delete rows that no longer appear as a top-N candidate, and add any new top-N finding whose
+  cumulative share is large enough to be worth remembering next time (rule of thumb: >5% of
+  total allocation, or a mutex/block entry inside the top 5 by cum ms).
 
   | Issue | Location | Profile signal | Impact |
   |-------|----------|----------------|--------|
-  | `log.DebugLog.Printf` in hot poll loop | `session/instance_status.go:78` (`GetStatus`) | mutex: 2.2B cycles, 5094 events | Every review queue tick serializes on log mutex |
-  | `log.DebugLog.Printf` in content cache hot path | `session/review_queue_poller.go:557,574,581` | mutex: 1.4B cycles, 2607 events | Same pattern — no `DebugLog != nil` guard |
-  | `log.DebugLog.Printf` on every `%output` event | `session/tmux/control_mode.go:331` | mutex: 2.7B cycles, 94 events | tmux output path — fires on every terminal byte |
-  | `log.DebugLog.Printf` inside streaming send loop | `server/services/connectrpc_websocket.go:629` | block: 23T cycles, 26437 events | Per-frame log call in WebSocket stream goroutine |
-  | `EntRepository.Get` before every field update | `session/ent_repository.go:622` via `storage.go:285` | allocs: full row read per update | Should be a direct `UPDATE … WHERE id=?` |
+  | `diffShortstatUncached` racy-clean re-hash + untracked-file walk | `session/unfinished/gogit_vcs_reader.go:850,877,926` | allocs: ~397GB cum (66% of all app allocations) | Re-hashes every stat-clean tracked file and reads every gitignore-blind untracked file's content on every 30s poll per worktree |
+
+  (2026-05-02 rows — hot-path `DebugLog.Printf` in `instance_status.go`/`review_queue_poller.go`/`control_mode.go`/`connectrpc_websocket.go`, and the ent `Get`-before-update in `ent_repository.go`/`storage.go` — verified fixed on 2026-07-13: no `DebugLog` calls remain in those files, mutex total dropped to ~1.4ms cum, and storage.go carries a "pre-fix: this loop re-queried..." comment. Removed per the prune rule above.)
 
   ---
 
@@ -308,22 +336,36 @@ each proposal would have caught the regression via the Reflect & Fix ladder.
 # Server must be running with --profile
 make restart-web PROFILE_FLAGS="--profile"
 
-# Capture all profiles in one shot
-for p in goroutine mutex block heap allocs; do
-  curl -s "http://localhost:6060/debug/pprof/${p}?debug=1" > /tmp/ss-${p}.txt
-done
+# Locate the binary once (needed for go tool pprof symbolization)
+systemctl --user show stapler-squad -p ExecStart | grep -oP '(?<=path=)\S+'
 
-# Then invoke this command — it reads the files and does the rest
+# Ranked, symbolized, pre-aggregated — no raw-text capture or manual parsing needed
+BIN=./stapler-squad  # path from above
+go tool pprof -top -nodecount=15 $BIN http://localhost:6060/debug/pprof/mutex
+go tool pprof -top -nodecount=15 $BIN http://localhost:6060/debug/pprof/block
+go tool pprof -top -alloc_space -unit=mb -focus='github.com/tstapler/stapler-squad' -nodecount=20 $BIN http://localhost:6060/debug/pprof/allocs
+go tool pprof -top -inuse_space -unit=mb -focus='github.com/tstapler/stapler-squad' -nodecount=20 $BIN http://localhost:6060/debug/pprof/heap
+
+# Goroutine states are the one profile still worth a raw capture + grep (compact output)
+curl -s "http://localhost:6060/debug/pprof/goroutine?debug=2" > /tmp/ss-goroutine.txt
+grep "^goroutine" /tmp/ss-goroutine.txt | sed 's/goroutine [0-9]* //' | sort | uniq -c | sort -rn
+
+# Then drill into the top hit's exact line:
+go tool pprof -list='FunctionName$' -alloc_space -unit=mb $BIN http://localhost:6060/debug/pprof/allocs
 ```
+
+Avoid `curl ... ?debug=1 > /tmp/ss-<profile>.txt` for mutex/block/heap/allocs — those files run
+100K+ lines on a long-running process and force manual grep/awk/python symbolization that
+`go tool pprof` already does. Only goroutine is worth a raw capture, for the state-count grep above.
 
 ## Profile quick-reference
 
-| Profile | Primary metric | What to look for |
+| Profile | Primary metric (via `go tool pprof -top`) | What to look for |
 |---------|---------------|-----------------|
-| `mutex` | cycles waiting for a lock | stdlib `log.Printf` in hot paths; RWMutex on read-heavy paths |
-| `block` | cycles blocked in select/chan | abnormally high `count` on per-connection goroutines |
-| `allocs` | total-bytes column `[N: X]` | proto Marshal per frame, ORM full-row reads |
-| `heap` | in-use objects | large objects without pool; compress encoder per request |
+| `mutex` | cum ms waiting for a lock | stdlib `log.Printf` in hot paths; RWMutex on read-heavy paths |
+| `block` | cum ms blocked in select/chan | abnormally high raw `count` on short-lived per-connection goroutines |
+| `allocs` | cum MB (`-alloc_space`) | proto Marshal per frame, ORM full-row reads, a poller redoing full-cost work every tick |
+| `heap` | cum MB (`-inuse_space`) | large objects without pool; compress encoder per request |
 | `goroutine` | goroutine count and state | leaks (`[sleep, X minutes]`), lock storms (`[semacquire]`) |
 
 ## Enforcement ladder
@@ -357,12 +399,15 @@ ls -lah web-app/.next/static/chunks/*.js 2>/dev/null | sort -k5 -rh | head -10
 | Memory leak | Playwright heap delta across 10 cycles | > 5MB growth |
 | Oversized bundle | `source-map-explorer` or `.next/static/chunks` | chunk > 500KB unparsed |
 
-## Known hotspots (as of 2026-05-02)
+## Known hotspots — prune stale rows each session, don't just append
 
-| Location | Profile | Cycles | Count | Fix direction |
-|----------|---------|--------|-------|---------------|
-| `session/instance_status.go:78` | mutex | 2.2B | 5094 | remove debug Printf from GetStatus hot path |
-| `session/review_queue_poller.go:557` | mutex | 1.4B | 2607 | gate behind `DebugLog != nil` or remove |
-| `session/tmux/control_mode.go:331` | mutex | 2.7B | 94 | remove Printf from %output hot path |
-| `server/services/connectrpc_websocket.go:629` | block | 23T | 26437 | remove per-frame debug log from stream goroutine |
-| `session/ent_repository.go:622` via `storage.go:285` | allocs | — | — | direct UPDATE instead of Get + update |
+Re-check every row against this run's fresh `go tool pprof -top` output before relying on it —
+a shipped fix makes a row wrong, not just outdated. Delete rows that no longer show up in the
+top-N; only add a row when its cumulative share is large enough to matter next time (>5% of
+total allocation, or top-5 by cum ms for mutex/block).
+
+| Location | Profile | Signal (as of session date) | Fix direction |
+|----------|---------|--------|---------------|
+| `session/unfinished/gogit_vcs_reader.go:850,877,926` | allocs | ~397GB cum, 66% of all app allocations (2026-07-13) | see PerfFix-1/2/3 below — racy-clean re-hash + ungitignored untracked-file walk on every 30s poll |
+
+(2026-05-02 rows for `instance_status.go`/`review_queue_poller.go`/`control_mode.go`/`connectrpc_websocket.go` hot-path `DebugLog.Printf` calls and the `ent_repository.go`/`storage.go` Get-before-update — verified fixed on 2026-07-13 and pruned: no `DebugLog` calls remain in those files, mutex total is ~1.4ms cum, storage.go now carries a "pre-fix: this loop re-queried..." comment.)

@@ -33,6 +33,9 @@ jest.mock("@/components/sessions/ApprovalNavBadge", () => ({
 jest.mock("@/components/unfinished/UnfinishedNavBadge", () => ({
   UnfinishedNavBadge: () => null,
 }));
+jest.mock("@/components/backlog-stuck/StuckNavBadge", () => ({
+  StuckNavBadge: () => null,
+}));
 jest.mock("@/components/ui/DebugMenu", () => ({
   DebugMenu: () => null,
 }));

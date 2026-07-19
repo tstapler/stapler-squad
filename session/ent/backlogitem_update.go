@@ -13,7 +13,9 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -166,6 +168,48 @@ func (_u *BacklogItemUpdate) SetSkipPlanning(v bool) *BacklogItemUpdate {
 func (_u *BacklogItemUpdate) SetNillableSkipPlanning(v *bool) *BacklogItemUpdate {
 	if v != nil {
 		_u.SetSkipPlanning(*v)
+	}
+	return _u
+}
+
+// SetAutoSpawnSession sets the "auto_spawn_session" field.
+func (_u *BacklogItemUpdate) SetAutoSpawnSession(v bool) *BacklogItemUpdate {
+	_u.mutation.SetAutoSpawnSession(v)
+	return _u
+}
+
+// SetNillableAutoSpawnSession sets the "auto_spawn_session" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableAutoSpawnSession(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetAutoSpawnSession(*v)
+	}
+	return _u
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (_u *BacklogItemUpdate) SetAutoCreatePr(v bool) *BacklogItemUpdate {
+	_u.mutation.SetAutoCreatePr(v)
+	return _u
+}
+
+// SetNillableAutoCreatePr sets the "auto_create_pr" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableAutoCreatePr(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetAutoCreatePr(*v)
+	}
+	return _u
+}
+
+// SetPipelineMode sets the "pipeline_mode" field.
+func (_u *BacklogItemUpdate) SetPipelineMode(v string) *BacklogItemUpdate {
+	_u.mutation.SetPipelineMode(v)
+	return _u
+}
+
+// SetNillablePipelineMode sets the "pipeline_mode" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePipelineMode(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPipelineMode(*v)
 	}
 	return _u
 }
@@ -324,6 +368,187 @@ func (_u *BacklogItemUpdate) ClearArchivedAt() *BacklogItemUpdate {
 	return _u
 }
 
+// SetPrURL sets the "pr_url" field.
+func (_u *BacklogItemUpdate) SetPrURL(v string) *BacklogItemUpdate {
+	_u.mutation.SetPrURL(v)
+	return _u
+}
+
+// SetNillablePrURL sets the "pr_url" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePrURL(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPrURL(*v)
+	}
+	return _u
+}
+
+// ClearPrURL clears the value of the "pr_url" field.
+func (_u *BacklogItemUpdate) ClearPrURL() *BacklogItemUpdate {
+	_u.mutation.ClearPrURL()
+	return _u
+}
+
+// SetPrNumber sets the "pr_number" field.
+func (_u *BacklogItemUpdate) SetPrNumber(v int) *BacklogItemUpdate {
+	_u.mutation.ResetPrNumber()
+	_u.mutation.SetPrNumber(v)
+	return _u
+}
+
+// SetNillablePrNumber sets the "pr_number" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePrNumber(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPrNumber(*v)
+	}
+	return _u
+}
+
+// AddPrNumber adds value to the "pr_number" field.
+func (_u *BacklogItemUpdate) AddPrNumber(v int) *BacklogItemUpdate {
+	_u.mutation.AddPrNumber(v)
+	return _u
+}
+
+// ClearPrNumber clears the value of the "pr_number" field.
+func (_u *BacklogItemUpdate) ClearPrNumber() *BacklogItemUpdate {
+	_u.mutation.ClearPrNumber()
+	return _u
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdate) SetShippedCheckConclusion(v string) *BacklogItemUpdate {
+	_u.mutation.SetShippedCheckConclusion(v)
+	return _u
+}
+
+// SetNillableShippedCheckConclusion sets the "shipped_check_conclusion" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedCheckConclusion(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedCheckConclusion(*v)
+	}
+	return _u
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdate) ClearShippedCheckConclusion() *BacklogItemUpdate {
+	_u.mutation.ClearShippedCheckConclusion()
+	return _u
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) SetShippedApprovedCount(v int) *BacklogItemUpdate {
+	_u.mutation.ResetShippedApprovedCount()
+	_u.mutation.SetShippedApprovedCount(v)
+	return _u
+}
+
+// SetNillableShippedApprovedCount sets the "shipped_approved_count" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedApprovedCount(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedApprovedCount(*v)
+	}
+	return _u
+}
+
+// AddShippedApprovedCount adds value to the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) AddShippedApprovedCount(v int) *BacklogItemUpdate {
+	_u.mutation.AddShippedApprovedCount(v)
+	return _u
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (_u *BacklogItemUpdate) ClearShippedApprovedCount() *BacklogItemUpdate {
+	_u.mutation.ClearShippedApprovedCount()
+	return _u
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) SetShippedChangesReqCount(v int) *BacklogItemUpdate {
+	_u.mutation.ResetShippedChangesReqCount()
+	_u.mutation.SetShippedChangesReqCount(v)
+	return _u
+}
+
+// SetNillableShippedChangesReqCount sets the "shipped_changes_req_count" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedChangesReqCount(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedChangesReqCount(*v)
+	}
+	return _u
+}
+
+// AddShippedChangesReqCount adds value to the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) AddShippedChangesReqCount(v int) *BacklogItemUpdate {
+	_u.mutation.AddShippedChangesReqCount(v)
+	return _u
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdate) ClearShippedChangesReqCount() *BacklogItemUpdate {
+	_u.mutation.ClearShippedChangesReqCount()
+	return _u
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdate) SetShippedSnapshotAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetShippedSnapshotAt(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotAt sets the "shipped_snapshot_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedSnapshotAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedSnapshotAt(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdate) ClearShippedSnapshotAt() *BacklogItemUpdate {
+	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (_u *BacklogItemUpdate) SetShippedFileStats(v string) *BacklogItemUpdate {
+	_u.mutation.SetShippedFileStats(v)
+	return _u
+}
+
+// SetNillableShippedFileStats sets the "shipped_file_stats" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedFileStats(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedFileStats(*v)
+	}
+	return _u
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (_u *BacklogItemUpdate) ClearShippedFileStats() *BacklogItemUpdate {
+	_u.mutation.ClearShippedFileStats()
+	return _u
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdate) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpdate {
+	_u.mutation.SetShippedSnapshotCaptureFailed(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableShippedSnapshotCaptureFailed(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetShippedSnapshotCaptureFailed(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdate) ClearShippedSnapshotCaptureFailed() *BacklogItemUpdate {
+	_u.mutation.ClearShippedSnapshotCaptureFailed()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdate) SetUpdatedAt(v time.Time) *BacklogItemUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -373,6 +598,36 @@ func (_u *BacklogItemUpdate) AddStatusEvents(v ...*BacklogStatusEvent) *BacklogI
 		ids[i] = v[i].ID
 	}
 	return _u.AddStatusEventIDs(ids...)
+}
+
+// AddStuckStateIDs adds the "stuck_states" edge to the BacklogStuckState entity by IDs.
+func (_u *BacklogItemUpdate) AddStuckStateIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.AddStuckStateIDs(ids...)
+	return _u
+}
+
+// AddStuckStates adds the "stuck_states" edges to the BacklogStuckState entity.
+func (_u *BacklogItemUpdate) AddStuckStates(v ...*BacklogStuckState) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddStuckStateIDs(ids...)
+}
+
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (_u *BacklogItemUpdate) AddProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.AddProgressNoteIDs(ids...)
+	return _u
+}
+
+// AddProgressNotes adds the "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdate) AddProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddProgressNoteIDs(ids...)
 }
 
 // SetSourceID sets the "source" edge to the ItemSource entity by ID.
@@ -460,6 +715,48 @@ func (_u *BacklogItemUpdate) RemoveStatusEvents(v ...*BacklogStatusEvent) *Backl
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveStatusEventIDs(ids...)
+}
+
+// ClearStuckStates clears all "stuck_states" edges to the BacklogStuckState entity.
+func (_u *BacklogItemUpdate) ClearStuckStates() *BacklogItemUpdate {
+	_u.mutation.ClearStuckStates()
+	return _u
+}
+
+// RemoveStuckStateIDs removes the "stuck_states" edge to BacklogStuckState entities by IDs.
+func (_u *BacklogItemUpdate) RemoveStuckStateIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.RemoveStuckStateIDs(ids...)
+	return _u
+}
+
+// RemoveStuckStates removes "stuck_states" edges to BacklogStuckState entities.
+func (_u *BacklogItemUpdate) RemoveStuckStates(v ...*BacklogStuckState) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveStuckStateIDs(ids...)
+}
+
+// ClearProgressNotes clears all "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdate) ClearProgressNotes() *BacklogItemUpdate {
+	_u.mutation.ClearProgressNotes()
+	return _u
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to BacklogProgressNote entities by IDs.
+func (_u *BacklogItemUpdate) RemoveProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdate {
+	_u.mutation.RemoveProgressNoteIDs(ids...)
+	return _u
+}
+
+// RemoveProgressNotes removes "progress_notes" edges to BacklogProgressNote entities.
+func (_u *BacklogItemUpdate) RemoveProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveProgressNoteIDs(ids...)
 }
 
 // ClearSource clears the "source" edge to the ItemSource entity.
@@ -567,6 +864,15 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.SkipPlanning(); ok {
 		_spec.SetField(backlogitem.FieldSkipPlanning, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AutoSpawnSession(); ok {
+		_spec.SetField(backlogitem.FieldAutoSpawnSession, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AutoCreatePr(); ok {
+		_spec.SetField(backlogitem.FieldAutoCreatePr, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.PipelineMode(); ok {
+		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.PlanApproved(); ok {
 		_spec.SetField(backlogitem.FieldPlanApproved, field.TypeBool, value)
 	}
@@ -611,6 +917,63 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ArchivedAtCleared() {
 		_spec.ClearField(backlogitem.FieldArchivedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrURL(); ok {
+		_spec.SetField(backlogitem.FieldPrURL, field.TypeString, value)
+	}
+	if _u.mutation.PrURLCleared() {
+		_spec.ClearField(backlogitem.FieldPrURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.PrNumber(); ok {
+		_spec.SetField(backlogitem.FieldPrNumber, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPrNumber(); ok {
+		_spec.AddField(backlogitem.FieldPrNumber, field.TypeInt, value)
+	}
+	if _u.mutation.PrNumberCleared() {
+		_spec.ClearField(backlogitem.FieldPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedCheckConclusion(); ok {
+		_spec.SetField(backlogitem.FieldShippedCheckConclusion, field.TypeString, value)
+	}
+	if _u.mutation.ShippedCheckConclusionCleared() {
+		_spec.ClearField(backlogitem.FieldShippedCheckConclusion, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedApprovedCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedApprovedCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedApprovedCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedApprovedCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedChangesReqCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedChangesReqCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedChangesReqCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedChangesReqCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotAt(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
+	}
+	if _u.mutation.ShippedSnapshotAtCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ShippedFileStats(); ok {
+		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
+	}
+	if _u.mutation.ShippedFileStatsCleared() {
+		_spec.ClearField(backlogitem.FieldShippedFileStats, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotCaptureFailed(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
+	}
+	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
@@ -743,6 +1106,96 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(backlogstatusevent.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.StuckStatesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedStuckStatesIDs(); len(nodes) > 0 && !_u.mutation.StuckStatesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.StuckStatesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedProgressNotesIDs(); len(nodes) > 0 && !_u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProgressNotesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {
@@ -936,6 +1389,48 @@ func (_u *BacklogItemUpdateOne) SetNillableSkipPlanning(v *bool) *BacklogItemUpd
 	return _u
 }
 
+// SetAutoSpawnSession sets the "auto_spawn_session" field.
+func (_u *BacklogItemUpdateOne) SetAutoSpawnSession(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetAutoSpawnSession(v)
+	return _u
+}
+
+// SetNillableAutoSpawnSession sets the "auto_spawn_session" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableAutoSpawnSession(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetAutoSpawnSession(*v)
+	}
+	return _u
+}
+
+// SetAutoCreatePr sets the "auto_create_pr" field.
+func (_u *BacklogItemUpdateOne) SetAutoCreatePr(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetAutoCreatePr(v)
+	return _u
+}
+
+// SetNillableAutoCreatePr sets the "auto_create_pr" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableAutoCreatePr(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetAutoCreatePr(*v)
+	}
+	return _u
+}
+
+// SetPipelineMode sets the "pipeline_mode" field.
+func (_u *BacklogItemUpdateOne) SetPipelineMode(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetPipelineMode(v)
+	return _u
+}
+
+// SetNillablePipelineMode sets the "pipeline_mode" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePipelineMode(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPipelineMode(*v)
+	}
+	return _u
+}
+
 // SetPlanApproved sets the "plan_approved" field.
 func (_u *BacklogItemUpdateOne) SetPlanApproved(v bool) *BacklogItemUpdateOne {
 	_u.mutation.SetPlanApproved(v)
@@ -1090,6 +1585,187 @@ func (_u *BacklogItemUpdateOne) ClearArchivedAt() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetPrURL sets the "pr_url" field.
+func (_u *BacklogItemUpdateOne) SetPrURL(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetPrURL(v)
+	return _u
+}
+
+// SetNillablePrURL sets the "pr_url" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePrURL(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPrURL(*v)
+	}
+	return _u
+}
+
+// ClearPrURL clears the value of the "pr_url" field.
+func (_u *BacklogItemUpdateOne) ClearPrURL() *BacklogItemUpdateOne {
+	_u.mutation.ClearPrURL()
+	return _u
+}
+
+// SetPrNumber sets the "pr_number" field.
+func (_u *BacklogItemUpdateOne) SetPrNumber(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetPrNumber()
+	_u.mutation.SetPrNumber(v)
+	return _u
+}
+
+// SetNillablePrNumber sets the "pr_number" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePrNumber(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPrNumber(*v)
+	}
+	return _u
+}
+
+// AddPrNumber adds value to the "pr_number" field.
+func (_u *BacklogItemUpdateOne) AddPrNumber(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddPrNumber(v)
+	return _u
+}
+
+// ClearPrNumber clears the value of the "pr_number" field.
+func (_u *BacklogItemUpdateOne) ClearPrNumber() *BacklogItemUpdateOne {
+	_u.mutation.ClearPrNumber()
+	return _u
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdateOne) SetShippedCheckConclusion(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedCheckConclusion(v)
+	return _u
+}
+
+// SetNillableShippedCheckConclusion sets the "shipped_check_conclusion" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedCheckConclusion(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedCheckConclusion(*v)
+	}
+	return _u
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (_u *BacklogItemUpdateOne) ClearShippedCheckConclusion() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedCheckConclusion()
+	return _u
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) SetShippedApprovedCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetShippedApprovedCount()
+	_u.mutation.SetShippedApprovedCount(v)
+	return _u
+}
+
+// SetNillableShippedApprovedCount sets the "shipped_approved_count" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedApprovedCount(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedApprovedCount(*v)
+	}
+	return _u
+}
+
+// AddShippedApprovedCount adds value to the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) AddShippedApprovedCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddShippedApprovedCount(v)
+	return _u
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (_u *BacklogItemUpdateOne) ClearShippedApprovedCount() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedApprovedCount()
+	return _u
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) SetShippedChangesReqCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetShippedChangesReqCount()
+	_u.mutation.SetShippedChangesReqCount(v)
+	return _u
+}
+
+// SetNillableShippedChangesReqCount sets the "shipped_changes_req_count" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedChangesReqCount(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedChangesReqCount(*v)
+	}
+	return _u
+}
+
+// AddShippedChangesReqCount adds value to the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) AddShippedChangesReqCount(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddShippedChangesReqCount(v)
+	return _u
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (_u *BacklogItemUpdateOne) ClearShippedChangesReqCount() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedChangesReqCount()
+	return _u
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdateOne) SetShippedSnapshotAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedSnapshotAt(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotAt sets the "shipped_snapshot_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedSnapshotAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedSnapshotAt(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (_u *BacklogItemUpdateOne) ClearShippedSnapshotAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedSnapshotAt()
+	return _u
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (_u *BacklogItemUpdateOne) SetShippedFileStats(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedFileStats(v)
+	return _u
+}
+
+// SetNillableShippedFileStats sets the "shipped_file_stats" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedFileStats(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedFileStats(*v)
+	}
+	return _u
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (_u *BacklogItemUpdateOne) ClearShippedFileStats() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedFileStats()
+	return _u
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdateOne) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetShippedSnapshotCaptureFailed(v)
+	return _u
+}
+
+// SetNillableShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableShippedSnapshotCaptureFailed(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetShippedSnapshotCaptureFailed(*v)
+	}
+	return _u
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (_u *BacklogItemUpdateOne) ClearShippedSnapshotCaptureFailed() *BacklogItemUpdateOne {
+	_u.mutation.ClearShippedSnapshotCaptureFailed()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdateOne) SetUpdatedAt(v time.Time) *BacklogItemUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -1139,6 +1815,36 @@ func (_u *BacklogItemUpdateOne) AddStatusEvents(v ...*BacklogStatusEvent) *Backl
 		ids[i] = v[i].ID
 	}
 	return _u.AddStatusEventIDs(ids...)
+}
+
+// AddStuckStateIDs adds the "stuck_states" edge to the BacklogStuckState entity by IDs.
+func (_u *BacklogItemUpdateOne) AddStuckStateIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.AddStuckStateIDs(ids...)
+	return _u
+}
+
+// AddStuckStates adds the "stuck_states" edges to the BacklogStuckState entity.
+func (_u *BacklogItemUpdateOne) AddStuckStates(v ...*BacklogStuckState) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddStuckStateIDs(ids...)
+}
+
+// AddProgressNoteIDs adds the "progress_notes" edge to the BacklogProgressNote entity by IDs.
+func (_u *BacklogItemUpdateOne) AddProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.AddProgressNoteIDs(ids...)
+	return _u
+}
+
+// AddProgressNotes adds the "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdateOne) AddProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddProgressNoteIDs(ids...)
 }
 
 // SetSourceID sets the "source" edge to the ItemSource entity by ID.
@@ -1226,6 +1932,48 @@ func (_u *BacklogItemUpdateOne) RemoveStatusEvents(v ...*BacklogStatusEvent) *Ba
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveStatusEventIDs(ids...)
+}
+
+// ClearStuckStates clears all "stuck_states" edges to the BacklogStuckState entity.
+func (_u *BacklogItemUpdateOne) ClearStuckStates() *BacklogItemUpdateOne {
+	_u.mutation.ClearStuckStates()
+	return _u
+}
+
+// RemoveStuckStateIDs removes the "stuck_states" edge to BacklogStuckState entities by IDs.
+func (_u *BacklogItemUpdateOne) RemoveStuckStateIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.RemoveStuckStateIDs(ids...)
+	return _u
+}
+
+// RemoveStuckStates removes "stuck_states" edges to BacklogStuckState entities.
+func (_u *BacklogItemUpdateOne) RemoveStuckStates(v ...*BacklogStuckState) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveStuckStateIDs(ids...)
+}
+
+// ClearProgressNotes clears all "progress_notes" edges to the BacklogProgressNote entity.
+func (_u *BacklogItemUpdateOne) ClearProgressNotes() *BacklogItemUpdateOne {
+	_u.mutation.ClearProgressNotes()
+	return _u
+}
+
+// RemoveProgressNoteIDs removes the "progress_notes" edge to BacklogProgressNote entities by IDs.
+func (_u *BacklogItemUpdateOne) RemoveProgressNoteIDs(ids ...uuid.UUID) *BacklogItemUpdateOne {
+	_u.mutation.RemoveProgressNoteIDs(ids...)
+	return _u
+}
+
+// RemoveProgressNotes removes "progress_notes" edges to BacklogProgressNote entities.
+func (_u *BacklogItemUpdateOne) RemoveProgressNotes(v ...*BacklogProgressNote) *BacklogItemUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveProgressNoteIDs(ids...)
 }
 
 // ClearSource clears the "source" edge to the ItemSource entity.
@@ -1363,6 +2111,15 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	if value, ok := _u.mutation.SkipPlanning(); ok {
 		_spec.SetField(backlogitem.FieldSkipPlanning, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AutoSpawnSession(); ok {
+		_spec.SetField(backlogitem.FieldAutoSpawnSession, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AutoCreatePr(); ok {
+		_spec.SetField(backlogitem.FieldAutoCreatePr, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.PipelineMode(); ok {
+		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.PlanApproved(); ok {
 		_spec.SetField(backlogitem.FieldPlanApproved, field.TypeBool, value)
 	}
@@ -1407,6 +2164,63 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ArchivedAtCleared() {
 		_spec.ClearField(backlogitem.FieldArchivedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrURL(); ok {
+		_spec.SetField(backlogitem.FieldPrURL, field.TypeString, value)
+	}
+	if _u.mutation.PrURLCleared() {
+		_spec.ClearField(backlogitem.FieldPrURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.PrNumber(); ok {
+		_spec.SetField(backlogitem.FieldPrNumber, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedPrNumber(); ok {
+		_spec.AddField(backlogitem.FieldPrNumber, field.TypeInt, value)
+	}
+	if _u.mutation.PrNumberCleared() {
+		_spec.ClearField(backlogitem.FieldPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedCheckConclusion(); ok {
+		_spec.SetField(backlogitem.FieldShippedCheckConclusion, field.TypeString, value)
+	}
+	if _u.mutation.ShippedCheckConclusionCleared() {
+		_spec.ClearField(backlogitem.FieldShippedCheckConclusion, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedApprovedCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedApprovedCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedApprovedCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedApprovedCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedChangesReqCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedShippedChangesReqCount(); ok {
+		_spec.AddField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+	}
+	if _u.mutation.ShippedChangesReqCountCleared() {
+		_spec.ClearField(backlogitem.FieldShippedChangesReqCount, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotAt(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
+	}
+	if _u.mutation.ShippedSnapshotAtCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ShippedFileStats(); ok {
+		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
+	}
+	if _u.mutation.ShippedFileStatsCleared() {
+		_spec.ClearField(backlogitem.FieldShippedFileStats, field.TypeString)
+	}
+	if value, ok := _u.mutation.ShippedSnapshotCaptureFailed(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
+	}
+	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
+		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
@@ -1539,6 +2353,96 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(backlogstatusevent.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.StuckStatesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedStuckStatesIDs(); len(nodes) > 0 && !_u.mutation.StuckStatesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.StuckStatesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.StuckStatesTable,
+			Columns: []string{backlogitem.StuckStatesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogstuckstate.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedProgressNotesIDs(); len(nodes) > 0 && !_u.mutation.ProgressNotesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProgressNotesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   backlogitem.ProgressNotesTable,
+			Columns: []string{backlogitem.ProgressNotesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogprogressnote.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

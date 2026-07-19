@@ -4,13 +4,17 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
@@ -76,6 +80,8 @@ func DefaultConfig() Config {
 type Provider struct {
 	tracerProvider *sdktrace.TracerProvider
 	tracer         trace.Tracer
+	meterProvider  *sdkmetric.MeterProvider
+	meter          metric.Meter
 	config         Config
 }
 
@@ -86,9 +92,10 @@ var globalProvider *Provider
 func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	if !cfg.Enabled {
 		log.Info("telemetry disabled (set OTEL_ENABLED=true or DD_TRACE_ENABLED=true to enable)")
-		// Return a provider with no-op tracer
+		// Return a provider with no-op tracer/meter
 		globalProvider = &Provider{
 			tracer: otel.Tracer(ServiceName),
+			meter:  otel.Meter(ServiceName),
 			config: cfg,
 		}
 		return globalProvider, nil
@@ -137,9 +144,29 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		propagation.Baggage{},
 	))
 
+	// Create OTLP metric exporter, sharing the same OTLP endpoint/resource as
+	// tracing — one Datadog Agent/OTLP collector receives both.
+	metricExporter, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlpmetricgrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(res),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
+			sdkmetric.WithInterval(15*time.Second),
+		)),
+	)
+	otel.SetMeterProvider(mp)
+
 	provider := &Provider{
 		tracerProvider: tp,
 		tracer:         tp.Tracer(ServiceName),
+		meterProvider:  mp,
+		meter:          mp.Meter(ServiceName),
 		config:         cfg,
 	}
 
@@ -149,19 +176,35 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	return provider, nil
 }
 
-// Shutdown gracefully shuts down the telemetry provider
+// Shutdown gracefully shuts down the telemetry provider(s). Flushes any
+// buffered spans/metrics before returning, so call this before process exit.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	if p.tracerProvider == nil {
-		return nil
+	var errs []error
+	if p.tracerProvider != nil {
+		log.Info("shutting down telemetry trace provider")
+		if err := p.tracerProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
 	}
-
-	log.Info("shutting down telemetry provider")
-	return p.tracerProvider.Shutdown(ctx)
+	if p.meterProvider != nil {
+		log.Info("shutting down telemetry meter provider")
+		if err := p.meterProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Tracer returns the configured tracer for creating spans
 func (p *Provider) Tracer() trace.Tracer {
 	return p.tracer
+}
+
+// Meter returns the configured meter for creating instruments (counters,
+// histograms, observable gauges). A no-op meter when telemetry is disabled —
+// instruments still work, they just don't export anywhere.
+func (p *Provider) Meter() metric.Meter {
+	return p.meter
 }
 
 // IsEnabled returns whether telemetry is enabled
@@ -175,6 +218,17 @@ func GetTracer() trace.Tracer {
 		return globalProvider.tracer
 	}
 	return otel.Tracer(ServiceName)
+}
+
+// GetMeter returns the global meter (convenience function). Safe to call
+// before Initialize (returns a no-op meter) — packages registering
+// observable instruments at init/construction time don't need to wait for
+// telemetry.Initialize to run first.
+func GetMeter() metric.Meter {
+	if globalProvider != nil {
+		return globalProvider.meter
+	}
+	return otel.Meter(ServiceName)
 }
 
 // StartSpan creates a new span with the given name and options

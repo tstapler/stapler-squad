@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // HistoryEntry represents a single command execution in history.
@@ -41,12 +43,9 @@ func NewCommandHistoryWithPersistence(sessionName string, persistDir string) (*C
 	ch := NewCommandHistory(sessionName)
 	ch.persistPath = filepath.Join(persistDir, fmt.Sprintf("history_%s.json", sessionName))
 
-	// Try to load existing history
-	if err := ch.Load(); err != nil {
-		// If file doesn't exist, that's fine - we'll create it on first save
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("failed to load history: %w", err)
-		}
+	// Try to load existing history; any error (missing or corrupt) is non-fatal.
+	if err := ch.Load(); err != nil && !os.IsNotExist(err) {
+		log.Warn("command history load failed, starting fresh", "session", sessionName, "err", err)
 	}
 
 	return ch, nil

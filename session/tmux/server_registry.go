@@ -211,7 +211,7 @@ func (r *TmuxServerRegistry) syncSessions() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	args := prependSocket(r.serverSocket, []string{"list-sessions", "-F", "#{session_name}"})
-	cmd := safeexec.CommandContext(ctx, "tmux", args...)
+	cmd := safeexec.CommandContext(ctx, Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("list-sessions: %w", err)
@@ -262,10 +262,15 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 		// Ensure the sentinel session exists so attach-session doesn't exit immediately.
 		// "new-session -d -s <name>" is idempotent: if the session already exists tmux
 		// exits with a non-zero code which we intentionally ignore.
-		createArgs := []string{"new-session", "-d", "-s", keepaliveName}
+		//
+		// Routed through prependSocket like the attach-session call below: r.serverSocket == ""
+		// here means "this registry didn't request an explicitly isolated socket," but the
+		// actual command must still resolve through ResolveSocket so a `go test` binary never
+		// issues an unscoped call straight at the real shared default socket.
+		createArgs := prependSocket(r.serverSocket, []string{"new-session", "-d", "-s", keepaliveName})
 		keepaliveCtx, keepaliveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer keepaliveCancel()
-		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, "tmux", createArgs...)
+		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, Binary(), createArgs...)
 		_ = keepaliveCmd.Run()
 	}
 
@@ -273,7 +278,12 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// immediate %exit on some tmux versions.
 	baseArgs := []string{"-C", "attach-session", "-t", keepaliveName}
 	args := prependSocket(r.serverSocket, baseArgs)
-	cmd := exec.CommandContext(r.ctx, "tmux", args...) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
+	// lifecycle managed by caller via r.ctx (see reconnectLoop) — but ctx
+	// cancellation never runs if this process is SIGKILLed (e.g. a
+	// `--mcp` invocation killed by its parent), so EnsurePdeathsig backs
+	// that up at the kernel level.
+	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process
+	safeexec.EnsurePdeathsig(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

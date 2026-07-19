@@ -119,6 +119,34 @@ func (_u *ItemSessionUpdate) ClearAcSnapshot() *ItemSessionUpdate {
 	return _u
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (_u *ItemSessionUpdate) SetPipelineModeSnapshot(v string) *ItemSessionUpdate {
+	_u.mutation.SetPipelineModeSnapshot(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshot sets the "pipeline_mode_snapshot" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillablePipelineModeSnapshot(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetPipelineModeSnapshot(*v)
+	}
+	return _u
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (_u *ItemSessionUpdate) SetPipelineModeSnapshotHash(v string) *ItemSessionUpdate {
+	_u.mutation.SetPipelineModeSnapshotHash(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillablePipelineModeSnapshotHash(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetPipelineModeSnapshotHash(*v)
+	}
+	return _u
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (_u *ItemSessionUpdate) SetTriageResult(v string) *ItemSessionUpdate {
 	_u.mutation.SetTriageResult(v)
@@ -136,6 +164,26 @@ func (_u *ItemSessionUpdate) SetNillableTriageResult(v *string) *ItemSessionUpda
 // ClearTriageResult clears the value of the "triage_result" field.
 func (_u *ItemSessionUpdate) ClearTriageResult() *ItemSessionUpdate {
 	_u.mutation.ClearTriageResult()
+	return _u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdate) SetVerificationNotes(v string) *ItemSessionUpdate {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableVerificationNotes(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdate) ClearVerificationNotes() *ItemSessionUpdate {
+	_u.mutation.ClearVerificationNotes()
 	return _u
 }
 
@@ -260,6 +308,33 @@ func (_u *ItemSessionUpdate) ClearLastProgressAt() *ItemSessionUpdate {
 	return _u
 }
 
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdate) SetEstimatedCostUsd(v float64) *ItemSessionUpdate {
+	_u.mutation.ResetEstimatedCostUsd()
+	_u.mutation.SetEstimatedCostUsd(v)
+	return _u
+}
+
+// SetNillableEstimatedCostUsd sets the "estimated_cost_usd" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableEstimatedCostUsd(v *float64) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetEstimatedCostUsd(*v)
+	}
+	return _u
+}
+
+// AddEstimatedCostUsd adds value to the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdate) AddEstimatedCostUsd(v float64) *ItemSessionUpdate {
+	_u.mutation.AddEstimatedCostUsd(v)
+	return _u
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdate) ClearEstimatedCostUsd() *ItemSessionUpdate {
+	_u.mutation.ClearEstimatedCostUsd()
+	return _u
+}
+
 // SetBacklogItemID sets the "backlog_item" edge to the BacklogItem entity by ID.
 func (_u *ItemSessionUpdate) SetBacklogItemID(id uuid.UUID) *ItemSessionUpdate {
 	_u.mutation.SetBacklogItemID(id)
@@ -378,11 +453,23 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.AcSnapshotCleared() {
 		_spec.ClearField(itemsession.FieldAcSnapshot, field.TypeString)
 	}
+	if value, ok := _u.mutation.PipelineModeSnapshot(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshot, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PipelineModeSnapshotHash(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshotHash, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.TriageResult(); ok {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 	}
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
+	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -419,6 +506,15 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.LastProgressAtCleared() {
 		_spec.ClearField(itemsession.FieldLastProgressAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.EstimatedCostUsd(); ok {
+		_spec.SetField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedEstimatedCostUsd(); ok {
+		_spec.AddField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.EstimatedCostUsdCleared() {
+		_spec.ClearField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64)
 	}
 	if _u.mutation.BacklogItemCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -586,6 +682,34 @@ func (_u *ItemSessionUpdateOne) ClearAcSnapshot() *ItemSessionUpdateOne {
 	return _u
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (_u *ItemSessionUpdateOne) SetPipelineModeSnapshot(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetPipelineModeSnapshot(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshot sets the "pipeline_mode_snapshot" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillablePipelineModeSnapshot(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetPipelineModeSnapshot(*v)
+	}
+	return _u
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (_u *ItemSessionUpdateOne) SetPipelineModeSnapshotHash(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetPipelineModeSnapshotHash(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillablePipelineModeSnapshotHash(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetPipelineModeSnapshotHash(*v)
+	}
+	return _u
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (_u *ItemSessionUpdateOne) SetTriageResult(v string) *ItemSessionUpdateOne {
 	_u.mutation.SetTriageResult(v)
@@ -603,6 +727,26 @@ func (_u *ItemSessionUpdateOne) SetNillableTriageResult(v *string) *ItemSessionU
 // ClearTriageResult clears the value of the "triage_result" field.
 func (_u *ItemSessionUpdateOne) ClearTriageResult() *ItemSessionUpdateOne {
 	_u.mutation.ClearTriageResult()
+	return _u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) SetVerificationNotes(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableVerificationNotes(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) ClearVerificationNotes() *ItemSessionUpdateOne {
+	_u.mutation.ClearVerificationNotes()
 	return _u
 }
 
@@ -724,6 +868,33 @@ func (_u *ItemSessionUpdateOne) SetNillableLastProgressAt(v *time.Time) *ItemSes
 // ClearLastProgressAt clears the value of the "last_progress_at" field.
 func (_u *ItemSessionUpdateOne) ClearLastProgressAt() *ItemSessionUpdateOne {
 	_u.mutation.ClearLastProgressAt()
+	return _u
+}
+
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdateOne) SetEstimatedCostUsd(v float64) *ItemSessionUpdateOne {
+	_u.mutation.ResetEstimatedCostUsd()
+	_u.mutation.SetEstimatedCostUsd(v)
+	return _u
+}
+
+// SetNillableEstimatedCostUsd sets the "estimated_cost_usd" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableEstimatedCostUsd(v *float64) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetEstimatedCostUsd(*v)
+	}
+	return _u
+}
+
+// AddEstimatedCostUsd adds value to the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdateOne) AddEstimatedCostUsd(v float64) *ItemSessionUpdateOne {
+	_u.mutation.AddEstimatedCostUsd(v)
+	return _u
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (_u *ItemSessionUpdateOne) ClearEstimatedCostUsd() *ItemSessionUpdateOne {
+	_u.mutation.ClearEstimatedCostUsd()
 	return _u
 }
 
@@ -875,11 +1046,23 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	if _u.mutation.AcSnapshotCleared() {
 		_spec.ClearField(itemsession.FieldAcSnapshot, field.TypeString)
 	}
+	if value, ok := _u.mutation.PipelineModeSnapshot(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshot, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PipelineModeSnapshotHash(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshotHash, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.TriageResult(); ok {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 	}
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
+	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -916,6 +1099,15 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.LastProgressAtCleared() {
 		_spec.ClearField(itemsession.FieldLastProgressAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.EstimatedCostUsd(); ok {
+		_spec.SetField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedEstimatedCostUsd(); ok {
+		_spec.AddField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.EstimatedCostUsdCleared() {
+		_spec.ClearField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64)
 	}
 	if _u.mutation.BacklogItemCleared() {
 		edge := &sqlgraph.EdgeSpec{

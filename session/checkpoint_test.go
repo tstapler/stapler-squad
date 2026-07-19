@@ -112,9 +112,9 @@ func TestCreateCheckpoint_UnstartedInstance_ReturnsError(t *testing.T) {
 
 func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 	inst := &Instance{
-		Title:   "test-session",
-		started: true,
+		Title: "test-session",
 	}
+	inst.started.Store(true)
 	// Set conversation UUID so it gets captured.
 	inst.claudeSession = &ClaudeSessionData{ConversationUUID: "conv-uuid-123"}
 
@@ -136,7 +136,8 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 }
 
 func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 
 	cp, err := inst.CreateCheckpoint("label", 0)
 
@@ -146,7 +147,8 @@ func TestCreateCheckpoint_IdIsValidUUID(t *testing.T) {
 }
 
 func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 
 	cp1, err := inst.CreateCheckpoint("first", 10)
 	require.NoError(t, err)
@@ -161,7 +163,8 @@ func TestCreateCheckpoint_MultipleCheckpoints_AppendCorrectly(t *testing.T) {
 }
 
 func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 
 	cp1, _ := inst.CreateCheckpoint("first", 0)
 	assert.Equal(t, cp1.ID, inst.ActiveCheckpoint)
@@ -171,7 +174,8 @@ func TestCreateCheckpoint_ActiveCheckpointUpdated(t *testing.T) {
 }
 
 func TestCreateCheckpoint_NoConversationUUID_EmptyField(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 	// claudeSession is nil — no UUID available yet.
 
 	cp, err := inst.CreateCheckpoint("early-checkpoint", 5)

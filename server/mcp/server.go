@@ -37,7 +37,7 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
 	if storage != nil {
-		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc})
+		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc})
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus})
 	}
 	if prCache != nil {

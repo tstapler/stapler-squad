@@ -11,6 +11,7 @@ import { routes } from "@/lib/routes";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
+import { StuckNavBadge } from "@/components/backlog-stuck/StuckNavBadge";
 import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
 import {
   drawer,
@@ -81,6 +82,7 @@ export function DrawerNav() {
                     {page.href === routes.unfinished && (
                       <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
                         <UnfinishedNavBadge inline={isDrawerOpen} />
+                        <StuckNavBadge inline={isDrawerOpen} />
                       </span>
                     )}
                     {page.href === routes.notifications && (

@@ -14,7 +14,8 @@ import (
 
 // WorktreeScanItem is the minimal worktree info the poller needs from the
 // unfinished-work scanner. Using a local struct avoids an import cycle:
-//   session → session/unfinished → pkg/events → session
+//
+//	session → session/unfinished → pkg/events → session
 //
 // The server layer bridges the two packages via WorktreeSource (adapter pattern).
 type WorktreeScanItem struct {
@@ -54,8 +55,8 @@ func DefaultWorktreePRPollerConfig() WorktreePRPollerConfig {
 
 // listCacheEntry records the ETag and last result for a branch→PR list API call.
 type listCacheEntry struct {
-	etag  string
-	noPR  bool // true if the last list response contained no PRs
+	etag string
+	noPR bool // true if the last list response contained no PRs
 }
 
 // worktreeOnUpdatedFn is a function value stored in an atomic.Value.
@@ -227,7 +228,8 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 			p.fetchAndStore(captured)
 		}()
 	}
-	wg.Wait()}
+	wg.Wait()
+}
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
 func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {

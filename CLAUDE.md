@@ -71,7 +71,19 @@ gofmt -w .         # Format before committing
 
 Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
 
-### Go Concurrency Patterns
+### Go Skills — Always Invoke for Go Work
+
+When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
+
+| Task | Skill |
+|---|---|
+| General idioms, error handling, interfaces, naming, project structure | `/go-development` |
+| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
+| pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
+| Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
+| Goroutine fan-out, singleflight, avoiding mutex contention | `/go:parallelism` |
+
+Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
 
 Subtle patterns (double-checked locking, etc.): `.claude/docs/concurrency-patterns.md`
 
@@ -217,4 +229,7 @@ make e2e-lighthouse
 | systemd user service (restart, logs, D-Bus issues) | `.claude/rules/systemd-user-service.md` |
 | ent ORM schema generation (`--feature sql/upsert`) | `.claude/rules/ent-schema-generation.md` |
 | Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
+| Interface pollution checklist (leaky abstractions in LLM-generated Go) | `.claude/rules/interface-pollution-checklist.md` |
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
+| Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
+| Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |

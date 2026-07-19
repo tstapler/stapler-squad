@@ -88,8 +88,17 @@ type SearchService struct {
 	// cross-reference live sessions for session_status enrichment.
 	getInstances func() []*session.Instance
 
+	// resolveConversationUUID converts a tmux session UUID to a Claude conversation UUID.
+	// Used by GetClaudeHistoryMessages to look up history for backlog sessions.
+	resolveConversationUUID func(ctx context.Context, tmuxUUID string) (string, error)
+
 	branchCache    sync.Map // map[string]*historyBranchEntry  keyed by projectPath
 	branchCacheTTL time.Duration
+}
+
+// SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver.
+func (ss *SearchService) SetResolveConversationUUID(fn func(ctx context.Context, tmuxUUID string) (string, error)) {
+	ss.resolveConversationUUID = fn
 }
 
 // NewSearchService creates a SearchService with the given search components.
@@ -99,10 +108,10 @@ func NewSearchService(
 	historyCacheTTL time.Duration,
 ) *SearchService {
 	return &SearchService{
-		searchEngine:    searchEngine,
+		searchEngine:     searchEngine,
 		snippetGenerator: snippetGenerator,
-		historyCacheTTL: historyCacheTTL,
-		branchCacheTTL:  60 * time.Second,
+		historyCacheTTL:  historyCacheTTL,
+		branchCacheTTL:   60 * time.Second,
 	}
 }
 

@@ -1,0 +1,19 @@
+{
+  "id": "local-file-browser",
+  "type": "frontend",
+  "component": "LocalFileBrowser",
+  "path": "web-app/src/components/files/LocalFileBrowser.tsx",
+  "tested": true,
+  "testIds": [
+    "LocalFileBrowser — navigation > descends into a directory entry on click, including a resolved symlinked directory",
+    "LocalFileBrowser — filter > narrows entries client-side without an extra fetch",
+    "serveUrl — special-character filenames > round-trips %s through encode/decode",
+    "LocalFileBrowser — truncation notice > shows an accurate notice sourced from has_more/total, not a hardcoded count",
+    "local-file-browser > navigates into a symlinked directory",
+    "local-file-browser > filter box narrows entries client-side",
+    "local-file-browser > opens a file with special characters in its name",
+    "local-file-browser > path bar offers autocomplete suggestions while typing",
+    "local-file-browser > open terminal here creates a directory-mode session"
+  ],
+  "lastModified": "2026-07-13T00:00:00Z"
+}

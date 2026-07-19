@@ -171,7 +171,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	defer li.Stop()
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
-	instance.started = true
+	instance.started.Store(true)
 	instance.Status = Active
 
 	done := make(chan struct{})

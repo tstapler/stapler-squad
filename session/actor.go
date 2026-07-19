@@ -103,6 +103,21 @@ func (i *Instance) sendCtx(ctx context.Context, fn func(*instanceState)) error {
 // runActor is the main actor goroutine for a LiveInstance.  It processes commands
 // from li.mailbox and republishes the atomic snapshot after each one.  It exits
 // when li.ctx is cancelled, signalling completion by closing li.done.
+//
+// The post-command rebuild takes i.mu.RLock() around buildSnapshot(): actor
+// commands (the "Locked" family) mutate Instance fields relying purely on
+// actor-goroutine confinement, without taking i.mu at all. But a handful of
+// legacy setters (MarkViewed, MarkUserResponded, MarkAcknowledged,
+// SetLastMeaningfulOutput, RecoverFromStopped) still mutate fields directly
+// from arbitrary caller goroutines under i.mu.Lock(), bypassing the actor
+// entirely. buildSnapshot() reads every mutable field in one pass, so an
+// unprotected read here can race with one of those direct i.mu.Lock() writers
+// even though neither side is doing anything wrong by its own local contract.
+// Taking i.mu.RLock() here — matching buildSnapshot's own documented
+// requirement — closes that gap: it doesn't serialize against other actor
+// commands (single-goroutine confinement already does that) but it does
+// serialize against the legacy direct-lock writers. Caught by -race via a
+// concurrent MarkViewed()/ForceStatus() call during CreateSession.
 func runActor(li *LiveInstance) {
 	defer close(li.done)
 	for {
@@ -111,7 +126,10 @@ func runActor(li *LiveInstance) {
 			return
 		case cmd := <-li.mailbox:
 			cmd(li.Instance)
-			li.snapshot.Store(buildSnapshot(li.Instance))
+			li.mu.RLock()
+			snap := buildSnapshot(li.Instance)
+			li.mu.RUnlock()
+			li.snapshot.Store(snap)
 		}
 	}
 }
@@ -121,8 +139,14 @@ func runActor(li *LiveInstance) {
 // finishInstanceConstruction: where plain *Instance construction sites call
 // finishInstanceConstruction, the LiveInstance construction path calls this
 // instead (via NewLiveInstance).
+//
+// Takes i.mu.RLock() around the initial buildSnapshot() for the same reason
+// runActor does — see its comment above.
 func finishLiveInstanceConstruction(li *LiveInstance) {
-	li.snapshot.Store(buildSnapshot(li.Instance))
+	li.mu.RLock()
+	snap := buildSnapshot(li.Instance)
+	li.mu.RUnlock()
+	li.snapshot.Store(snap)
 	go runActor(li)
 }
 

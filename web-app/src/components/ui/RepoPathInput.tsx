@@ -23,6 +23,8 @@ interface RepoPathInputProps {
    * instead of leaving the user to guess whether a pasted URL is supported.
    */
   detectGitHubUrl?: boolean;
+  /** Called (in addition to onChange) when an entry is picked from the dropdown, not on every keystroke. */
+  onSelect?: (entry: CompletionEntry) => void;
   "data-testid"?: string;
 }
 
@@ -43,6 +45,7 @@ export function RepoPathInput({
   required = false,
   hint,
   detectGitHubUrl = false,
+  onSelect,
   "data-testid": testId,
 }: RepoPathInputProps) {
   const generatedId = useId();
@@ -98,10 +101,11 @@ export function RepoPathInput({
   const handleSelect = useCallback(
     (entry: CompletionEntry) => {
       onChange(entry.path);
+      onSelect?.(entry);
       setOpen(false);
       setSelectedIndex(-1);
     },
-    [onChange]
+    [onChange, onSelect]
   );
 
   const handleKeyDown = useCallback(

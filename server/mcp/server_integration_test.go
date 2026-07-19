@@ -6,15 +6,45 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/server/services"
 )
 
+// expectedToolCount registers the tool set the exact same way main.go's
+// --mcp fallback path does (buildMCPDeps + RunServer(ctx, ..., nil, nil) --
+// eventBus and prCache are both nil there) and returns how many tools that
+// produces. This is the single source of truth for
+// TestMCPHandshakeSubprocess's assertion below -- adding, removing, or
+// gating a tool anywhere in this package changes this count automatically,
+// with nothing to update by hand.
+func expectedToolCount(t *testing.T) int {
+	t.Helper()
+	storage := newTestBacklogStorage(t)
+	svc := services.NewSessionService(storage, nil)
+	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil)
+	return len(s.ListTools())
+}
+
 // TestMCPHandshakeSubprocess builds the binary and verifies that a full
-// MCP handshake (initialize + tools/list) over stdio returns exactly 20
-// registered tools (I-1.1, I-1.4).
+// MCP handshake (initialize + tools/list) over stdio returns exactly the
+// tools NewCore registers in production (I-1.1, I-1.4).
+//
+// The subprocess is pointed at an isolated config with an unreachable
+// listen_address so it always takes the local fallback path (buildMCPDeps)
+// deterministically, matching expectedToolCount above. Without this, the
+// test silently proxies to a real stapler-squad HTTP server if one happens
+// to already be listening on the default port (true on any dev machine
+// running the service) -- exercising a completely different code path than
+// intended, with a tool count that depends on incidental environment state
+// rather than this package's own registration code.
 func TestMCPHandshakeSubprocess(t *testing.T) {
+	want := expectedToolCount(t)
 	binaryPath := t.TempDir() + "/stapler-squad-test"
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
 	build.Dir = "../.."
@@ -22,10 +52,17 @@ func TestMCPHandshakeSubprocess(t *testing.T) {
 		t.Fatalf("build failed: %v\n%s", err, out)
 	}
 
+	testDir := t.TempDir()
+	configJSON := `{"listen_address": "127.0.0.1:1"}`
+	if err := os.WriteFile(filepath.Join(testDir, "config.json"), []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write isolated config: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, "--mcp")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("STAPLER_SQUAD_TEST_DIR=%s", testDir))
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 
@@ -78,11 +115,11 @@ func TestMCPHandshakeSubprocess(t *testing.T) {
 	if !ok {
 		t.Fatal("tools field is not an array")
 	}
-	if len(tools) != 24 {
+	if len(tools) != want {
 		names := make([]string, len(tools))
 		for i, tool := range tools {
 			names[i] = tool.(map[string]interface{})["name"].(string)
 		}
-		t.Errorf("expected 24 tools, got %d: %v", len(tools), names)
+		t.Errorf("expected %d tools (from NewCore's own registration), got %d: %v", want, len(tools), names)
 	}
 }

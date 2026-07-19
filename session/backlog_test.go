@@ -38,10 +38,8 @@ func TestCanTransition_AllInvalidPaths(t *testing.T) {
 		to   BacklogStatus
 	}{
 		{BacklogStatusIdea, BacklogStatusDone},
-		{BacklogStatusDone, BacklogStatusInProgress},
 		{BacklogStatusReady, BacklogStatusDone},
 		{BacklogStatusArchived, BacklogStatusReview},
-		{BacklogStatusInProgress, BacklogStatusIdea},
 	}
 	for _, tc := range cases {
 		if CanTransitionBacklog(tc.from, tc.to) {
@@ -71,15 +69,15 @@ func TestCanTransition_ArchivedToIdeaIsExplicit(t *testing.T) {
 func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
 	// Empty AC JSON → error
 	item := BacklogItemTransitionInput{
-		Status:         BacklogStatusIdea,
-		AcCriteriaJSON: "",
+		Status:     BacklogStatusIdea,
+		AcCriteria: "",
 	}
 	if err := TransitionGuard(item, BacklogStatusReady); err != ErrACRequired {
 		t.Errorf("TransitionGuard with empty AC = %v; want ErrACRequired", err)
 	}
 
 	// Empty JSON array → error
-	item.AcCriteriaJSON = "[]"
+	item.AcCriteria = "[]"
 	if err := TransitionGuard(item, BacklogStatusReady); err != ErrACRequired {
 		t.Errorf("TransitionGuard with [] AC = %v; want ErrACRequired", err)
 	}
@@ -87,7 +85,7 @@ func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
 	// Valid AC with one criterion → nil
 	criteria := []AcCriterion{{Index: 0, Text: "must work", Status: "pending"}}
 	raw, _ := json.Marshal(criteria)
-	item.AcCriteriaJSON = string(raw)
+	item.AcCriteria = AcCriteriaJSON(raw)
 	if err := TransitionGuard(item, BacklogStatusReady); err != nil {
 		t.Errorf("TransitionGuard with 1 AC = %v; want nil", err)
 	}
@@ -259,4 +257,126 @@ func TestAggregateOutcome_PartialAndUnverifiable(t *testing.T) {
 	if got := AggregateOutcome(verdicts); got != ReviewVerdictFail {
 		t.Errorf("AggregateOutcome([FAIL,PARTIAL,UNVERIFIABLE]) = %q; want %q", got, ReviewVerdictFail)
 	}
+}
+
+// UT-010: TestMergeAcCriteria covers the core merge semantics of MergeAcCriteria.
+func TestMergeAcCriteria(t *testing.T) {
+	type tc struct {
+		name     string
+		existing []AcCriterion
+		incoming []AcCriterion
+		// wantErr: if true, expect a non-nil error and skip result checks.
+		wantErr bool
+		// wantIndices: expected index order in the result (nil means skip check).
+		wantIndices []int
+		// wantStatuses: expected status per position in result (aligned with wantIndices).
+		wantStatuses []AcStatus
+		// wantTexts: expected text per position in result.
+		wantTexts []string
+	}
+
+	tests := []tc{
+		{
+			name:         "empty_existing_non_empty_incoming",
+			existing:     nil,
+			incoming:     []AcCriterion{{Index: 0, Text: "first", Status: AcStatusPending}, {Index: 1, Text: "second", Status: AcStatusDone}},
+			wantErr:      false,
+			wantIndices:  []int{0, 1},
+			wantStatuses: []AcStatus{AcStatusPending, AcStatusDone},
+			wantTexts:    []string{"first", "second"},
+		},
+		{
+			name:         "update_existing_criterion",
+			existing:     []AcCriterion{{Index: 0, Text: "initial", Status: AcStatusPending}},
+			incoming:     []AcCriterion{{Index: 0, Text: "initial", Status: AcStatusDone}},
+			wantErr:      false,
+			wantIndices:  []int{0},
+			wantStatuses: []AcStatus{AcStatusDone},
+			wantTexts:    []string{"initial"},
+		},
+		{
+			name: "preserve_unmentioned_criteria",
+			existing: []AcCriterion{
+				{Index: 0, Text: "a", Status: AcStatusPending},
+				{Index: 1, Text: "b", Status: AcStatusPending},
+				{Index: 2, Text: "c", Status: AcStatusPending},
+			},
+			// Only update index 1; indices 0 and 2 must survive unchanged.
+			incoming:     []AcCriterion{{Index: 1, Text: "b-updated", Status: AcStatusDone}},
+			wantErr:      false,
+			wantIndices:  []int{0, 1, 2},
+			wantStatuses: []AcStatus{AcStatusPending, AcStatusDone, AcStatusPending},
+			wantTexts:    []string{"a", "b-updated", "c"},
+		},
+		{
+			name:         "append_new_criterion_with_gap_in_indices",
+			existing:     []AcCriterion{{Index: 0, Text: "zero", Status: AcStatusDone}},
+			incoming:     []AcCriterion{{Index: 5, Text: "five", Status: AcStatusPending}},
+			wantErr:      false,
+			wantIndices:  []int{0, 5},
+			wantStatuses: []AcStatus{AcStatusDone, AcStatusPending},
+			wantTexts:    []string{"zero", "five"},
+		},
+		{
+			name:     "duplicate_index_in_incoming_returns_error",
+			existing: nil,
+			incoming: []AcCriterion{
+				{Index: 0, Text: "first", Status: AcStatusPending},
+				{Index: 0, Text: "dup", Status: AcStatusDone},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MergeAcCriteria(tt.existing, tt.incoming)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("MergeAcCriteria() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+
+			result, parseErr := ParseAcCriteria(got)
+			if parseErr != nil {
+				t.Fatalf("ParseAcCriteria(result) error: %v", parseErr)
+			}
+
+			if len(result) != len(tt.wantIndices) {
+				t.Fatalf("result length = %d, want %d; result = %+v", len(result), len(tt.wantIndices), result)
+			}
+			for i, criterion := range result {
+				if criterion.Index != tt.wantIndices[i] {
+					t.Errorf("result[%d].Index = %d, want %d", i, criterion.Index, tt.wantIndices[i])
+				}
+				if criterion.Status != tt.wantStatuses[i] {
+					t.Errorf("result[%d].Status = %q, want %q", i, criterion.Status, tt.wantStatuses[i])
+				}
+				if criterion.Text != tt.wantTexts[i] {
+					t.Errorf("result[%d].Text = %q, want %q", i, criterion.Text, tt.wantTexts[i])
+				}
+			}
+		})
+	}
+}
+
+// FuzzMergeAcCriteria verifies that MergeAcCriteria never panics on arbitrary input.
+func FuzzMergeAcCriteria(f *testing.F) {
+	f.Add(
+		[]byte(`[{"index":0,"text":"test","status":"pending"}]`),
+		[]byte(`[{"index":0,"text":"done","status":"done"}]`),
+	)
+	f.Fuzz(func(t *testing.T, existingJSON, incomingJSON []byte) {
+		var existing []AcCriterion
+		if err := json.Unmarshal(existingJSON, &existing); err != nil {
+			return // skip unparseable input
+		}
+		var incoming []AcCriterion
+		if err := json.Unmarshal(incomingJSON, &incoming); err != nil {
+			return // skip unparseable input
+		}
+		// Only goal is no panic.
+		_, _ = MergeAcCriteria(existing, incoming)
+	})
 }

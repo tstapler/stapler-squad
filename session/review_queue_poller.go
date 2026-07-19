@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -79,6 +80,7 @@ type ReviewQueuePoller struct {
 	approvalProvider ApprovalMetadataProvider   // Optional: enriches approval items with hook metadata
 	contentProvider  ContentProvider            // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
+	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -96,36 +98,34 @@ type ReviewQueuePoller struct {
 	tickCount atomic.Int64
 }
 
+// contentCacheEntry bundles all per-session cache fields into one value so
+// reads and writes can be done with a single lock-free map operation.
+type contentCacheEntry struct {
+	cachedContent        string
+	lastSeenActivity     time.Time // last IdleDetector.lastActivity seen (controller path)
+	lastSeenPaneActivity time.Time // last #{pane_last_activity} seen (no-controller path)
+	lastPreviewTime      time.Time // fallback TTL timestamp (no-controller path)
+}
+
 // pollerContentProvider is the default ContentProvider implementation that owns all
 // content caching state. It is created by NewReviewQueuePoller and can be replaced
 // in tests with a fake implementation.
 type pollerContentProvider struct {
-	cacheMu              deadlock.Mutex
-	lastSeenActivity     map[string]time.Time // per-session: last IdleDetector.lastActivity seen
-	lastSeenPaneActivity map[string]time.Time // per-session: last #{pane_last_activity} seen
-	cachedContent        map[string]string    // per-session: content from last Preview() call
-	lastPreviewTime      map[string]time.Time // per-session: fallback TTL timestamp
+	// ponytail: xsync.Map replaces 4 map[string]* + RWMutex — lock-free reads across sessions
+	cache *xsync.Map[string, contentCacheEntry]
 }
 
 // NewPollerContentProvider creates a new pollerContentProvider.
 // It is exported so server/dependencies.go can pass it to NewStartupScanner.
 func NewPollerContentProvider() ContentProvider {
 	return &pollerContentProvider{
-		lastSeenActivity:     make(map[string]time.Time),
-		lastSeenPaneActivity: make(map[string]time.Time),
-		cachedContent:        make(map[string]string),
-		lastPreviewTime:      make(map[string]time.Time),
+		cache: xsync.NewMap[string, contentCacheEntry](),
 	}
 }
 
 // EvictInstance removes all cache entries for the given session title.
 func (p *pollerContentProvider) EvictInstance(title string) {
-	p.cacheMu.Lock()
-	delete(p.lastSeenActivity, title)
-	delete(p.lastSeenPaneActivity, title)
-	delete(p.cachedContent, title)
-	delete(p.lastPreviewTime, title)
-	p.cacheMu.Unlock()
+	p.cache.Delete(title)
 }
 
 // NewReviewQueuePoller creates a new poller for automatically managing the review queue.
@@ -146,6 +146,7 @@ func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager StatusProv
 		statusDetector:   detection.NewStatusDetector(),
 		contentProvider:  NewPollerContentProvider(),
 		statusDeterminer: NewDefaultStatusDeterminer(config),
+		tmuxSocket:       realTmuxSocketQuerier{},
 	}
 }
 
@@ -332,7 +333,7 @@ func (rqp *ReviewQueuePoller) pollLoop() {
 			rqp.consecutiveErrors = 0
 
 			// Adaptive interval: back off when queue is empty and activity channel is wired.
-			if actCh != nil && len(rqp.queue.List()) == 0 {
+			if actCh != nil && rqp.queue.Count() == 0 {
 				interval = slowInterval
 			} else {
 				interval = fastInterval
@@ -406,66 +407,88 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 		return
 	}
 
-	// Determine the server socket from the first managed instance (all share the same socket).
-	serverSocket := ""
-	for _, inst := range instances {
-		if inst.IsManaged && inst.TmuxServerSocket != "" {
-			serverSocket = inst.TmuxServerSocket
-			break
-		}
-	}
+	// Group instances by their own tmux server socket -- see groupInstancesBySocket
+	// for why querying a single assumed-shared socket is wrong. Unmanaged instances
+	// are skipped inside the per-socket loop below, same as before.
+	bySocket := groupInstancesBySocket(instances)
 
-	liveSessions, err := tmux.ListAllSessions(serverSocket)
-	if err != nil {
-		if err == tmux.ErrServerDown {
-			log.Warn("reconcileSessions: tmux server is down, skipping reconciliation")
-		} else {
-			log.Warn("reconcileSessions: ListAllSessions error", "err", err)
-		}
-		return
-	}
-
-	for _, inst := range instances {
-		if !inst.IsManaged {
-			continue
-		}
-		sessionName := inst.GetTmuxSessionName()
-		if sessionName == "" {
-			continue
-		}
-
-		switch inst.Status {
-		case Active:
-			// Active but tmux session gone — mark Stopped.
-			if !liveSessions[sessionName] {
-				log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName)
-				ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-					if s.inst.Status == Active {
-						if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
-							log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-							s.inst.loadStatus(Stopped)
-						}
-					}
-				})
-				cancel()
-				rqp.queue.Remove(inst.Title)
-				inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
+	for serverSocket, socketInstances := range bySocket {
+		liveSessions, err := rqp.tmuxSocket.ListSessions(serverSocket)
+		if err != nil {
+			if err == tmux.ErrServerDown {
+				log.Warn("reconcileSessions: tmux server is down, skipping reconciliation", "socket", serverSocket)
+			} else {
+				log.Warn("reconcileSessions: ListAllSessions error", "socket", serverSocket, "err", err)
 			}
-		case Stopped:
-			// Stopped but tmux session is alive — revive to Active.
-			if liveSessions[sessionName] {
-				log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName)
-				ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-					if s.inst.Status == Stopped {
-						if err := transitionToLocked(s, context.Background(), Active); err != nil {
-							log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+			continue
+		}
+
+		for _, inst := range socketInstances {
+			if !inst.IsManaged {
+				continue
+			}
+			sessionName := inst.GetTmuxSessionName()
+			if sessionName == "" {
+				continue
+			}
+
+			switch inst.Status {
+			case Active:
+				// Active but tmux session gone — mark Stopped.
+				if !liveSessions[sessionName] {
+					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Active {
+							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
+								s.inst.loadStatus(Stopped)
+							}
 						}
-					}
-				})
-				cancel()
-				inst.fireLifecycleEvent(EventStarted, "reconcile-session-revived")
+					})
+					cancel()
+					rqp.queue.Remove(inst.Title)
+					inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
+				}
+			case Stopped:
+				// Stopped but tmux session is alive — revive to Active.
+				if liveSessions[sessionName] {
+					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Stopped {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-revived")
+				}
+			case Hibernated:
+				// Hibernated sessions intentionally have no tmux session (Hibernate()
+				// explicitly kills it) -- that's the expected steady state, so do
+				// nothing when the tmux session is also gone. But if one is found
+				// alive anyway (e.g. a code path resurrected it without checking
+				// IsHibernated() first), bring the instance back in sync via the same
+				// transition streamTerminal's hibernation guard uses deliberately:
+				// this restarts the controller/session driver, instead of leaving
+				// Status stuck at Hibernated forever while a real tmux session runs
+				// unmanaged underneath it (Preview() short-circuits for Hibernated,
+				// so such a session would otherwise look permanently dead).
+				if liveSessions[sessionName] {
+					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
+					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
+						if s.inst.Status == Hibernated {
+							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
+							}
+						}
+					})
+					cancel()
+					inst.fireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+				}
 			}
 		}
 	}
@@ -521,45 +544,46 @@ const previewCacheTTL = 30 * time.Second
 // On error, the last cached content is returned so callers see empty string only
 // on the very first poll for a session.
 func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceStatusInfo, paneActivity map[string]time.Time) string {
+	// Lock-free read: load the single bundled entry for this session.
+	entry, _ := p.cache.Load(inst.Title)
+
 	if statusInfo.IsControllerActive {
 		lastActivity := statusInfo.IdleState.LastActivity
-		if !lastActivity.IsZero() {
-			p.cacheMu.Lock()
-			lastSeen := p.lastSeenActivity[inst.Title]
-			cached := p.cachedContent[inst.Title]
-			p.cacheMu.Unlock()
-
-			if lastActivity.Equal(lastSeen) {
-				return cached
-			}
+		if !lastActivity.IsZero() && lastActivity.Equal(entry.lastSeenActivity) {
+			return entry.cachedContent
 		}
 	} else {
-		p.cacheMu.Lock()
-		cached := p.cachedContent[inst.Title]
-		lastSeenPane := p.lastSeenPaneActivity[inst.Title]
-		lastCall := p.lastPreviewTime[inst.Title]
-		p.cacheMu.Unlock()
-
 		if paneActivity != nil {
-			// Primary: event-driven via #{pane_last_activity}.
 			tmuxName := inst.GetTmuxSessionName()
 			if currentActivity, ok := paneActivity[tmuxName]; ok {
-				if !currentActivity.IsZero() && currentActivity.Equal(lastSeenPane) {
-					return cached
+				if !currentActivity.IsZero() && currentActivity.Equal(entry.lastSeenPaneActivity) {
+					return entry.cachedContent
 				}
+			} else if !entry.lastPreviewTime.IsZero() && time.Since(entry.lastPreviewTime) < previewCacheTTL {
+				// The session's pane is absent from the batch snapshot entirely (its
+				// tmux session has died or never existed). Without this fallback, a
+				// dead session's capture-pane gets retried on every single poll cycle
+				// forever instead of backing off -- observed as thousands of failed
+				// subprocess spawns per hour for a handful of orphaned sessions.
+				return entry.cachedContent
 			}
-		} else if !lastCall.IsZero() && time.Since(lastCall) < previewCacheTTL {
-			return cached
+		} else if !entry.lastPreviewTime.IsZero() && time.Since(entry.lastPreviewTime) < previewCacheTTL {
+			return entry.cachedContent
 		}
 	}
 
 	content, err := inst.Preview()
 	if err != nil {
 		log.Debug("Preview() error", "session", inst.Title, "err", err)
-		p.cacheMu.Lock()
-		cached := p.cachedContent[inst.Title]
-		p.cacheMu.Unlock()
-		return cached
+		// Record the attempt even on failure. Without this, lastPreviewTime stays
+		// at its zero value forever for a session whose Preview() never succeeds,
+		// which defeats the previewCacheTTL backoff above and re-triggers a fresh
+		// capture-pane subprocess on every single poll cycle indefinitely.
+		p.cache.Compute(inst.Title, func(e contentCacheEntry, _ bool) (contentCacheEntry, xsync.ComputeOp) {
+			e.lastPreviewTime = time.Now()
+			return e, xsync.UpdateOp
+		})
+		return entry.cachedContent
 	}
 
 	// Update LastMeaningfulOutput when new terminal content is detected.
@@ -573,20 +597,29 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 		inst.UpdateTerminalTimestamps(content, false)
 	}
 
-	p.cacheMu.Lock()
-	p.cachedContent[inst.Title] = content
-	if statusInfo.IsControllerActive && !statusInfo.IdleState.LastActivity.IsZero() {
-		p.lastSeenActivity[inst.Title] = statusInfo.IdleState.LastActivity
-	} else {
-		if paneActivity != nil {
-			tmuxName := inst.GetTmuxSessionName()
-			if currentActivity, ok := paneActivity[tmuxName]; ok && !currentActivity.IsZero() {
-				p.lastSeenPaneActivity[inst.Title] = currentActivity
-			}
+	// Atomic write: Compute replaces the entry under a per-key shard lock (no I/O inside).
+	newActivity := statusInfo.IdleState.LastActivity
+	isController := statusInfo.IsControllerActive
+	var newPaneActivity time.Time
+	if !isController && paneActivity != nil {
+		tmuxName := inst.GetTmuxSessionName()
+		if t, ok := paneActivity[tmuxName]; ok && !t.IsZero() {
+			newPaneActivity = t
 		}
-		p.lastPreviewTime[inst.Title] = time.Now()
 	}
-	p.cacheMu.Unlock()
+	now := time.Now()
+	p.cache.Compute(inst.Title, func(e contentCacheEntry, _ bool) (contentCacheEntry, xsync.ComputeOp) {
+		e.cachedContent = content
+		if isController && !newActivity.IsZero() {
+			e.lastSeenActivity = newActivity
+		} else {
+			if !newPaneActivity.IsZero() {
+				e.lastSeenPaneActivity = newPaneActivity
+			}
+			e.lastPreviewTime = now
+		}
+		return e, xsync.UpdateOp
+	})
 
 	return content
 }
@@ -657,7 +690,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// If the determiner saw a clean worktree, remove any stale UncommittedChanges entry.
 	if result.CleanWorktree {
 		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == ReasonUncommittedChanges {
-			log.Info("changes committed, removing UncommittedChanges entry", "session", snap.Title)
+			log.Debug("changes committed, removing UncommittedChanges entry", "session", snap.Title)
 			rqp.queue.Remove(snap.Title)
 		}
 	}
@@ -673,7 +706,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// when an identical prompt reappears, so IsAcknowledgedAfterOutput() would be a false
 	// positive and silently suppress a live blocking prompt.
 	isActiveHighPriority := shouldAdd && priority <= PriorityHigh
-	if !isActiveHighPriority && inst.IsAcknowledgedAfterOutput() {
+	if !isActiveHighPriority && snap.IsAcknowledgedAfterOutput() {
 		rqp.queue.Remove(snap.Title)
 		return
 	}
@@ -705,7 +738,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
 				isEscalation := priority < existingItem.Priority
 				if isEscalation {
-					log.Info("priority escalation, bypassing rate limit", "session", snap.Title, "from", existingItem.Priority.String(), "to", priority.String())
+					log.Debug("priority escalation, bypassing rate limit", "session", snap.Title, "from", existingItem.Priority.String(), "to", priority.String())
 				} else {
 					return
 				}
@@ -723,7 +756,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		return
 	}
 
-	log.Info("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
+	log.Debug("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
 
 	if shouldAdd {
 		// Check if item already exists and preserve DetectedAt if status hasn't changed
@@ -792,18 +825,18 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.Orphaned {
 					item.Metadata["orphaned"] = "true"
 				}
-				log.Info("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
 			}
 		}
 
-		log.Info("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+		log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 		rqp.queue.Add(item)
 
 		// Update spam prevention timestamp via actor command so the write is
 		// serialised with buildSnapshot and does not race.
 		now := time.Now()
 		inst.SetLastAddedToQueue(now)
-		log.Info("updated LastAddedToQueue timestamp", "session", snap.Title, "timestamp", now)
+		log.Debug("updated LastAddedToQueue timestamp", "session", snap.Title, "timestamp", now)
 
 		// CRITICAL: Persist LastAddedToQueue to database to prevent notification spam
 		// Without persistence, this timestamp resets on app restart or instance reload,
@@ -817,7 +850,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 
 		if !isUpdate {
-			log.Info("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+			log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 		}
 	}
 }
@@ -878,10 +911,12 @@ func (rqp *ReviewQueuePoller) FindInstance(sessionID string) *Instance {
 // custom ContentProvider implementations ignore the call.
 func (rqp *ReviewQueuePoller) injectCachedContent(title, content string) {
 	if p, ok := rqp.contentProvider.(*pollerContentProvider); ok {
-		p.cacheMu.Lock()
-		p.cachedContent[title] = content
-		p.lastPreviewTime[title] = time.Now()
-		p.cacheMu.Unlock()
+		now := time.Now()
+		p.cache.Compute(title, func(e contentCacheEntry, _ bool) (contentCacheEntry, xsync.ComputeOp) {
+			e.cachedContent = content
+			e.lastPreviewTime = now
+			return e, xsync.UpdateOp
+		})
 	}
 }
 

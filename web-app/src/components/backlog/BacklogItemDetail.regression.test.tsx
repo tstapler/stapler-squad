@@ -35,7 +35,24 @@ jest.mock("@/lib/hooks/useSessionService", () => ({
   useSessionService: () => ({ deleteSession: jest.fn() }),
 }));
 
+// BacklogItemDetail itself also calls useAnalytics() directly (for the
+// session-delete tracking event) — mock it the same way. Without this,
+// render() throws "useAnalytics must be used within an
+// AnalyticsContextProvider" since no provider is mounted in this test.
+jest.mock("@/lib/analytics", () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 const getBacklogItem = jest.fn();
+// Epic 3.4: BacklogItemDetail now fetches the mode list on mount for the
+// "what ran" surface, via a `useEffect` keyed on `listPipelineModes`. This
+// must be a stable (module-scope) reference like `getBacklogItem` above —
+// declaring it inline inside the mock factory below would recreate a new
+// jest.fn() on every render (the factory re-runs each time
+// `useBacklogService()` is called), making the effect's dependency change
+// every render and re-fire in an infinite loop (each resolution calls
+// `setPipelineModes`, forcing a re-render, forcing the effect to refire).
+const listPipelineModes = jest.fn().mockResolvedValue([]);
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
@@ -46,8 +63,10 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     approvePlan: jest.fn(),
     overrideVerdict: jest.fn(),
     triggerReReview: jest.fn(),
+    triggerShipPR: jest.fn(),
     archiveBacklogItem: jest.fn(),
     updateBacklogItem: jest.fn().mockResolvedValue(null),
+    listPipelineModes,
     lastError: null,
   }),
 }));
@@ -61,6 +80,8 @@ const baseItem: BacklogItem = {
   repoPath: "/tmp/repo",
   skipPlanning: false,
   skipReviewGate: false,
+  autoSpawnSession: false,
+  autoCreatePR: false,
   planApproved: false,
   // triageStatus "running" is what enables the 5s background poll.
   triageStatus: "running",

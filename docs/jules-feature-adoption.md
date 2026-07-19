@@ -31,8 +31,14 @@ ranked by leverage, extending existing services rather than inventing parallel o
 
 ## Explicitly deferred / rejected
 
-- **Cloud VM sandboxing** — no local analog, new infra (container runtime), conflicts with this project's local-first, single-tenant design. Needs product sign-off before any engineering work, not scheduled.
-- **Audio changelog** — no TTS infra, low ROI, needs product sign-off first.
+- **Container-per-session (Docker/Podman) sandboxing, à la Jules' per-task cloud VM.**
+  Not scoped as an ADR. No concrete local-resource-contention problem is documented
+  yet — item 5 below (concurrency throttle) is the cheaper fix for the contention
+  that *is* observed today. Only write a container-per-session ADR if the throttle
+  proves insufficient and a specific, measured contention incident is on record;
+  until then this stays a rejected idea, not a queued one.
+- **Audio changelog** — no TTS infra, low ROI. Deferred entirely pending explicit
+  product sign-off; not scheduled as a backlog item.
 
 ## Sequencing notes
 

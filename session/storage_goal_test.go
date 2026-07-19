@@ -143,7 +143,7 @@ func TestInitialPromptPersistenceRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	}
-	inst.started = true
+	inst.started.Store(true)
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -177,7 +177,7 @@ func TestSessionGoalLoadedFromEntOnStartup(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started = true
+	inst.started.Store(true)
 	require.NoError(t, storage.AddInstance(inst))
 
 	// Set a goal.

@@ -242,34 +242,25 @@ func (ce *CommandExecutor) executionLoop(ctx context.Context) {
 // Returns true if the caller should continue (timer fired or command ready),
 // false if the response channel closed (caller should exit).
 func (ce *CommandExecutor) waitForCommandOrDrain(ctx context.Context, responseCh <-chan ResponseChunk) bool {
-	// Create the timer once outside the loop. Using time.After() inside the loop
-	// allocates a new channel+timer on every iteration, causing massive GC pressure
-	// when response chunks are flowing (thousands of leaked timers per second).
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
 	for {
+		// Non-blocking drain: consume all buffered chunks without blocking the
+		// scheduler. This avoids the 6.6M goroutine wake-ups that occurred when
+		// responseCh was a select case (one wake-up per chunk arrival).
+		for len(responseCh) > 0 {
+			if _, ok := <-responseCh; !ok {
+				return false
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return false
 		case <-ce.queue.NotifyChannel():
 			// New command available
 			return true
-		case _, ok := <-responseCh:
-			// Drain response chunks while idle - we don't need the data,
-			// just preventing channel overflow. Consume all buffered chunks
-			// in a tight loop so we re-enter the scheduler only once per burst
-			// rather than once per chunk.
-			if !ok {
-				return false
-			}
-			for len(responseCh) > 0 {
-				if _, ok := <-responseCh; !ok {
-					return false
-				}
-			}
-			// Continue draining
 		case <-timer.C:
-			// Periodic check for context cancellation
+			// Periodic wake-up to drain any chunks that accumulated since last iteration.
 			return true
 		}
 	}

@@ -22,6 +22,21 @@ type CallOptions struct {
 	Model string
 	// TimeoutSecs is unused by Pool directly — callers wrap ctx with WithTimeout.
 	TimeoutSecs int
+	// AllowedTools scopes a WorkDir-bearing call to a specific comma-separated
+	// tool list (e.g. "Read,Grep,Glob"), mirroring session.InstanceOptions.AllowedTools.
+	// Only applied when WorkDir is also set; ignored otherwise.
+	AllowedTools string
+	// PermissionMode scopes a WorkDir-bearing call to a specific --permission-mode
+	// value, mirroring session.InstanceOptions.PermissionMode. Only applied when
+	// WorkDir is also set; ignored otherwise.
+	PermissionMode string
+	// DisallowedTools scopes a WorkDir-bearing call to an explicit denylist
+	// (comma-separated, e.g. "Bash(rm:*),Write,Edit"), passed through to the
+	// claude CLI's --disallowedTools flag. Mirrors AllowedTools/PermissionMode:
+	// only applied when WorkDir is also set; ignored otherwise. Used alongside
+	// AllowedTools as belt-and-suspenders — an explicit denylist of destructive
+	// Bash prefixes and write-capable tools on top of a scoped allowlist.
+	DisallowedTools string
 }
 
 // firstCallJSONResult is the JSON schema returned by claude -p --output-format json.
@@ -407,6 +422,9 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 
 		dirRunner := pr.WithWorkDir(opts.WorkDir)
+		if opts.AllowedTools != "" || opts.PermissionMode != "" || opts.DisallowedTools != "" {
+			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
+		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
 		innerCh, err := oneShot.Call(ctx, key, systemPrompt, userPrompt)
 		if err != nil {
@@ -434,41 +452,37 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
 }
 
-// CallBlockingWithOptions is like CallBlocking but supports WorkDir and Model overrides.
-func (p *Pool) CallBlockingWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, error) {
+// CallBlocking makes a single blocking headless call and returns the result text,
+// the cost in USD reported by claude, and any error. opts is the single place to
+// pass WorkDir/Model/AllowedTools/PermissionMode; the zero value reproduces the
+// simplest call shape. Cost is always parsed from the JSON result at no extra cost
+// to callers that ignore it via `_`.
+func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, float64, error) {
 	ch, err := p.CallWithOptions(ctx, key, systemPrompt, userPrompt, opts)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return drainChannel(ch)
+	return drainChannelWithCost(ch)
 }
 
-// CallBlocking runs a headless LLM call and blocks until the result is complete.
-// Returns the concatenated text from all chunks and the first non-nil error.
-func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string) (string, error) {
-	ch, err := p.Call(ctx, key, systemPrompt, userPrompt)
-	if err != nil {
-		return "", err
-	}
-	return drainChannel(ch)
-}
-
-// drainChannel collects all StreamChunk text from ch until Done=true or Err!=nil.
-func drainChannel(ch <-chan StreamChunk) (string, error) {
+// drainChannelWithCost collects all StreamChunk text from ch until Done=true or
+// Err!=nil, along with the CostUSD reported on the Done chunk.
+func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, error) {
 	var sb strings.Builder
+	var costUSD float64
 	for chunk := range ch {
 		if chunk.Err != nil {
-			return sb.String(), chunk.Err
+			return sb.String(), costUSD, chunk.Err
 		}
 		if chunk.Text != "" {
 			sb.WriteString(chunk.Text)
 		}
 		if chunk.Done {
+			costUSD = chunk.CostUSD
 			break
 		}
 	}
-	// Drain remaining chunks in case the channel has extras.
 	for range ch {
 	}
-	return sb.String(), nil
+	return sb.String(), costUSD, nil
 }

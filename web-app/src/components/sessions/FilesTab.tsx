@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FileStatus, FileChange } from "@/gen/session/v1/types_pb";
 import { FileTree } from "./FileTree";
-import type { FileTreeHandle } from "./FileTree";
+import type { FileTreeHandle, SortMode } from "./FileTree";
 import { FileContentViewer } from "./FileContentViewer";
 import { useSessionVcsContext } from "@/lib/contexts/SessionVcsContext";
 import { useResizablePanel } from "@/lib/hooks/useResizablePanel";
+import { buildGitStatusMap, buildLineStatsMap } from "@/lib/utils/gitStatus";
 import { TreeResizeHandle } from "./TreeResizeHandle";
 import { RecentFilesSection } from "./RecentFilesSection";
 import { QuickOpenPalette } from "./QuickOpenPalette";
@@ -16,31 +16,6 @@ import {
   mobilePaneHidden, mobilePaneVisible, mobileBackButton,
   toolbarButtonMobileHidden, mobileSearchButton, toolbarDivider,
 } from "./FilesTab.css";
-
-// ---- Git status helpers ----
-
-function fileChangeToStatusLetter(status: FileStatus): string {
-  switch (status) {
-    case FileStatus.MODIFIED:    return "M";
-    case FileStatus.ADDED:       return "A";
-    case FileStatus.DELETED:     return "D";
-    case FileStatus.RENAMED:     return "R";
-    case FileStatus.UNTRACKED:   return "?";
-    case FileStatus.CONFLICT:    return "U";
-    default:                     return "";
-  }
-}
-
-function buildGitStatusMap(files: FileChange[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const f of files) {
-    const letter = fileChangeToStatusLetter(f.status);
-    if (letter && f.path) {
-      map.set(f.path, letter);
-    }
-  }
-  return map;
-}
 
 // ---- Props ----
 
@@ -62,6 +37,8 @@ export function FilesTab({
 }: FilesTabProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(initialSelectedPath ?? null);
   const [includeIgnored, setIncludeIgnored] = useState(false);
+  const [sortBy, setSortBy] = useState<SortMode>("name");
+  const [filterChangedOnly, setFilterChangedOnly] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResultCount, setSearchResultCount] = useState<number | null>(null);
   const [searchResultTruncated, setSearchResultTruncated] = useState(false);
@@ -79,15 +56,17 @@ export function FilesTab({
     maxWidthFraction: 0.5,
   });
 
-  // VCS status comes from shared context — no independent fetch.
-  const { status, statusLoading: vcsLoading, refreshStatus } = useSessionVcsContext();
+  // VCS status/diff come from shared context — no independent fetch.
+  const { status, diff, statusLoading: vcsLoading, refreshStatus } = useSessionVcsContext();
 
-  // Derive git status map from shared VCS status.
-  const gitStatusMap = useMemo(() => {
-    if (!status) return new Map<string, string>();
+  // Derive git status + per-file line-count maps from shared VCS status.
+  const changedFiles = useMemo(() => {
+    if (!status) return [];
     const { stagedFiles, unstagedFiles, untrackedFiles } = status;
-    return buildGitStatusMap([...stagedFiles, ...unstagedFiles, ...untrackedFiles]);
+    return [...stagedFiles, ...unstagedFiles, ...untrackedFiles];
   }, [status]);
+  const gitStatusMap = useMemo(() => buildGitStatusMap(changedFiles), [changedFiles]);
+  const lineStatsMap = useMemo(() => buildLineStatsMap(changedFiles), [changedFiles]);
 
   // Notify parent when selection changes.
   const handleFileSelect = useCallback(
@@ -194,6 +173,22 @@ export function FilesTab({
             />
             Ignored
           </label>
+          <label className={toolbarLabel} title="Show only files with git changes">
+            <input
+              type="checkbox"
+              checked={filterChangedOnly}
+              onChange={(e) => setFilterChangedOnly(e.target.checked)}
+            />
+            Changed
+          </label>
+          <button
+            className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
+            onClick={() => setSortBy((prev) => (prev === "name" ? "type" : "name"))}
+            title={`Sort by ${sortBy === "name" ? "type" : "name"}`}
+            aria-label={`Sort by ${sortBy === "name" ? "type" : "name"}`}
+          >
+            Sort: {sortBy === "name" ? "Name" : "Type"}
+          </button>
           <button
             className={`${toolbarButton} ${toolbarButtonMobileHidden}`}
             onClick={() => fileTreeRef.current?.collapseAll()}
@@ -244,6 +239,9 @@ export function FilesTab({
             baseUrl={baseUrl}
             onFileSelect={handleFileSelect}
             gitStatusMap={gitStatusMap}
+            lineStatsMap={lineStatsMap}
+            sortBy={sortBy}
+            filterChangedOnly={filterChangedOnly}
             selectedPath={selectedPath}
             includeIgnored={includeIgnored}
             searchTerm={searchTerm}
@@ -276,6 +274,7 @@ export function FilesTab({
           sessionId={sessionId}
           filePath={selectedPath}
           baseUrl={baseUrl}
+          diffContent={diff?.content}
         />
       </div>
 

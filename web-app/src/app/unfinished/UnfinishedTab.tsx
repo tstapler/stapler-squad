@@ -14,6 +14,7 @@ import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
 import { UnfinishedRepoGroup } from "@/components/unfinished/UnfinishedRepoGroup";
 import { GitHubPRsSection } from "@/components/unfinished/GitHubPRsSection";
+import { StuckItemsSection } from "@/components/backlog-stuck/StuckItemsSection";
 import * as styles from "./UnfinishedTab.css";
 
 type FilterType = "all" | "uncommitted" | "ahead" | "behind";
@@ -141,6 +142,11 @@ export function UnfinishedTab() {
           </button>
         ))}
       </div>
+
+      {/* Stuck Backlog Items — sits directly below the filter-chip row and
+          above GitHubPRsSection/repo groups, per design/ux.md Surface 2:
+          it's the first thing that answers "what needs me". */}
+      <StuckItemsSection />
 
       {/* GitHub PRs */}
       <GitHubPRsSection />

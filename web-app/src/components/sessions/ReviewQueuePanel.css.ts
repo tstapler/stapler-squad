@@ -552,6 +552,69 @@ export const ruleModalContent = style({
   gap: "1rem",
 });
 
+export const searchInput = style({
+  padding: `${vars.space["2"]} 10px`,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: vars.color.inputBackground,
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.base,
+  width: "100%",
+  maxWidth: "360px",
+  selectors: {
+    "&:focus": {
+      outline: "none",
+      borderColor: vars.color.inputFocusBorder,
+    },
+  },
+  "@media": {
+    "(max-width: 768px)": {
+      maxWidth: "none",
+      minHeight: "44px",
+    },
+  },
+});
+
+export const sortRow = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+});
+
+export const sortSelect = style({
+  padding: `6px 10px`,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: vars.color.cardBackground,
+  color: vars.color.textPrimary,
+  fontSize: "13px",
+  cursor: "pointer",
+  "@media": {
+    "(max-width: 768px)": {
+      minHeight: "44px",
+      padding: "10px 12px",
+    },
+  },
+});
+
+export const groupSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
+  marginBottom: vars.space["4"],
+});
+
+export const groupHeading = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.textSecondary,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  paddingBottom: vars.space["1"],
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
 export const divergedBadge = style({
   fontSize: vars.fontSize.xs,
   padding: `2px 6px`,

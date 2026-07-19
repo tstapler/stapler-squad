@@ -63,37 +63,6 @@ func readEnvelopeFromClient(t *testing.T, conn *websocket.Conn) *protocol.Envelo
 	return env
 }
 
-// --- Streaming mode validation ---
-
-// TestNewHandlerAcceptsValidStreamingModes verifies that each documented
-// transport mode is stored on the handler without being silently replaced.
-func TestNewHandlerAcceptsValidStreamingModes(t *testing.T) {
-	validModes := []string{"raw", "raw-compressed", "state", "hybrid"}
-	for _, mode := range validModes {
-		t.Run(mode, func(t *testing.T) {
-			h := NewConnectRPCWebSocketHandler(nil, nil, nil, mode)
-			if h.streamingMode != mode {
-				t.Errorf("mode %q: expected handler.streamingMode=%q, got %q", mode, mode, h.streamingMode)
-			}
-		})
-	}
-}
-
-// TestNewHandlerDefaultsInvalidModeToRawCompressed verifies that an unrecognised
-// mode (including the empty string) is replaced with "raw-compressed", matching
-// the documented default transport.
-func TestNewHandlerDefaultsInvalidModeToRawCompressed(t *testing.T) {
-	invalidModes := []string{"", "unknown", "ssp", "HYBRID", "Raw"}
-	for _, mode := range invalidModes {
-		t.Run(mode, func(t *testing.T) {
-			h := NewConnectRPCWebSocketHandler(nil, nil, nil, mode)
-			if h.streamingMode != "raw-compressed" {
-				t.Errorf("invalid mode %q: expected default %q, got %q", mode, "raw-compressed", h.streamingMode)
-			}
-		})
-	}
-}
-
 // TestSendEndStreamSuccess verifies that sendEndStreamSuccess writes a message
 // with the EndStream flag set (regression: streamViaControlMode was missing this call).
 func TestSendEndStreamSuccess(t *testing.T) {
@@ -432,7 +401,7 @@ func TestWaitForQuiescenceResetsTimerOnUpdates(t *testing.T) {
 // TestGetOrRefreshSnapshotCallsCaptureFnOnMiss verifies that on a cache miss
 // captureFn is called and the result is cached.
 func TestGetOrRefreshSnapshotCallsCaptureFnOnMiss(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
 		calls++
@@ -454,7 +423,7 @@ func TestGetOrRefreshSnapshotCallsCaptureFnOnMiss(t *testing.T) {
 // TestGetOrRefreshSnapshotReturnsCacheOnHit verifies that a second call returns
 // the cached result without invoking captureFn again.
 func TestGetOrRefreshSnapshotReturnsCacheOnHit(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
 		calls++
@@ -477,7 +446,7 @@ func TestGetOrRefreshSnapshotReturnsCacheOnHit(t *testing.T) {
 // TestGetOrRefreshSnapshotRefreshesOnDirty verifies that marking a snapshot dirty
 // causes the next getOrRefreshSnapshot call to invoke captureFn again.
 func TestGetOrRefreshSnapshotRefreshesOnDirty(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	calls := 0
 	captureFn := func() (string, error) {
 		calls++
@@ -506,13 +475,13 @@ func TestGetOrRefreshSnapshotRefreshesOnDirty(t *testing.T) {
 // TestMarkSnapshotDirtyOnUnknownSessionIsNoOp verifies that marking an absent
 // session dirty does not panic or create a cache entry.
 func TestMarkSnapshotDirtyOnUnknownSessionIsNoOp(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 
 	// Should not panic
 	h.markSnapshotDirty("nonexistent-session")
 
 	// Should not create an entry
-	if _, ok := h.snapshotCache["nonexistent-session"]; ok {
+	if _, ok := h.snapshotCache.Load("nonexistent-session"); ok {
 		t.Error("markSnapshotDirty created a cache entry for an unknown session")
 	}
 }
@@ -520,7 +489,7 @@ func TestMarkSnapshotDirtyOnUnknownSessionIsNoOp(t *testing.T) {
 // TestGetOrRefreshSnapshotPropagatesCaptureFnError verifies that captureFn errors
 // are returned to the caller and nothing is cached.
 func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	captureErr := fmt.Errorf("tmux: session not found")
 	captureFn := func() (string, error) { return "", captureErr }
 
@@ -531,7 +500,7 @@ func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
 	if !strings.Contains(err.Error(), captureErr.Error()) {
 		t.Errorf("error %q does not contain %q", err.Error(), captureErr.Error())
 	}
-	if _, ok := h.snapshotCache["sess1"]; ok {
+	if _, ok := h.snapshotCache.Load("sess1"); ok {
 		t.Error("cache entry created despite captureFn error")
 	}
 }
@@ -539,7 +508,7 @@ func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
 // TestSnapshotCacheConcurrentAccess verifies that concurrent reads and
 // dirty-marking do not cause data races. Run with -race to validate.
 func TestSnapshotCacheConcurrentAccess(t *testing.T) {
-	h := NewConnectRPCWebSocketHandler(nil, nil, nil, "raw")
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -764,5 +733,28 @@ func TestAnsiSnapshotPrefixContainsRequiredSequences(t *testing.T) {
 	if dIdx >= eIdx || eIdx >= cIdx {
 		t.Errorf("ansiSnapshotPrefix sequence order wrong: DECSTR@%d ED2@%d CUP@%d; want DECSTR < ED2 < CUP; prefix = %q",
 			dIdx, eIdx, cIdx, ansiSnapshotPrefix)
+	}
+}
+
+// TestStripAnsiCodesHandlesNonLetterCSITerminators verifies stripAnsiCodes (used by
+// detectContentWidth to count visible characters) strips CSI sequences terminated by
+// a non-letter final byte. The CSI final-byte range is 0x40-0x7E per ECMA-48, not just
+// A-Z/a-z; a letter-only class would leave these bytes in the "visible" count.
+func TestStripAnsiCodesHandlesNonLetterCSITerminators(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "insert_character_at_sign", input: "\x1b[5@Hello", want: "Hello"},
+		{name: "tilde_terminator", input: "\x1b[3~Hello", want: "Hello"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripAnsiCodes(tt.input)
+			if got != tt.want {
+				t.Errorf("stripAnsiCodes(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

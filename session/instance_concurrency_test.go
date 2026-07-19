@@ -18,10 +18,10 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	inst := &Instance{
 		Title:      "test-non-worktree",
 		Status:     Active,
-		started:    true,
 		IsWorktree: false,
 		// gitManager left as zero value — IsDirty() returns error if called
 	}
+	inst.started.Store(true)
 
 	err := inst.Pause()
 
@@ -38,10 +38,10 @@ func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t 
 	inst := &Instance{
 		Title:      "test-worktree-uninit",
 		Status:     Active,
-		started:    true,
 		IsWorktree: true,
 		// gitManager.worktree == nil → IsDirty returns "git worktree not initialized"
 	}
+	inst.started.Store(true)
 
 	err := inst.Pause()
 
@@ -58,10 +58,10 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 	// (because after the first successful transition, the status is Paused
 	// and Paused->Paused is not a valid transition).
 	inst := &Instance{
-		Title:   "test-concurrent",
-		Status:  Active,
-		started: true,
+		Title:  "test-concurrent",
+		Status: Active,
 	}
+	inst.started.Store(true)
 
 	const numGoroutines = 10
 	var wg sync.WaitGroup
@@ -103,10 +103,10 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	// Exactly one should succeed; after that, Active→Active is invalid.
 	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
-		Title:   "test-concurrent-approve",
-		Status:  Paused,
-		started: true,
+		Title:  "test-concurrent-approve",
+		Status: Paused,
 	}
+	inst.started.Store(true)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
 
@@ -149,10 +149,10 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	//   3. At least one operation succeeds
 	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
-		Title:   "test-concurrent-mixed",
-		Status:  Paused,
-		started: true,
+		Title:  "test-concurrent-mixed",
+		Status: Paused,
 	}
+	inst.started.Store(true)
 	li := NewLiveInstance(inst)
 	defer li.Stop()
 

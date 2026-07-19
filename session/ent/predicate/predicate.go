@@ -15,8 +15,14 @@ type ApprovalRule func(*sql.Selector)
 // BacklogItem is the predicate function for backlogitem builders.
 type BacklogItem func(*sql.Selector)
 
+// BacklogProgressNote is the predicate function for backlogprogressnote builders.
+type BacklogProgressNote func(*sql.Selector)
+
 // BacklogStatusEvent is the predicate function for backlogstatusevent builders.
 type BacklogStatusEvent func(*sql.Selector)
+
+// BacklogStuckState is the predicate function for backlogstuckstate builders.
+type BacklogStuckState func(*sql.Selector)
 
 // ClassificationAnalytics is the predicate function for classificationanalytics builders.
 type ClassificationAnalytics func(*sql.Selector)
@@ -41,6 +47,9 @@ type ItemSession func(*sql.Selector)
 
 // ItemSource is the predicate function for itemsource builders.
 type ItemSource func(*sql.Selector)
+
+// PipelineMode is the predicate function for pipelinemode builders.
+type PipelineMode func(*sql.Selector)
 
 // Project is the predicate function for project builders.
 type Project func(*sql.Selector)

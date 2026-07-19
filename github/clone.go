@@ -1,10 +1,16 @@
 package github
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	sessiongit "github.com/tstapler/stapler-squad/session/git"
 )
 
 const (
@@ -62,10 +68,10 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 		if opts.Branch != "" {
 			// Fetch might fail if branch doesn't exist remotely, try checkout anyway
 			// as it might be a local branch
-			_ = FetchBranch(existingPath, opts.Branch)
+			_ = sessiongit.FetchBranch(existingPath, opts.Branch)
 
 			// Create worktree or checkout the branch
-			if err := CheckoutBranch(existingPath, opts.Branch); err != nil {
+			if err := sessiongit.CheckoutBranch(existingPath, opts.Branch); err != nil {
 				return nil, fmt.Errorf("failed to checkout branch '%s': %w", opts.Branch, err)
 			}
 			result.Branch = opts.Branch
@@ -91,8 +97,15 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 		return nil, fmt.Errorf("failed to create directory '%s': %w", parentDir, err)
 	}
 
-	// Clone the repository
-	if err := CloneRepository(opts.Owner, opts.Repo, clonePath); err != nil {
+	// Clone the repository via git (no gh CLI dependency)
+	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cloneCancel()
+	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", opts.Owner, opts.Repo)
+	cloneCmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, clonePath)
+	if err := cloneCmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("failed to clone repository: %s", string(exitErr.Stderr))
+		}
 		return nil, fmt.Errorf("failed to clone repository: %w", err)
 	}
 
@@ -104,9 +117,9 @@ func GetOrCloneRepository(opts CloneOptions) (*CloneResult, error) {
 	// If a specific branch is requested, checkout
 	if opts.Branch != "" {
 		// Might be the default branch, continue
-		_ = FetchBranch(clonePath, opts.Branch)
+		_ = sessiongit.FetchBranch(clonePath, opts.Branch)
 
-		if err := CheckoutBranch(clonePath, opts.Branch); err != nil {
+		if err := sessiongit.CheckoutBranch(clonePath, opts.Branch); err != nil {
 			return nil, fmt.Errorf("failed to checkout branch '%s': %w", opts.Branch, err)
 		}
 		result.Branch = opts.Branch

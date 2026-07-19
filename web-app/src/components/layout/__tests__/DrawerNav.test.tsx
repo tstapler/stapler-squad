@@ -40,6 +40,9 @@ jest.mock("@/components/sessions/ReviewQueueNavBadge", () => ({
 jest.mock("@/components/unfinished/UnfinishedNavBadge", () => ({
   UnfinishedNavBadge: () => <span data-testid="unfinished-badge" />,
 }));
+jest.mock("@/components/backlog-stuck/StuckNavBadge", () => ({
+  StuckNavBadge: () => <span data-testid="stuck-badge" />,
+}));
 jest.mock("@/components/ui/NotificationsNavBadge", () => ({
   NotificationsNavBadge: () => <span data-testid="notifications-badge" />,
 }));

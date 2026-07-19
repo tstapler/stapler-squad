@@ -126,6 +126,43 @@ export const skipButton = style({
   },
 });
 
+// Feedback / refine section
+
+export const refineForm = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+});
+
+export const refineLabel = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  color: vars.color.textSecondary,
+});
+
+export const refineTextarea = style({
+  width: "100%",
+  minHeight: "72px",
+  padding: vars.space["2"],
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontFamily: vars.font.sans,
+  resize: "vertical",
+  ":focus": {
+    outline: "none",
+    borderColor: vars.color.inputFocusBorder,
+  },
+});
+
+export const iterationBadge = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontWeight: vars.fontWeight.medium,
+});
+
 export const noSuggestionsText = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.textMuted,

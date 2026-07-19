@@ -191,6 +191,10 @@ export const primaryButton = style([
     ":hover": {
       background: vars.color.primaryHover,
     },
+    ":disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
   },
 ]);
 

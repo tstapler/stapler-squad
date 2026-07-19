@@ -169,6 +169,43 @@ func TestShouldApprovePrompt(t *testing.T) {
 	}
 }
 
+// TestShouldApprovePromptWithCooldown covers #165: the driver re-checks
+// NeedsApproval every poll tick, and the status can remain NeedsApproval for
+// several ticks after "1\r" is sent while the PTY redraws. Without a cooldown
+// this resends "1" every tick, flooding the agent with phantom "1" keystrokes.
+func TestShouldApprovePromptWithCooldown(t *testing.T) {
+	output := "Allow reading in /home/user/myrepo"
+	allowedPath := "/home/user/myrepo"
+
+	t.Run("returns true when dialog present and cooldown has not started", func(t *testing.T) {
+		var zeroTime time.Time
+		if !shouldApprovePromptWithCooldown(output, allowedPath, zeroTime, 5*time.Second) {
+			t.Error("expected true for fresh dialog with zero lastAnsweredAt")
+		}
+	})
+
+	t.Run("returns false within the cooldown window — prevents repeated 1s", func(t *testing.T) {
+		recent := time.Now()
+		if shouldApprovePromptWithCooldown(output, allowedPath, recent, 5*time.Second) {
+			t.Error("expected false within cooldown window")
+		}
+	})
+
+	t.Run("returns true once cooldown has elapsed", func(t *testing.T) {
+		old := time.Now().Add(-10 * time.Second)
+		if !shouldApprovePromptWithCooldown(output, allowedPath, old, 5*time.Second) {
+			t.Error("expected true after cooldown has elapsed")
+		}
+	})
+
+	t.Run("returns false for non-matching output regardless of cooldown", func(t *testing.T) {
+		var zeroTime time.Time
+		if shouldApprovePromptWithCooldown("Compiling project…", allowedPath, zeroTime, 5*time.Second) {
+			t.Error("expected false for non-dialog output")
+		}
+	})
+}
+
 // UT-3: TestIsOneShot — verifies one-shot detection logic.
 func TestIsOneShot(t *testing.T) {
 	cases := []struct {

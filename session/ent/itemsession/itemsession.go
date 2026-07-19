@@ -25,8 +25,14 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
+	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
+	FieldPipelineModeSnapshot = "pipeline_mode_snapshot"
+	// FieldPipelineModeSnapshotHash holds the string denoting the pipeline_mode_snapshot_hash field in the database.
+	FieldPipelineModeSnapshotHash = "pipeline_mode_snapshot_hash"
 	// FieldTriageResult holds the string denoting the triage_result field in the database.
 	FieldTriageResult = "triage_result"
+	// FieldVerificationNotes holds the string denoting the verification_notes field in the database.
+	FieldVerificationNotes = "verification_notes"
 	// FieldLastCommitSha holds the string denoting the last_commit_sha field in the database.
 	FieldLastCommitSha = "last_commit_sha"
 	// FieldLastCommitAt holds the string denoting the last_commit_at field in the database.
@@ -41,6 +47,8 @@ const (
 	FieldLastProgressAt = "last_progress_at"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
+	// FieldEstimatedCostUsd holds the string denoting the estimated_cost_usd field in the database.
+	FieldEstimatedCostUsd = "estimated_cost_usd"
 	// EdgeBacklogItem holds the string denoting the backlog_item edge name in mutations.
 	EdgeBacklogItem = "backlog_item"
 	// EdgeReviewVerdict holds the string denoting the review_verdict edge name in mutations.
@@ -71,7 +79,10 @@ var Columns = []string{
 	FieldStartedAt,
 	FieldEndedAt,
 	FieldAcSnapshot,
+	FieldPipelineModeSnapshot,
+	FieldPipelineModeSnapshotHash,
 	FieldTriageResult,
+	FieldVerificationNotes,
 	FieldLastCommitSha,
 	FieldLastCommitAt,
 	FieldLastCommitMessage,
@@ -79,6 +90,7 @@ var Columns = []string{
 	FieldLastFileTouchAt,
 	FieldLastProgressAt,
 	FieldCreatedAt,
+	FieldEstimatedCostUsd,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "item_sessions"
@@ -103,10 +115,16 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
+	DefaultPipelineModeSnapshot string
+	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
+	DefaultPipelineModeSnapshotHash string
 	// DefaultCommitCountSinceSpawn holds the default value on creation for the "commit_count_since_spawn" field.
 	DefaultCommitCountSinceSpawn int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
+	// DefaultEstimatedCostUsd holds the default value on creation for the "estimated_cost_usd" field.
+	DefaultEstimatedCostUsd float64
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -144,9 +162,24 @@ func ByAcSnapshot(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAcSnapshot, opts...).ToFunc()
 }
 
+// ByPipelineModeSnapshot orders the results by the pipeline_mode_snapshot field.
+func ByPipelineModeSnapshot(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPipelineModeSnapshot, opts...).ToFunc()
+}
+
+// ByPipelineModeSnapshotHash orders the results by the pipeline_mode_snapshot_hash field.
+func ByPipelineModeSnapshotHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPipelineModeSnapshotHash, opts...).ToFunc()
+}
+
 // ByTriageResult orders the results by the triage_result field.
 func ByTriageResult(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriageResult, opts...).ToFunc()
+}
+
+// ByVerificationNotes orders the results by the verification_notes field.
+func ByVerificationNotes(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVerificationNotes, opts...).ToFunc()
 }
 
 // ByLastCommitSha orders the results by the last_commit_sha field.
@@ -182,6 +215,11 @@ func ByLastProgressAt(opts ...sql.OrderTermOption) OrderOption {
 // ByCreatedAt orders the results by the created_at field.
 func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCreatedAt, opts...).ToFunc()
+}
+
+// ByEstimatedCostUsd orders the results by the estimated_cost_usd field.
+func ByEstimatedCostUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEstimatedCostUsd, opts...).ToFunc()
 }
 
 // ByBacklogItemField orders the results by backlog_item field.
