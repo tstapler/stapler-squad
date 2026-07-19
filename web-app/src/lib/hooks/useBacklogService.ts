@@ -130,6 +130,12 @@ export interface BacklogItem {
   prNumber?: number;
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
+  /**
+   * Per-item override for the auto-rework cap. Undefined = use the global
+   * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
+   * this item's own cap, replacing the global value.
+   */
+  reworkCapOverride?: number;
 }
 
 /**
@@ -219,6 +225,8 @@ export interface BacklogItemInput {
   skipTriage?: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode?: string;
+  /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
+  reworkCapOverride?: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -410,6 +418,7 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
+    reworkCapOverride: p.reworkCapOverride,
   };
 }
 
@@ -612,6 +621,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
+          reworkCapOverride: data.reworkCapOverride,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {

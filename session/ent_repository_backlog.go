@@ -160,6 +160,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
+		ReworkCapOverride:            item.ReworkCapOverride,
 		CreatedAt:                    item.CreatedAt,
 		UpdatedAt:                    item.UpdatedAt,
 	}
@@ -230,7 +231,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
-		SetNillableArchivedAt(data.ArchivedAt)
+		SetNillableArchivedAt(data.ArchivedAt).
+		SetNillableReworkCapOverride(data.ReworkCapOverride)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -503,6 +505,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	}
 	if update.ShippedSnapshotCaptureFailed != nil {
 		u.SetShippedSnapshotCaptureFailed(*update.ShippedSnapshotCaptureFailed)
+	}
+	if update.ReworkCapOverride != nil {
+		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
 
 	item, err := u.Save(ctx)

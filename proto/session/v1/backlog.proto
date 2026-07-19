@@ -140,6 +140,10 @@ message BacklogItem {
   // progress_notes is the implementer's append-only report_progress audit
   // trail — eagerly loaded alongside status_events (see GetBacklogItem).
   repeated BacklogProgressNote progress_notes = 27;
+  // rework_cap_override: unset means "use the global default"
+  // (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
+  // >0 = this item's own cap, replacing the global value.
+  optional int32 rework_cap_override = 28;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -334,6 +338,10 @@ message UpdateBacklogItemRequest {
   bool auto_spawn_session = 12;
   optional string pipeline_mode = 13;
   bool auto_create_pr = 14;
+  // rework_cap_override is a per-item override for the auto-rework cap.
+  // Unset = leave the item's stored override untouched. 0 = unlimited retries
+  // for this item. >0 = this item's own cap, replacing the global default.
+  optional int32 rework_cap_override = 15;
 }
 
 message UpdateBacklogItemResponse {
@@ -820,6 +828,7 @@ enum StuckReason {
   STUCK_REASON_BOUNCING = 5;
   STUCK_REASON_PUSH_FAILED = 6;
   STUCK_REASON_ORPHANED_TRIAGE = 7;
+  STUCK_REASON_AUTONOMOUS_STUCK = 8;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

@@ -521,6 +521,10 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
+	if item.ReworkCapOverride != nil {
+		override := int32(*item.ReworkCapOverride)
+		p.ReworkCapOverride = &override
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {

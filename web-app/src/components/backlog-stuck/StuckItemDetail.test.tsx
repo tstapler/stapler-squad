@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { StuckItemDetail } from "./StuckItemDetail";
@@ -117,12 +117,81 @@ describe("StuckItemDetail", () => {
       );
       const copy = screen.getByTestId("stuck-item-rework-cap-copy");
       expect(copy.textContent).toMatch(/Reopen for Revision/);
-      expect(copy.textContent).toMatch(/Settings/);
+      expect(copy.textContent).toMatch(/cap/i);
     });
 
     it("does not render for a non-rework_cap reason", () => {
       render(<StuckItemDetail item={makeItem({ reason: StuckReason.PR_READY_UNMERGED })} />);
       expect(screen.queryByTestId("stuck-item-rework-cap-copy")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("StuckItemDetail_should_offerOverrideControl_When_ReasonIsReworkCapAndHandlerProvided", () => {
+    it("does not render the override form when no handler is provided", () => {
+      render(<StuckItemDetail item={makeItem({ reason: StuckReason.REWORK_CAP })} />);
+      expect(screen.queryByTestId("stuck-item-rework-cap-override-form")).not.toBeInTheDocument();
+    });
+
+    it("calls onReworkCapOverride with the entered cap value when 'Set cap' is clicked", async () => {
+      const onReworkCapOverride = jest.fn().mockResolvedValue(true);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP, itemId: "item-abc" })}
+          onReworkCapOverride={onReworkCapOverride}
+        />
+      );
+      const input = screen.getByTestId("stuck-item-rework-cap-rounds-input");
+      fireEvent.change(input, { target: { value: "7" } });
+      fireEvent.click(screen.getByTestId("stuck-item-rework-cap-allow-rounds"));
+
+      await waitFor(() => expect(onReworkCapOverride).toHaveBeenCalledWith("item-abc", 7));
+    });
+
+    it("calls onReworkCapOverride with 0 (unlimited) when 'Remove cap' is clicked", async () => {
+      const onReworkCapOverride = jest.fn().mockResolvedValue(true);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP, itemId: "item-xyz" })}
+          onReworkCapOverride={onReworkCapOverride}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-rework-cap-unlimited"));
+
+      await waitFor(() => expect(onReworkCapOverride).toHaveBeenCalledWith("item-xyz", 0));
+    });
+
+    it("shows an error message when the override call fails", async () => {
+      const onReworkCapOverride = jest.fn().mockResolvedValue(false);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.REWORK_CAP })}
+          onReworkCapOverride={onReworkCapOverride}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-rework-cap-unlimited"));
+
+      await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    });
+  });
+
+  describe("StuckItemDetail_should_showAutonomousStuckGuidance_When_ReasonIsAutonomousStuck", () => {
+    it("renders guidance copy for autonomous_stuck", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({
+            reason: StuckReason.AUTONOMOUS_STUCK,
+            prNumber: 0,
+            prUrl: "",
+            context: "autonomous driver stopped after 20 turns without a DONE signal",
+          })}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-autonomous-stuck-copy")).toBeInTheDocument();
+    });
+
+    it("does not render for a non-autonomous_stuck reason", () => {
+      render(<StuckItemDetail item={makeItem({ reason: StuckReason.PR_READY_UNMERGED })} />);
+      expect(screen.queryByTestId("stuck-item-autonomous-stuck-copy")).not.toBeInTheDocument();
     });
   });
 });

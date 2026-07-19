@@ -1535,8 +1535,16 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed:
-			continue // event-shaped: resolved only at their explicit call sites
+		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed, domain.StuckReasonAutonomousStuck:
+			// Event-shaped: resolved only at an explicit call site, not by anchoring
+			// on item status. autonomous_stuck specifically cannot anchor on the
+			// item's status at mark-time: onAutonomousDriverComplete's SessionRoleWork
+			// case transitions in_progress->review even when the driver is stuck (a
+			// separate, flagged behavior — see that function's doc comment), so an
+			// in_progress anchor would immediately false-resolve on the very next
+			// tick once the status-transition below it runs, before an operator ever
+			// sees the row.
+			continue
 		default:
 			continue
 		}

@@ -37,6 +37,7 @@ const (
 	StuckReason_STUCK_REASON_BOUNCING          StuckReason = 5
 	StuckReason_STUCK_REASON_PUSH_FAILED       StuckReason = 6
 	StuckReason_STUCK_REASON_ORPHANED_TRIAGE   StuckReason = 7
+	StuckReason_STUCK_REASON_AUTONOMOUS_STUCK  StuckReason = 8
 )
 
 // Enum value maps for StuckReason.
@@ -50,6 +51,7 @@ var (
 		5: "STUCK_REASON_BOUNCING",
 		6: "STUCK_REASON_PUSH_FAILED",
 		7: "STUCK_REASON_ORPHANED_TRIAGE",
+		8: "STUCK_REASON_AUTONOMOUS_STUCK",
 	}
 	StuckReason_value = map[string]int32{
 		"STUCK_REASON_UNSPECIFIED":       0,
@@ -60,6 +62,7 @@ var (
 		"STUCK_REASON_BOUNCING":          5,
 		"STUCK_REASON_PUSH_FAILED":       6,
 		"STUCK_REASON_ORPHANED_TRIAGE":   7,
+		"STUCK_REASON_AUTONOMOUS_STUCK":  8,
 	}
 )
 
@@ -915,8 +918,12 @@ type BacklogItem struct {
 	// progress_notes is the implementer's append-only report_progress audit
 	// trail — eagerly loaded alongside status_events (see GetBacklogItem).
 	ProgressNotes []*BacklogProgressNote `protobuf:"bytes,27,rep,name=progress_notes,json=progressNotes,proto3" json:"progress_notes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// rework_cap_override: unset means "use the global default"
+	// (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
+	// >0 = this item's own cap, replacing the global value.
+	ReworkCapOverride *int32 `protobuf:"varint,28,opt,name=rework_cap_override,json=reworkCapOverride,proto3,oneof" json:"rework_cap_override,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *BacklogItem) Reset() {
@@ -1136,6 +1143,13 @@ func (x *BacklogItem) GetProgressNotes() []*BacklogProgressNote {
 		return x.ProgressNotes
 	}
 	return nil
+}
+
+func (x *BacklogItem) GetReworkCapOverride() int32 {
+	if x != nil && x.ReworkCapOverride != nil {
+		return *x.ReworkCapOverride
+	}
+	return 0
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -2365,8 +2379,12 @@ type UpdateBacklogItemRequest struct {
 	AutoSpawnSession   bool                   `protobuf:"varint,12,opt,name=auto_spawn_session,json=autoSpawnSession,proto3" json:"auto_spawn_session,omitempty"`
 	PipelineMode       *string                `protobuf:"bytes,13,opt,name=pipeline_mode,json=pipelineMode,proto3,oneof" json:"pipeline_mode,omitempty"`
 	AutoCreatePr       bool                   `protobuf:"varint,14,opt,name=auto_create_pr,json=autoCreatePr,proto3" json:"auto_create_pr,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// rework_cap_override is a per-item override for the auto-rework cap.
+	// Unset = leave the item's stored override untouched. 0 = unlimited retries
+	// for this item. >0 = this item's own cap, replacing the global default.
+	ReworkCapOverride *int32 `protobuf:"varint,15,opt,name=rework_cap_override,json=reworkCapOverride,proto3,oneof" json:"rework_cap_override,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *UpdateBacklogItemRequest) Reset() {
@@ -2495,6 +2513,13 @@ func (x *UpdateBacklogItemRequest) GetAutoCreatePr() bool {
 		return x.AutoCreatePr
 	}
 	return false
+}
+
+func (x *UpdateBacklogItemRequest) GetReworkCapOverride() int32 {
+	if x != nil && x.ReworkCapOverride != nil {
+		return *x.ReworkCapOverride
+	}
+	return 0
 }
 
 type UpdateBacklogItemResponse struct {
@@ -6332,7 +6357,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa9\t\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf6\t\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -6365,8 +6390,10 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x12auto_spawn_session\x18\x18 \x01(\bR\x10autoSpawnSession\x12(\n" +
 	"\rpipeline_mode\x18\x19 \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
 	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePr\x12F\n" +
-	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotesB\x10\n" +
-	"\x0e_pipeline_mode\"\xd9\x02\n" +
+	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotes\x123\n" +
+	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01B\x10\n" +
+	"\x0e_pipeline_modeB\x16\n" +
+	"\x14_rework_cap_override\"\xd9\x02\n" +
 	"\n" +
 	"ItemSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -6481,7 +6508,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\asort_by\x18\x03 \x01(\tR\x06sortBy\x12)\n" +
 	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xd8\x04\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xa5\x05\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -6497,8 +6524,10 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x13expected_updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x11expectedUpdatedAt\x12,\n" +
 	"\x12auto_spawn_session\x18\f \x01(\bR\x10autoSpawnSession\x12(\n" +
 	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
-	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePrB\x10\n" +
-	"\x0e_pipeline_mode\"H\n" +
+	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePr\x123\n" +
+	"\x13rework_cap_override\x18\x0f \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01B\x10\n" +
+	"\x0e_pipeline_modeB\x16\n" +
+	"\x14_rework_cap_override\"H\n" +
 	"\x19UpdateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"4\n" +
 	"\x19ArchiveBacklogItemRequest\x12\x17\n" +
@@ -6745,7 +6774,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.session.v1.StuckReasonR\x06reason\x120\n" +
 	"\x05until\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x05until\"3\n" +
 	"\x17SnoozeStuckItemResponse\x12\x18\n" +
-	"\aapplied\x18\x01 \x01(\bR\aapplied*\x87\x02\n" +
+	"\aapplied\x18\x01 \x01(\bR\aapplied*\xaa\x02\n" +
 	"\vStuckReason\x12\x1c\n" +
 	"\x18STUCK_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eSTUCK_REASON_PR_READY_UNMERGED\x10\x01\x12\x1b\n" +
@@ -6754,7 +6783,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x17STUCK_REASON_STALE_WORK\x10\x04\x12\x19\n" +
 	"\x15STUCK_REASON_BOUNCING\x10\x05\x12\x1c\n" +
 	"\x18STUCK_REASON_PUSH_FAILED\x10\x06\x12 \n" +
-	"\x1cSTUCK_REASON_ORPHANED_TRIAGE\x10\a2\xe7\x1c\n" +
+	"\x1cSTUCK_REASON_ORPHANED_TRIAGE\x10\a\x12!\n" +
+	"\x1dSTUCK_REASON_AUTONOMOUS_STUCK\x10\b2\xe7\x1c\n" +
 	"\x0eBacklogService\x12b\n" +
 	"\x11CreateBacklogItem\x12$.session.v1.CreateBacklogItemRequest\x1a%.session.v1.CreateBacklogItemResponse\"\x00\x12Y\n" +
 	"\x0eGetBacklogItem\x12!.session.v1.GetBacklogItemRequest\x1a\".session.v1.GetBacklogItemResponse\"\x00\x12w\n" +

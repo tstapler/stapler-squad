@@ -59,6 +59,11 @@ const (
 	// re-triggered triage (tombstoneOrphanTriageSessions); this reason lets the
 	// periodic stuck sweep catch it without a manual retry.
 	StuckReasonOrphanedTriage StuckReason = "orphaned_triage"
+	// StuckReasonAutonomousStuck: an autonomous driver run stopped after
+	// maxTurns without a DONE signal. Previously only surfaced as a one-off
+	// ephemeral notification (onAutonomousDriverComplete), invisible to the
+	// Unfinished tab's durable stuck-reason system.
+	StuckReasonAutonomousStuck StuckReason = "autonomous_stuck"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -70,13 +75,15 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonBouncing,
 	StuckReasonPushFailed,
 	StuckReasonOrphanedTriage,
+	StuckReasonAutonomousStuck,
 }
 
 // IsValid reports whether r is a known stuck reason value.
 func (r StuckReason) IsValid() bool {
 	switch r {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
-		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage:
+		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
+		StuckReasonAutonomousStuck:
 		return true
 	}
 	return false

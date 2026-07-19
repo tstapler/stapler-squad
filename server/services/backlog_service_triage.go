@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,9 +64,24 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 	return s.pipelineEngine.ReviewPromptFor(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 }
 
+// effectiveReworkCap returns item's own per-item rework-cap override if set
+// (BacklogItemData.ReworkCapOverride), otherwise the global default
+// (config.Config.MaxAutoReworkIterationsOrDefault). 0 on the override means
+// "unlimited retries for this item" — represented as math.MaxInt so every
+// count comparison (workCount/reviewCount >= reworkCap) never trips.
+func (s *BacklogService) effectiveReworkCap(item *session.BacklogItemData) int {
+	if item != nil && item.ReworkCapOverride != nil {
+		if *item.ReworkCapOverride == 0 {
+			return math.MaxInt
+		}
+		return *item.ReworkCapOverride
+	}
+	return s.cfg.MaxAutoReworkIterationsOrDefault()
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
-// loop (review→rework or PR-fix→rework) hits maxAutoReworkIterations and leaves an
-// item stranded for manual action. No-op if no event bus is wired.
+// loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
+// leaves an item stranded for manual action. No-op if no event bus is wired.
 //
 // Story 2.1.2: also writes a durable rework_cap BacklogStuckState row (threshold
 // 0 — the cap hit is a discrete, definitive event, marked the moment it's hit)
@@ -73,8 +89,7 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 // a missed toast. The durable write is additive to the notification, not a
 // gate: a MarkStuck/MarkStuckNotified failure is logged but must never
 // suppress the notification itself.
-func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string) {
-	reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault()
+func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string, reworkCap int) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
 			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
@@ -592,9 +607,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 			workCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); workCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict")
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
 		return nil
 	}
 
@@ -680,9 +695,9 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 			workCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); workCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.InfoLog.Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber))
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
 		return nil
 	}
 
@@ -818,9 +833,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 			reviewCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); reviewCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); reviewCount >= reworkCap {
 		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session")
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
 		return nil
 	}
 

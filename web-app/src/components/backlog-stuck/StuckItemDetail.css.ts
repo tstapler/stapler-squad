@@ -49,3 +49,57 @@ export const unknownNote = style({
   color: vars.color.textMuted,
   fontStyle: "italic",
 });
+
+export const overrideForm = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+  flexWrap: "wrap",
+});
+
+export const overrideInput = style({
+  width: "72px",
+  minHeight: "44px",
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.inputBackground,
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.sm,
+});
+
+export const overrideButton = style({
+  minHeight: "44px",
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.primary}`,
+  background: vars.color.primary,
+  color: vars.color.textInverse,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  ":disabled": {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
+});
+
+export const overrideUnlimitedButton = style({
+  minHeight: "44px",
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderColor}`,
+  background: "transparent",
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.sm,
+  cursor: "pointer",
+  ":disabled": {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
+});
+
+export const overrideStatus = style({
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+});
