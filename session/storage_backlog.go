@@ -700,6 +700,44 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 	return ReviewOutcome(is.Edges.ReviewVerdict.OverallOutcome), nil
 }
 
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
+// given BacklogItem UUID, most recent first. Reuses the existing
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
+// Summary are populated, since that's all callers (IsRepeatedFailure in
+// stuck_decisions.go) need.
+func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	sessions, err := r.client.ItemSession.Query().
+		Where(
+			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
+			itemsession.HasReviewVerdict(),
+		).
+		WithReviewVerdict().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		Limit(limit).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query review verdicts for item %s: %w", itemID, err)
+	}
+
+	result := make([]ReviewVerdictSummary, 0, len(sessions))
+	for _, is := range sessions {
+		if is.Edges.ReviewVerdict == nil {
+			continue
+		}
+		result = append(result, ReviewVerdictSummary{
+			ID:             is.Edges.ReviewVerdict.ID.String(),
+			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
+			Summary:        is.Edges.ReviewVerdict.Summary,
+		})
+	}
+	return result, nil
+}
+
 // --- AC criterion update ---
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.

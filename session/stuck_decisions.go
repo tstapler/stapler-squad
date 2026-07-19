@@ -66,6 +66,27 @@ func isBouncing(cycleCount int, hasPass bool) bool {
 	return cycleCount >= bounceThreshold && !hasPass
 }
 
+// IsRepeatedFailure reports whether the two most recent review verdicts (most
+// recent first, as returned by Storage.GetRecentReviewVerdictSummaries) are a
+// non-PASS outcome paired with an identical summary — i.e. the last rework
+// attempt changed nothing about why the item failed. This catches a
+// fast-looping non-converging cycle (e.g. an infrastructure error like a
+// missing diff, reproduced on every attempt) well before bounceThreshold's
+// 3-cycles-in-24h window would, since a broken-worktree or similar
+// environment fault can otherwise burn through the entire rework cap in
+// minutes without ever changing outcome. Exported: called from
+// server/services across the package boundary (AutoReopenAfterFailedReview).
+func IsRepeatedFailure(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	if latest.OverallOutcome == string(ReviewOutcomePass) {
+		return false
+	}
+	return latest.OverallOutcome == prior.OverallOutcome && latest.Summary != "" && latest.Summary == prior.Summary
+}
+
 // prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001
 // "Single-user readiness"). It applies every blocking-exclusion
 // github.DerivePRPriority uses (draft, changes-requested, CI-failure, not
