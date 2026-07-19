@@ -305,6 +305,14 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					case session.SessionRoleReview:
 						// Review outcomes are managed by submit_review_verdict — no transition,
 						// and no generic notification (that would duplicate the review-specific one).
+						// The review driver completing without hitting the turn cap is still
+						// evidence the "driver run stuck" condition no longer applies, so resolve
+						// any open autonomous_stuck row here even though the item's own status
+						// transition (if any) happens elsewhere. Only when outcome.Done — a stuck
+						// review run must not immediately undo the MarkStuck call a few lines up.
+						if outcome.Done {
+							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
+						}
 						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
 						return
 					default:
@@ -322,6 +330,18 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
 						} else {
 							log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+							// The item just advanced via the automated pipeline. Close any open
+							// autonomous_stuck row now rather than leaving it for a human to clear
+							// via resolveStuckOnManualTransition (server/services/
+							// backlog_service_lifecycle.go), which only fires on a manual
+							// TransitionBacklogItemStatus RPC — items that complete entirely through
+							// the automated pipeline never hit that path. Only resolve on an actually
+							// successful (outcome.Done) run: the SessionRoleWork case above still
+							// transitions in_progress->review even when the driver got stuck, and
+							// MarkStuck may have just (re)opened this exact row a few lines up.
+							if outcome.Done {
+								a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
+							}
 							// Immediately kick off headless review for completed work sessions.
 							if toStatus == session.BacklogStatusReview && a.reviewGateTrigger != nil {
 								a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
@@ -361,4 +381,23 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		int32(2), // NotificationPriority_MEDIUM
 		title, body, nil,
 	))
+}
+
+// resolveAutonomousStuck best-effort closes any open autonomous_stuck row for
+// itemID. Mirrors the resolve-at-point-of-success pattern resolveToPRPending
+// uses for push_failed/abandoned_review (session/backlog_lifecycle.go:1729-1738):
+// autonomous_stuck is excluded from selfHealStuck's per-reason sweep
+// (session/backlog_lifecycle.go's selfHealStuck) as event-shaped, and the only
+// other resolve path — resolveStuckOnManualTransition
+// (server/services/backlog_service_lifecycle.go) — fires solely on a
+// human-initiated TransitionBacklogItemStatus RPC. Without an explicit call
+// here, items that are marked autonomous_stuck and then later complete purely
+// through the automated pipeline (no human ever clicks a manual transition)
+// keep a permanently-open stuck row. A failure here is logged, not returned:
+// this is bookkeeping cleanup and must never block the caller's own
+// notification/transition handling.
+func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Context, storage *session.Storage, itemID string) {
+	if _, err := storage.ResolveStuck(ctx, itemID, domain.StuckReasonAutonomousStuck); err != nil {
+		log.Warn("[AutonomousDriver] resolveAutonomousStuck ResolveStuck(autonomous_stuck) failed", "item", itemID, "err", err)
+	}
 }

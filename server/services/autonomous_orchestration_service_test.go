@@ -464,3 +464,167 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	require.NotNil(t, notif, "the operator must still get the generic complete/stuck notification, not silence")
 	assert.Equal(t, "Autonomous fix complete", notif.NotificationTitle)
 }
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAutonomousStuck_When_WorkSucceeds
+// is the regression test for the "notify-only, not resolved" defect: an item
+// previously marked autonomous_stuck (e.g. a prior turn-cap stop) that later
+// completes successfully through the automated pipeline (SessionRoleWork,
+// outcome.Done=true) must have its open autonomous_stuck row resolved here,
+// rather than staying permanently open until a human happens to trigger a
+// manual TransitionBacklogItemStatus RPC (server/services/
+// backlog_service_lifecycle.go's resolveStuckOnManualTransition — the only
+// other resolve path, and one the automated pipeline never exercises).
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAutonomousStuck_When_WorkSucceeds(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-stuck-resolves-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous stuck resolves test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Simulate a prior turn-cap stop that left an open autonomous_stuck row.
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
+		session.BacklogStatusInProgress, "autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "precondition: the stuck row must be open before the success run")
+
+	// The item resumes and this time the work driver actually finishes.
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 3}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err = storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a successful automated completion must resolve the previously-open autonomous_stuck row")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAutonomousStuck_When_ReviewSucceeds
+// covers the SessionRoleReview half of the same fix: onAutonomousDriverComplete
+// intentionally skips the backlog item's status transition for review sessions
+// (that is submit_review_verdict's job), but a successful review driver run is
+// still proof the driver itself is no longer stuck, so the open autonomous_stuck
+// row must still be resolved here.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAutonomousStuck_When_ReviewSucceeds(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-stuck-review-resolves-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous stuck review resolves test item",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
+		session.BacklogStatusReview, "autonomous review driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "precondition: the stuck row must be open before the success run")
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "review complete", Turns: 2}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err = storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a successful review driver run must resolve the previously-open autonomous_stuck row even though the status transition itself happens in submit_review_verdict")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomousStuck_When_WorkStillStuck
+// guards against a naive "resolve whenever the transition succeeds" fix: the
+// SessionRoleWork case still transitions in_progress->review even when the
+// driver itself got stuck (outcome.Done=false; see selfHealStuck's doc
+// comment in session/backlog_lifecycle.go for why that transition happens
+// regardless of outcome), so the row MarkStuck just (re)opened a few lines
+// above must NOT be immediately resolved by that same transition succeeding.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomousStuck_When_WorkStillStuck(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-stuck-still-stuck-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous still-stuck test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "the MarkStuck row written moments earlier in the same call must survive — the item is still stuck")
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
