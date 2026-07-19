@@ -20,6 +20,17 @@ type ReviewGateTrigger interface {
 	TriggerReviewForSession(workSessionUUID string)
 }
 
+// AutonomousStuckRespawner is implemented by BacklogService to give an
+// in_progress backlog item a fresh work-session turn budget after an
+// autonomous work session hits its turn cap without a DONE signal, instead of
+// forcing the item into review against work the driver itself flagged
+// incomplete (see onAutonomousDriverComplete's SessionRoleWork case). Gated
+// by the same rework cap AutoReopenAfterFailedReview uses, so this respawn
+// loop can't run forever either.
+type AutonomousStuckRespawner interface {
+	AutoRespawnAutonomousWork(ctx context.Context, itemID string) error
+}
+
 // AutonomousOrchestrationService manages the lifecycle of AutonomousDriver instances:
 // registering them on session creation, stopping them on deletion/hibernate, and
 // handling their completion callbacks.
@@ -46,11 +57,23 @@ type AutonomousOrchestrationService struct {
 	// reviewGateTrigger fires an immediate headless review when a work session
 	// completes under autonomous mode. Optional — if nil, review runs on next ReconcileStuck tick.
 	reviewGateTrigger ReviewGateTrigger
+
+	// autonomousStuckRespawner gives an item a fresh autonomous work-session
+	// turn budget when a work session hits its turn cap without a DONE signal.
+	// Optional — if nil, the item is simply left in_progress (marked
+	// autonomous_stuck) until a human reopens it manually.
+	autonomousStuckRespawner AutonomousStuckRespawner
 }
 
 // SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
 func (a *AutonomousOrchestrationService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	a.reviewGateTrigger = t
+}
+
+// SetAutonomousStuckRespawner wires the respawner (typically BacklogService) used to
+// retry a turn-cap-stopped autonomous work session instead of forcing it to review.
+func (a *AutonomousOrchestrationService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	a.autonomousStuckRespawner = r
 }
 
 // TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger, used
@@ -300,8 +323,34 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						toStatus = session.BacklogStatusReady
 						expectedStatus = string(session.BacklogStatusIdea)
 					case session.SessionRoleWork:
-						toStatus = session.BacklogStatusReview
-						expectedStatus = string(session.BacklogStatusInProgress)
+						if !outcome.Done {
+							// Turn-cap stop with no DONE signal: don't force the item into
+							// review — that reviews known-incomplete work every time, and
+							// (before this fix) a doomed review that itself exits with no
+							// verdict fed straight back into another turn-cap-doomed work
+							// session, with no working circuit breaker to stop it (a live
+							// item bounced 78 times in 24h this way — see
+							// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update).
+							// Leave toStatus unset so the item stays in_progress; the
+							// autonomous_stuck row written above already makes this visible
+							// in the Unfinished tab, and the generic "Autonomous fix stuck"
+							// notification below still fires. Give the item a fresh turn
+							// budget directly instead, gated by the same rework cap the
+							// review-side auto-reopen loop uses.
+							log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
+							if a.autonomousStuckRespawner != nil {
+								respawner := a.autonomousStuckRespawner
+								itemID := item.ID
+								go func() {
+									if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
+										log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+									}
+								}()
+							}
+						} else {
+							toStatus = session.BacklogStatusReview
+							expectedStatus = string(session.BacklogStatusInProgress)
+						}
 					case session.SessionRoleReview:
 						// Review outcomes are managed by submit_review_verdict — no transition,
 						// and no generic notification (that would duplicate the review-specific one).

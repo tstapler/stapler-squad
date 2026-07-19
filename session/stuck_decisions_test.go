@@ -136,3 +136,19 @@ func TestIsRepeatedFailure_should_returnFalse_When_SummariesAreBothEmpty(t *test
 	}
 	assert.False(t, IsRepeatedFailure(recent), "two empty summaries carry no signal and must not trip the breaker")
 }
+
+func TestIsRepeatedNoVerdictFailure_should_returnTrue_When_LastTwoReviewsHadNoVerdict(t *testing.T) {
+	assert.True(t, IsRepeatedNoVerdictFailure([]bool{false, false}),
+		"two consecutive review sessions with no verdict at all must trip the breaker")
+}
+
+func TestIsRepeatedNoVerdictFailure_should_returnFalse_When_FewerThanTwoReviews(t *testing.T) {
+	assert.False(t, IsRepeatedNoVerdictFailure(nil))
+	assert.False(t, IsRepeatedNoVerdictFailure([]bool{false}), "a single no-verdict review must not trip the breaker")
+}
+
+func TestIsRepeatedNoVerdictFailure_should_returnFalse_When_EitherReviewHadAVerdict(t *testing.T) {
+	assert.False(t, IsRepeatedNoVerdictFailure([]bool{true, false}), "latest had a verdict — not a repeat of nothing")
+	assert.False(t, IsRepeatedNoVerdictFailure([]bool{false, true}), "prior had a verdict — not a repeat of nothing")
+	assert.False(t, IsRepeatedNoVerdictFailure([]bool{true, true}), "both had verdicts — IsRepeatedFailure's job, not this one")
+}

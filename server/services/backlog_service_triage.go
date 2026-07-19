@@ -79,6 +79,23 @@ func (s *BacklogService) effectiveReworkCap(item *session.BacklogItemData) int {
 	return s.cfg.MaxAutoReworkIterationsOrDefault()
 }
 
+// recentReviewHadVerdict returns up to n bools, most-recent-first, one per
+// review-role ItemSession in sessions — true if that session ever had a
+// ReviewVerdict row attached. sessions must be ordered oldest-first, as
+// Storage.ListItemSessions returns (and as AutoReopenAfterFailedReview already
+// has in hand for its work-session cap check, so this needs no extra query).
+// Feeds session.IsRepeatedNoVerdictFailure.
+func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool {
+	out := make([]bool, 0, n)
+	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
+		if sessions[i].Role != session.SessionRoleReview {
+			continue
+		}
+		out = append(out, sessions[i].ReviewVerdict != nil)
+	}
+	return out
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
 // loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
 // leaves an item stranded for manual action. No-op if no event bus is wired.
@@ -659,6 +676,22 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return nil
 	}
 
+	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
+	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
+	// was killed, or hit its turn cap before ever calling submit_review_verdict
+	// is invisible to the check above — the IsRepeatedFailure comparison above
+	// never even sees it, so it can never trip on this failure shape no matter
+	// how many times it repeats. sessions (already fetched above for the work
+	// session cap check) has the review-role entries with ReviewVerdict
+	// eagerly loaded, so no extra query is needed. See
+	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
+	// loop (78 cycles in 24h) this closes.
+	if session.IsRepeatedNoVerdictFailure(recentReviewHadVerdict(sessions, 2)) {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s: the last two review sessions both exited without ever writing a verdict; leaving in review for remediation instead of reopening", itemID)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "review session exited without ever writing a verdict")
+		return nil
+	}
+
 	workCount := 0
 	for _, is := range sessions {
 		if is.Role == session.SessionRoleWork {
@@ -706,6 +739,69 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
+	return nil
+}
+
+// AutoRespawnAutonomousWork implements the AutonomousStuckRespawner interface
+// consumed by AutonomousOrchestrationService. It gives an in_progress item a
+// fresh autonomous work-session turn budget after a work session hits its
+// turn cap without a DONE signal, instead of forcing the item through a
+// review cycle against known-incomplete work (see onAutonomousDriverComplete's
+// SessionRoleWork case in autonomous_orchestration_service.go, and
+// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update, for the
+// bounce loop this closes). No status transition is needed — the item is
+// already in_progress — so this mirrors AutoReopenAfterFailedReview's guard
+// and cap checks without the review→in_progress transition step.
+func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+		// Already moved on (a human acted manually, or another reconciler beat
+		// us to it) — nothing to do.
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions for cap check: %w", sessErr)
+	}
+
+	// Tombstone any work session confirmed dead before checking liveness,
+	// mirroring AutoReopenForPRFix's identical guard — the driver-complete
+	// callback that triggered this call already ended the session record, but
+	// a race with another respawn attempt is still possible.
+	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
+	if hasActiveWorkSession(sessions) {
+		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s already has an active work session; skipping respawn", itemID)
+		return nil
+	}
+
+	workCount := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork {
+			workCount++
+		}
+	}
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s has %d work sessions (cap %d); leaving in_progress for manual action", itemID, workCount, reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after repeatedly hitting the autonomous turn cap without finishing", reworkCap)
+		return nil
+	}
+
+	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId:     itemID,
+		Autonomous: true,
+	}))
+	if spawnErr != nil {
+		return fmt.Errorf("spawn session: %w", spawnErr)
+	}
+	log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s respawned with a fresh turn budget", itemID)
 	return nil
 }
 

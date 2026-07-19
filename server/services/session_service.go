@@ -751,6 +751,13 @@ func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	s.autonomousSvc.SetReviewGateTrigger(t)
 }
 
+// SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
+// service so a turn-cap-stopped work session gets a fresh turn budget instead of
+// being forced into review.
+func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	s.autonomousSvc.SetAutonomousStuckRespawner(r)
+}
+
 // TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
 // Satisfies mcp.ReviewTrigger so request_review can spawn a review gate immediately
 // instead of waiting for the next ReconcileStuck tick.
