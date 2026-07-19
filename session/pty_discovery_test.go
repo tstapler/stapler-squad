@@ -1,6 +1,9 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,7 +407,7 @@ func TestWithSessionLister(t *testing.T) {
 // TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister verifies that when the
 // SessionLister is healthy no exec.Command("tmux","list-sessions") fork occurs.
 // The lister returns two staplersquad_ sessions; because there is no real tmux
-// process the PTY lookup (getPTYInfoFromTmux) will fail and both sessions will
+// process the PTY lookup (getPTYInfoFromTmuxWithSocket) will fail and both sessions will
 // be skipped — but the point is we exercised the lister path without error.
 func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 	lister := &fakeSessionLister{
@@ -421,7 +424,7 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 	// lister without forking tmux list-sessions.
 	result := pd.discoverOrphanedPTYs()
 
-	// In a test environment getPTYInfoFromTmux will fail for every session,
+	// In a test environment getPTYInfoFromTmuxWithSocket will fail for every session,
 	// so the returned slice will be empty — but no exec fork occurred.
 	// We assert nil-safety only; the important invariant is no panic.
 	if result == nil {
@@ -466,5 +469,117 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
 				t.Error("discoverOrphanedPTYs returned nil slice on exec fallback")
 			}
 		})
+	}
+}
+
+// TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne is the regression guard
+// for the raw "tmux list-panes -a" call that, before ResolveSocket existed, always
+// targeted the shared, machine-wide default tmux socket when called with an empty
+// socket argument — the same class of bug that let a test process enumerate another
+// running stapler-squad instance's panes. It replaces the tmux binary with a fake
+// script that records its argv and asserts the call is socket-scoped to the
+// per-process isolated socket rather than the shared default.
+func TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne(t *testing.T) {
+	logPath := installFakeTmuxBinary(t)
+
+	batchPaneActivity("")
+
+	assertInvocationsUseIsolatedSocket(t, logPath, "list-panes")
+}
+
+// TestBatchPTYInfo_UsesIsolatedSocketWhenCalledWithoutOne mirrors
+// TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne for the sibling
+// "tmux list-panes -a" call in batchPTYInfo.
+func TestBatchPTYInfo_UsesIsolatedSocketWhenCalledWithoutOne(t *testing.T) {
+	logPath := installFakeTmuxBinary(t)
+
+	batchPTYInfo("")
+
+	assertInvocationsUseIsolatedSocket(t, logPath, "list-panes")
+}
+
+// installFakeTmuxBinary points TMUX_BIN (auto-restored by t.Setenv) at a script that
+// appends its argv to a log file and exits non-zero, so callers gracefully return
+// empty results. Returns the log path.
+func installFakeTmuxBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	fakeTmux := filepath.Join(dir, "tmux")
+
+	script := "#!/bin/sh\necho \"$@\" >> \"" + logPath + "\"\nexit 1\n"
+	if err := os.WriteFile(fakeTmux, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake tmux binary: %v", err)
+	}
+	t.Setenv("TMUX_BIN", fakeTmux)
+	return logPath
+}
+
+// assertInvocationsUseIsolatedSocket asserts that the fake tmux binary was invoked
+// at least once with the given subcommand, and that EVERY invocation logged --
+// including any from unrelated background goroutines (e.g. hibernation sweepers)
+// left running by earlier tests in this process, since TMUX_BIN is process-global --
+// is socket-scoped with "-L <isolated-socket>" rather than falling through to the
+// shared default (no -L at all). A stray unscoped call from anywhere would mean
+// ResolveSocket's isolation guarantee has a hole.
+func assertInvocationsUseIsolatedSocket(t *testing.T, logPath string, wantSubcommand string) {
+	t.Helper()
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected the fake tmux binary to have been invoked: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("expected at least one tmux invocation, got none")
+	}
+
+	sawWantedSubcommand := false
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "-L ") {
+			t.Fatalf("expected every invocation to be socket-scoped with -L, got: %q", line)
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.Contains(fields[1], "test-isolated-") {
+			t.Fatalf("expected the per-process isolated socket, not the shared default, got: %q", line)
+		}
+		if strings.Contains(line, wantSubcommand) {
+			sawWantedSubcommand = true
+		}
+	}
+	if !sawWantedSubcommand {
+		t.Fatalf("expected an invocation containing %q, got: %v", wantSubcommand, lines)
+	}
+}
+
+// TestPTYDiscovery_SkipsTickWhenPreviousStillRunning is a regression test for
+// monitorLoop's "skip this tick if the previous one is still running" guard:
+// this poller fires every refreshRate (default 5s) forever regardless of
+// session count, and without the guard, a slow tmux call (server under load)
+// would let ticks pile up as concurrent Refresh() calls instead of backing off.
+func TestPTYDiscovery_SkipsTickWhenPreviousStillRunning(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Simulate a refresh already in flight (as if a previous tick's Refresh()
+	// hadn't returned yet).
+	pd.refreshing.Store(true)
+
+	ran, err := pd.tryRefreshOnce()
+	if ran {
+		t.Fatal("tryRefreshOnce ran Refresh() while a previous call was still marked in-flight")
+	}
+	if err != nil {
+		t.Fatalf("skipped tick should return a nil error, got: %v", err)
+	}
+
+	// Once the in-flight refresh "finishes" (guard cleared), the next call must
+	// actually run Refresh() again -- proves this isn't just permanently stuck.
+	pd.refreshing.Store(false)
+	ran, _ = pd.tryRefreshOnce()
+	if !ran {
+		t.Fatal("tryRefreshOnce should run Refresh() once the guard is clear")
+	}
+	if pd.refreshing.Load() {
+		t.Fatal("tryRefreshOnce must clear the in-flight guard after Refresh() returns")
 	}
 }

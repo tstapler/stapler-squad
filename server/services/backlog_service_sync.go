@@ -90,7 +90,7 @@ func (s *BacklogService) AttachSessionToItem(
 				worktreePath := inst.GetEffectiveRootDir()
 				// Write synchronously under mutex to prevent concurrent write races.
 				s.worktreeMu.Lock()
-				if wErr := session.WriteSlashCommands(item, worktreePath); wErr != nil {
+				if wErr := session.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 				}
@@ -104,6 +104,12 @@ func (s *BacklogService) AttachSessionToItem(
 				if baseSHA, shaErr := session.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
 					_ = s.storage.UpdateItemSessionGitActivity(ctx, is.ID, baseSHA, "", time.Now(), 0)
 					inst.SetDirBaseSHA(baseSHA)
+				}
+				// Persist synchronously so the review gate's worktree lookup (by session
+				// UUID) doesn't race the next periodic SaveInstances sweep — same fix as
+				// SpawnSessionFromItem.
+				if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
+					log.WarningLog.Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 				}
 				break
 			}

@@ -7,9 +7,9 @@ import (
 )
 
 const keychainService = "stapler-squad"
-const keychainTokenKey = "github-token"           // legacy single-account key
-const keychainAccountsKey = "github-accounts"     // JSON []string of usernames
-const keychainAccountPrefix = "github-token:"     // per-account key prefix
+const keychainTokenKey = "github-token"       // legacy single-account key
+const keychainAccountsKey = "github-accounts" // JSON []string of usernames
+const keychainAccountPrefix = "github-token:" // per-account key prefix
 
 // GetKeychainToken returns any stored GitHub token (first account, or the
 // legacy single-account slot). Kept for backward-compatibility with the

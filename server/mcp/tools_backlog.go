@@ -78,6 +78,14 @@ type ReviewCompletionSignaler interface {
 	StopDriverForSession(sessionTitle string)
 }
 
+// ReviewTrigger allows the MCP handler to spawn a review gate immediately when
+// request_review is called, instead of waiting for the next ReconcileStuck tick
+// (up to 60s later). Implemented by SessionService, which delegates to the
+// BacklogLifecycleListener wired via SetReviewGateTrigger.
+type ReviewTrigger interface {
+	TriggerReviewForSession(sessionUUID string)
+}
+
 // --- Handler struct ---
 
 type backlogHandlers struct {
@@ -86,6 +94,7 @@ type backlogHandlers struct {
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
+	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
 }
 
 // --- get_backlog_item ---
@@ -142,6 +151,30 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("\n\n")
 	}
 
+	// Latest review verdict, if one has been submitted. This is the primary way a
+	// still-running work session discovers review feedback without being killed and
+	// respawned — see request_review's guidance below.
+	if verdict := latestReviewVerdict(ctx, h.storage, itemID); verdict != nil {
+		sb.WriteString("## Latest Review Verdict\n")
+		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
+		if verdict.Summary != "" {
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", session.SanitizeForAgentContext(verdict.Summary, 500))
+		}
+		var perCriterion []session.CriterionVerdict
+		if verdict.PerCriterion != "" {
+			if jsonErr := json.Unmarshal([]byte(verdict.PerCriterion), &perCriterion); jsonErr != nil {
+				log.WarningLog.Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
+			}
+		}
+		for _, v := range perCriterion {
+			if v.Outcome == session.ReviewOutcomePass {
+				continue
+			}
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, session.SanitizeForAgentContext(v.Evidence, 300))
+		}
+		sb.WriteString("\n")
+	}
+
 	// Role-aware workflow guidance: look up the caller's role if a session UUID is present.
 	role := ""
 	if callerUUID, ok := sessionUUIDFromContext(ctx); ok {
@@ -164,6 +197,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
+		sb.WriteString("4. Do NOT end your session after request_review. Wait a bit, then call get_backlog_item again — once a verdict lands it appears under \"Latest Review Verdict\" above. PASS → status becomes done, you're finished. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Keep looping until PASS.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -186,6 +220,24 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	)
 
 	return mcpgo.NewToolResultText(envelope), nil
+}
+
+// latestReviewVerdict returns the most recently submitted ReviewVerdict for the item,
+// or nil if none exists yet. ListItemSessions orders ascending by created_at, so the
+// last session carrying a verdict is the most recent one.
+func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *session.ReviewVerdictSummary {
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
+		return nil
+	}
+	var latest *session.ReviewVerdictSummary
+	for _, s := range sessions {
+		if s.ReviewVerdict != nil {
+			latest = s.ReviewVerdict
+		}
+	}
+	return latest
 }
 
 // --- report_progress ---
@@ -253,6 +305,14 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
+	// Append to the full-history log in addition to the current-note-per-criterion
+	// update above. This is an enrichment for reviewers (full timeline of notes across
+	// a work session), not part of report_progress's primary contract — a failure here
+	// must not fail the call that already succeeded above.
+	if appendErr := h.storage.AppendProgressNote(ctx, itemID, criteriaIndex, note, acStatus); appendErr != nil {
+		log.WarningLog.Printf("[mcp:report_progress] failed to append progress note history item=%s criterion=%d: %v", itemID, criteriaIndex, appendErr)
+	}
+
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Criterion %d updated to %q on item %s.", criteriaIndex, status, itemID,
 	)), nil
@@ -287,13 +347,34 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "message must be <= 2000 characters", ""), nil
 	}
 
+	// verification_notes is optional but strongly encouraged: it is the reviewer's
+	// only window into evidence that isn't visible in the diff (test runs, manual
+	// UI checks). See tool description for what makes a claim credible.
+	verificationNotes, _ := args["verification_notes"].(string)
+	if len(verificationNotes) > 4000 {
+		return errResult(ErrInvalidArgument, "verification_notes must be <= 4000 characters", ""), nil
+	}
+
 	// Verify session is linked to item.
-	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr != nil {
 		if errors.Is(linkErr, session.ErrNotFound) {
 			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+
+	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
+	// The reviewer reads the committed diff; uncommitted work would be invisible and
+	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
+		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
+			return errResult(ErrInvalidArgument,
+				"request_review rejected: the worktree has uncommitted changes. "+
+					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
+				""), nil
+		}
 	}
 
 	// Transition item to review status (from in_progress only).
@@ -303,7 +384,23 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
 	}
 
-	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q", callerUUID, itemID, message)
+	// Persist verification evidence on the work ItemSession so the review gate can
+	// surface it in the reviewer's prompt (see BuildReviewPrompt). Best-effort: a
+	// failure here should not block the status transition that already succeeded.
+	if verificationNotes != "" {
+		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, verificationNotes); updateErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+		}
+	}
+
+	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q verification_notes_len=%d", callerUUID, itemID, message, len(verificationNotes))
+
+	// Spawn the review gate immediately rather than waiting for the next 60s
+	// ReconcileStuck tick — that tick is meant as a fallback for the rare case this
+	// call is unavailable, not the primary trigger.
+	if h.reviewTrigger != nil {
+		h.reviewTrigger.TriggerReviewForSession(callerUUID)
+	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
@@ -409,14 +506,14 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// If PASS, transition item to done (only from review status).
-	if overallOutcome == session.ReviewVerdictPass {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition); transErr != nil {
-			log.InfoLog.Printf("[mcp:submit_review_verdict] PASS but transition to done failed: %v", transErr)
-			// Non-fatal — verdict is saved, status transition is best-effort.
-		}
-	}
+	// Deliberately no status transition here: BacklogLifecycleListener.
+	// handleReviewSessionExited (session/backlog_lifecycle.go) is the sole place
+	// that decides what happens next once this review session exits — on PASS it
+	// pushes the branch, creates a PR, and transitions to pr_pending
+	// (pushAndCreatePR); on FAIL/PARTIAL/UNVERIFIABLE it triggers auto-reopen.
+	// Transitioning straight to done here would race that handler: its own
+	// precondition (ExpectedStatus: review) would then fail once the session
+	// actually exits, silently skipping PR creation.
 
 	// Stop the AutonomousDriver for this review session (belt-and-suspenders).
 	// The verdict is already persisted; a subsequent Stuck fireCompletion is harmless
@@ -678,7 +775,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("request_review",
-			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done."),
+			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done. "+
+				"The reviewer only sees the committed diff plus what you report here — it CANNOT see command output or UI behavior you observed. "+
+				"If any acceptance criterion describes something that isn't visible in a diff (a test suite passing, `make quick-check` succeeding, a manually-verified UI behavior), you MUST report it in verification_notes or the reviewer will mark that criterion UNVERIFIABLE even if you genuinely did the work. "+
+				"If you concluded an acceptance criterion is already satisfied by existing code and made no change for it, say so explicitly and cite the exact file path and function/symbol that already satisfies it — an unsupported claim like \"already implemented\" or \"already done\" with no citation is weak evidence and is likely to be marked UNVERIFIABLE."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -686,6 +786,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("message",
 				mcpgo.Description("Summary for the reviewer: what was built, how to verify it, any known limitations (max 2000 chars)"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithString("verification_notes",
+				mcpgo.Description("Evidence for any acceptance criteria not verifiable from the diff alone (max 4000 chars). "+
+					"For each command you ran to verify behavior, state the exact command and its outcome, e.g. "+
+					"\"ran `go test ./session/...` -> ok (41 tests)\" or \"ran `make quick-check` -> build/test/lint all passed\". "+
+					"For manually-verified UI behavior, describe exactly what you did and observed, e.g. "+
+					"\"ran make install-service, opened the session list, confirmed the new session appeared under Category=Backlog\". "+
+					"Vague claims like \"I tested it\" or \"verified manually\" with no specifics are not useful evidence — be concrete or omit the claim. "+
+					"If a criterion required no change because it's already implemented, state that explicitly and cite the exact file path and function/symbol that satisfies it, e.g. "+
+					"\"AC 2 already satisfied by ValidateSessionOwnership() in session/backlog_review.go — no change needed\". "+
+					"A citation-free claim of \"already implemented\" is weak evidence for the reviewer."),
 			),
 		),
 		h.requestReview,

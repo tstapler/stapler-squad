@@ -318,7 +318,7 @@ func TestMergeAcCriteria(t *testing.T) {
 			wantTexts:    []string{"zero", "five"},
 		},
 		{
-			name: "duplicate_index_in_incoming_returns_error",
+			name:     "duplicate_index_in_incoming_returns_error",
 			existing: nil,
 			incoming: []AcCriterion{
 				{Index: 0, Text: "first", Status: AcStatusPending},

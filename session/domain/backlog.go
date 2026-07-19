@@ -27,6 +27,68 @@ const (
 // when no priority is specified. Lower values indicate higher priority.
 const DefaultBacklogPriority = 3
 
+// StuckReason is a validated string-backed enum of the classes a backlog item
+// can be "stuck" for — matching the house BacklogStatus/ReviewOutcome style
+// (validated at the boundary via IsValid, not a truly-unrepresentable sum
+// type). Only these compile-time constants should ever reach MarkStuck; no
+// unvalidated string should reach the DB.
+type StuckReason string
+
+const (
+	// StuckReasonPRReadyUnmerged: a pr_pending item's PR is green, mergeable,
+	// and unmerged past the threshold (see prReadyToMergeSolo).
+	StuckReasonPRReadyUnmerged StuckReason = "pr_ready_unmerged"
+	// StuckReasonReworkCap: the auto-rework loop hit maxAutoReworkIterations
+	// and parked the item for manual action.
+	StuckReasonReworkCap StuckReason = "rework_cap"
+	// StuckReasonAbandonedReview: a review-status item has a review verdict on
+	// record but nothing active in flight.
+	StuckReasonAbandonedReview StuckReason = "abandoned_review"
+	// StuckReasonStaleWork: an in_progress item's active work session reported
+	// no progress for longer than maxWorkSessionStaleness.
+	StuckReasonStaleWork StuckReason = "stale_work"
+	// StuckReasonBouncing: an item crossed in_progress <-> review >= bounceThreshold
+	// times within bounceLookback with no PASS verdict.
+	StuckReasonBouncing StuckReason = "bouncing"
+	// StuckReasonPushFailed: pushAndCreatePR failed (push rejected / gh pr
+	// create errored) leaving a post-review item with no pr_number.
+	StuckReasonPushFailed StuckReason = "push_failed"
+	// StuckReasonOrphanedTriage: an idea-status item's triage session ended
+	// (crashed, was killed, or the process exited) without ever transitioning
+	// the item to ready — previously only surfaced when a human manually
+	// re-triggered triage (tombstoneOrphanTriageSessions); this reason lets the
+	// periodic stuck sweep catch it without a manual retry.
+	StuckReasonOrphanedTriage StuckReason = "orphaned_triage"
+	// StuckReasonAutonomousStuck: an autonomous driver run stopped after
+	// maxTurns without a DONE signal. Previously only surfaced as a one-off
+	// ephemeral notification (onAutonomousDriverComplete), invisible to the
+	// Unfinished tab's durable stuck-reason system.
+	StuckReasonAutonomousStuck StuckReason = "autonomous_stuck"
+)
+
+// AllStuckReasons lists every valid StuckReason constant.
+var AllStuckReasons = []StuckReason{
+	StuckReasonPRReadyUnmerged,
+	StuckReasonReworkCap,
+	StuckReasonAbandonedReview,
+	StuckReasonStaleWork,
+	StuckReasonBouncing,
+	StuckReasonPushFailed,
+	StuckReasonOrphanedTriage,
+	StuckReasonAutonomousStuck,
+}
+
+// IsValid reports whether r is a known stuck reason value.
+func (r StuckReason) IsValid() bool {
+	switch r {
+	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
+		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
+		StuckReasonAutonomousStuck:
+		return true
+	}
+	return false
+}
+
 // AcStatus represents the status of a single acceptance criterion.
 type AcStatus string
 
@@ -248,6 +310,7 @@ var (
 	ErrPlanRequired          = errors.New("plan must be approved or skip_planning must be true before spawning work session")
 	ErrPlanArtifactsRequired = errors.New("plan artifacts path is required when planning is not skipped")
 	ErrVerdictRequired       = errors.New("PASS verdict or manual override required before marking done")
+	ErrCodeNotOnMain         = errors.New("code changes must actually be on main (merged locally or via a merged PR) before marking done; provide override_reason to bypass")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -259,6 +322,13 @@ type BacklogItemTransitionInput struct {
 	PlanArtifactsPath string        // path to plan artifacts written by triage session
 	OverallOutcome    ReviewOutcome // from linked ReviewVerdict
 	OverrideReason    string
+	// HasUnshippedCode is true when a work session committed code
+	// (LastCommitSha != "") that has not been verified to actually be on main —
+	// locally (merged/committed directly) or remotely (merged PR, pulled or not).
+	// A PrURL alone does NOT clear this: an open, unmerged, or later-reverted PR
+	// still has PrURL set, so it was never proof the code shipped. The
+	// review→done guard uses this to block premature done transitions.
+	HasUnshippedCode bool
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -292,12 +362,27 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		return nil
 
-	case from == BacklogStatusReview && to == BacklogStatusDone:
+	case to == BacklogStatusDone:
+		// Applies to both review->done and pr_pending->done — the only two edges
+		// in validTransitions that reach "done". Previously this guard only
+		// matched from == BacklogStatusReview, so a pr_pending item could be
+		// marked done (e.g. via a manual "Approve" click) with no verdict/shipped
+		// check at all: found live when a real backlog item reached done while
+		// its GitHub PR was still open with merge conflicts, permanently
+		// orphaning that PR from ReconcilePRPending's monitoring (which only
+		// polls pr_pending-status items). The automated ReconcilePRPending path
+		// that legitimately drives pr_pending->done already verifies
+		// IsPRMerged() itself before calling this transition, so it always
+		// carries a genuine PASS verdict and shipped code — this guard does not
+		// change its behavior, only closes the gap for other callers.
 		if item.OverrideReason != "" {
 			return nil
 		}
 		if item.OverallOutcome != ReviewOutcomePass {
 			return ErrVerdictRequired
+		}
+		if item.HasUnshippedCode {
+			return ErrCodeNotOnMain
 		}
 		return nil
 

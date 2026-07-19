@@ -9,7 +9,6 @@ import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BackoffState, getWsCloseCode, isRetriableCloseCode } from "@/lib/utils/backoff";
 import { MessageQueue } from "@/lib/terminal/MessageQueue";
-import { decompressLZMA, isLZMACompressed } from "@/lib/compression/lzma";
 import { useTerminalFlowControl } from "./useTerminalFlowControl";
 import { useTerminalMetrics } from "./useTerminalMetrics";
 import type { Terminal } from '@xterm/xterm';
@@ -49,10 +48,7 @@ interface UseTerminalStreamOptions {
   autoConnect?: boolean; // If false, requires manual connect() call (default: true)
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
-  streamingMode?: "raw" | "raw-compressed" | "state" | "hybrid" | "ssp"; // Terminal streaming mode (default: "raw")
   isExternal?: boolean; // Whether this is an external session (uses /ws/external endpoint)
-  enablePredictiveEcho?: boolean; // Enable Mosh-style predictive echo (default: false)
-  onEchoAck?: (echoNum: bigint, latencyMs: number) => void; // Callback when echo is acknowledged (for RTT stats)
 }
 
 interface TerminalStreamResult {
@@ -60,15 +56,12 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
-  sendInputWithEcho: (input: string) => bigint; // SSP: Send input with predictive echo tracking, returns echo number
   resize: (cols: number, rows: number) => void;
   connect: (cols?: number, rows?: number) => void; // Optional dimensions to override initial values
   disconnect: () => void;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
   requestScrollback: (fromSequence: number, limit: number) => void; // Request historical scrollback
   sendFlowControl: (paused: boolean, watermark?: number) => void; // Send flow control signal to server
-  getIsApplyingState: () => boolean; // Check if StateApplicator is currently applying a state (prevents scrollback auto-load)
-  sspNegotiated: boolean; // Whether SSP capabilities have been negotiated
   startRecording: () => void; // Start recording WebSocket messages for debugging
   stopRecording: () => void; // Stop recording and download recorded messages
   /** Terminal state machine (R1.4) — typed lifecycle state driven by server messages. */
@@ -90,9 +83,6 @@ export function useTerminalStream({
   autoConnect = true,
   initialCols,
   initialRows,
-  streamingMode = "raw",
-  enablePredictiveEcho = false,
-  onEchoAck,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -145,13 +135,10 @@ export function useTerminalStream({
 
   const flowControl = useTerminalFlowControl({
     sessionId,
-    streamingMode,
-    enablePredictiveEcho,
     getTerminal: getTerminal ?? (() => null),
     pushMessageRef,
     isConnectedRef,
     onError,
-    onEchoAck,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -192,7 +179,6 @@ export function useTerminalStream({
       const currentPaneReq = create(CurrentPaneRequestSchema, {
         lines: 50,
         includeEscapes: true,
-        streamingMode: streamingMode,
       });
 
       if (targetCols !== undefined && targetRows !== undefined) {
@@ -255,32 +241,9 @@ export function useTerminalStream({
               continue;
             }
 
-            // Dispatch to sub-hooks based on message type
-            if (msg.data.case === "state") {
-              flowControl.handleStateMessage(msg.data.value);
-            } else if (msg.data.case === "diff") {
-              flowControl.handleDiffMessage(msg.data.value);
-            } else if (msg.data.case === "sspNegotiation") {
-              flowControl.handleSspNegotiation(msg.data.value);
-            } else if (msg.data.case === "output") {
-              // Handle raw output (may be compressed)
-              const rawData = msg.data.value.data;
-
-              let decodedData: Uint8Array;
-              if (streamingMode === "raw-compressed" && isLZMACompressed(rawData)) {
-                try {
-                  decodedData = await decompressLZMA(rawData);
-                  if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-                    console.debug(`[useTerminalStream] Decompressed output: ${rawData.length} -> ${decodedData.length} bytes`);
-                  }
-                } catch (err) {
-                  console.error(`[useTerminalStream] LZMA decompression failed, using raw data:`, err);
-                  decodedData = rawData;
-                }
-              } else {
-                decodedData = rawData;
-              }
-
+            if (msg.data.case === "output") {
+              // Handle raw output
+              const decodedData = msg.data.value.data;
               const text = textDecoderRef.current.decode(decodedData, { stream: true });
 
               // Record message if recording is active
@@ -303,20 +266,6 @@ export function useTerminalStream({
               }
               // First raw output → terminal is stable (not resizing)
               setTerminalState((prev) => prev === 'LOADING' || prev === 'CONNECTING' ? 'STABLE' : prev);
-            } else if (msg.data.case === "currentPaneResponse") {
-              flowControl.handleCurrentPaneResponse(msg.data.value);
-
-              // Write deprecated pane content via scrollback callback.
-              // Use a fresh one-shot TextDecoder — currentPaneResponse is a single complete message,
-              // not a streaming sequence, so it must not share stateful decoder state with other messages.
-              const response = msg.data.value;
-              const content = new TextDecoder().decode(response.content);
-              console.log(`[useTerminalStream] Received current pane (deprecated): ${content.length} bytes`);
-
-              if (onScrollbackReceived) {
-                onScrollbackReceived(content);
-              }
-              setTerminalState('STABLE');
             } else if (msg.data.case === "scrollbackResponse") {
               // Use a per-response decoder so chunks within one scrollbackResponse are streamed
               // correctly, but separate responses don't share stateful decoder state.
@@ -397,7 +346,7 @@ export function useTerminalStream({
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      streamingMode, flowControl, metrics, handleError, initialCols, initialRows]);
+      flowControl, metrics, handleError, initialCols, initialRows]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -510,15 +459,12 @@ export function useTerminalStream({
     isConnected,
     error,
     sendInput: flowControl.sendInput,
-    sendInputWithEcho: flowControl.sendInputWithEcho,
     resize: flowControl.resize,
     connect,
     disconnect,
     scrollbackLoaded,
     requestScrollback: flowControl.requestScrollback,
     sendFlowControl: flowControl.sendFlowControl,
-    getIsApplyingState: flowControl.getIsApplyingState,
-    sspNegotiated: flowControl.sspNegotiated,
     startRecording: metrics.startRecording,
     stopRecording: metrics.stopRecording,
     terminalState,

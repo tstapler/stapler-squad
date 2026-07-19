@@ -5,7 +5,6 @@
  */
 
 import { renderHook, act } from '@testing-library/react';
-import { useRef } from 'react';
 
 // Mock @bufbuild/protobuf so create() returns a plain object mirroring the init fields
 jest.mock('@bufbuild/protobuf', () => ({
@@ -28,36 +27,12 @@ jest.mock('@/gen/session/v1/events_pb', () => {
     TerminalResize: class { cols: number; rows: number; constructor(init: any) { this.cols = init?.cols; this.rows = init?.rows; } },
     ScrollbackRequest: class { fromSequence: any; limit: any; constructor(init: any) { this.fromSequence = init?.fromSequence; this.limit = init?.limit; } },
     CurrentPaneRequest: class {
-      lines: any; includeEscapes: any; targetCols: any; targetRows: any; streamingMode: any;
+      lines: any; includeEscapes: any; targetCols: any; targetRows: any;
       constructor(init: any) { Object.assign(this, init); }
     },
     FlowControl: class { paused: any; watermark: any; constructor(init: any) { this.paused = init?.paused; this.watermark = init?.watermark; } },
-    InputWithEcho: class { data: any; echoNum: any; clientTimestampMs: any; constructor(init: any) { Object.assign(this, init); } },
-    SSPNegotiation: class {},
-    SSPCapabilities: class {},
   };
 });
-
-jest.mock('@/lib/terminal/StateApplicator', () => ({
-  StateApplicator: class {
-    applyState = jest.fn().mockReturnValue(true);
-    applyDiff = jest.fn().mockReturnValue(true);
-    getCurrentSequence = jest.fn().mockReturnValue(BigInt(0));
-    setOnDimensionMismatch = jest.fn();
-    setEchoOverlay = jest.fn();
-    setOnEchoAck = jest.fn();
-    getIsApplyingState = jest.fn().mockReturnValue(false);
-    resetSequence = jest.fn();
-  },
-}));
-
-jest.mock('@/lib/terminal/EchoOverlay', () => ({
-  EchoOverlay: class {
-    attach = jest.fn();
-    detach = jest.fn();
-    showPredictiveEcho = jest.fn();
-  },
-}));
 
 import { useTerminalFlowControl, type UseTerminalFlowControlOptions } from '../useTerminalFlowControl';
 
@@ -72,13 +47,10 @@ function createTestOptions(overrides: Partial<UseTerminalFlowControlOptions> = {
   return {
     options: {
       sessionId: 'test-session',
-      streamingMode: 'raw' as const,
-      enablePredictiveEcho: false,
       getTerminal,
       pushMessageRef,
       isConnectedRef,
       onError: jest.fn(),
-      onEchoAck: jest.fn(),
       ...overrides,
     },
     pushMessageFn,
@@ -219,26 +191,6 @@ describe('useTerminalFlowControl', () => {
     });
   });
 
-  describe('sendInputWithEcho', () => {
-    it('should increment echo counter and store timestamp', () => {
-      const { options } = createTestOptions({ enablePredictiveEcho: true });
-      const { result } = renderHook(() => useTerminalFlowControl(options));
-
-      let echoNum1: bigint = BigInt(0);
-      let echoNum2: bigint = BigInt(0);
-
-      act(() => {
-        echoNum1 = result.current.sendInputWithEcho('a');
-      });
-      act(() => {
-        echoNum2 = result.current.sendInputWithEcho('b');
-      });
-
-      expect(echoNum1).toBe(BigInt(1));
-      expect(echoNum2).toBe(BigInt(2));
-    });
-  });
-
   describe('sendFlowControl', () => {
     it('should send correct FlowControl message', () => {
       const { options, pushMessageFn } = createTestOptions();
@@ -251,24 +203,6 @@ describe('useTerminalFlowControl', () => {
       expect(pushMessageFn).toHaveBeenCalled();
       const msg = pushMessageFn.mock.calls[0][0];
       expect(msg.data.case).toBe('flowControl');
-    });
-  });
-
-  describe('getIsApplyingState', () => {
-    it('should return false when no state applicator exists', () => {
-      const { options } = createTestOptions();
-      const { result } = renderHook(() => useTerminalFlowControl(options));
-
-      expect(result.current.getIsApplyingState()).toBe(false);
-    });
-  });
-
-  describe('sspNegotiated', () => {
-    it('should start as false', () => {
-      const { options } = createTestOptions();
-      const { result } = renderHook(() => useTerminalFlowControl(options));
-
-      expect(result.current.sspNegotiated).toBe(false);
     });
   });
 });

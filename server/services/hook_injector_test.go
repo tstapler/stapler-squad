@@ -241,12 +241,47 @@ func TestInjectHooksIdempotent(t *testing.T) {
 	count := 0
 	for _, g := range groups {
 		for _, h := range g.Hooks {
-			if strings.Contains(h.Command, hookApprovalURL) {
+			if strings.Contains(h.Command, hookApprovalURL()) {
 				count++
 			}
 		}
 	}
 	if count != 1 {
 		t.Errorf("expected exactly 1 PermissionRequest hook entry after 2 calls, got %d", count)
+	}
+}
+
+// Test_hookEndpoints_should_ReflectCurrentBaseURLFn_When_CalledTwiceWithDifferentAddresses
+// (REQ-3 test #3, plan.md Task 1.3.1c).
+//
+// Calls hookEndpoints(fn) once with fn returning http://localhost:0, then again with fn
+// returning http://localhost:54211, and asserts the second call's map contains the new
+// address -- proving the map is rebuilt fresh from baseURLFn() on every call rather than
+// cached at package-construction time (the old hookEndpoint package-level var's behavior).
+func Test_hookEndpoints_should_ReflectCurrentBaseURLFn_When_CalledTwiceWithDifferentAddresses(t *testing.T) {
+	first := hookEndpoints(func() string { return "http://localhost:0" })
+	for name, url := range first {
+		if !strings.Contains(url, "http://localhost:0") {
+			t.Fatalf("expected first call's %s endpoint to use http://localhost:0, got %q", name, url)
+		}
+	}
+	if got := first[HookStopNotification]; got != "http://localhost:0/api/hooks/stop" {
+		t.Fatalf("expected first call's Stop endpoint to be http://localhost:0/api/hooks/stop, got %q", got)
+	}
+
+	second := hookEndpoints(func() string { return "http://localhost:54211" })
+	if got := second[HookStopNotification]; got != "http://localhost:54211/api/hooks/stop" {
+		t.Fatalf("expected second call's Stop endpoint to be http://localhost:54211/api/hooks/stop, got %q", got)
+	}
+	if got := second[HookPermissionApproval]; got != "http://localhost:54211/api/hooks/permission-request" {
+		t.Fatalf("expected second call's PermissionRequest endpoint to be http://localhost:54211/api/hooks/permission-request, got %q", got)
+	}
+
+	// The second call must not retain any trace of the first call's address --
+	// proving the map is rebuilt fresh each call, never cached.
+	for name, url := range second {
+		if strings.Contains(url, "localhost:0") {
+			t.Fatalf("expected hookEndpoints to be rebuilt fresh per call, but %s endpoint leaked the first call's stale address: %q", name, url)
+		}
 	}
 }

@@ -49,6 +49,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
@@ -78,6 +81,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -118,6 +124,9 @@ jobs:
     needs: prepare
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -275,6 +284,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -318,6 +330,9 @@ jobs:
     needs: prepare
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -361,6 +376,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          lfs: true
+          submodules: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go

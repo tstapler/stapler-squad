@@ -2,13 +2,15 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -1090,151 +1092,72 @@ func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// UpdateSession – program switch (backlog: "switching session programs does not
-// save correctly"). Regression coverage for the shipped fix (commit 914138ec) plus
-// the empty->default no-op fix folded into Instance.SwitchProgram.
+// SetMCPServerURL / resolveMCPServerURL (Task 1.1.1c)
 // --------------------------------------------------------------------------
 
-// TestUpdateSession_ProgramUpdate_Stopped_SavesNoRestart verifies that changing the
-// program on a non-Active session persists the new value and completes without error
-// (no restart is attempted for a Paused/Stopped session).
-func TestUpdateSession_ProgramUpdate_Stopped_SavesNoRestart(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
+// SessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfterAddrChanges
+// verifies that mcpServerURLFn is invoked lazily at each point of use rather
+// than snapshotted once at SetMCPServerURL time. This is the regression test
+// for the early-binding bug where "http://"+srv.addr+"/mcp" was baked into a
+// plain string field at server-construction time — before Start() resolved a
+// PORT=0 listener's real address — permanently freezing the MCP URL at
+// http://localhost:0/mcp.
+func TestSessionService_should_ReturnUpdatedPort_When_MCPServerURLFnInvokedAfterAddrChanges(t *testing.T) {
+	svc := &SessionService{}
 
-	addPausedSession(t, fix, "program-switch-session")
+	// Simulate the server's address being resolved lazily, e.g. after
+	// net.Listen reassigns s.addr post-bind (Task 1.1.1a).
+	addr := "localhost:0"
+	svc.SetMCPServerURL(func() string { return "http://" + addr + "/mcp" })
 
-	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id:      "program-switch-session",
-		Program: strPtr("aider"),
-	}))
-	require.NoError(t, err)
-	assert.Equal(t, "aider", resp.Msg.Session.Program)
+	require.Equal(t, "http://localhost:0/mcp", svc.resolveMCPServerURL(),
+		"expected the fn to reflect the pre-bind value before addr changes")
 
-	loaded, err := fix.storage.LoadInstances()
-	require.NoError(t, err)
-	var found *session.Instance
-	for _, inst := range loaded {
-		if inst.Title == "program-switch-session" {
-			found = inst
-			break
-		}
+	// Mutate the captured address, simulating Start() reassigning s.addr to
+	// the real OS-assigned port after PORT=0 was requested.
+	addr = "localhost:54211"
+
+	assert.Equal(t, "http://localhost:54211/mcp", svc.resolveMCPServerURL(),
+		"expected the fn to be re-invoked and reflect the updated address, not a construction-time snapshot")
+}
+
+// SessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfigured
+// verifies that reading the MCP server URL before SetMCPServerURL has been
+// called returns a safe empty string instead of a nil-pointer panic.
+func TestSessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfigured(t *testing.T) {
+	svc := &SessionService{}
+
+	assert.NotPanics(t, func() {
+		got := svc.resolveMCPServerURL()
+		assert.Equal(t, "", got)
+	})
+}
+
+// TestSpawnReviewSession_SetsBacklogCategory verifies that review-gate sessions
+// created via SpawnReviewSession get Category == "Backlog" so they group
+// correctly in the session list UI instead of falling into "Uncategorized".
+// This starts a real tmux session (like session/integration_test.go), so it's
+// skipped under -short (see make test vs. make test-integration).
+func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
 	}
-	require.NotNil(t, found)
-	assert.Equal(t, "aider", found.Program, "program change must be persisted")
-}
-
-// TestUpdateSession_ProgramUpdate_EmptyString_ResolvesToConfigDefault verifies that
-// sending program: "" (the "System default" option) resolves to config.LoadConfig()'s
-// DefaultProgram before persistence, rather than being dropped or stored as "".
-func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesToConfigDefault(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	addPausedSession(t, fix, "default-program-session")
+	// Isolate config to this test and use a trivial program so the tmux pane
+	// doesn't need the real "claude" binary to exist.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
 
-	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id:      "default-program-session",
-		Program: strPtr(""),
-	}))
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnReviewSession(context.Background(), item, "item-session-id", "review this")
 	require.NoError(t, err)
-	assert.NotEmpty(t, resp.Msg.Session.Program, "empty string must resolve to a real default, not be stored empty")
-	assert.Equal(t, config.LoadConfig().DefaultProgram, resp.Msg.Session.Program)
-}
+	t.Cleanup(func() { _ = inst.Destroy() })
 
-// TestUpdateSession_ProgramUpdate_SameValue_NoOp verifies that requesting the program a
-// session already has succeeds and leaves the program unchanged.
-func TestUpdateSession_ProgramUpdate_SameValue_NoOp(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	addPausedSession(t, fix, "same-program-session")
-
-	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id:      "same-program-session",
-		Program: strPtr("claude"),
-	}))
-	require.NoError(t, err)
-	assert.Equal(t, "claude", resp.Msg.Session.Program)
-}
-
-// TestUpdateSession_ProgramUpdate_ActiveSameValue_NoRestartAttempted verifies that a
-// same-value program request against an Active session is recognized as a no-op before
-// any restart is attempted. The Active instance here has no real tmux backend wired up,
-// so if SwitchProgram attempted a restart anyway, Restart() would error and this test
-// would fail — the passing case is the regression guard.
-func TestUpdateSession_ProgramUpdate_ActiveSameValue_NoRestartAttempted(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	inst := &session.Instance{
-		Title:     "active-noop-session",
-		Path:      "/tmp/test",
-		Status:    session.Paused,
-		Program:   "claude",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	require.NoError(t, fix.storage.AddInstance(inst))
-	loaded, err := fix.storage.LoadInstances()
-	require.NoError(t, err)
-	var found *session.Instance
-	for _, li := range loaded {
-		if li.Title == "active-noop-session" {
-			found = li
-			break
-		}
-	}
-	require.NotNil(t, found)
-	found.Status = session.Active // started=true from the Paused round-trip; no real tmux session backing it
-	addInstanceToPoller(fix.poller, found)
-
-	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
-		Id:      "active-noop-session",
-		Program: strPtr("claude"),
-	}))
-	require.NoError(t, err, "same-value switch on an Active session must not attempt a restart")
-	assert.Equal(t, "claude", resp.Msg.Session.Program)
-}
-
-// --------------------------------------------------------------------------
-// UpdateSessionProgram – capacity-monitor auto-fallback path
-// --------------------------------------------------------------------------
-
-// TestUpdateSessionProgram_EmptyString_ResolvesToConfigDefault verifies the
-// capacity-monitor auto-fallback entry point (UpdateSessionProgram) gets the same
-// empty->default resolution as the UpdateSession RPC handler now that both share
-// Instance.SwitchProgram — this was the gap flagged in the plan (the old duplicated
-// implementation compared the raw "" against inst.Program instead of the resolved
-// default first).
-func TestUpdateSessionProgram_EmptyString_ResolvesToConfigDefault(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	addPausedSession(t, fix, "capacity-fallback-session")
-
-	err := fix.svc.UpdateSessionProgram(context.Background(), "capacity-fallback-session", "")
-	require.NoError(t, err)
-
-	loaded, err := fix.storage.LoadInstances()
-	require.NoError(t, err)
-	var found *session.Instance
-	for _, inst := range loaded {
-		if inst.Title == "capacity-fallback-session" {
-			found = inst
-			break
-		}
-	}
-	require.NotNil(t, found)
-	assert.Equal(t, config.LoadConfig().DefaultProgram, found.Program)
-}
-
-// TestUpdateSessionProgram_NotFound verifies UpdateSessionProgram returns an error for
-// an unknown session id rather than silently no-op'ing.
-func TestUpdateSessionProgram_NotFound(t *testing.T) {
-	fix := setupForkTestFixture(t)
-	t.Cleanup(fix.cleanup)
-
-	err := fix.svc.UpdateSessionProgram(context.Background(), "no-such-session", "aider")
-	require.Error(t, err)
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
 }

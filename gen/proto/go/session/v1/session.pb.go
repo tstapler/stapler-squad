@@ -7472,8 +7472,12 @@ type SessionDefaultsConfig struct {
 	OneOffBaseDir  string                           `protobuf:"bytes,8,opt,name=one_off_base_dir,json=oneOffBaseDir,proto3" json:"one_off_base_dir,omitempty"`
 	// Base directory where new project folders are created. Defaults to ~/Projects.
 	NewProjectBaseDir string `protobuf:"bytes,9,opt,name=new_project_base_dir,json=newProjectBaseDir,proto3" json:"new_project_base_dir,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Max automated rework iterations before a backlog item's auto-reopen loop
+	// leaves it in review for manual action. 0 in a request means "use the
+	// server default (3)"; the response always echoes the resolved value.
+	MaxAutoReworkIterations int32 `protobuf:"varint,10,opt,name=max_auto_rework_iterations,json=maxAutoReworkIterations,proto3" json:"max_auto_rework_iterations,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *SessionDefaultsConfig) Reset() {
@@ -7567,6 +7571,13 @@ func (x *SessionDefaultsConfig) GetNewProjectBaseDir() string {
 		return x.NewProjectBaseDir
 	}
 	return ""
+}
+
+func (x *SessionDefaultsConfig) GetMaxAutoReworkIterations() int32 {
+	if x != nil {
+		return x.MaxAutoReworkIterations
+	}
+	return 0
 }
 
 type GetSessionDefaultsRequest struct {
@@ -7820,8 +7831,10 @@ type UpdateGlobalDefaultsRequest struct {
 	OneOffBaseDir string                 `protobuf:"bytes,6,opt,name=one_off_base_dir,json=oneOffBaseDir,proto3" json:"one_off_base_dir,omitempty"`
 	// Base directory where new project folders are created. Defaults to ~/Projects.
 	NewProjectBaseDir string `protobuf:"bytes,7,opt,name=new_project_base_dir,json=newProjectBaseDir,proto3" json:"new_project_base_dir,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+	MaxAutoReworkIterations int32 `protobuf:"varint,8,opt,name=max_auto_rework_iterations,json=maxAutoReworkIterations,proto3" json:"max_auto_rework_iterations,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *UpdateGlobalDefaultsRequest) Reset() {
@@ -7901,6 +7914,13 @@ func (x *UpdateGlobalDefaultsRequest) GetNewProjectBaseDir() string {
 		return x.NewProjectBaseDir
 	}
 	return ""
+}
+
+func (x *UpdateGlobalDefaultsRequest) GetMaxAutoReworkIterations() int32 {
+	if x != nil {
+		return x.MaxAutoReworkIterations
+	}
+	return 0
 }
 
 type UpdateGlobalDefaultsResponse struct {
@@ -15673,7 +15693,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x12DirectoryRuleProto\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12>\n" +
-	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\xd3\x04\n" +
+	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\x90\x05\n" +
 	"\x15SessionDefaultsConfig\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
@@ -15683,7 +15703,9 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\bprofiles\x18\x06 \x03(\v2/.session.v1.SessionDefaultsConfig.ProfilesEntryR\bprofiles\x12G\n" +
 	"\x0fdirectory_rules\x18\a \x03(\v2\x1e.session.v1.DirectoryRuleProtoR\x0edirectoryRules\x12'\n" +
 	"\x10one_off_base_dir\x18\b \x01(\tR\roneOffBaseDir\x12/\n" +
-	"\x14new_project_base_dir\x18\t \x01(\tR\x11newProjectBaseDir\x1a:\n" +
+	"\x14new_project_base_dir\x18\t \x01(\tR\x11newProjectBaseDir\x12;\n" +
+	"\x1amax_auto_rework_iterations\x18\n" +
+	" \x01(\x05R\x17maxAutoReworkIterations\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a]\n" +
@@ -15710,7 +15732,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11matched_directory\x18\t \x01(\tR\x10matchedDirectory\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x03\n" +
 	"\x1bUpdateGlobalDefaultsRequest\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
@@ -15718,7 +15740,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\benv_vars\x18\x04 \x03(\v24.session.v1.UpdateGlobalDefaultsRequest.EnvVarsEntryR\aenvVars\x12\x1b\n" +
 	"\tcli_flags\x18\x05 \x01(\tR\bcliFlags\x12'\n" +
 	"\x10one_off_base_dir\x18\x06 \x01(\tR\roneOffBaseDir\x12/\n" +
-	"\x14new_project_base_dir\x18\a \x01(\tR\x11newProjectBaseDir\x1a:\n" +
+	"\x14new_project_base_dir\x18\a \x01(\tR\x11newProjectBaseDir\x12;\n" +
+	"\x1amax_auto_rework_iterations\x18\b \x01(\x05R\x17maxAutoReworkIterations\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"]\n" +

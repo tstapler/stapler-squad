@@ -123,7 +123,7 @@ func (x UserInteractionEvent_InteractionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use UserInteractionEvent_InteractionType.Descriptor instead.
 func (UserInteractionEvent_InteractionType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{34, 0}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{17, 0}
 }
 
 // SessionEvent represents a real-time event about session state changes.
@@ -503,14 +503,9 @@ type TerminalData struct {
 	//	*TerminalData_Error
 	//	*TerminalData_ScrollbackRequest
 	//	*TerminalData_ScrollbackResponse
-	//	*TerminalData_Delta
 	//	*TerminalData_CurrentPaneRequest
 	//	*TerminalData_CurrentPaneResponse
 	//	*TerminalData_FlowControl
-	//	*TerminalData_State
-	//	*TerminalData_Diff
-	//	*TerminalData_InputEcho
-	//	*TerminalData_SspNegotiation
 	//	*TerminalData_ResizeQuiescence
 	//	*TerminalData_ShellStatusUpdate
 	Data isTerminalData_Data `protobuf_oneof:"data"`
@@ -619,15 +614,6 @@ func (x *TerminalData) GetScrollbackResponse() *ScrollbackResponse {
 	return nil
 }
 
-func (x *TerminalData) GetDelta() *TerminalDelta {
-	if x != nil {
-		if x, ok := x.Data.(*TerminalData_Delta); ok {
-			return x.Delta
-		}
-	}
-	return nil
-}
-
 func (x *TerminalData) GetCurrentPaneRequest() *CurrentPaneRequest {
 	if x != nil {
 		if x, ok := x.Data.(*TerminalData_CurrentPaneRequest); ok {
@@ -650,42 +636,6 @@ func (x *TerminalData) GetFlowControl() *FlowControl {
 	if x != nil {
 		if x, ok := x.Data.(*TerminalData_FlowControl); ok {
 			return x.FlowControl
-		}
-	}
-	return nil
-}
-
-func (x *TerminalData) GetState() *TerminalState {
-	if x != nil {
-		if x, ok := x.Data.(*TerminalData_State); ok {
-			return x.State
-		}
-	}
-	return nil
-}
-
-func (x *TerminalData) GetDiff() *TerminalDiff {
-	if x != nil {
-		if x, ok := x.Data.(*TerminalData_Diff); ok {
-			return x.Diff
-		}
-	}
-	return nil
-}
-
-func (x *TerminalData) GetInputEcho() *InputWithEcho {
-	if x != nil {
-		if x, ok := x.Data.(*TerminalData_InputEcho); ok {
-			return x.InputEcho
-		}
-	}
-	return nil
-}
-
-func (x *TerminalData) GetSspNegotiation() *SSPNegotiation {
-	if x != nil {
-		if x, ok := x.Data.(*TerminalData_SspNegotiation); ok {
-			return x.SspNegotiation
 		}
 	}
 	return nil
@@ -744,37 +694,16 @@ type TerminalData_ScrollbackResponse struct {
 	ScrollbackResponse *ScrollbackResponse `protobuf:"bytes,7,opt,name=scrollback_response,json=scrollbackResponse,proto3,oneof"`
 }
 
-type TerminalData_Delta struct {
-	Delta *TerminalDelta `protobuf:"bytes,8,opt,name=delta,proto3,oneof"` // Delta compression for efficient updates (DEPRECATED - use diff)
-}
-
 type TerminalData_CurrentPaneRequest struct {
 	CurrentPaneRequest *CurrentPaneRequest `protobuf:"bytes,9,opt,name=current_pane_request,json=currentPaneRequest,proto3,oneof"` // Request current tmux pane content
 }
 
 type TerminalData_CurrentPaneResponse struct {
-	CurrentPaneResponse *CurrentPaneResponse `protobuf:"bytes,10,opt,name=current_pane_response,json=currentPaneResponse,proto3,oneof"` // Response with current pane content (DEPRECATED - use diff)
+	CurrentPaneResponse *CurrentPaneResponse `protobuf:"bytes,10,opt,name=current_pane_response,json=currentPaneResponse,proto3,oneof"` // Response with current pane content
 }
 
 type TerminalData_FlowControl struct {
 	FlowControl *FlowControl `protobuf:"bytes,11,opt,name=flow_control,json=flowControl,proto3,oneof"` // Flow control signals for backpressure management (xterm.js best practice)
-}
-
-type TerminalData_State struct {
-	State *TerminalState `protobuf:"bytes,12,opt,name=state,proto3,oneof"` // Complete terminal state (DEPRECATED - use diff for incremental updates)
-}
-
-type TerminalData_Diff struct {
-	// SSP (State Synchronization Protocol) messages - MOSH-style efficient updates
-	Diff *TerminalDiff `protobuf:"bytes,13,opt,name=diff,proto3,oneof"` // Minimal ANSI diff (server → client)
-}
-
-type TerminalData_InputEcho struct {
-	InputEcho *InputWithEcho `protobuf:"bytes,14,opt,name=input_echo,json=inputEcho,proto3,oneof"` // Input with echo tracking (client → server)
-}
-
-type TerminalData_SspNegotiation struct {
-	SspNegotiation *SSPNegotiation `protobuf:"bytes,15,opt,name=ssp_negotiation,json=sspNegotiation,proto3,oneof"` // Feature negotiation (bidirectional)
 }
 
 type TerminalData_ResizeQuiescence struct {
@@ -799,21 +728,11 @@ func (*TerminalData_ScrollbackRequest) isTerminalData_Data() {}
 
 func (*TerminalData_ScrollbackResponse) isTerminalData_Data() {}
 
-func (*TerminalData_Delta) isTerminalData_Data() {}
-
 func (*TerminalData_CurrentPaneRequest) isTerminalData_Data() {}
 
 func (*TerminalData_CurrentPaneResponse) isTerminalData_Data() {}
 
 func (*TerminalData_FlowControl) isTerminalData_Data() {}
-
-func (*TerminalData_State) isTerminalData_Data() {}
-
-func (*TerminalData_Diff) isTerminalData_Data() {}
-
-func (*TerminalData_InputEcho) isTerminalData_Data() {}
-
-func (*TerminalData_SspNegotiation) isTerminalData_Data() {}
 
 func (*TerminalData_ResizeQuiescence) isTerminalData_Data() {}
 
@@ -1419,15 +1338,8 @@ type CurrentPaneRequest struct {
 	// Target terminal dimensions (optional)
 	// If provided, server will resize tmux pane to match BEFORE capturing content
 	// This prevents size mismatches between client's browser terminal and server's tmux pane
-	TargetCols *int32 `protobuf:"varint,3,opt,name=target_cols,json=targetCols,proto3,oneof" json:"target_cols,omitempty"` // Target columns (width)
-	TargetRows *int32 `protobuf:"varint,4,opt,name=target_rows,json=targetRows,proto3,oneof" json:"target_rows,omitempty"` // Target rows (height)
-	// Streaming mode for terminal output (optional)
-	// Options: "raw" (direct PTY bytes), "raw-compressed" (PTY bytes with LZMA),
-	//
-	//	"state" (MOSH-style state sync), "hybrid" (both raw and state)
-	//
-	// Default: "raw" if not specified
-	StreamingMode *string `protobuf:"bytes,5,opt,name=streaming_mode,json=streamingMode,proto3,oneof" json:"streaming_mode,omitempty"`
+	TargetCols    *int32 `protobuf:"varint,3,opt,name=target_cols,json=targetCols,proto3,oneof" json:"target_cols,omitempty"` // Target columns (width)
+	TargetRows    *int32 `protobuf:"varint,4,opt,name=target_rows,json=targetRows,proto3,oneof" json:"target_rows,omitempty"` // Target rows (height)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1488,13 +1400,6 @@ func (x *CurrentPaneRequest) GetTargetRows() int32 {
 		return *x.TargetRows
 	}
 	return 0
-}
-
-func (x *CurrentPaneRequest) GetStreamingMode() string {
-	if x != nil && x.StreamingMode != nil {
-		return *x.StreamingMode
-	}
-	return ""
 }
 
 // CurrentPaneResponse contains the current visible tmux pane content
@@ -1577,1334 +1482,6 @@ func (x *CurrentPaneResponse) GetPaneHeight() int32 {
 	return 0
 }
 
-// TerminalDelta represents incremental terminal state changes.
-// Inspired by MOSH protocol - only sends what changed in the terminal screen.
-// Reduces bandwidth by 70-90% for typical terminal usage.
-type TerminalDelta struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// State version tracking for synchronization
-	FromState uint64 `protobuf:"varint,1,opt,name=from_state,json=fromState,proto3" json:"from_state,omitempty"` // Previous state version (0 for initial)
-	ToState   uint64 `protobuf:"varint,2,opt,name=to_state,json=toState,proto3" json:"to_state,omitempty"`       // New state version after applying delta
-	// Screen changes (only modified lines)
-	Lines []*LineDelta `protobuf:"bytes,3,rep,name=lines,proto3" json:"lines,omitempty"`
-	// Cursor position after changes
-	Cursor *CursorPosition `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	// Full sync flag - if true, this is complete state (not a delta)
-	// Used for initial sync or error recovery when client/server out of sync
-	FullSync bool `protobuf:"varint,5,opt,name=full_sync,json=fullSync,proto3" json:"full_sync,omitempty"`
-	// Terminal dimensions (included if changed)
-	Dimensions    *TerminalDimensions `protobuf:"bytes,6,opt,name=dimensions,proto3,oneof" json:"dimensions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TerminalDelta) Reset() {
-	*x = TerminalDelta{}
-	mi := &file_session_v1_events_proto_msgTypes[17]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TerminalDelta) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TerminalDelta) ProtoMessage() {}
-
-func (x *TerminalDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[17]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TerminalDelta.ProtoReflect.Descriptor instead.
-func (*TerminalDelta) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{17}
-}
-
-func (x *TerminalDelta) GetFromState() uint64 {
-	if x != nil {
-		return x.FromState
-	}
-	return 0
-}
-
-func (x *TerminalDelta) GetToState() uint64 {
-	if x != nil {
-		return x.ToState
-	}
-	return 0
-}
-
-func (x *TerminalDelta) GetLines() []*LineDelta {
-	if x != nil {
-		return x.Lines
-	}
-	return nil
-}
-
-func (x *TerminalDelta) GetCursor() *CursorPosition {
-	if x != nil {
-		return x.Cursor
-	}
-	return nil
-}
-
-func (x *TerminalDelta) GetFullSync() bool {
-	if x != nil {
-		return x.FullSync
-	}
-	return false
-}
-
-func (x *TerminalDelta) GetDimensions() *TerminalDimensions {
-	if x != nil {
-		return x.Dimensions
-	}
-	return nil
-}
-
-// LineDelta represents changes to a specific terminal line
-type LineDelta struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Line number (0-based from top of screen)
-	LineNumber uint32 `protobuf:"varint,1,opt,name=line_number,json=lineNumber,proto3" json:"line_number,omitempty"`
-	// Operation to perform on this line
-	//
-	// Types that are valid to be assigned to Operation:
-	//
-	//	*LineDelta_ReplaceLine
-	//	*LineDelta_Edit
-	//	*LineDelta_DeleteLine
-	//	*LineDelta_Insert
-	//	*LineDelta_ClearLine
-	Operation     isLineDelta_Operation `protobuf_oneof:"operation"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LineDelta) Reset() {
-	*x = LineDelta{}
-	mi := &file_session_v1_events_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LineDelta) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LineDelta) ProtoMessage() {}
-
-func (x *LineDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LineDelta.ProtoReflect.Descriptor instead.
-func (*LineDelta) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *LineDelta) GetLineNumber() uint32 {
-	if x != nil {
-		return x.LineNumber
-	}
-	return 0
-}
-
-func (x *LineDelta) GetOperation() isLineDelta_Operation {
-	if x != nil {
-		return x.Operation
-	}
-	return nil
-}
-
-func (x *LineDelta) GetReplaceLine() []byte {
-	if x != nil {
-		if x, ok := x.Operation.(*LineDelta_ReplaceLine); ok {
-			return x.ReplaceLine
-		}
-	}
-	return nil
-}
-
-func (x *LineDelta) GetEdit() *LineEdit {
-	if x != nil {
-		if x, ok := x.Operation.(*LineDelta_Edit); ok {
-			return x.Edit
-		}
-	}
-	return nil
-}
-
-func (x *LineDelta) GetDeleteLine() bool {
-	if x != nil {
-		if x, ok := x.Operation.(*LineDelta_DeleteLine); ok {
-			return x.DeleteLine
-		}
-	}
-	return false
-}
-
-func (x *LineDelta) GetInsert() *InsertLine {
-	if x != nil {
-		if x, ok := x.Operation.(*LineDelta_Insert); ok {
-			return x.Insert
-		}
-	}
-	return nil
-}
-
-func (x *LineDelta) GetClearLine() bool {
-	if x != nil {
-		if x, ok := x.Operation.(*LineDelta_ClearLine); ok {
-			return x.ClearLine
-		}
-	}
-	return false
-}
-
-type isLineDelta_Operation interface {
-	isLineDelta_Operation()
-}
-
-type LineDelta_ReplaceLine struct {
-	ReplaceLine []byte `protobuf:"bytes,2,opt,name=replace_line,json=replaceLine,proto3,oneof"` // Replace entire line with this content (raw bytes with ANSI codes)
-}
-
-type LineDelta_Edit struct {
-	Edit *LineEdit `protobuf:"bytes,3,opt,name=edit,proto3,oneof"` // Character-level edit within line
-}
-
-type LineDelta_DeleteLine struct {
-	DeleteLine bool `protobuf:"varint,4,opt,name=delete_line,json=deleteLine,proto3,oneof"` // Delete this line (shifts lines up)
-}
-
-type LineDelta_Insert struct {
-	Insert *InsertLine `protobuf:"bytes,5,opt,name=insert,proto3,oneof"` // Insert new line (shifts lines down)
-}
-
-type LineDelta_ClearLine struct {
-	ClearLine bool `protobuf:"varint,6,opt,name=clear_line,json=clearLine,proto3,oneof"` // Clear line to empty (optimization)
-}
-
-func (*LineDelta_ReplaceLine) isLineDelta_Operation() {}
-
-func (*LineDelta_Edit) isLineDelta_Operation() {}
-
-func (*LineDelta_DeleteLine) isLineDelta_Operation() {}
-
-func (*LineDelta_Insert) isLineDelta_Operation() {}
-
-func (*LineDelta_ClearLine) isLineDelta_Operation() {}
-
-// LineEdit represents a character-level edit within a line
-type LineEdit struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StartCol      uint32                 `protobuf:"varint,1,opt,name=start_col,json=startCol,proto3" json:"start_col,omitempty"` // Start column (0-based)
-	EndCol        uint32                 `protobuf:"varint,2,opt,name=end_col,json=endCol,proto3" json:"end_col,omitempty"`       // End column (exclusive, like string slice)
-	Text          []byte                 `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`                          // Replacement text (raw bytes with ANSI codes)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LineEdit) Reset() {
-	*x = LineEdit{}
-	mi := &file_session_v1_events_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LineEdit) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LineEdit) ProtoMessage() {}
-
-func (x *LineEdit) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LineEdit.ProtoReflect.Descriptor instead.
-func (*LineEdit) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *LineEdit) GetStartCol() uint32 {
-	if x != nil {
-		return x.StartCol
-	}
-	return 0
-}
-
-func (x *LineEdit) GetEndCol() uint32 {
-	if x != nil {
-		return x.EndCol
-	}
-	return 0
-}
-
-func (x *LineEdit) GetText() []byte {
-	if x != nil {
-		return x.Text
-	}
-	return nil
-}
-
-// InsertLine represents insertion of a new line
-type InsertLine struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          []byte                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`                          // Line content (raw bytes with ANSI codes)
-	AtCursor      bool                   `protobuf:"varint,2,opt,name=at_cursor,json=atCursor,proto3" json:"at_cursor,omitempty"` // If true, insert at cursor; else at line_number
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *InsertLine) Reset() {
-	*x = InsertLine{}
-	mi := &file_session_v1_events_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *InsertLine) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InsertLine) ProtoMessage() {}
-
-func (x *InsertLine) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InsertLine.ProtoReflect.Descriptor instead.
-func (*InsertLine) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *InsertLine) GetText() []byte {
-	if x != nil {
-		return x.Text
-	}
-	return nil
-}
-
-func (x *InsertLine) GetAtCursor() bool {
-	if x != nil {
-		return x.AtCursor
-	}
-	return false
-}
-
-// CursorPosition tracks terminal cursor location
-type CursorPosition struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Row           uint32                 `protobuf:"varint,1,opt,name=row,proto3" json:"row,omitempty"`         // Row number (0-based from top)
-	Col           uint32                 `protobuf:"varint,2,opt,name=col,proto3" json:"col,omitempty"`         // Column number (0-based from left)
-	Visible       bool                   `protobuf:"varint,3,opt,name=visible,proto3" json:"visible,omitempty"` // Cursor visibility flag
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CursorPosition) Reset() {
-	*x = CursorPosition{}
-	mi := &file_session_v1_events_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CursorPosition) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CursorPosition) ProtoMessage() {}
-
-func (x *CursorPosition) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CursorPosition.ProtoReflect.Descriptor instead.
-func (*CursorPosition) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{21}
-}
-
-func (x *CursorPosition) GetRow() uint32 {
-	if x != nil {
-		return x.Row
-	}
-	return 0
-}
-
-func (x *CursorPosition) GetCol() uint32 {
-	if x != nil {
-		return x.Col
-	}
-	return 0
-}
-
-func (x *CursorPosition) GetVisible() bool {
-	if x != nil {
-		return x.Visible
-	}
-	return false
-}
-
-// TerminalDimensions represents terminal size
-type TerminalDimensions struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"` // Number of rows
-	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"` // Number of columns
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TerminalDimensions) Reset() {
-	*x = TerminalDimensions{}
-	mi := &file_session_v1_events_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TerminalDimensions) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TerminalDimensions) ProtoMessage() {}
-
-func (x *TerminalDimensions) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TerminalDimensions.ProtoReflect.Descriptor instead.
-func (*TerminalDimensions) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{22}
-}
-
-func (x *TerminalDimensions) GetRows() uint32 {
-	if x != nil {
-		return x.Rows
-	}
-	return 0
-}
-
-func (x *TerminalDimensions) GetCols() uint32 {
-	if x != nil {
-		return x.Cols
-	}
-	return 0
-}
-
-// TerminalDiff represents minimal ANSI escape sequences to transform terminal state.
-// This is the core of the SSP protocol - generates the smallest possible update
-// to transform an old terminal state into a new one.
-//
-// Key features (inspired by Mosh):
-// - Generates minimal ANSI escape sequences (not cell-by-cell diffs)
-// - Uses smart cursor positioning (relative vs absolute, whichever is shorter)
-// - Batches consecutive cells with the same style into single writes
-// - Skips unchanged rows entirely for efficiency
-// - Can piggyback echo acknowledgments for predictive typing
-type TerminalDiff struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Sequence number of the state this diff is based on
-	// Client must have this state to apply the diff correctly
-	FromSequence uint64 `protobuf:"varint,1,opt,name=from_sequence,json=fromSequence,proto3" json:"from_sequence,omitempty"`
-	// Sequence number of the resulting state after applying this diff
-	ToSequence uint64 `protobuf:"varint,2,opt,name=to_sequence,json=toSequence,proto3" json:"to_sequence,omitempty"`
-	// Minimal ANSI escape sequences that transform from_sequence → to_sequence
-	// These can be written directly to xterm.js (they're valid ANSI codes)
-	DiffBytes []byte `protobuf:"bytes,3,opt,name=diff_bytes,json=diffBytes,proto3" json:"diff_bytes,omitempty"`
-	// Echo acknowledgment piggy-backed on state updates
-	// Reduces round-trips for predictive echo confirmation
-	EchoAck *EchoAck `protobuf:"bytes,4,opt,name=echo_ack,json=echoAck,proto3,oneof" json:"echo_ack,omitempty"`
-	// True if this is a full redraw (no dependency on from_sequence)
-	// Sent when: dimension change, client requests resync, or from_sequence=0
-	FullRedraw bool `protobuf:"varint,5,opt,name=full_redraw,json=fullRedraw,proto3" json:"full_redraw,omitempty"`
-	// Number of cells that changed (for metrics/debugging)
-	ChangedCells uint32 `protobuf:"varint,6,opt,name=changed_cells,json=changedCells,proto3" json:"changed_cells,omitempty"`
-	// Number of cells unchanged (for metrics/debugging)
-	UnchangedCells uint32 `protobuf:"varint,7,opt,name=unchanged_cells,json=unchangedCells,proto3" json:"unchanged_cells,omitempty"`
-	// Compression metadata (optional - for compressed diff_bytes)
-	Compression   *CompressionMetadata `protobuf:"bytes,8,opt,name=compression,proto3,oneof" json:"compression,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TerminalDiff) Reset() {
-	*x = TerminalDiff{}
-	mi := &file_session_v1_events_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TerminalDiff) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TerminalDiff) ProtoMessage() {}
-
-func (x *TerminalDiff) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TerminalDiff.ProtoReflect.Descriptor instead.
-func (*TerminalDiff) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{23}
-}
-
-func (x *TerminalDiff) GetFromSequence() uint64 {
-	if x != nil {
-		return x.FromSequence
-	}
-	return 0
-}
-
-func (x *TerminalDiff) GetToSequence() uint64 {
-	if x != nil {
-		return x.ToSequence
-	}
-	return 0
-}
-
-func (x *TerminalDiff) GetDiffBytes() []byte {
-	if x != nil {
-		return x.DiffBytes
-	}
-	return nil
-}
-
-func (x *TerminalDiff) GetEchoAck() *EchoAck {
-	if x != nil {
-		return x.EchoAck
-	}
-	return nil
-}
-
-func (x *TerminalDiff) GetFullRedraw() bool {
-	if x != nil {
-		return x.FullRedraw
-	}
-	return false
-}
-
-func (x *TerminalDiff) GetChangedCells() uint32 {
-	if x != nil {
-		return x.ChangedCells
-	}
-	return 0
-}
-
-func (x *TerminalDiff) GetUnchangedCells() uint32 {
-	if x != nil {
-		return x.UnchangedCells
-	}
-	return 0
-}
-
-func (x *TerminalDiff) GetCompression() *CompressionMetadata {
-	if x != nil {
-		return x.Compression
-	}
-	return nil
-}
-
-// EchoAck confirms that the server has processed input up to a certain point.
-// Used for predictive echo - client shows typed characters immediately, then
-// clears the prediction once the server confirms the input was processed.
-//
-// Mosh uses a 50ms timeout: if EchoAck not received within 50ms, the prediction
-// is cleared to prevent stuck predictions on slow connections.
-type EchoAck struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Server has processed all input with echo_num <= echo_ack_num
-	EchoAckNum uint64 `protobuf:"varint,1,opt,name=echo_ack_num,json=echoAckNum,proto3" json:"echo_ack_num,omitempty"`
-	// Server timestamp when the input was processed (for RTT calculation)
-	ServerTimestampMs int64 `protobuf:"varint,2,opt,name=server_timestamp_ms,json=serverTimestampMs,proto3" json:"server_timestamp_ms,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *EchoAck) Reset() {
-	*x = EchoAck{}
-	mi := &file_session_v1_events_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EchoAck) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EchoAck) ProtoMessage() {}
-
-func (x *EchoAck) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EchoAck.ProtoReflect.Descriptor instead.
-func (*EchoAck) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *EchoAck) GetEchoAckNum() uint64 {
-	if x != nil {
-		return x.EchoAckNum
-	}
-	return 0
-}
-
-func (x *EchoAck) GetServerTimestampMs() int64 {
-	if x != nil {
-		return x.ServerTimestampMs
-	}
-	return 0
-}
-
-// InputWithEcho wraps user input with echo tracking for predictive typing.
-// The client assigns a monotonically increasing echo_num to each input,
-// then shows the input immediately (dimmed) as a "prediction". When the
-// server sends back an EchoAck with that echo_num, the prediction is cleared.
-type InputWithEcho struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Raw input bytes (keystrokes)
-	Data []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	// Client-assigned echo number (monotonically increasing)
-	EchoNum uint64 `protobuf:"varint,2,opt,name=echo_num,json=echoNum,proto3" json:"echo_num,omitempty"`
-	// Client timestamp when input was sent (for latency measurement)
-	ClientTimestampMs int64 `protobuf:"varint,3,opt,name=client_timestamp_ms,json=clientTimestampMs,proto3" json:"client_timestamp_ms,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *InputWithEcho) Reset() {
-	*x = InputWithEcho{}
-	mi := &file_session_v1_events_proto_msgTypes[25]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *InputWithEcho) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InputWithEcho) ProtoMessage() {}
-
-func (x *InputWithEcho) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[25]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InputWithEcho.ProtoReflect.Descriptor instead.
-func (*InputWithEcho) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *InputWithEcho) GetData() []byte {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *InputWithEcho) GetEchoNum() uint64 {
-	if x != nil {
-		return x.EchoNum
-	}
-	return 0
-}
-
-func (x *InputWithEcho) GetClientTimestampMs() int64 {
-	if x != nil {
-		return x.ClientTimestampMs
-	}
-	return 0
-}
-
-// SSPCapabilities is exchanged during connection setup for feature negotiation.
-// Allows graceful fallback when client/server have different capabilities.
-type SSPCapabilities struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Client/server supports predictive echo protocol
-	SupportsPredictiveEcho bool `protobuf:"varint,1,opt,name=supports_predictive_echo,json=supportsPredictiveEcho,proto3" json:"supports_predictive_echo,omitempty"`
-	// Client/server supports diff-based updates (TerminalDiff messages)
-	SupportsDiffUpdates bool `protobuf:"varint,2,opt,name=supports_diff_updates,json=supportsDiffUpdates,proto3" json:"supports_diff_updates,omitempty"`
-	// Supported compression algorithms (e.g., "lzma", "zstd", "none")
-	CompressionAlgorithms []string `protobuf:"bytes,3,rep,name=compression_algorithms,json=compressionAlgorithms,proto3" json:"compression_algorithms,omitempty"`
-	// Protocol version for future compatibility
-	ProtocolVersion uint32 `protobuf:"varint,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	// Maximum diff size in bytes before falling back to full state
-	// (helps with very large terminal changes like `cat large_file.txt`)
-	MaxDiffSize *uint32 `protobuf:"varint,5,opt,name=max_diff_size,json=maxDiffSize,proto3,oneof" json:"max_diff_size,omitempty"`
-	// Preferred frame interval in milliseconds (for RTT-based throttling)
-	PreferredFrameIntervalMs *uint32 `protobuf:"varint,6,opt,name=preferred_frame_interval_ms,json=preferredFrameIntervalMs,proto3,oneof" json:"preferred_frame_interval_ms,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
-}
-
-func (x *SSPCapabilities) Reset() {
-	*x = SSPCapabilities{}
-	mi := &file_session_v1_events_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SSPCapabilities) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SSPCapabilities) ProtoMessage() {}
-
-func (x *SSPCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SSPCapabilities.ProtoReflect.Descriptor instead.
-func (*SSPCapabilities) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *SSPCapabilities) GetSupportsPredictiveEcho() bool {
-	if x != nil {
-		return x.SupportsPredictiveEcho
-	}
-	return false
-}
-
-func (x *SSPCapabilities) GetSupportsDiffUpdates() bool {
-	if x != nil {
-		return x.SupportsDiffUpdates
-	}
-	return false
-}
-
-func (x *SSPCapabilities) GetCompressionAlgorithms() []string {
-	if x != nil {
-		return x.CompressionAlgorithms
-	}
-	return nil
-}
-
-func (x *SSPCapabilities) GetProtocolVersion() uint32 {
-	if x != nil {
-		return x.ProtocolVersion
-	}
-	return 0
-}
-
-func (x *SSPCapabilities) GetMaxDiffSize() uint32 {
-	if x != nil && x.MaxDiffSize != nil {
-		return *x.MaxDiffSize
-	}
-	return 0
-}
-
-func (x *SSPCapabilities) GetPreferredFrameIntervalMs() uint32 {
-	if x != nil && x.PreferredFrameIntervalMs != nil {
-		return *x.PreferredFrameIntervalMs
-	}
-	return 0
-}
-
-// SSPNegotiation is sent at connection start to negotiate SSP features.
-// Server responds with its capabilities, and both sides use the intersection.
-type SSPNegotiation struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Client's capabilities
-	Capabilities *SSPCapabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
-	// True if this is a request (client → server), false if response (server → client)
-	IsRequest bool `protobuf:"varint,2,opt,name=is_request,json=isRequest,proto3" json:"is_request,omitempty"`
-	// Selected capabilities after negotiation (only in response)
-	Negotiated    *SSPCapabilities `protobuf:"bytes,3,opt,name=negotiated,proto3,oneof" json:"negotiated,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SSPNegotiation) Reset() {
-	*x = SSPNegotiation{}
-	mi := &file_session_v1_events_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SSPNegotiation) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SSPNegotiation) ProtoMessage() {}
-
-func (x *SSPNegotiation) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SSPNegotiation.ProtoReflect.Descriptor instead.
-func (*SSPNegotiation) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *SSPNegotiation) GetCapabilities() *SSPCapabilities {
-	if x != nil {
-		return x.Capabilities
-	}
-	return nil
-}
-
-func (x *SSPNegotiation) GetIsRequest() bool {
-	if x != nil {
-		return x.IsRequest
-	}
-	return false
-}
-
-func (x *SSPNegotiation) GetNegotiated() *SSPCapabilities {
-	if x != nil {
-		return x.Negotiated
-	}
-	return nil
-}
-
-// TerminalState represents complete terminal state using MOSH-style SSP.
-// Unlike deltas, this contains the complete visible terminal screen state.
-// Optimized with LZMA compression and dynamic dictionary learning.
-type TerminalState struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// State sequence number for idempotent updates
-	Sequence uint64 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	// Terminal dimensions
-	Dimensions *TerminalDimensions `protobuf:"bytes,2,opt,name=dimensions,proto3" json:"dimensions,omitempty"`
-	// Complete screen buffer - array of terminal lines
-	Lines []*TerminalLine `protobuf:"bytes,3,rep,name=lines,proto3" json:"lines,omitempty"`
-	// Cursor position
-	Cursor *CursorPosition `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
-	// Scrollback information
-	Scrollback *ScrollbackInfo `protobuf:"bytes,5,opt,name=scrollback,proto3,oneof" json:"scrollback,omitempty"`
-	// Compression metadata (optional)
-	Compression   *CompressionMetadata `protobuf:"bytes,6,opt,name=compression,proto3,oneof" json:"compression,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TerminalState) Reset() {
-	*x = TerminalState{}
-	mi := &file_session_v1_events_proto_msgTypes[28]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TerminalState) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TerminalState) ProtoMessage() {}
-
-func (x *TerminalState) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[28]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TerminalState.ProtoReflect.Descriptor instead.
-func (*TerminalState) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{28}
-}
-
-func (x *TerminalState) GetSequence() uint64 {
-	if x != nil {
-		return x.Sequence
-	}
-	return 0
-}
-
-func (x *TerminalState) GetDimensions() *TerminalDimensions {
-	if x != nil {
-		return x.Dimensions
-	}
-	return nil
-}
-
-func (x *TerminalState) GetLines() []*TerminalLine {
-	if x != nil {
-		return x.Lines
-	}
-	return nil
-}
-
-func (x *TerminalState) GetCursor() *CursorPosition {
-	if x != nil {
-		return x.Cursor
-	}
-	return nil
-}
-
-func (x *TerminalState) GetScrollback() *ScrollbackInfo {
-	if x != nil {
-		return x.Scrollback
-	}
-	return nil
-}
-
-func (x *TerminalState) GetCompression() *CompressionMetadata {
-	if x != nil {
-		return x.Compression
-	}
-	return nil
-}
-
-// TerminalLine represents a single line in the terminal buffer
-type TerminalLine struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Line content with ANSI escape sequences preserved
-	Content []byte `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// Line attributes for optimization
-	Attributes    *LineAttributes `protobuf:"bytes,2,opt,name=attributes,proto3,oneof" json:"attributes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TerminalLine) Reset() {
-	*x = TerminalLine{}
-	mi := &file_session_v1_events_proto_msgTypes[29]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TerminalLine) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TerminalLine) ProtoMessage() {}
-
-func (x *TerminalLine) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[29]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TerminalLine.ProtoReflect.Descriptor instead.
-func (*TerminalLine) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{29}
-}
-
-func (x *TerminalLine) GetContent() []byte {
-	if x != nil {
-		return x.Content
-	}
-	return nil
-}
-
-func (x *TerminalLine) GetAttributes() *LineAttributes {
-	if x != nil {
-		return x.Attributes
-	}
-	return nil
-}
-
-// LineAttributes provide metadata for compression optimization
-type LineAttributes struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// True if line is empty (optimization)
-	IsEmpty bool `protobuf:"varint,1,opt,name=is_empty,json=isEmpty,proto3" json:"is_empty,omitempty"`
-	// True if line contains only printable ASCII (optimization)
-	AsciiOnly bool `protobuf:"varint,2,opt,name=ascii_only,json=asciiOnly,proto3" json:"ascii_only,omitempty"`
-	// Character encoding hint for compression
-	Encoding *string `protobuf:"bytes,3,opt,name=encoding,proto3,oneof" json:"encoding,omitempty"`
-	// Pattern hash for dictionary learning
-	PatternHash   *uint64 `protobuf:"varint,4,opt,name=pattern_hash,json=patternHash,proto3,oneof" json:"pattern_hash,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LineAttributes) Reset() {
-	*x = LineAttributes{}
-	mi := &file_session_v1_events_proto_msgTypes[30]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LineAttributes) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LineAttributes) ProtoMessage() {}
-
-func (x *LineAttributes) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[30]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LineAttributes.ProtoReflect.Descriptor instead.
-func (*LineAttributes) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{30}
-}
-
-func (x *LineAttributes) GetIsEmpty() bool {
-	if x != nil {
-		return x.IsEmpty
-	}
-	return false
-}
-
-func (x *LineAttributes) GetAsciiOnly() bool {
-	if x != nil {
-		return x.AsciiOnly
-	}
-	return false
-}
-
-func (x *LineAttributes) GetEncoding() string {
-	if x != nil && x.Encoding != nil {
-		return *x.Encoding
-	}
-	return ""
-}
-
-func (x *LineAttributes) GetPatternHash() uint64 {
-	if x != nil && x.PatternHash != nil {
-		return *x.PatternHash
-	}
-	return 0
-}
-
-// ScrollbackInfo provides context about terminal scrollback
-type ScrollbackInfo struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Total lines available in scrollback
-	TotalLines uint64 `protobuf:"varint,1,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
-	// First visible line number (0-based)
-	FirstVisible uint64 `protobuf:"varint,2,opt,name=first_visible,json=firstVisible,proto3" json:"first_visible,omitempty"`
-	// Last visible line number (0-based)
-	LastVisible   uint64 `protobuf:"varint,3,opt,name=last_visible,json=lastVisible,proto3" json:"last_visible,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ScrollbackInfo) Reset() {
-	*x = ScrollbackInfo{}
-	mi := &file_session_v1_events_proto_msgTypes[31]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ScrollbackInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ScrollbackInfo) ProtoMessage() {}
-
-func (x *ScrollbackInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[31]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ScrollbackInfo.ProtoReflect.Descriptor instead.
-func (*ScrollbackInfo) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{31}
-}
-
-func (x *ScrollbackInfo) GetTotalLines() uint64 {
-	if x != nil {
-		return x.TotalLines
-	}
-	return 0
-}
-
-func (x *ScrollbackInfo) GetFirstVisible() uint64 {
-	if x != nil {
-		return x.FirstVisible
-	}
-	return 0
-}
-
-func (x *ScrollbackInfo) GetLastVisible() uint64 {
-	if x != nil {
-		return x.LastVisible
-	}
-	return 0
-}
-
-// CompressionMetadata tracks LZMA compression and dictionary learning
-type CompressionMetadata struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Compression algorithm used
-	Algorithm string `protobuf:"bytes,1,opt,name=algorithm,proto3" json:"algorithm,omitempty"` // "lzma", "none"
-	// Dictionary ID used for this state
-	DictionaryId *string `protobuf:"bytes,2,opt,name=dictionary_id,json=dictionaryId,proto3,oneof" json:"dictionary_id,omitempty"`
-	// Uncompressed size in bytes
-	UncompressedSize uint64 `protobuf:"varint,3,opt,name=uncompressed_size,json=uncompressedSize,proto3" json:"uncompressed_size,omitempty"`
-	// Compressed size in bytes
-	CompressedSize uint64 `protobuf:"varint,4,opt,name=compressed_size,json=compressedSize,proto3" json:"compressed_size,omitempty"`
-	// Compression ratio (compressed/uncompressed)
-	CompressionRatio float32 `protobuf:"fixed32,5,opt,name=compression_ratio,json=compressionRatio,proto3" json:"compression_ratio,omitempty"`
-	// Dictionary learning metadata
-	Dictionary    *DictionaryMetadata `protobuf:"bytes,6,opt,name=dictionary,proto3,oneof" json:"dictionary,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CompressionMetadata) Reset() {
-	*x = CompressionMetadata{}
-	mi := &file_session_v1_events_proto_msgTypes[32]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CompressionMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CompressionMetadata) ProtoMessage() {}
-
-func (x *CompressionMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[32]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CompressionMetadata.ProtoReflect.Descriptor instead.
-func (*CompressionMetadata) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{32}
-}
-
-func (x *CompressionMetadata) GetAlgorithm() string {
-	if x != nil {
-		return x.Algorithm
-	}
-	return ""
-}
-
-func (x *CompressionMetadata) GetDictionaryId() string {
-	if x != nil && x.DictionaryId != nil {
-		return *x.DictionaryId
-	}
-	return ""
-}
-
-func (x *CompressionMetadata) GetUncompressedSize() uint64 {
-	if x != nil {
-		return x.UncompressedSize
-	}
-	return 0
-}
-
-func (x *CompressionMetadata) GetCompressedSize() uint64 {
-	if x != nil {
-		return x.CompressedSize
-	}
-	return 0
-}
-
-func (x *CompressionMetadata) GetCompressionRatio() float32 {
-	if x != nil {
-		return x.CompressionRatio
-	}
-	return 0
-}
-
-func (x *CompressionMetadata) GetDictionary() *DictionaryMetadata {
-	if x != nil {
-		return x.Dictionary
-	}
-	return nil
-}
-
-// DictionaryMetadata tracks dynamic dictionary learning progress
-type DictionaryMetadata struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Dictionary learning level (base/session/user/project)
-	Level string `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"`
-	// Number of patterns learned
-	PatternCount uint64 `protobuf:"varint,2,opt,name=pattern_count,json=patternCount,proto3" json:"pattern_count,omitempty"`
-	// Dictionary effectiveness score (0.0-1.0)
-	Effectiveness float32 `protobuf:"fixed32,3,opt,name=effectiveness,proto3" json:"effectiveness,omitempty"`
-	// Last update timestamp
-	UpdatedAt int64 `protobuf:"varint,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Dictionary size in bytes
-	SizeBytes     uint64 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DictionaryMetadata) Reset() {
-	*x = DictionaryMetadata{}
-	mi := &file_session_v1_events_proto_msgTypes[33]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DictionaryMetadata) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DictionaryMetadata) ProtoMessage() {}
-
-func (x *DictionaryMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[33]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DictionaryMetadata.ProtoReflect.Descriptor instead.
-func (*DictionaryMetadata) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{33}
-}
-
-func (x *DictionaryMetadata) GetLevel() string {
-	if x != nil {
-		return x.Level
-	}
-	return ""
-}
-
-func (x *DictionaryMetadata) GetPatternCount() uint64 {
-	if x != nil {
-		return x.PatternCount
-	}
-	return 0
-}
-
-func (x *DictionaryMetadata) GetEffectiveness() float32 {
-	if x != nil {
-		return x.Effectiveness
-	}
-	return 0
-}
-
-func (x *DictionaryMetadata) GetUpdatedAt() int64 {
-	if x != nil {
-		return x.UpdatedAt
-	}
-	return 0
-}
-
-func (x *DictionaryMetadata) GetSizeBytes() uint64 {
-	if x != nil {
-		return x.SizeBytes
-	}
-	return 0
-}
-
 // UserInteractionEvent is emitted when user interacts with a session.
 // Triggers immediate review queue re-evaluation for responsive feedback.
 type UserInteractionEvent struct {
@@ -2921,7 +1498,7 @@ type UserInteractionEvent struct {
 
 func (x *UserInteractionEvent) Reset() {
 	*x = UserInteractionEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[34]
+	mi := &file_session_v1_events_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2933,7 +1510,7 @@ func (x *UserInteractionEvent) String() string {
 func (*UserInteractionEvent) ProtoMessage() {}
 
 func (x *UserInteractionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[34]
+	mi := &file_session_v1_events_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2946,7 +1523,7 @@ func (x *UserInteractionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserInteractionEvent.ProtoReflect.Descriptor instead.
 func (*UserInteractionEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{34}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UserInteractionEvent) GetSessionId() string {
@@ -2986,7 +1563,7 @@ type SessionAcknowledgedEvent struct {
 
 func (x *SessionAcknowledgedEvent) Reset() {
 	*x = SessionAcknowledgedEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[35]
+	mi := &file_session_v1_events_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2998,7 +1575,7 @@ func (x *SessionAcknowledgedEvent) String() string {
 func (*SessionAcknowledgedEvent) ProtoMessage() {}
 
 func (x *SessionAcknowledgedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[35]
+	mi := &file_session_v1_events_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3011,7 +1588,7 @@ func (x *SessionAcknowledgedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionAcknowledgedEvent.ProtoReflect.Descriptor instead.
 func (*SessionAcknowledgedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{35}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SessionAcknowledgedEvent) GetSessionId() string {
@@ -3053,7 +1630,7 @@ type ApprovalResponseEvent struct {
 
 func (x *ApprovalResponseEvent) Reset() {
 	*x = ApprovalResponseEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[36]
+	mi := &file_session_v1_events_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3065,7 +1642,7 @@ func (x *ApprovalResponseEvent) String() string {
 func (*ApprovalResponseEvent) ProtoMessage() {}
 
 func (x *ApprovalResponseEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[36]
+	mi := &file_session_v1_events_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3078,7 +1655,7 @@ func (x *ApprovalResponseEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalResponseEvent.ProtoReflect.Descriptor instead.
 func (*ApprovalResponseEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{36}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ApprovalResponseEvent) GetSessionId() string {
@@ -3130,7 +1707,7 @@ type ReviewQueueEvent struct {
 
 func (x *ReviewQueueEvent) Reset() {
 	*x = ReviewQueueEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[37]
+	mi := &file_session_v1_events_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3142,7 +1719,7 @@ func (x *ReviewQueueEvent) String() string {
 func (*ReviewQueueEvent) ProtoMessage() {}
 
 func (x *ReviewQueueEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[37]
+	mi := &file_session_v1_events_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3155,7 +1732,7 @@ func (x *ReviewQueueEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueueEvent.ProtoReflect.Descriptor instead.
 func (*ReviewQueueEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{37}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ReviewQueueEvent) GetTimestamp() *timestamppb.Timestamp {
@@ -3254,7 +1831,7 @@ type ReviewQueueItemAddedEvent struct {
 
 func (x *ReviewQueueItemAddedEvent) Reset() {
 	*x = ReviewQueueItemAddedEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[38]
+	mi := &file_session_v1_events_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3266,7 +1843,7 @@ func (x *ReviewQueueItemAddedEvent) String() string {
 func (*ReviewQueueItemAddedEvent) ProtoMessage() {}
 
 func (x *ReviewQueueItemAddedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[38]
+	mi := &file_session_v1_events_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3279,7 +1856,7 @@ func (x *ReviewQueueItemAddedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueueItemAddedEvent.ProtoReflect.Descriptor instead.
 func (*ReviewQueueItemAddedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{38}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ReviewQueueItemAddedEvent) GetItem() *ReviewItem {
@@ -3316,7 +1893,7 @@ type ReviewQueueItemRemovedEvent struct {
 
 func (x *ReviewQueueItemRemovedEvent) Reset() {
 	*x = ReviewQueueItemRemovedEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[39]
+	mi := &file_session_v1_events_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3328,7 +1905,7 @@ func (x *ReviewQueueItemRemovedEvent) String() string {
 func (*ReviewQueueItemRemovedEvent) ProtoMessage() {}
 
 func (x *ReviewQueueItemRemovedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[39]
+	mi := &file_session_v1_events_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3341,7 +1918,7 @@ func (x *ReviewQueueItemRemovedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueueItemRemovedEvent.ProtoReflect.Descriptor instead.
 func (*ReviewQueueItemRemovedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{39}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ReviewQueueItemRemovedEvent) GetSessionId() string {
@@ -3373,7 +1950,7 @@ type ReviewQueueItemUpdatedEvent struct {
 
 func (x *ReviewQueueItemUpdatedEvent) Reset() {
 	*x = ReviewQueueItemUpdatedEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[40]
+	mi := &file_session_v1_events_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3385,7 +1962,7 @@ func (x *ReviewQueueItemUpdatedEvent) String() string {
 func (*ReviewQueueItemUpdatedEvent) ProtoMessage() {}
 
 func (x *ReviewQueueItemUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[40]
+	mi := &file_session_v1_events_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3398,7 +1975,7 @@ func (x *ReviewQueueItemUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueueItemUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*ReviewQueueItemUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{40}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ReviewQueueItemUpdatedEvent) GetSessionId() string {
@@ -3441,7 +2018,7 @@ type ReviewQueueStatisticsEvent struct {
 
 func (x *ReviewQueueStatisticsEvent) Reset() {
 	*x = ReviewQueueStatisticsEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[41]
+	mi := &file_session_v1_events_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3453,7 +2030,7 @@ func (x *ReviewQueueStatisticsEvent) String() string {
 func (*ReviewQueueStatisticsEvent) ProtoMessage() {}
 
 func (x *ReviewQueueStatisticsEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[41]
+	mi := &file_session_v1_events_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3466,7 +2043,7 @@ func (x *ReviewQueueStatisticsEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueueStatisticsEvent.ProtoReflect.Descriptor instead.
 func (*ReviewQueueStatisticsEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{41}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReviewQueueStatisticsEvent) GetTotalItems() int32 {
@@ -3532,7 +2109,7 @@ type NotificationEvent struct {
 
 func (x *NotificationEvent) Reset() {
 	*x = NotificationEvent{}
-	mi := &file_session_v1_events_proto_msgTypes[42]
+	mi := &file_session_v1_events_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3544,7 +2121,7 @@ func (x *NotificationEvent) String() string {
 func (*NotificationEvent) ProtoMessage() {}
 
 func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_events_proto_msgTypes[42]
+	mi := &file_session_v1_events_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3557,7 +2134,7 @@ func (x *NotificationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationEvent.ProtoReflect.Descriptor instead.
 func (*NotificationEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_events_proto_rawDescGZIP(), []int{42}
+	return file_session_v1_events_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *NotificationEvent) GetSessionId() string {
@@ -3651,7 +2228,7 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\x13SessionDeletedEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xe5\b\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x9b\a\n" +
 	"\fTerminalData\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x124\n" +
@@ -3660,21 +2237,16 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\x06resize\x18\x04 \x01(\v2\x1a.session.v1.TerminalResizeH\x00R\x06resize\x121\n" +
 	"\x05error\x18\x05 \x01(\v2\x19.session.v1.TerminalErrorH\x00R\x05error\x12N\n" +
 	"\x12scrollback_request\x18\x06 \x01(\v2\x1d.session.v1.ScrollbackRequestH\x00R\x11scrollbackRequest\x12Q\n" +
-	"\x13scrollback_response\x18\a \x01(\v2\x1e.session.v1.ScrollbackResponseH\x00R\x12scrollbackResponse\x121\n" +
-	"\x05delta\x18\b \x01(\v2\x19.session.v1.TerminalDeltaH\x00R\x05delta\x12R\n" +
+	"\x13scrollback_response\x18\a \x01(\v2\x1e.session.v1.ScrollbackResponseH\x00R\x12scrollbackResponse\x12R\n" +
 	"\x14current_pane_request\x18\t \x01(\v2\x1e.session.v1.CurrentPaneRequestH\x00R\x12currentPaneRequest\x12U\n" +
 	"\x15current_pane_response\x18\n" +
 	" \x01(\v2\x1f.session.v1.CurrentPaneResponseH\x00R\x13currentPaneResponse\x12<\n" +
-	"\fflow_control\x18\v \x01(\v2\x17.session.v1.FlowControlH\x00R\vflowControl\x121\n" +
-	"\x05state\x18\f \x01(\v2\x19.session.v1.TerminalStateH\x00R\x05state\x12.\n" +
-	"\x04diff\x18\r \x01(\v2\x18.session.v1.TerminalDiffH\x00R\x04diff\x12:\n" +
-	"\n" +
-	"input_echo\x18\x0e \x01(\v2\x19.session.v1.InputWithEchoH\x00R\tinputEcho\x12E\n" +
-	"\x0fssp_negotiation\x18\x0f \x01(\v2\x1a.session.v1.SSPNegotiationH\x00R\x0esspNegotiation\x12K\n" +
+	"\fflow_control\x18\v \x01(\v2\x17.session.v1.FlowControlH\x00R\vflowControl\x12K\n" +
 	"\x11resize_quiescence\x18\x10 \x01(\v2\x1c.session.v1.ResizeQuiescenceH\x00R\x10resizeQuiescence\x12O\n" +
 	"\x13shell_status_update\x18\x12 \x01(\v2\x1d.session.v1.ShellStatusUpdateH\x00R\x11shellStatusUpdate\x12\x19\n" +
 	"\bshell_id\x18\x11 \x01(\tR\ashellIdB\x06\n" +
-	"\x04data\"\x83\x01\n" +
+	"\x04dataJ\x04\b\b\x10\tJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\x05deltaR\x05stateR\x04diffR\n" +
+	"input_echoR\x0fssp_negotiation\"\x83\x01\n" +
 	"\x11ShellStatusUpdate\x12\x19\n" +
 	"\bshell_id\x18\x01 \x01(\tR\ashellId\x126\n" +
 	"\n" +
@@ -3712,18 +2284,16 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\x0fScrollbackChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12!\n" +
-	"\ftimestamp_ms\x18\x03 \x01(\x03R\vtimestampMs\"\xfe\x01\n" +
+	"\ftimestamp_ms\x18\x03 \x01(\x03R\vtimestampMs\"\xd5\x01\n" +
 	"\x12CurrentPaneRequest\x12\x14\n" +
 	"\x05lines\x18\x01 \x01(\x05R\x05lines\x12'\n" +
 	"\x0finclude_escapes\x18\x02 \x01(\bR\x0eincludeEscapes\x12$\n" +
 	"\vtarget_cols\x18\x03 \x01(\x05H\x00R\n" +
 	"targetCols\x88\x01\x01\x12$\n" +
 	"\vtarget_rows\x18\x04 \x01(\x05H\x01R\n" +
-	"targetRows\x88\x01\x01\x12*\n" +
-	"\x0estreaming_mode\x18\x05 \x01(\tH\x02R\rstreamingMode\x88\x01\x01B\x0e\n" +
+	"targetRows\x88\x01\x01B\x0e\n" +
 	"\f_target_colsB\x0e\n" +
-	"\f_target_rowsB\x11\n" +
-	"\x0f_streaming_mode\"\xa5\x01\n" +
+	"\f_target_rowsJ\x04\b\x05\x10\x06R\x0estreaming_mode\"\xa5\x01\n" +
 	"\x13CurrentPaneResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\fR\acontent\x12\x19\n" +
 	"\bcursor_x\x18\x02 \x01(\x05R\acursorX\x12\x19\n" +
@@ -3731,134 +2301,7 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"pane_width\x18\x04 \x01(\x05R\tpaneWidth\x12\x1f\n" +
 	"\vpane_height\x18\x05 \x01(\x05R\n" +
-	"paneHeight\"\x9b\x02\n" +
-	"\rTerminalDelta\x12\x1d\n" +
-	"\n" +
-	"from_state\x18\x01 \x01(\x04R\tfromState\x12\x19\n" +
-	"\bto_state\x18\x02 \x01(\x04R\atoState\x12+\n" +
-	"\x05lines\x18\x03 \x03(\v2\x15.session.v1.LineDeltaR\x05lines\x122\n" +
-	"\x06cursor\x18\x04 \x01(\v2\x1a.session.v1.CursorPositionR\x06cursor\x12\x1b\n" +
-	"\tfull_sync\x18\x05 \x01(\bR\bfullSync\x12C\n" +
-	"\n" +
-	"dimensions\x18\x06 \x01(\v2\x1e.session.v1.TerminalDimensionsH\x00R\n" +
-	"dimensions\x88\x01\x01B\r\n" +
-	"\v_dimensions\"\x80\x02\n" +
-	"\tLineDelta\x12\x1f\n" +
-	"\vline_number\x18\x01 \x01(\rR\n" +
-	"lineNumber\x12#\n" +
-	"\freplace_line\x18\x02 \x01(\fH\x00R\vreplaceLine\x12*\n" +
-	"\x04edit\x18\x03 \x01(\v2\x14.session.v1.LineEditH\x00R\x04edit\x12!\n" +
-	"\vdelete_line\x18\x04 \x01(\bH\x00R\n" +
-	"deleteLine\x120\n" +
-	"\x06insert\x18\x05 \x01(\v2\x16.session.v1.InsertLineH\x00R\x06insert\x12\x1f\n" +
-	"\n" +
-	"clear_line\x18\x06 \x01(\bH\x00R\tclearLineB\v\n" +
-	"\toperation\"T\n" +
-	"\bLineEdit\x12\x1b\n" +
-	"\tstart_col\x18\x01 \x01(\rR\bstartCol\x12\x17\n" +
-	"\aend_col\x18\x02 \x01(\rR\x06endCol\x12\x12\n" +
-	"\x04text\x18\x03 \x01(\fR\x04text\"=\n" +
-	"\n" +
-	"InsertLine\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\fR\x04text\x12\x1b\n" +
-	"\tat_cursor\x18\x02 \x01(\bR\batCursor\"N\n" +
-	"\x0eCursorPosition\x12\x10\n" +
-	"\x03row\x18\x01 \x01(\rR\x03row\x12\x10\n" +
-	"\x03col\x18\x02 \x01(\rR\x03col\x12\x18\n" +
-	"\avisible\x18\x03 \x01(\bR\avisible\"<\n" +
-	"\x12TerminalDimensions\x12\x12\n" +
-	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
-	"\x04cols\x18\x02 \x01(\rR\x04cols\"\xfc\x02\n" +
-	"\fTerminalDiff\x12#\n" +
-	"\rfrom_sequence\x18\x01 \x01(\x04R\ffromSequence\x12\x1f\n" +
-	"\vto_sequence\x18\x02 \x01(\x04R\n" +
-	"toSequence\x12\x1d\n" +
-	"\n" +
-	"diff_bytes\x18\x03 \x01(\fR\tdiffBytes\x123\n" +
-	"\becho_ack\x18\x04 \x01(\v2\x13.session.v1.EchoAckH\x00R\aechoAck\x88\x01\x01\x12\x1f\n" +
-	"\vfull_redraw\x18\x05 \x01(\bR\n" +
-	"fullRedraw\x12#\n" +
-	"\rchanged_cells\x18\x06 \x01(\rR\fchangedCells\x12'\n" +
-	"\x0funchanged_cells\x18\a \x01(\rR\x0eunchangedCells\x12F\n" +
-	"\vcompression\x18\b \x01(\v2\x1f.session.v1.CompressionMetadataH\x01R\vcompression\x88\x01\x01B\v\n" +
-	"\t_echo_ackB\x0e\n" +
-	"\f_compression\"[\n" +
-	"\aEchoAck\x12 \n" +
-	"\fecho_ack_num\x18\x01 \x01(\x04R\n" +
-	"echoAckNum\x12.\n" +
-	"\x13server_timestamp_ms\x18\x02 \x01(\x03R\x11serverTimestampMs\"n\n" +
-	"\rInputWithEcho\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\x12\x19\n" +
-	"\becho_num\x18\x02 \x01(\x04R\aechoNum\x12.\n" +
-	"\x13client_timestamp_ms\x18\x03 \x01(\x03R\x11clientTimestampMs\"\x80\x03\n" +
-	"\x0fSSPCapabilities\x128\n" +
-	"\x18supports_predictive_echo\x18\x01 \x01(\bR\x16supportsPredictiveEcho\x122\n" +
-	"\x15supports_diff_updates\x18\x02 \x01(\bR\x13supportsDiffUpdates\x125\n" +
-	"\x16compression_algorithms\x18\x03 \x03(\tR\x15compressionAlgorithms\x12)\n" +
-	"\x10protocol_version\x18\x04 \x01(\rR\x0fprotocolVersion\x12'\n" +
-	"\rmax_diff_size\x18\x05 \x01(\rH\x00R\vmaxDiffSize\x88\x01\x01\x12B\n" +
-	"\x1bpreferred_frame_interval_ms\x18\x06 \x01(\rH\x01R\x18preferredFrameIntervalMs\x88\x01\x01B\x10\n" +
-	"\x0e_max_diff_sizeB\x1e\n" +
-	"\x1c_preferred_frame_interval_ms\"\xc1\x01\n" +
-	"\x0eSSPNegotiation\x12?\n" +
-	"\fcapabilities\x18\x01 \x01(\v2\x1b.session.v1.SSPCapabilitiesR\fcapabilities\x12\x1d\n" +
-	"\n" +
-	"is_request\x18\x02 \x01(\bR\tisRequest\x12@\n" +
-	"\n" +
-	"negotiated\x18\x03 \x01(\v2\x1b.session.v1.SSPCapabilitiesH\x00R\n" +
-	"negotiated\x88\x01\x01B\r\n" +
-	"\v_negotiated\"\xf7\x02\n" +
-	"\rTerminalState\x12\x1a\n" +
-	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12>\n" +
-	"\n" +
-	"dimensions\x18\x02 \x01(\v2\x1e.session.v1.TerminalDimensionsR\n" +
-	"dimensions\x12.\n" +
-	"\x05lines\x18\x03 \x03(\v2\x18.session.v1.TerminalLineR\x05lines\x122\n" +
-	"\x06cursor\x18\x04 \x01(\v2\x1a.session.v1.CursorPositionR\x06cursor\x12?\n" +
-	"\n" +
-	"scrollback\x18\x05 \x01(\v2\x1a.session.v1.ScrollbackInfoH\x00R\n" +
-	"scrollback\x88\x01\x01\x12F\n" +
-	"\vcompression\x18\x06 \x01(\v2\x1f.session.v1.CompressionMetadataH\x01R\vcompression\x88\x01\x01B\r\n" +
-	"\v_scrollbackB\x0e\n" +
-	"\f_compression\"x\n" +
-	"\fTerminalLine\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\fR\acontent\x12?\n" +
-	"\n" +
-	"attributes\x18\x02 \x01(\v2\x1a.session.v1.LineAttributesH\x00R\n" +
-	"attributes\x88\x01\x01B\r\n" +
-	"\v_attributes\"\xb1\x01\n" +
-	"\x0eLineAttributes\x12\x19\n" +
-	"\bis_empty\x18\x01 \x01(\bR\aisEmpty\x12\x1d\n" +
-	"\n" +
-	"ascii_only\x18\x02 \x01(\bR\tasciiOnly\x12\x1f\n" +
-	"\bencoding\x18\x03 \x01(\tH\x00R\bencoding\x88\x01\x01\x12&\n" +
-	"\fpattern_hash\x18\x04 \x01(\x04H\x01R\vpatternHash\x88\x01\x01B\v\n" +
-	"\t_encodingB\x0f\n" +
-	"\r_pattern_hash\"y\n" +
-	"\x0eScrollbackInfo\x12\x1f\n" +
-	"\vtotal_lines\x18\x01 \x01(\x04R\n" +
-	"totalLines\x12#\n" +
-	"\rfirst_visible\x18\x02 \x01(\x04R\ffirstVisible\x12!\n" +
-	"\flast_visible\x18\x03 \x01(\x04R\vlastVisible\"\xc6\x02\n" +
-	"\x13CompressionMetadata\x12\x1c\n" +
-	"\talgorithm\x18\x01 \x01(\tR\talgorithm\x12(\n" +
-	"\rdictionary_id\x18\x02 \x01(\tH\x00R\fdictionaryId\x88\x01\x01\x12+\n" +
-	"\x11uncompressed_size\x18\x03 \x01(\x04R\x10uncompressedSize\x12'\n" +
-	"\x0fcompressed_size\x18\x04 \x01(\x04R\x0ecompressedSize\x12+\n" +
-	"\x11compression_ratio\x18\x05 \x01(\x02R\x10compressionRatio\x12C\n" +
-	"\n" +
-	"dictionary\x18\x06 \x01(\v2\x1e.session.v1.DictionaryMetadataH\x01R\n" +
-	"dictionary\x88\x01\x01B\x10\n" +
-	"\x0e_dictionary_idB\r\n" +
-	"\v_dictionary\"\xb3\x01\n" +
-	"\x12DictionaryMetadata\x12\x14\n" +
-	"\x05level\x18\x01 \x01(\tR\x05level\x12#\n" +
-	"\rpattern_count\x18\x02 \x01(\x04R\fpatternCount\x12$\n" +
-	"\reffectiveness\x18\x03 \x01(\x02R\reffectiveness\x12\x1d\n" +
-	"\n" +
-	"updated_at\x18\x04 \x01(\x03R\tupdatedAt\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\"\xd9\x06\n" +
+	"paneHeight\"\xd9\x06\n" +
 	"\x14UserInteractionEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12D\n" +
@@ -3962,7 +2405,7 @@ func file_session_v1_events_proto_rawDescGZIP() []byte {
 }
 
 var file_session_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_session_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_session_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_session_v1_events_proto_goTypes = []any{
 	(UserInteractionEvent_InteractionType)(0), // 0: session.v1.UserInteractionEvent.InteractionType
 	(*SessionEvent)(nil),                      // 1: session.v1.SessionEvent
@@ -3982,110 +2425,72 @@ var file_session_v1_events_proto_goTypes = []any{
 	(*ScrollbackChunk)(nil),                   // 15: session.v1.ScrollbackChunk
 	(*CurrentPaneRequest)(nil),                // 16: session.v1.CurrentPaneRequest
 	(*CurrentPaneResponse)(nil),               // 17: session.v1.CurrentPaneResponse
-	(*TerminalDelta)(nil),                     // 18: session.v1.TerminalDelta
-	(*LineDelta)(nil),                         // 19: session.v1.LineDelta
-	(*LineEdit)(nil),                          // 20: session.v1.LineEdit
-	(*InsertLine)(nil),                        // 21: session.v1.InsertLine
-	(*CursorPosition)(nil),                    // 22: session.v1.CursorPosition
-	(*TerminalDimensions)(nil),                // 23: session.v1.TerminalDimensions
-	(*TerminalDiff)(nil),                      // 24: session.v1.TerminalDiff
-	(*EchoAck)(nil),                           // 25: session.v1.EchoAck
-	(*InputWithEcho)(nil),                     // 26: session.v1.InputWithEcho
-	(*SSPCapabilities)(nil),                   // 27: session.v1.SSPCapabilities
-	(*SSPNegotiation)(nil),                    // 28: session.v1.SSPNegotiation
-	(*TerminalState)(nil),                     // 29: session.v1.TerminalState
-	(*TerminalLine)(nil),                      // 30: session.v1.TerminalLine
-	(*LineAttributes)(nil),                    // 31: session.v1.LineAttributes
-	(*ScrollbackInfo)(nil),                    // 32: session.v1.ScrollbackInfo
-	(*CompressionMetadata)(nil),               // 33: session.v1.CompressionMetadata
-	(*DictionaryMetadata)(nil),                // 34: session.v1.DictionaryMetadata
-	(*UserInteractionEvent)(nil),              // 35: session.v1.UserInteractionEvent
-	(*SessionAcknowledgedEvent)(nil),          // 36: session.v1.SessionAcknowledgedEvent
-	(*ApprovalResponseEvent)(nil),             // 37: session.v1.ApprovalResponseEvent
-	(*ReviewQueueEvent)(nil),                  // 38: session.v1.ReviewQueueEvent
-	(*ReviewQueueItemAddedEvent)(nil),         // 39: session.v1.ReviewQueueItemAddedEvent
-	(*ReviewQueueItemRemovedEvent)(nil),       // 40: session.v1.ReviewQueueItemRemovedEvent
-	(*ReviewQueueItemUpdatedEvent)(nil),       // 41: session.v1.ReviewQueueItemUpdatedEvent
-	(*ReviewQueueStatisticsEvent)(nil),        // 42: session.v1.ReviewQueueStatisticsEvent
-	(*NotificationEvent)(nil),                 // 43: session.v1.NotificationEvent
-	nil,                                       // 44: session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
-	nil,                                       // 45: session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
-	nil,                                       // 46: session.v1.NotificationEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),             // 47: google.protobuf.Timestamp
-	(*Session)(nil),                           // 48: session.v1.Session
-	(DetectedStatus)(0),                       // 49: session.v1.DetectedStatus
-	(ShellStatus)(0),                          // 50: session.v1.ShellStatus
-	(*ReviewItem)(nil),                        // 51: session.v1.ReviewItem
-	(NotificationType)(0),                     // 52: session.v1.NotificationType
-	(NotificationPriority)(0),                 // 53: session.v1.NotificationPriority
+	(*UserInteractionEvent)(nil),              // 18: session.v1.UserInteractionEvent
+	(*SessionAcknowledgedEvent)(nil),          // 19: session.v1.SessionAcknowledgedEvent
+	(*ApprovalResponseEvent)(nil),             // 20: session.v1.ApprovalResponseEvent
+	(*ReviewQueueEvent)(nil),                  // 21: session.v1.ReviewQueueEvent
+	(*ReviewQueueItemAddedEvent)(nil),         // 22: session.v1.ReviewQueueItemAddedEvent
+	(*ReviewQueueItemRemovedEvent)(nil),       // 23: session.v1.ReviewQueueItemRemovedEvent
+	(*ReviewQueueItemUpdatedEvent)(nil),       // 24: session.v1.ReviewQueueItemUpdatedEvent
+	(*ReviewQueueStatisticsEvent)(nil),        // 25: session.v1.ReviewQueueStatisticsEvent
+	(*NotificationEvent)(nil),                 // 26: session.v1.NotificationEvent
+	nil,                                       // 27: session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
+	nil,                                       // 28: session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
+	nil,                                       // 29: session.v1.NotificationEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),             // 30: google.protobuf.Timestamp
+	(*Session)(nil),                           // 31: session.v1.Session
+	(DetectedStatus)(0),                       // 32: session.v1.DetectedStatus
+	(ShellStatus)(0),                          // 33: session.v1.ShellStatus
+	(*ReviewItem)(nil),                        // 34: session.v1.ReviewItem
+	(NotificationType)(0),                     // 35: session.v1.NotificationType
+	(NotificationPriority)(0),                 // 36: session.v1.NotificationPriority
 }
 var file_session_v1_events_proto_depIdxs = []int32{
-	47, // 0: session.v1.SessionEvent.timestamp:type_name -> google.protobuf.Timestamp
+	30, // 0: session.v1.SessionEvent.timestamp:type_name -> google.protobuf.Timestamp
 	2,  // 1: session.v1.SessionEvent.session_created:type_name -> session.v1.SessionCreatedEvent
 	3,  // 2: session.v1.SessionEvent.session_updated:type_name -> session.v1.SessionUpdatedEvent
 	4,  // 3: session.v1.SessionEvent.session_deleted:type_name -> session.v1.SessionDeletedEvent
-	35, // 4: session.v1.SessionEvent.user_interaction:type_name -> session.v1.UserInteractionEvent
-	36, // 5: session.v1.SessionEvent.session_acknowledged:type_name -> session.v1.SessionAcknowledgedEvent
-	37, // 6: session.v1.SessionEvent.approval_response:type_name -> session.v1.ApprovalResponseEvent
-	43, // 7: session.v1.SessionEvent.notification:type_name -> session.v1.NotificationEvent
-	48, // 8: session.v1.SessionCreatedEvent.session:type_name -> session.v1.Session
-	48, // 9: session.v1.SessionUpdatedEvent.session:type_name -> session.v1.Session
-	49, // 10: session.v1.SessionUpdatedEvent.detected_status:type_name -> session.v1.DetectedStatus
+	18, // 4: session.v1.SessionEvent.user_interaction:type_name -> session.v1.UserInteractionEvent
+	19, // 5: session.v1.SessionEvent.session_acknowledged:type_name -> session.v1.SessionAcknowledgedEvent
+	20, // 6: session.v1.SessionEvent.approval_response:type_name -> session.v1.ApprovalResponseEvent
+	26, // 7: session.v1.SessionEvent.notification:type_name -> session.v1.NotificationEvent
+	31, // 8: session.v1.SessionCreatedEvent.session:type_name -> session.v1.Session
+	31, // 9: session.v1.SessionUpdatedEvent.session:type_name -> session.v1.Session
+	32, // 10: session.v1.SessionUpdatedEvent.detected_status:type_name -> session.v1.DetectedStatus
 	8,  // 11: session.v1.TerminalData.output:type_name -> session.v1.TerminalOutput
 	9,  // 12: session.v1.TerminalData.input:type_name -> session.v1.TerminalInput
 	10, // 13: session.v1.TerminalData.resize:type_name -> session.v1.TerminalResize
 	11, // 14: session.v1.TerminalData.error:type_name -> session.v1.TerminalError
 	13, // 15: session.v1.TerminalData.scrollback_request:type_name -> session.v1.ScrollbackRequest
 	14, // 16: session.v1.TerminalData.scrollback_response:type_name -> session.v1.ScrollbackResponse
-	18, // 17: session.v1.TerminalData.delta:type_name -> session.v1.TerminalDelta
-	16, // 18: session.v1.TerminalData.current_pane_request:type_name -> session.v1.CurrentPaneRequest
-	17, // 19: session.v1.TerminalData.current_pane_response:type_name -> session.v1.CurrentPaneResponse
-	12, // 20: session.v1.TerminalData.flow_control:type_name -> session.v1.FlowControl
-	29, // 21: session.v1.TerminalData.state:type_name -> session.v1.TerminalState
-	24, // 22: session.v1.TerminalData.diff:type_name -> session.v1.TerminalDiff
-	26, // 23: session.v1.TerminalData.input_echo:type_name -> session.v1.InputWithEcho
-	28, // 24: session.v1.TerminalData.ssp_negotiation:type_name -> session.v1.SSPNegotiation
-	7,  // 25: session.v1.TerminalData.resize_quiescence:type_name -> session.v1.ResizeQuiescence
-	6,  // 26: session.v1.TerminalData.shell_status_update:type_name -> session.v1.ShellStatusUpdate
-	50, // 27: session.v1.ShellStatusUpdate.new_status:type_name -> session.v1.ShellStatus
-	15, // 28: session.v1.ScrollbackResponse.chunks:type_name -> session.v1.ScrollbackChunk
-	19, // 29: session.v1.TerminalDelta.lines:type_name -> session.v1.LineDelta
-	22, // 30: session.v1.TerminalDelta.cursor:type_name -> session.v1.CursorPosition
-	23, // 31: session.v1.TerminalDelta.dimensions:type_name -> session.v1.TerminalDimensions
-	20, // 32: session.v1.LineDelta.edit:type_name -> session.v1.LineEdit
-	21, // 33: session.v1.LineDelta.insert:type_name -> session.v1.InsertLine
-	25, // 34: session.v1.TerminalDiff.echo_ack:type_name -> session.v1.EchoAck
-	33, // 35: session.v1.TerminalDiff.compression:type_name -> session.v1.CompressionMetadata
-	27, // 36: session.v1.SSPNegotiation.capabilities:type_name -> session.v1.SSPCapabilities
-	27, // 37: session.v1.SSPNegotiation.negotiated:type_name -> session.v1.SSPCapabilities
-	23, // 38: session.v1.TerminalState.dimensions:type_name -> session.v1.TerminalDimensions
-	30, // 39: session.v1.TerminalState.lines:type_name -> session.v1.TerminalLine
-	22, // 40: session.v1.TerminalState.cursor:type_name -> session.v1.CursorPosition
-	32, // 41: session.v1.TerminalState.scrollback:type_name -> session.v1.ScrollbackInfo
-	33, // 42: session.v1.TerminalState.compression:type_name -> session.v1.CompressionMetadata
-	31, // 43: session.v1.TerminalLine.attributes:type_name -> session.v1.LineAttributes
-	34, // 44: session.v1.CompressionMetadata.dictionary:type_name -> session.v1.DictionaryMetadata
-	0,  // 45: session.v1.UserInteractionEvent.type:type_name -> session.v1.UserInteractionEvent.InteractionType
-	47, // 46: session.v1.SessionAcknowledgedEvent.acknowledged_at:type_name -> google.protobuf.Timestamp
-	47, // 47: session.v1.ApprovalResponseEvent.responded_at:type_name -> google.protobuf.Timestamp
-	47, // 48: session.v1.ReviewQueueEvent.timestamp:type_name -> google.protobuf.Timestamp
-	39, // 49: session.v1.ReviewQueueEvent.item_added:type_name -> session.v1.ReviewQueueItemAddedEvent
-	40, // 50: session.v1.ReviewQueueEvent.item_removed:type_name -> session.v1.ReviewQueueItemRemovedEvent
-	41, // 51: session.v1.ReviewQueueEvent.item_updated:type_name -> session.v1.ReviewQueueItemUpdatedEvent
-	42, // 52: session.v1.ReviewQueueEvent.statistics:type_name -> session.v1.ReviewQueueStatisticsEvent
-	51, // 53: session.v1.ReviewQueueItemAddedEvent.item:type_name -> session.v1.ReviewItem
-	51, // 54: session.v1.ReviewQueueItemUpdatedEvent.item:type_name -> session.v1.ReviewItem
-	44, // 55: session.v1.ReviewQueueStatisticsEvent.by_priority:type_name -> session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
-	45, // 56: session.v1.ReviewQueueStatisticsEvent.by_reason:type_name -> session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
-	52, // 57: session.v1.NotificationEvent.notification_type:type_name -> session.v1.NotificationType
-	53, // 58: session.v1.NotificationEvent.priority:type_name -> session.v1.NotificationPriority
-	46, // 59: session.v1.NotificationEvent.metadata:type_name -> session.v1.NotificationEvent.MetadataEntry
-	47, // 60: session.v1.NotificationEvent.timestamp:type_name -> google.protobuf.Timestamp
-	61, // [61:61] is the sub-list for method output_type
-	61, // [61:61] is the sub-list for method input_type
-	61, // [61:61] is the sub-list for extension type_name
-	61, // [61:61] is the sub-list for extension extendee
-	0,  // [0:61] is the sub-list for field type_name
+	16, // 17: session.v1.TerminalData.current_pane_request:type_name -> session.v1.CurrentPaneRequest
+	17, // 18: session.v1.TerminalData.current_pane_response:type_name -> session.v1.CurrentPaneResponse
+	12, // 19: session.v1.TerminalData.flow_control:type_name -> session.v1.FlowControl
+	7,  // 20: session.v1.TerminalData.resize_quiescence:type_name -> session.v1.ResizeQuiescence
+	6,  // 21: session.v1.TerminalData.shell_status_update:type_name -> session.v1.ShellStatusUpdate
+	33, // 22: session.v1.ShellStatusUpdate.new_status:type_name -> session.v1.ShellStatus
+	15, // 23: session.v1.ScrollbackResponse.chunks:type_name -> session.v1.ScrollbackChunk
+	0,  // 24: session.v1.UserInteractionEvent.type:type_name -> session.v1.UserInteractionEvent.InteractionType
+	30, // 25: session.v1.SessionAcknowledgedEvent.acknowledged_at:type_name -> google.protobuf.Timestamp
+	30, // 26: session.v1.ApprovalResponseEvent.responded_at:type_name -> google.protobuf.Timestamp
+	30, // 27: session.v1.ReviewQueueEvent.timestamp:type_name -> google.protobuf.Timestamp
+	22, // 28: session.v1.ReviewQueueEvent.item_added:type_name -> session.v1.ReviewQueueItemAddedEvent
+	23, // 29: session.v1.ReviewQueueEvent.item_removed:type_name -> session.v1.ReviewQueueItemRemovedEvent
+	24, // 30: session.v1.ReviewQueueEvent.item_updated:type_name -> session.v1.ReviewQueueItemUpdatedEvent
+	25, // 31: session.v1.ReviewQueueEvent.statistics:type_name -> session.v1.ReviewQueueStatisticsEvent
+	34, // 32: session.v1.ReviewQueueItemAddedEvent.item:type_name -> session.v1.ReviewItem
+	34, // 33: session.v1.ReviewQueueItemUpdatedEvent.item:type_name -> session.v1.ReviewItem
+	27, // 34: session.v1.ReviewQueueStatisticsEvent.by_priority:type_name -> session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
+	28, // 35: session.v1.ReviewQueueStatisticsEvent.by_reason:type_name -> session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
+	35, // 36: session.v1.NotificationEvent.notification_type:type_name -> session.v1.NotificationType
+	36, // 37: session.v1.NotificationEvent.priority:type_name -> session.v1.NotificationPriority
+	29, // 38: session.v1.NotificationEvent.metadata:type_name -> session.v1.NotificationEvent.MetadataEntry
+	30, // 39: session.v1.NotificationEvent.timestamp:type_name -> google.protobuf.Timestamp
+	40, // [40:40] is the sub-list for method output_type
+	40, // [40:40] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_events_proto_init() }
@@ -4110,35 +2515,15 @@ func file_session_v1_events_proto_init() {
 		(*TerminalData_Error)(nil),
 		(*TerminalData_ScrollbackRequest)(nil),
 		(*TerminalData_ScrollbackResponse)(nil),
-		(*TerminalData_Delta)(nil),
 		(*TerminalData_CurrentPaneRequest)(nil),
 		(*TerminalData_CurrentPaneResponse)(nil),
 		(*TerminalData_FlowControl)(nil),
-		(*TerminalData_State)(nil),
-		(*TerminalData_Diff)(nil),
-		(*TerminalData_InputEcho)(nil),
-		(*TerminalData_SspNegotiation)(nil),
 		(*TerminalData_ResizeQuiescence)(nil),
 		(*TerminalData_ShellStatusUpdate)(nil),
 	}
 	file_session_v1_events_proto_msgTypes[11].OneofWrappers = []any{}
 	file_session_v1_events_proto_msgTypes[15].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[17].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[18].OneofWrappers = []any{
-		(*LineDelta_ReplaceLine)(nil),
-		(*LineDelta_Edit)(nil),
-		(*LineDelta_DeleteLine)(nil),
-		(*LineDelta_Insert)(nil),
-		(*LineDelta_ClearLine)(nil),
-	}
-	file_session_v1_events_proto_msgTypes[23].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[26].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[27].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[28].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[29].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[30].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[32].OneofWrappers = []any{}
-	file_session_v1_events_proto_msgTypes[37].OneofWrappers = []any{
+	file_session_v1_events_proto_msgTypes[20].OneofWrappers = []any{
 		(*ReviewQueueEvent_ItemAdded)(nil),
 		(*ReviewQueueEvent_ItemRemoved)(nil),
 		(*ReviewQueueEvent_ItemUpdated)(nil),
@@ -4150,7 +2535,7 @@ func file_session_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_events_proto_rawDesc), len(file_session_v1_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   46,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

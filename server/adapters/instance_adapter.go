@@ -153,19 +153,22 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		}
 	}
 
+	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
+	var statusInfo session.InstanceStatusInfo
+	if snap.Status == session.Active {
+		if mgr := inst.GetStatusManager(); mgr != nil {
+			statusInfo = mgr.GetStatus(inst)
+		}
+	}
+
 	// SubStatus: fine-grained activity state derived from terminal detection.
 	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
-	protoSession.SubStatus = toProtoSubStatus(inst)
+	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
 
 	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
-	// Only meaningful for Active sessions; non-Active sessions leave these at their
-	// zero values (DETECTED_STATUS_UNSPECIFIED, empty string).
-	if snap.Status == session.Active {
-		detectedStatus := inst.GetDetectedStatus()
-		if detectedStatus != detection.StatusUnknown {
-			protoSession.DetectedStatus = detection.DetectedStatusToProto(detectedStatus)
-			protoSession.DetectedContext = inst.GetDetectedContext()
-		}
+	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
+		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
+		protoSession.DetectedContext = statusInfo.StatusContext
 	}
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
@@ -229,18 +232,18 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 	}
 }
 
-// toProtoSubStatus derives the SubStatus proto enum from an Instance's terminal detection state.
+// toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
-	if inst.Snapshot().Status != session.Active {
+func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
+	if basicStatus != session.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
 	// Rate limit state takes precedence.
-	if ratelimit.RateLimitState(inst.GetRateLimitState()) == ratelimit.StateWaiting {
+	if ratelimit.RateLimitState(rateLimitState) == ratelimit.StateWaiting {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
-	switch inst.GetDetectedStatus() {
+	switch info.ClaudeStatus {
 	case detection.StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
 	case detection.StatusProcessing, detection.StatusExecuting:

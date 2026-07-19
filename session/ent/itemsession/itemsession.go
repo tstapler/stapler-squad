@@ -25,8 +25,14 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
+	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
+	FieldPipelineModeSnapshot = "pipeline_mode_snapshot"
+	// FieldPipelineModeSnapshotHash holds the string denoting the pipeline_mode_snapshot_hash field in the database.
+	FieldPipelineModeSnapshotHash = "pipeline_mode_snapshot_hash"
 	// FieldTriageResult holds the string denoting the triage_result field in the database.
 	FieldTriageResult = "triage_result"
+	// FieldVerificationNotes holds the string denoting the verification_notes field in the database.
+	FieldVerificationNotes = "verification_notes"
 	// FieldLastCommitSha holds the string denoting the last_commit_sha field in the database.
 	FieldLastCommitSha = "last_commit_sha"
 	// FieldLastCommitAt holds the string denoting the last_commit_at field in the database.
@@ -73,7 +79,10 @@ var Columns = []string{
 	FieldStartedAt,
 	FieldEndedAt,
 	FieldAcSnapshot,
+	FieldPipelineModeSnapshot,
+	FieldPipelineModeSnapshotHash,
 	FieldTriageResult,
+	FieldVerificationNotes,
 	FieldLastCommitSha,
 	FieldLastCommitAt,
 	FieldLastCommitMessage,
@@ -106,6 +115,10 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
+	DefaultPipelineModeSnapshot string
+	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
+	DefaultPipelineModeSnapshotHash string
 	// DefaultCommitCountSinceSpawn holds the default value on creation for the "commit_count_since_spawn" field.
 	DefaultCommitCountSinceSpawn int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -149,9 +162,24 @@ func ByAcSnapshot(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAcSnapshot, opts...).ToFunc()
 }
 
+// ByPipelineModeSnapshot orders the results by the pipeline_mode_snapshot field.
+func ByPipelineModeSnapshot(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPipelineModeSnapshot, opts...).ToFunc()
+}
+
+// ByPipelineModeSnapshotHash orders the results by the pipeline_mode_snapshot_hash field.
+func ByPipelineModeSnapshotHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPipelineModeSnapshotHash, opts...).ToFunc()
+}
+
 // ByTriageResult orders the results by the triage_result field.
 func ByTriageResult(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriageResult, opts...).ToFunc()
+}
+
+// ByVerificationNotes orders the results by the verification_notes field.
+func ByVerificationNotes(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldVerificationNotes, opts...).ToFunc()
 }
 
 // ByLastCommitSha orders the results by the last_commit_sha field.

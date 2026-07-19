@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
@@ -66,25 +69,28 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 	}
 
 	return ItemSessionSummary{
-		ID:                    is.ID.String(),
-		BacklogItemID:         backlogItemID,
-		SessionUUID:           is.SessionUUID,
-		Role:                  is.SessionRole,
-		AcSnapshot:            AcCriteriaJSON(is.AcSnapshot),
-		LastCommitSha:         is.LastCommitSha,
-		LastCommitMessage:     is.LastCommitMessage,
-		CommitCountSinceSpawn: is.CommitCountSinceSpawn,
-		StartedAt:             is.StartedAt,
-		EndedAt:               is.EndedAt,
-		LastCommitAt:          is.LastCommitAt,
-		LastFileTouchAt:       is.LastFileTouchAt,
-		LastProgressAt:        is.LastProgressAt,
-		CreatedAt:             is.CreatedAt,
-		EstimatedCostUsd:      is.EstimatedCostUsd,
-		TriageResult:          is.TriageResult,
-		TriageResultSummary:   triageResultSummary,
-		OverallOutcome:        overallOutcome,
-		ReviewVerdict:         reviewVerdictToSummary(is.Edges.ReviewVerdict),
+		ID:                       is.ID.String(),
+		BacklogItemID:            backlogItemID,
+		SessionUUID:              is.SessionUUID,
+		Role:                     is.SessionRole,
+		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
+		PipelineModeSnapshot:     is.PipelineModeSnapshot,
+		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		LastCommitSha:            is.LastCommitSha,
+		LastCommitMessage:        is.LastCommitMessage,
+		CommitCountSinceSpawn:    is.CommitCountSinceSpawn,
+		StartedAt:                is.StartedAt,
+		EndedAt:                  is.EndedAt,
+		LastCommitAt:             is.LastCommitAt,
+		LastFileTouchAt:          is.LastFileTouchAt,
+		LastProgressAt:           is.LastProgressAt,
+		CreatedAt:                is.CreatedAt,
+		EstimatedCostUsd:         is.EstimatedCostUsd,
+		TriageResult:             is.TriageResult,
+		TriageResultSummary:      triageResultSummary,
+		VerificationNotes:        is.VerificationNotes,
+		OverallOutcome:           overallOutcome,
+		ReviewVerdict:            reviewVerdictToSummary(is.Edges.ReviewVerdict),
 	}
 }
 
@@ -97,6 +103,17 @@ func backlogStatusEventToData(e *ent.BacklogStatusEvent) BacklogStatusEventData 
 		TriggeredBy: e.TriggeredBy,
 		Note:        e.Note,
 		CreatedAt:   e.CreatedAt,
+	}
+}
+
+// progressNoteToData maps an *ent.BacklogProgressNote to a ProgressNoteData DTO.
+func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
+	return ProgressNoteData{
+		ID:             n.ID.String(),
+		CriterionIndex: n.CriterionIndex,
+		Note:           n.Note,
+		Status:         n.Status,
+		CreatedAt:      n.CreatedAt,
 	}
 }
 
@@ -117,25 +134,35 @@ func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 
 func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 	data := BacklogItemData{
-		ID:                 item.ID.String(),
-		Title:              item.Title,
-		Description:        item.Description,
-		AcceptanceCriteria: AcCriteriaJSON(item.AcceptanceCriteria),
-		Priority:           item.Priority,
-		Status:             item.Status,
-		RepoPath:           item.RepoPath,
-		SkipReviewGate:     item.SkipReviewGate,
-		SkipPlanning:       item.SkipPlanning,
-		PlanApproved:       item.PlanApproved,
-		PlanApprovedAt:     item.PlanApprovedAt,
-		PlanArtifactsPath:  item.PlanArtifactsPath,
-		Notes:              item.Notes,
-		ExternalID:         item.ExternalID,
-		ArchivedAt:         item.ArchivedAt,
-		PrURL:              item.PrURL,
-		PrNumber:           item.PrNumber,
-		CreatedAt:          item.CreatedAt,
-		UpdatedAt:          item.UpdatedAt,
+		ID:                           item.ID.String(),
+		Title:                        item.Title,
+		Description:                  item.Description,
+		AcceptanceCriteria:           AcCriteriaJSON(item.AcceptanceCriteria),
+		Priority:                     item.Priority,
+		Status:                       item.Status,
+		RepoPath:                     item.RepoPath,
+		SkipReviewGate:               item.SkipReviewGate,
+		SkipPlanning:                 item.SkipPlanning,
+		AutoSpawnSession:             item.AutoSpawnSession,
+		AutoCreatePR:                 item.AutoCreatePr,
+		PipelineMode:                 item.PipelineMode,
+		PlanApproved:                 item.PlanApproved,
+		PlanApprovedAt:               item.PlanApprovedAt,
+		PlanArtifactsPath:            item.PlanArtifactsPath,
+		Notes:                        item.Notes,
+		ExternalID:                   item.ExternalID,
+		ArchivedAt:                   item.ArchivedAt,
+		PrURL:                        item.PrURL,
+		PrNumber:                     item.PrNumber,
+		ShippedCheckConclusion:       item.ShippedCheckConclusion,
+		ShippedApprovedCount:         item.ShippedApprovedCount,
+		ShippedChangesReqCount:       item.ShippedChangesReqCount,
+		ShippedSnapshotAt:            item.ShippedSnapshotAt,
+		ShippedFileStats:             item.ShippedFileStats,
+		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
+		ReworkCapOverride:            item.ReworkCapOverride,
+		CreatedAt:                    item.CreatedAt,
+		UpdatedAt:                    item.UpdatedAt,
 	}
 	// Resolve source ID from the eager-loaded edge when available.
 	if item.Edges.Source != nil {
@@ -146,6 +173,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.StatusEvents = make([]BacklogStatusEventData, len(item.Edges.StatusEvents))
 		for i, ev := range item.Edges.StatusEvents {
 			data.StatusEvents[i] = backlogStatusEventToData(ev)
+		}
+	}
+	// Propagate eagerly-loaded progress notes when present (see StatusEvents above).
+	if item.Edges.ProgressNotes != nil {
+		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
+		for i, n := range item.Edges.ProgressNotes {
+			data.ProgressNotes[i] = progressNoteToData(n)
 		}
 	}
 	return data
@@ -189,12 +223,16 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillableRepoPath(&data.RepoPath).
 		SetSkipReviewGate(data.SkipReviewGate).
 		SetSkipPlanning(data.SkipPlanning).
+		SetAutoSpawnSession(data.AutoSpawnSession).
+		SetAutoCreatePr(data.AutoCreatePR).
+		SetPipelineMode(data.PipelineMode).
 		SetPlanApproved(data.PlanApproved).
 		SetNillablePlanApprovedAt(data.PlanApprovedAt).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
-		SetNillableArchivedAt(data.ArchivedAt)
+		SetNillableArchivedAt(data.ArchivedAt).
+		SetNillableReworkCapOverride(data.ReworkCapOverride)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -223,6 +261,9 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		WithSource().
 		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
 			q.Order(ent.Asc(backlogstatusevent.FieldCreatedAt))
+		}).
+		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
+			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
 		}).
 		Only(ctx)
 	if err != nil {
@@ -420,6 +461,15 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.SkipPlanning != nil {
 		u.SetSkipPlanning(*update.SkipPlanning)
 	}
+	if update.AutoSpawnSession != nil {
+		u.SetAutoSpawnSession(*update.AutoSpawnSession)
+	}
+	if update.AutoCreatePR != nil {
+		u.SetAutoCreatePr(*update.AutoCreatePR)
+	}
+	if update.PipelineMode != nil {
+		u.SetPipelineMode(*update.PipelineMode)
+	}
 	if update.Notes != nil {
 		u.SetNotes(*update.Notes)
 	}
@@ -437,6 +487,27 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	}
 	if update.PrNumber != nil {
 		u.SetPrNumber(*update.PrNumber)
+	}
+	if update.ShippedCheckConclusion != nil {
+		u.SetShippedCheckConclusion(*update.ShippedCheckConclusion)
+	}
+	if update.ShippedApprovedCount != nil {
+		u.SetShippedApprovedCount(*update.ShippedApprovedCount)
+	}
+	if update.ShippedChangesReqCount != nil {
+		u.SetShippedChangesReqCount(*update.ShippedChangesReqCount)
+	}
+	if update.ShippedSnapshotAt != nil {
+		u.SetShippedSnapshotAt(*update.ShippedSnapshotAt)
+	}
+	if update.ShippedFileStats != nil {
+		u.SetShippedFileStats(*update.ShippedFileStats)
+	}
+	if update.ShippedSnapshotCaptureFailed != nil {
+		u.SetShippedSnapshotCaptureFailed(*update.ShippedSnapshotCaptureFailed)
+	}
+	if update.ReworkCapOverride != nil {
+		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
 
 	item, err := u.Save(ctx)
@@ -563,6 +634,227 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 
 	result := backlogItemToData(item)
 	return &result, nil
+}
+
+// --- BacklogStuckState (durable stuck-state bookkeeping) ---
+
+// MarkStuck opens, refreshes, or reopens a durable BacklogStuckState row for
+// the given item + reason via a resolve-in-place upsert on the (item_id,
+// reason) unique index — there is exactly one row per pair at all times.
+//
+// A best-effort item-status precondition is applied before writing: if the
+// item's current status does not equal expectedStatus, MarkStuck returns
+// (false, nil) without writing. This precondition is NOT atomic with the
+// write itself (a concurrent transition can still race in between); the
+// self-heal sweep (reconcile pipeline, Phase 2) is the correctness backstop
+// for any stale write that still lands.
+//
+// Row semantics on conflict with an existing (item_id, reason) row:
+//   - OPEN row (resolved_at IS NULL): only last_checked_at and context are
+//     refreshed. first_detected_at and notified_at are left untouched, so
+//     notify-once dedup and the "stuck for N" duration both survive repeated
+//     ticks.
+//   - RESOLVED row (resolved_at IS NOT NULL): the SAME row is reopened in
+//     place — resolved_at and notified_at are cleared and first_detected_at
+//     is reset to now — never a second row for the same pair.
+//
+// Implementation note: this is two atomic statements (an INSERT ... ON
+// CONFLICT upsert, then a conditional UPDATE ... WHERE resolved_at IS NOT
+// NULL) inside one DB transaction, rather than a single raw SQL statement.
+// Ent's generated upsert Update() callback has no portable way to express a
+// per-row CASE WHEN keyed off the pre-existing resolved_at value without
+// hand-written dialect-specific SQL, so the reopen adjustment is split into
+// its own atomic, idempotent conditional UPDATE. Row-dedup itself — the
+// concurrency-sensitive part — is still guaranteed by the single upsert
+// statement; there is no read-then-write for detecting whether the row
+// exists.
+func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (applied bool, err error) {
+	if !reason.IsValid() {
+		return false, fmt.Errorf("invalid stuck reason %q", reason)
+	}
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return false, fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+		}
+		return false, fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
+	}
+	if current.Status != string(expectedStatus) {
+		// Best-effort precondition mismatch: not an error, just not applied.
+		return false, nil
+	}
+
+	now := time.Now()
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return false, fmt.Errorf("mark stuck: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	err = tx.BacklogStuckState.Create().
+		SetItemID(parsedID).
+		SetReason(string(reason)).
+		SetFirstDetectedAt(now).
+		SetLastCheckedAt(now).
+		SetContext(stuckContext).
+		OnConflictColumns(backlogstuckstate.FieldItemID, backlogstuckstate.FieldReason).
+		Update(func(u *ent.BacklogStuckStateUpsert) {
+			u.SetLastCheckedAt(now)
+			u.SetContext(stuckContext)
+		}).
+		Exec(ctx)
+	if err != nil {
+		return false, fmt.Errorf("mark stuck: upsert %s/%s: %w", itemID, reason, err)
+	}
+
+	// Reopen-in-place: only touches a row that was already resolved. This is
+	// its own atomic, idempotent conditional UPDATE — running it unconditionally
+	// after the upsert above is safe because it only ever affects a resolved row.
+	if _, err := tx.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtNotNil(),
+		).
+		ClearResolvedAt().
+		ClearNotifiedAt().
+		SetFirstDetectedAt(now).
+		Save(ctx); err != nil {
+		return false, fmt.Errorf("mark stuck: reopen %s/%s: %w", itemID, reason, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("mark stuck: commit: %w", err)
+	}
+	return true, nil
+}
+
+// ResolveStuck atomically, idempotently closes an open BacklogStuckState row
+// via a single conditional UPDATE ... WHERE resolved_at IS NULL. Returns
+// whether a row was actually resolved by this call; resolving an
+// already-resolved or nonexistent (item_id, reason) row is a no-op, not an
+// error, and never overwrites an existing resolved_at.
+func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetResolvedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("resolve stuck %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// MarkStuckNotified sets notified_at=now on an open, not-yet-notified stuck
+// row — the durable notify-once dedup write, called once after a stuck
+// notification has actually been sent. A no-op (not an error) if the row is
+// already notified or doesn't exist.
+func (r *EntRepository) MarkStuckNotified(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.NotifiedAtIsNil(),
+		).
+		SetNotifiedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("mark stuck notified %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// SnoozeStuckState sets snoozed_until on an open BacklogStuckState row via a
+// single atomic conditional UPDATE ... WHERE resolved_at IS NULL, matching the
+// ResolveStuck pattern. Returns whether a row was actually updated by this
+// call; snoozing a nonexistent or already-resolved (item_id, reason) row is a
+// no-op, not an error. A snoozed-until-past-now value simply un-snoozes the
+// row on the next FindOpenStuckStates read (its predicate is
+// snoozed_until IS NULL OR snoozed_until < now).
+func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, reason domain.StuckReason, until time.Time) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetSnoozedUntil(until).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("snooze stuck %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// --- Progress note history ---
+
+// AppendProgressNote records a single report_progress call as an immutable history
+// entry, in addition to (not instead of) the current-note-per-criterion stored on
+// BacklogItem.AcceptanceCriteria. Callers should treat failures here as best-effort:
+// the history is an enrichment for reviewers, not part of report_progress's primary
+// contract of updating the criterion's current status/note.
+func (r *EntRepository) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	_, err = r.client.BacklogProgressNote.Create().
+		SetItemID(parsedItemID).
+		SetCriterionIndex(criterionIndex).
+		SetNote(note).
+		SetStatus(status).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to append progress note for item %s: %w", itemID, err)
+	}
+	return nil
+}
+
+// ListProgressNotesForItem returns the full append-only history of report_progress
+// calls for a backlog item, ordered by created_at ascending (oldest first).
+func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	notes, err := r.client.BacklogProgressNote.Query().
+		Where(backlogprogressnote.HasItemWith(backlogitem.ID(parsedItemID))).
+		Order(ent.Asc(backlogprogressnote.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list progress notes for item %s: %w", itemID, err)
+	}
+	result := make([]ProgressNoteData, len(notes))
+	for i, n := range notes {
+		result[i] = progressNoteToData(n)
+	}
+	return result, nil
 }
 
 // --- ItemSource CRUD ---

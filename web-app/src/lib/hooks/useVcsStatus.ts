@@ -66,6 +66,10 @@ export function useVcsStatus(
 
   const fetchVcs = useCallback(
     async (skipCache = false) => {
+      if (!sessionId) {
+        setLoading(false);
+        return;
+      }
       if (!skipCache) {
         const cached = getCached(sessionId);
         if (cached) {

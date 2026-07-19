@@ -8,10 +8,10 @@ import (
 func TestApprove_FromActive_Fails(t *testing.T) {
 	// Active→Active is a self-transition and is not allowed.
 	inst := &Instance{
-		Title:   "test-approve-active",
-		Status:  Active,
-		started: true,
+		Title:  "test-approve-active",
+		Status: Active,
 	}
+	inst.started.Store(true)
 
 	err := inst.Approve()
 	if err == nil {
@@ -30,10 +30,10 @@ func TestApprove_FromActive_Fails(t *testing.T) {
 func TestApprove_FromPaused(t *testing.T) {
 	// Paused→Active is valid.
 	inst := &Instance{
-		Title:   "test-approve-paused",
-		Status:  Paused,
-		started: true,
+		Title:  "test-approve-paused",
+		Status: Paused,
 	}
+	inst.started.Store(true)
 
 	err := inst.Approve()
 	if err != nil {
@@ -48,10 +48,10 @@ func TestApprove_FromPaused(t *testing.T) {
 func TestDeny_FromActive(t *testing.T) {
 	// Active→Paused is valid, so Deny from Active should succeed.
 	inst := &Instance{
-		Title:   "test-deny-active",
-		Status:  Active,
-		started: true,
+		Title:  "test-deny-active",
+		Status: Active,
 	}
+	inst.started.Store(true)
 
 	err := inst.Deny()
 	if err != nil {
@@ -66,10 +66,10 @@ func TestDeny_FromActive(t *testing.T) {
 func TestDeny_FromPaused_Fails(t *testing.T) {
 	// Paused→Paused is NOT a valid transition (self-transition not allowed).
 	inst := &Instance{
-		Title:   "test-deny-paused",
-		Status:  Paused,
-		started: true,
+		Title:  "test-deny-paused",
+		Status: Paused,
 	}
+	inst.started.Store(true)
 
 	err := inst.Deny()
 	if err == nil {
@@ -85,10 +85,10 @@ func TestDeny_FromPaused_Fails(t *testing.T) {
 func TestApprove_FromStopped_Succeeds(t *testing.T) {
 	// Stopped→Active is valid for session revival.
 	inst := &Instance{
-		Title:   "test-approve-stopped",
-		Status:  Stopped,
-		started: true,
+		Title:  "test-approve-stopped",
+		Status: Stopped,
 	}
+	inst.started.Store(true)
 
 	err := inst.Approve()
 	if err != nil {
@@ -102,10 +102,10 @@ func TestApprove_FromStopped_Succeeds(t *testing.T) {
 func TestDeny_FromStopped_Fails(t *testing.T) {
 	// Stopped→Paused is not a valid transition.
 	inst := &Instance{
-		Title:   "test-deny-stopped",
-		Status:  Stopped,
-		started: true,
+		Title:  "test-deny-stopped",
+		Status: Stopped,
 	}
+	inst.started.Store(true)
 
 	err := inst.Deny()
 	if err == nil {
@@ -121,10 +121,18 @@ func TestDeny_FromStopped_Fails(t *testing.T) {
 func TestApprove_FromHibernated_Succeeds(t *testing.T) {
 	// Hibernated→Active is valid (resume from hibernation).
 	inst := &Instance{
-		Title:   "test-approve-hibernated",
-		Status:  Hibernated,
-		started: true,
+		Title:  "test-approve-hibernated",
+		Status: Hibernated,
 	}
+	inst.started.Store(true)
+	// transitionToLocked dispatches resumeFromHibernationLocked in a background
+	// goroutine that calls Start()/StartController()/StartSessionDriver — real,
+	// long-lived work this test isn't exercising or able to await. Pre-set
+	// driverRunning so StartSessionDriver's CAS guard (see
+	// TestStartSessionDriver_Idempotent) makes it a no-op, preventing a leaked
+	// ticker-loop goroutine from outliving this test (caught by goleak in
+	// TestActorNoLeak/TestActorStopIdempotent under CI's slower scheduling).
+	inst.driverRunning.Store(true)
 
 	err := inst.Approve()
 	if err != nil {
@@ -137,10 +145,10 @@ func TestApprove_FromHibernated_Succeeds(t *testing.T) {
 
 func TestApprove_ErrorMessageFormat(t *testing.T) {
 	inst := &Instance{
-		Title:   "test-err-format",
-		Status:  Active,
-		started: true,
+		Title:  "test-err-format",
+		Status: Active,
 	}
+	inst.started.Store(true)
 
 	err := inst.Approve()
 	if err == nil {
@@ -156,10 +164,10 @@ func TestApprove_ErrorMessageFormat(t *testing.T) {
 
 func TestDeny_ErrorMessageFormat(t *testing.T) {
 	inst := &Instance{
-		Title:   "test-err-format",
-		Status:  Stopped,
-		started: true,
+		Title:  "test-err-format",
+		Status: Stopped,
 	}
+	inst.started.Store(true)
 
 	err := inst.Deny()
 	if err == nil {
@@ -190,10 +198,14 @@ func TestApprove_AllSourceStatuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inst := &Instance{
-				Title:   "test",
-				Status:  tt.from,
-				started: true,
+				Title:  "test",
+				Status: tt.from,
 			}
+			inst.started.Store(true)
+			// See TestApprove_FromHibernated_Succeeds: suppresses the real
+			// StartSessionDriver goroutine that Hibernated->Active's resume
+			// path would otherwise leak past this test's lifetime.
+			inst.driverRunning.Store(true)
 			err := inst.Approve()
 			if tt.expectPass && err != nil {
 				t.Errorf("expected Approve to succeed from %s, got: %v", tt.from, err)
@@ -225,10 +237,10 @@ func TestDeny_AllSourceStatuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inst := &Instance{
-				Title:   "test",
-				Status:  tt.from,
-				started: true,
+				Title:  "test",
+				Status: tt.from,
 			}
+			inst.started.Store(true)
 			err := inst.Deny()
 			if tt.expectPass && err != nil {
 				t.Errorf("expected Deny to succeed from %s, got: %v", tt.from, err)

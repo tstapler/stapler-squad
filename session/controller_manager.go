@@ -1,7 +1,6 @@
 package session
 
 import (
-	"sync"
 	"sync/atomic"
 )
 
@@ -24,52 +23,46 @@ func (*noCopy) Unlock() {}
 // session selection) that is tightly coupled to Instance business logic.
 // It remains a direct field on Instance for now.
 //
-// The controller field is protected by mu; statusManager uses atomic.Pointer
-// for lock-free concurrent access.
+// Both controller and statusManager use atomic.Pointer for lock-free concurrent
+// access. Write operations (Register/Unregister/Set) are expected to be called
+// sequentially from the Instance lifecycle path and are not themselves
+// concurrency-safe against each other.
 // ControllerManager must not be copied after first use (enforced by noCopy).
 type ControllerManager struct {
 	_             noCopy
-	mu            sync.RWMutex
-	controller    *ClaudeController
+	controller    atomic.Pointer[ClaudeController]
 	statusManager atomic.Pointer[InstanceStatusManager]
 }
 
 // HasController reports whether a ClaudeController has been registered.
 func (cm *ControllerManager) HasController() bool {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.controller != nil
+	return cm.controller.Load() != nil
 }
 
 // GetController returns the current ClaudeController (may be nil).
 func (cm *ControllerManager) GetController() *ClaudeController {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.controller
+	return cm.controller.Load()
 }
 
 // SetController replaces the controller. Callers are responsible for stopping
 // the old controller before calling this.
 func (cm *ControllerManager) SetController(c *ClaudeController) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.controller = c
+	cm.controller.Store(c)
 }
 
-// stopAndClearLocked stops the controller (if running) and clears the reference.
-// Must be called with cm.mu.Lock() held.
-func (cm *ControllerManager) stopAndClearLocked() {
-	if cm.controller != nil {
-		cm.controller.Stop()
-		cm.controller = nil
+// stopAndClear atomically swaps the controller to nil, then stops it outside
+// any lock. Calling Stop() under a lock was a deadlock risk because Stop()
+// acquires its own lifecycle lock.
+func (cm *ControllerManager) stopAndClear() {
+	old := cm.controller.Swap(nil)
+	if old != nil {
+		old.Stop() //nolint:errcheck
 	}
 }
 
 // StopAndClearController stops the controller (if running) and clears the reference.
 func (cm *ControllerManager) StopAndClearController() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.stopAndClearLocked()
+	cm.stopAndClear()
 }
 
 // GetStatusManager returns the current InstanceStatusManager (may be nil).
@@ -85,22 +78,18 @@ func (cm *ControllerManager) SetStatusManager(m *InstanceStatusManager) {
 // RegisterController wires a new controller into the status manager and stores
 // it. Any existing controller is stopped first.
 func (cm *ControllerManager) RegisterController(title string, controller *ClaudeController) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.stopAndClearLocked()
+	cm.stopAndClear()
 	if mgr := cm.statusManager.Load(); mgr != nil {
 		mgr.RegisterController(title, controller)
 	}
-	cm.controller = controller
+	cm.controller.Store(controller)
 }
 
 // UnregisterController stops and clears the controller, and removes it from
 // the status manager.
 func (cm *ControllerManager) UnregisterController(title string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
 	if mgr := cm.statusManager.Load(); mgr != nil {
 		mgr.UnregisterController(title)
 	}
-	cm.stopAndClearLocked()
+	cm.stopAndClear()
 }

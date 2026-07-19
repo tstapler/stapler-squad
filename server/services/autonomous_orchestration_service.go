@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -49,6 +51,15 @@ type AutonomousOrchestrationService struct {
 // SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
 func (a *AutonomousOrchestrationService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	a.reviewGateTrigger = t
+}
+
+// TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger, used
+// by the request_review MCP tool to spawn a review gate immediately instead of waiting
+// for the next ReconcileStuck tick. No-op if no trigger is wired.
+func (a *AutonomousOrchestrationService) TriggerReviewForSession(sessionUUID string) {
+	if a.reviewGateTrigger != nil {
+		a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
+	}
 }
 
 // NewAutonomousOrchestrationService creates a new service.
@@ -227,13 +238,45 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	a.bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
 
 	// Look up the backlog item linked to this session.
+	// statusTransitionErr is surfaced in the notification below so the operator never sees
+	// "complete" while the backlog item silently failed to advance (e.g. a concurrent status
+	// change broke the optimistic-concurrency precondition).
+	var statusTransitionErr error
 	if a.storageGetter != nil {
 		concreteStorage := a.storageGetter()
 		if concreteStorage != nil {
 			is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
-			if err == nil {
+			if err != nil {
+				if errors.Is(err, session.ErrNotFound) {
+					// Expected: most autonomous sessions are not backlog-linked.
+					log.Debug("[AutonomousDriver] onAutonomousDriverComplete: no linked backlog item session", "session", instanceName)
+				} else {
+					// A real lookup failure would otherwise take the identical silent path as
+					// "not backlog-linked" above, making it undiagnosable in production.
+					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: item session lookup failed", "session", instanceName, "err", err)
+				}
+			} else {
 				item, itemErr := concreteStorage.GetBacklogItem(ctx, is.BacklogItemID)
-				if itemErr == nil && item != nil {
+				if itemErr != nil || item == nil {
+					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: failed to load linked backlog item", "itemSession", is.ID, "item", is.BacklogItemID, "err", itemErr)
+				} else {
+					// Write a durable autonomous_stuck row so a turn-cap stop is visible in
+					// the Unfinished tab, not just the ephemeral "Autonomous fix stuck"
+					// notification published below — previously invisible to the whole
+					// stuck-reason/recovery system every other detector in
+					// session/backlog_lifecycle.go participates in. Additive, never a gate:
+					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
+					// role-specific status handling below.
+					if !outcome.Done {
+						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
+							session.BacklogStatus(item.Status),
+							fmt.Sprintf("autonomous driver stopped after %d turns without a DONE signal (%s)", outcome.Turns, outcome.Reason)); markErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
+						} else if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
+						}
+					}
+
 					var toStatus session.BacklogStatus
 					var expectedStatus string
 					switch is.Role {
@@ -259,20 +302,30 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					case session.SessionRoleWork:
 						toStatus = session.BacklogStatusReview
 						expectedStatus = string(session.BacklogStatusInProgress)
-					default:
-						// SessionRoleReview and unknown roles: no transition from AutonomousDriver.
-						// Review outcomes are managed by submit_review_verdict.
+					case session.SessionRoleReview:
+						// Review outcomes are managed by submit_review_verdict — no transition,
+						// and no generic notification (that would duplicate the review-specific one).
 						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
 						return
+					default:
+						// Unrecognized role — a new pipeline stage was likely added elsewhere
+						// without updating this switch. Previously this fell into the same silent
+						// return as SessionRoleReview, leaving the operator with zero signal. Log
+						// at Warn (diagnosable) and fall through to the generic done/stuck
+						// notification below instead of returning early.
+						log.Warn("[AutonomousDriver] onAutonomousDriverComplete: unrecognized session role, skipping status transition", "role", is.Role, "item", item.ID)
 					}
-					precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-					if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition); transErr != nil {
-						log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
-					} else {
-						log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
-						// Immediately kick off headless review for completed work sessions.
-						if toStatus == session.BacklogStatusReview && a.reviewGateTrigger != nil {
-							a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
+					if toStatus != "" {
+						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
+						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition); transErr != nil {
+							statusTransitionErr = transErr
+							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
+						} else {
+							log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+							// Immediately kick off headless review for completed work sessions.
+							if toStatus == session.BacklogStatusReview && a.reviewGateTrigger != nil {
+								a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
+							}
 						}
 					}
 				}
@@ -292,6 +345,14 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	} else {
 		title = "Autonomous fix stuck"
 		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
+		notifType = int32(9) // NotificationType_FAILURE
+	}
+	if statusTransitionErr != nil {
+		// The driver finished (or got stuck), but the backlog item's status update failed.
+		// Never let the operator see "complete" while the item is silently stuck in its
+		// previous status — override the notification to say so explicitly.
+		title += " — status update failed"
+		body += fmt.Sprintf(" The backlog item status could not be updated (%v); it may be stuck in its previous status — check manually.", statusTransitionErr)
 		notifType = int32(9) // NotificationType_FAILURE
 	}
 	a.bus.Publish(events.NewNotificationEvent(

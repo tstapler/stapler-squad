@@ -146,7 +146,7 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       # Remaining services with intentional LoadInstances uses (health, backlog, etc.)
-      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
+      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "session/health\\.go"
@@ -160,6 +160,9 @@ linters:
       - path: "_test\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
+      - path: "_test\\.go"
+        linters: [forbidigo]
+        text: "exec\\.Command"
       # Allow fmt.Print* in main.go, test files, cmd/, and tests/demo/ (CLI/test output)
       - path: "main\\.go"
         linters: [forbidigo]

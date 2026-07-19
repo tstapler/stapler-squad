@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // ErrNotAuthenticated is returned by SearchUserRepos and ListRepoIssues when no
@@ -24,18 +25,21 @@ type RepoResult struct {
 
 // IssueResult is the domain return type for ListRepoIssues.
 type IssueResult struct {
-	Number int
-	Title  string
-	State  string
-	URL    string
-	Labels []string
+	Number    int
+	Title     string
+	State     string
+	URL       string
+	Labels    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	IsPR      bool
 }
 
 // ghRepoJSON matches the GitHub REST API /user/repos and /search/repositories item shape.
 type ghRepoJSON struct {
-	FullName    string `json:"full_name"`
-	Name        string `json:"name"`
-	Owner       struct {
+	FullName string `json:"full_name"`
+	Name     string `json:"name"`
+	Owner    struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 	Description string `json:"description"`
@@ -50,13 +54,17 @@ type ghSearchReposResponse struct {
 
 // ghIssueListJSON matches the GitHub REST API /repos/{owner}/{repo}/issues item shape.
 type ghIssueListJSON struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	State   string `json:"state"`
-	HTMLURL string `json:"html_url"`
-	Labels  []struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	State     string `json:"state"`
+	HTMLURL   string `json:"html_url"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	Labels    []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
+	// PullRequest is non-null in the GitHub API response when the item is a PR.
+	PullRequest json.RawMessage `json:"pull_request"`
 }
 
 // ghIssueSearchResponse matches the /search/issues envelope.
@@ -230,12 +238,18 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 		for i, l := range item.Labels {
 			labels[i] = l.Name
 		}
+		createdAt, _ := time.Parse(time.RFC3339, item.CreatedAt)
+		updatedAt, _ := time.Parse(time.RFC3339, item.UpdatedAt)
+		isPR := len(item.PullRequest) > 0 && string(item.PullRequest) != "null"
 		results = append(results, IssueResult{
-			Number: item.Number,
-			Title:  item.Title,
-			State:  item.State,
-			URL:    item.HTMLURL,
-			Labels: labels,
+			Number:    item.Number,
+			Title:     item.Title,
+			State:     item.State,
+			URL:       item.HTMLURL,
+			Labels:    labels,
+			CreatedAt: createdAt,
+			UpdatedAt: updatedAt,
+			IsPR:      isPR,
 		})
 	}
 	return results, nil

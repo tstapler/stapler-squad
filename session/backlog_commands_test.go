@@ -27,7 +27,7 @@ func TestWriteSlashCommands_CreatesCorrectFileCount(t *testing.T) {
 	ac := `[{"index":0,"text":"First criterion","status":"pending"},{"index":1,"text":"Second criterion","status":"pending"}]`
 	item := makeTestBacklogItemWithID("test-item-id-1", "My Feature", ac)
 
-	if err := WriteSlashCommands(item, worktree); err != nil {
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
 		t.Fatalf("WriteSlashCommands returned error: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	ac := `[{"index":0,"text":"Do something","status":"pending"},{"index":1,"text":"Do more","status":"pending"}]`
 	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
 
-	if err := WriteSlashCommands(item, worktree); err != nil {
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
 		t.Fatalf("WriteSlashCommands returned error: %v", err)
 	}
 

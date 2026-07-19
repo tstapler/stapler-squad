@@ -31,6 +31,41 @@ log_success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
 log_warning() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 log_error()   { printf "${RED}✗${NC} %s\n" "$1" >&2; }
 
+# ── Log Rotation ──────────────────────────────────────────────────────────────
+# launchd/systemd just append() to StandardOutPath/StandardError forever — neither
+# rotates it. A crash-restart loop (e.g. ThrottleInterval-bounded respawns) can grow
+# service.log to millions of lines in minutes. Rotate on every install/restart so a
+# bad run doesn't silently fill the disk between installs.
+# Threshold: 20 MiB.
+LOG_ROTATE_MAX_BYTES=20971520
+
+rotate_log_if_large() {
+    log_file="$1"
+    [ -f "$log_file" ] || return 0
+
+    size=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')
+    [ -n "$size" ] || return 0
+
+    if [ "$size" -gt "$LOG_ROTATE_MAX_BYTES" ]; then
+        mv -f "$log_file" "$log_file.old"
+        : > "$log_file"
+        log_info "Rotated oversized log ($((size / 1048576)) MiB): $log_file -> $log_file.old"
+    fi
+}
+
+# Remove duplicate ':'-separated PATH entries, keeping first occurrence order.
+# The unit/plist below bakes in "$PATH:<fallbacks>" verbatim from the invoking
+# shell; re-running this script from a shell whose own PATH already carries
+# duplicates (e.g. nested tool/plugin PATH prepends) writes those duplicates
+# into the persisted service file, and each subsequent install compounds it
+# further since the new shell inherits the bloated PATH. Once large enough,
+# every spawned tmux session re-embeds PATH via `-e PATH=...`, and the total
+# `tmux new-session` command line exceeds tmux's message-size limit — every
+# session/tmux spawn then fails with "command too long" (exit status 1).
+dedup_path() {
+    printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -91,6 +126,7 @@ install_linux() {
     log_info "Creating systemd user service..."
     mkdir -p "$service_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the current shell's PATH first (so custom
     # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
@@ -101,13 +137,43 @@ install_linux() {
     # install to ~/.local/bin) without a subsequent `make install-service`,
     # the headless LLM pool's exec.LookPath("claude") silently fails and
     # backlog triage no-ops with only a log warning (see server/dependencies.go).
-    service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    service_path=$(dedup_path "$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+    # Cgroup memory bound: this service's cgroup covers the Go binary AND every
+    # process it forks (tmux server + all spawned Claude agent sessions), since
+    # children inherit their parent's cgroup at fork time regardless of tmux
+    # daemonizing/detaching. Capping it keeps a runaway burst of concurrent agents
+    # (the 2026-07-12 OOM incident: 57/61GB used, swap exhausted) from taking down
+    # the whole box — the kernel's cgroup-aware OOM killer instead picks a victim
+    # from within this budget, leaving unrelated system processes alone.
+    # MemoryHigh (soft: throttle/reclaim, no kill) at 60% and MemoryMax (hard kill
+    # boundary) at 80% of total RAM, both computed from this machine's actual
+    # /proc/meminfo rather than a hardcoded value so the same script is safe on a
+    # small VM or a large workstation alike. Skipped entirely if detection fails.
+    mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)
+    memory_limit_lines=""
+    if [ -n "$mem_total_kb" ]; then
+        mem_high_mb=$((mem_total_kb * 60 / 100 / 1024))
+        mem_max_mb=$((mem_total_kb * 80 / 100 / 1024))
+        memory_limit_lines="MemoryHigh=${mem_high_mb}M
+MemoryMax=${mem_max_mb}M"
+    else
+        log_warning "Could not read /proc/meminfo; skipping MemoryHigh/MemoryMax cgroup limits"
+    fi
 
     cat > "$service_file" << EOF
 [Unit]
 Description=Stapler Squad — AI Agent Session Manager
 Documentation=https://github.com/tstapler/stapler-squad
 After=network.target
+# Tolerate a burst of OOM-kill/restart cycles during sustained memory pressure
+# without systemd permanently giving up (default is 5 restarts / 10s — a 5s
+# RestartSec can blow through that in one bad episode, leaving the service
+# down until a manual 'systemctl reset-failed'). It still gives up eventually
+# if genuinely crash-looping forever.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -116,6 +182,14 @@ WorkingDirectory=$HOME
 Restart=on-failure
 RestartSec=5s
 KillMode=process
+# Mild protective bias for the coordinator process itself (also inherited by
+# spawned children — a coarse, honestly-scoped tradeoff; per-session cgroup
+# delegation would be needed to bias only the coordinator, which is out of
+# scope here). In practice the kernel's OOM badness score is dominated by RSS,
+# and Claude agent subprocesses are the memory-heavy ones, so this mostly just
+# nudges ties in the coordinator's favor.
+OOMScoreAdjust=-500
+$memory_limit_lines
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment="HOME=$HOME"
@@ -214,12 +288,14 @@ install_macos() {
     log_info "Creating macOS LaunchAgent..."
     mkdir -p "$plist_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the user's shell PATH first (so custom tools,
     # go/bin, nvm, rbenv, etc. take precedence), then appends both Homebrew
     # prefixes (Apple Silicon + Intel) as a fallback so tools like tmux, git,
     # and claude are found even if not already on the shell PATH.
-    plist_path="$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    plist_path=$(dedup_path "$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin")
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
@@ -394,55 +470,6 @@ health_check_and_rollback() {
             fi
         fi
 
-        printf "."
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    printf "\n"
-    log_error "Service did not respond within ${max_wait}s."
-
-    if [ ! -f "$prev_bin" ]; then
-        log_warning "No previous build found at $prev_bin — cannot auto-rollback."
-        log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
-        return 1
-    fi
-
-    log_info "Auto-rolling back to previous build..."
-    cp -f "$prev_bin" "$bin_path"
-    log_success "Binary restored from $prev_bin"
-
-    os=$(detect_os)
-    case "$os" in
-        linux)
-            systemctl --user restart stapler-squad
-            log_success "Service restarted with previous build."
-            ;;
-        macos)
-            launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || \
-                launchctl stop "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
-            log_success "Service restarted with previous build."
-            ;;
-    esac
-    log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
-    return 1
-}
-
-# ── Health Check + Auto-rollback ──────────────────────────────────────────────
-# Polls localhost:8543/health for up to 15s. On failure, restores the .prev
-# binary (if it exists) and restarts the service automatically.
-health_check_and_rollback() {
-    bin_path="$1"
-    prev_bin="${bin_path}.prev"
-    max_wait=15
-    elapsed=0
-    url="http://localhost:8543/health"
-    printf "==> Waiting for service to be healthy"
-    while [ "$elapsed" -lt "$max_wait" ]; do
-        if curl -sf "$url" >/dev/null 2>&1; then
-            printf "\n"
-            log_success "Service is healthy"
-            return 0
-        fi
         printf "."
         sleep 1
         elapsed=$((elapsed + 1))

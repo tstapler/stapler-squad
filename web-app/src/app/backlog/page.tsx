@@ -399,7 +399,7 @@ function BacklogPageInner() {
               Loading…
             </div>
           ) : sortedItems.length === 0 && items.length === 0 ? (
-            <BacklogEmptyState onCreateItem={handleCreateItem} />
+            <BacklogEmptyState onCreateItem={() => { setFormMode("manual"); setShowForm(true); }} />
           ) : sortedItems.length === 0 ? (
             <FilterZeroState onClearFilters={() => { setStatusFilter([]); setPriorityFilter([]); setSearch(""); }} />
           ) : (

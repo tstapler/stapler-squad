@@ -5,7 +5,9 @@ package services
 // These tests do not require tmux or a real headless pool.
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -22,13 +25,13 @@ import (
 // allowing an AutonomousDriver to complete without needing a real LLM backend.
 type instantDonePool struct{}
 
-func (p *instantDonePool) CallBlockingWithOptions(
+func (p *instantDonePool) CallBlocking(
 	_ context.Context,
 	_ headless.FeatureKey,
 	_, _ string,
 	_ headless.CallOptions,
-) (string, error) {
-	return "DONE: test complete", nil
+) (string, float64, error) {
+	return "DONE: test complete", 0, nil
 }
 
 // addPausedAutonomousInstance inserts a paused session with AutonomousMode=true into storage.
@@ -151,4 +154,313 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 
 	// The driver must have been removed from the registry.
 	svc.autonomousSvc.stopAndDeregisterDriver(title) // no panic = already deregistered
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatusUpdateFailure
+// verifies the fix for the notification/transition-divergence bug: when the driver reports
+// Done but the backlog item's status transition fails its optimistic-concurrency precondition
+// (e.g. a concurrent status change), the published notification must say so explicitly rather
+// than announcing a plain "complete" while the item is silently stuck.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatusUpdateFailure(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "notif-race-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	// Bypass the real ReviewQueuePoller (not wired in this unit test) and resolve the
+	// instance directly, matching what FindLiveInstance would return once wired.
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	// Item is already at 'review' — the triage-role transition below expects 'idea', so its
+	// precondition will fail and TransitionBacklogItemStatus must return an error.
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Notification race test item",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	// onAutonomousDriverComplete also publishes a session.updated event before the
+	// notification (badge update for autonomous_mode/autonomous_outcome) — skip past it.
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected a notification event")
+	assert.Contains(t, notif.NotificationTitle, "status update failed", "operator must be told the status update failed, not just 'complete'")
+	assert.Equal(t, int32(9), notif.NotificationType, "a divergence between driver-done and status-update-failed must surface as a FAILURE notification")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomousStuck_When_NotDone
+// is the regression test for closing the "conversions limit" visibility gap: a
+// stuck (outcome.Done=false) autonomous run on a backlog-linked session must
+// write a durable autonomous_stuck BacklogStuckState row — previously only an
+// ephemeral "Autonomous fix stuck" notification, invisible to the Unfinished
+// tab's stuck-reason system every other detector participates in.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomousStuck_When_NotDone(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-stuck-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous stuck test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "20 turns")
+	assert.NotNil(t, open[0].NotifiedAt, "dedup must be pre-set since the notification already fired")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_When_Done verifies
+// a successful (Done=true) completion never writes an autonomous_stuck row.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_When_Done(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-done-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous done test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 5}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a successful completion must never write an autonomous_stuck row")
+}
+
+// captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
+// restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug verifies
+// the fix for the swallowed-error bug: when no item session is linked to the completing
+// session (the common, expected case — most autonomous sessions are not backlog-linked), the
+// lookup "failure" must log at Debug, not escalate to Warn.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinkedAtDebug(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "not-linked-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	buf := captureLogs(t)
+	svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+
+	assert.Contains(t, buf.String(), "no linked backlog item session")
+	assert.NotContains(t, buf.String(), "level=WARN", "the expected not-linked case must not escalate to Warn")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLookupFailureAtWarn
+// verifies the other half of the fix: when an item session IS found but its linked backlog
+// item cannot be loaded (a genuine data-integrity problem, not "not linked"), the failure
+// must log at Warn so it's diagnosable — previously this took the identical silent path as
+// the expected not-linked case above.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLookupFailureAtWarn(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "dangling-item-session-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	// Create a real backlog item + item session (FK-valid), then delete the backlog item —
+	// simulating an operator deleting an item while its autonomous session is still running.
+	// If the item session row also disappears via cascade, GetItemSessionBySessionUUID will
+	// return ErrNotFound and this test will report that below instead of asserting blindly.
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Deleted-out-from-under-us item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.DeleteBacklogItem(ctx, item.ID))
+
+	if _, lookupErr := storage.GetItemSessionBySessionUUID(ctx, inst.UUID); lookupErr != nil {
+		t.Skip("DeleteBacklogItem cascades to the item session too — this scenario isn't reachable via the public Storage API")
+	}
+
+	buf := captureLogs(t)
+	svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+
+	assert.Contains(t, buf.String(), "failed to load linked backlog item")
+	assert.Contains(t, buf.String(), "level=WARN", "a genuine lookup failure must be diagnosable, not silent")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedRoleStillNotifies
+// verifies the fix for the silent-default-role bug: an item session with a role the switch
+// doesn't recognize (e.g. a new pipeline stage added elsewhere without updating this switch)
+// must still log at Warn AND publish the generic done/stuck notification — previously it fell
+// into the same silent early-return as the expected SessionRoleReview case, leaving the
+// operator with zero signal that anything happened at all.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedRoleStillNotifies(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "unrecognized-role-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Unrecognized role test item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: "future-pipeline-stage", // not triage/work/review
+	})
+	require.NoError(t, err)
+
+	buf := captureLogs(t)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+
+	assert.Contains(t, buf.String(), "unrecognized session role")
+	assert.Contains(t, buf.String(), "level=WARN", "an unrecognized role must be diagnosable, not silent")
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "the operator must still get the generic complete/stuck notification, not silence")
+	assert.Equal(t, "Autonomous fix complete", notif.NotificationTitle)
 }

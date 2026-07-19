@@ -498,6 +498,20 @@ function SessionCardInner({
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
+            ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
+              // ponytail: reuses creationProgress — the field is only cleared on a
+              // successful start, so a startup/reconnect failure written here (see
+              // instance.SetCreationProgress in health.go / connectrpc_websocket.go)
+              // survives past the Creating phase and doubles as a "why stopped" reason.
+              <Tooltip label={session.creationProgress} side="top">
+                <span
+                  className={`${status} ${getStatusColor(session.status)}`}
+                  role="img"
+                  aria-label={`Session status: ${getStatusText(session.status)} — ${session.creationProgress}`}
+                >
+                  {getStatusText(session.status)}
+                </span>
+              </Tooltip>
             ) : (
               <span
                 className={`${status} ${getStatusColor(session.status)}`}

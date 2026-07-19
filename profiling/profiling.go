@@ -14,6 +14,7 @@ import (
 	pyroscope "github.com/grafana/pyroscope-go"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
 // Config holds profiling configuration
@@ -106,6 +107,25 @@ func StartProfiling(cfg Config) (func(), error) {
 			})
 		})
 
+		// Blob-cache effectiveness endpoint — see unfinished.BlobCacheStatsSnapshot.
+		// Registered before the scanner exists (this server starts early in
+		// main.go); safe because the reader lookup only happens per-request.
+		mux.HandleFunc("/debug/blob-cache", func(w http.ResponseWriter, r *http.Request) {
+			s := unfinished.BlobCacheStatsSnapshot()
+			total := s.Hits + s.Misses
+			var hitRate float64
+			if total > 0 {
+				hitRate = float64(s.Hits) / float64(total)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"hits":                    s.Hits,
+				"misses":                  s.Misses,
+				"hit_rate":                hitRate,
+				"estimated_time_saved_ms": s.EstimatedTimeSaved.Milliseconds(),
+			})
+		})
+
 		srv := &http.Server{Addr: addr, Handler: mux}
 
 		go func() {
@@ -116,6 +136,7 @@ func StartProfiling(cfg Config) (func(), error) {
 			log.Info("  - Mutex", "url", fmt.Sprintf("http://%s/debug/pprof/mutex?debug=1", addr))
 			log.Info("  - CPU", "cmd", fmt.Sprintf("curl http://%s/debug/pprof/profile?seconds=30 > cpu.prof", addr))
 			log.Info("  - Fork pressure", "url", fmt.Sprintf("http://%s/debug/fork-pressure", addr))
+			log.Info("  - Blob cache", "url", fmt.Sprintf("http://%s/debug/blob-cache", addr))
 			if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 				log.Error("Profiling server error", "err", err)
 			}

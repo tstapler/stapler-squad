@@ -46,7 +46,7 @@ import (
 // behind an httptest.Server. Returns a typed client and the service itself.
 func setupTriageHarness(t *testing.T, pool headless.PoolClient) (sessionv1connect.BacklogServiceClient, *BacklogService) {
 	t.Helper()
-	svc := NewBacklogService(createTestStorage(t), nil, nil, nil)
+	svc := NewBacklogService(createTestStorage(t), nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	t.Cleanup(svc.Shutdown)
 
@@ -304,15 +304,15 @@ Output a JSON object in exactly this structure (fill in real values):
 
 Rules: suggestions must be an empty array []. tasks must have text, estimate, and category fields. Output JSON only.`
 
-func (p *fastTriagePool) CallBlockingWithOptions(
+func (p *fastTriagePool) CallBlocking(
 	ctx context.Context,
 	key headless.FeatureKey,
 	_, _ string, // discard both production prompts (system and user)
 	opts headless.CallOptions,
-) (string, error) {
+) (string, float64, error) {
 	// Strip WorkDir — the fast prompt doesn't need git context.
 	opts.WorkDir = ""
-	return p.pool.CallBlockingWithOptions(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts)
+	return p.pool.CallBlocking(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts)
 }
 
 // TestTriageHarness_RealClaude exercises the full triage pipeline against a live Claude

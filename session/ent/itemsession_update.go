@@ -119,6 +119,34 @@ func (_u *ItemSessionUpdate) ClearAcSnapshot() *ItemSessionUpdate {
 	return _u
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (_u *ItemSessionUpdate) SetPipelineModeSnapshot(v string) *ItemSessionUpdate {
+	_u.mutation.SetPipelineModeSnapshot(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshot sets the "pipeline_mode_snapshot" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillablePipelineModeSnapshot(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetPipelineModeSnapshot(*v)
+	}
+	return _u
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (_u *ItemSessionUpdate) SetPipelineModeSnapshotHash(v string) *ItemSessionUpdate {
+	_u.mutation.SetPipelineModeSnapshotHash(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillablePipelineModeSnapshotHash(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetPipelineModeSnapshotHash(*v)
+	}
+	return _u
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (_u *ItemSessionUpdate) SetTriageResult(v string) *ItemSessionUpdate {
 	_u.mutation.SetTriageResult(v)
@@ -136,6 +164,26 @@ func (_u *ItemSessionUpdate) SetNillableTriageResult(v *string) *ItemSessionUpda
 // ClearTriageResult clears the value of the "triage_result" field.
 func (_u *ItemSessionUpdate) ClearTriageResult() *ItemSessionUpdate {
 	_u.mutation.ClearTriageResult()
+	return _u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdate) SetVerificationNotes(v string) *ItemSessionUpdate {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableVerificationNotes(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdate) ClearVerificationNotes() *ItemSessionUpdate {
+	_u.mutation.ClearVerificationNotes()
 	return _u
 }
 
@@ -405,11 +453,23 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.AcSnapshotCleared() {
 		_spec.ClearField(itemsession.FieldAcSnapshot, field.TypeString)
 	}
+	if value, ok := _u.mutation.PipelineModeSnapshot(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshot, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PipelineModeSnapshotHash(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshotHash, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.TriageResult(); ok {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 	}
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
+	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -622,6 +682,34 @@ func (_u *ItemSessionUpdateOne) ClearAcSnapshot() *ItemSessionUpdateOne {
 	return _u
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (_u *ItemSessionUpdateOne) SetPipelineModeSnapshot(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetPipelineModeSnapshot(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshot sets the "pipeline_mode_snapshot" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillablePipelineModeSnapshot(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetPipelineModeSnapshot(*v)
+	}
+	return _u
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (_u *ItemSessionUpdateOne) SetPipelineModeSnapshotHash(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetPipelineModeSnapshotHash(v)
+	return _u
+}
+
+// SetNillablePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillablePipelineModeSnapshotHash(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetPipelineModeSnapshotHash(*v)
+	}
+	return _u
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (_u *ItemSessionUpdateOne) SetTriageResult(v string) *ItemSessionUpdateOne {
 	_u.mutation.SetTriageResult(v)
@@ -639,6 +727,26 @@ func (_u *ItemSessionUpdateOne) SetNillableTriageResult(v *string) *ItemSessionU
 // ClearTriageResult clears the value of the "triage_result" field.
 func (_u *ItemSessionUpdateOne) ClearTriageResult() *ItemSessionUpdateOne {
 	_u.mutation.ClearTriageResult()
+	return _u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) SetVerificationNotes(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetVerificationNotes(v)
+	return _u
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableVerificationNotes(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetVerificationNotes(*v)
+	}
+	return _u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (_u *ItemSessionUpdateOne) ClearVerificationNotes() *ItemSessionUpdateOne {
+	_u.mutation.ClearVerificationNotes()
 	return _u
 }
 
@@ -938,11 +1046,23 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	if _u.mutation.AcSnapshotCleared() {
 		_spec.ClearField(itemsession.FieldAcSnapshot, field.TypeString)
 	}
+	if value, ok := _u.mutation.PipelineModeSnapshot(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshot, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.PipelineModeSnapshotHash(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshotHash, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.TriageResult(); ok {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 	}
 	if _u.mutation.TriageResultCleared() {
 		_spec.ClearField(itemsession.FieldTriageResult, field.TypeString)
+	}
+	if value, ok := _u.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+	}
+	if _u.mutation.VerificationNotesCleared() {
+		_spec.ClearField(itemsession.FieldVerificationNotes, field.TypeString)
 	}
 	if value, ok := _u.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)

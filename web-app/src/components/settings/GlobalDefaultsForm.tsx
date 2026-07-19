@@ -15,6 +15,7 @@ import {
   label as labelClass,
   select,
   input,
+  hint,
   tagList,
   tag as tagClass,
   tagRemove,
@@ -33,6 +34,7 @@ export function GlobalDefaultsForm() {
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
+  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(3);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +55,7 @@ export function GlobalDefaultsForm() {
         setNewProjectBaseDir(defaults.newProjectBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
+        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations || 3);
         const vars = Object.entries(defaults.envVars).map(([key, value]) => ({
           key,
           value,
@@ -91,6 +94,7 @@ export function GlobalDefaultsForm() {
         tags,
         envVars: envVarsMap,
         cliFlags,
+        maxAutoReworkIterations,
       });
       setSuccess("Global defaults saved.");
       setTimeout(() => setSuccess(null), 3000);
@@ -296,6 +300,27 @@ export function GlobalDefaultsForm() {
             value={cliFlags}
             onChange={(e) => setCliFlags(e.target.value)}
           />
+        </div>
+
+        {/* Max Auto Rework Iterations */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-max-auto-rework-iterations">
+            Max Auto-Rework Iterations
+          </label>
+          <input
+            id="global-max-auto-rework-iterations"
+            type="number"
+            min={1}
+            className={input}
+            value={maxAutoReworkIterations}
+            onChange={(e) =>
+              setMaxAutoReworkIterations(Math.max(1, Number(e.target.value) || 1))
+            }
+          />
+          <p className={hint}>
+            How many times a backlog item can be auto-reopened for rework after a failed
+            review before it&apos;s left in review for manual action.
+          </p>
         </div>
 
         {/* Save */}

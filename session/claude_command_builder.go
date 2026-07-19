@@ -38,9 +38,13 @@ func (b *ClaudeCommandBuilder) Build() string {
 		return b.baseProgram
 	}
 
-	// No session data means no resumption possible
+	// No session data means no resumption possible. This is a routine, expected
+	// condition (any non-resuming session start) rather than something worth a
+	// log line -- Build() runs on every session start/restart, and a benchmark
+	// exercising it at b.N in the tens of millions turned this single line into
+	// gigabytes of output (and skewed timing with real log I/O per call). See
+	// the analogous fix to getOrRefreshSnapshot's per-call logging.
 	if b.claudeSession == nil || b.claudeSession.ConversationUUID == "" {
-		log.Debug("no claude session data available for resumption")
 		return b.baseProgram
 	}
 
@@ -51,9 +55,10 @@ func (b *ClaudeCommandBuilder) Build() string {
 		return b.baseProgram
 	}
 
-	// Construct command with resumption flag
+	// Construct command with resumption flag. Same reasoning as above for not
+	// logging here: this runs on every session start/restart, a routine and
+	// frequent event, not a hot-path-per-call log line.
 	enrichedCommand := fmt.Sprintf("%s --resume %s", b.baseProgram, sessionID)
-	log.Info("built claude command with session resumption", "program", b.baseProgram, "uuid", sessionID)
 	return enrichedCommand
 }
 

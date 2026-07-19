@@ -8,7 +8,8 @@
   "testIds": [
     "BacklogItemForm — Repository Path help",
     "BacklogItemForm — checkbox help text",
-    "BacklogItemForm — cloning busy state"
+    "BacklogItemForm — cloning busy state",
+    "BacklogItemForm — auto-create-pr toggle"
   ],
-  "lastModified": "2026-07-01T00:00:00Z"
+  "lastModified": "2026-07-17T00:00:00Z"
 }

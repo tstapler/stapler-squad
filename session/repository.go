@@ -281,25 +281,28 @@ type ReviewVerdictSummary struct {
 //   - OverallOutcome: from the review_verdicts table (populated via ReviewVerdict edge)
 //   - ReviewVerdict: eagerly loaded when the query uses WithReviewVerdict()
 type ItemSessionSummary struct {
-	ID                    string
-	BacklogItemID         string
-	SessionUUID           string
-	Role                  string
-	AcSnapshot            AcCriteriaJSON
-	LastCommitSha         string
-	LastCommitMessage     string
-	CommitCountSinceSpawn int
-	StartedAt             *time.Time
-	EndedAt               *time.Time
-	LastCommitAt          *time.Time
-	LastFileTouchAt       *time.Time
-	LastProgressAt        *time.Time
-	CreatedAt             time.Time
-	EstimatedCostUsd      float64
-	TriageResult          string // raw JSON stored in triage_result column
-	TriageResultSummary   string // summary field parsed from TriageResult
-	OverallOutcome        string // from linked review_verdict (empty if none)
-	ReviewVerdict         *ReviewVerdictSummary
+	ID                       string
+	BacklogItemID            string
+	SessionUUID              string
+	Role                     string
+	AcSnapshot               AcCriteriaJSON
+	PipelineModeSnapshot     string
+	PipelineModeSnapshotHash string
+	LastCommitSha            string
+	LastCommitMessage        string
+	CommitCountSinceSpawn    int
+	StartedAt                *time.Time
+	EndedAt                  *time.Time
+	LastCommitAt             *time.Time
+	LastFileTouchAt          *time.Time
+	LastProgressAt           *time.Time
+	CreatedAt                time.Time
+	EstimatedCostUsd         float64
+	TriageResult             string // raw JSON stored in triage_result column
+	TriageResultSummary      string // summary field parsed from TriageResult
+	VerificationNotes        string // freeform verification evidence reported via request_review
+	OverallOutcome           string // from linked review_verdict (empty if none)
+	ReviewVerdict            *ReviewVerdictSummary
 }
 
 // BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.
@@ -310,6 +313,17 @@ type BacklogStatusEventData struct {
 	TriggeredBy string
 	Note        *string
 	CreatedAt   time.Time
+}
+
+// ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
+// Unlike the current-note-per-criterion stored on BacklogItem.AcceptanceCriteria, this
+// represents a single append-only history entry from one report_progress call.
+type ProgressNoteData struct {
+	ID             string
+	CriterionIndex int
+	Note           string
+	Status         string
+	CreatedAt      time.Time
 }
 
 // SourceSyncEventData is the domain DTO replacing *ent.SourceSyncEvent in Storage returns.
@@ -336,42 +350,93 @@ type BacklogItemData struct {
 	RepoPath           string
 	SkipReviewGate     bool
 	SkipPlanning       bool
-	PlanApproved       bool
-	PlanApprovedAt     *time.Time
-	PlanArtifactsPath  string
-	Notes              string
-	ExternalID         string
-	ArchivedAt         *time.Time
-	SourceID           string
-	PrURL              string
-	PrNumber           int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	AutoSpawnSession   bool
+	// AutoCreatePR, when true, automatically runs the same one-shot PR-creation
+	// prompt the Review Queue's manual "Create PR" button uses, once a work
+	// session for this item reaches TASK_COMPLETE (see
+	// server.ReactiveQueueManager.maybeAutoCreatePR). Off by default — a
+	// deliberate opt-in, since it removes the human review-the-prompt
+	// checkpoint before an LLM-authored PR is created.
+	AutoCreatePR bool
+	// ReworkCapOverride is a per-item override for the auto-rework cap
+	// (config.Config.MaxAutoReworkIterationsOrDefault). Nil = use the global
+	// default. 0 = unlimited retries for this item. >0 = this item's own cap,
+	// replacing (not adding to) the global value. See effectiveReworkCap in
+	// server/services/backlog_service_triage.go.
+	ReworkCapOverride *int
+	// PipelineMode is the slug of the PipelineMode this item uses to drive
+	// triage/work/review content (see session/pipeline_engine.go). Empty
+	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
+	//
+	// Scope note: this field is introduced in Epic 1.3 (backlog-configurable-
+	// pipeline) solely so PipelineEngine's mode-resolution/fail-closed
+	// behavior is exercisable against this struct per Story 1.3.3's own
+	// acceptance criteria. It is NOT yet wired to ent/proto/the repository
+	// persistence layer or any RPC handler — every BacklogItemData produced
+	// by the current storage layer has PipelineMode == "" today. That full
+	// wiring (ent schema field, proto optional field, repository Create/
+	// Update mapping, RPC handler presence-gating) is Epic 1.4's scope.
+	PipelineMode      string
+	PlanApproved      bool
+	PlanApprovedAt    *time.Time
+	PlanArtifactsPath string
+	Notes             string
+	ExternalID        string
+	ArchivedAt        *time.Time
+	SourceID          string
+	PrURL             string
+	PrNumber          int
+	// ShippedCheckConclusion holds the durable GitHub CI-conclusion snapshot
+	// captured at ship time — genuine GitHub CI-conclusion values only, never
+	// a capture-failure sentinel. See ShippedSnapshotCaptureFailed.
+	ShippedCheckConclusion string
+	// ShippedApprovedCount is the durable review-approval-count snapshot
+	// captured at ship time.
+	ShippedApprovedCount int
+	// ShippedChangesReqCount is the durable "changes requested" review-count
+	// snapshot captured at ship time.
+	ShippedChangesReqCount int
+	// ShippedSnapshotAt is the timestamp the durable ship snapshot was
+	// captured at. Nil when no snapshot has ever been captured.
+	ShippedSnapshotAt *time.Time
+	// ShippedFileStats holds the JSON-encoded []ShippedFileStat snapshot of
+	// per-file diff stats captured at ship time.
+	ShippedFileStats string
+	// ShippedSnapshotCaptureFailed is true when CaptureShipSnapshot's GitHub
+	// fetch or file-stats computation failed — distinct from
+	// ShippedCheckConclusion, which holds only genuine CI-conclusion values.
+	ShippedSnapshotCaptureFailed bool
+	CreatedAt                    time.Time
+	UpdatedAt                    time.Time
 	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	ItemSessions []ItemSessionSummary
 	// StatusEvents holds the eagerly-loaded status transition history.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	StatusEvents []BacklogStatusEventData
+	// ProgressNotes holds the eagerly-loaded report_progress audit trail (the
+	// implementer's decision history). Only populated when explicitly loaded by
+	// the caller (e.g. GetBacklogItem) — see StatusEvents for the same pattern.
+	ProgressNotes []ProgressNoteData
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.
 // It omits large text fields (Description, plan artifacts) and status-event history,
 // but eagerly includes ItemSessions (with ReviewVerdict) for cost/status display.
 type BacklogItemSummary struct {
-	ID                 string         `json:"id"`
-	ExternalID         string         `json:"external_id"`
-	Title              string         `json:"title"`
-	Status             BacklogStatus  `json:"status"`
-	Priority           int            `json:"priority"`
-	RepoPath           string         `json:"repo_path"`
-	AcceptanceCriteria AcCriteriaJSON `json:"acceptance_criteria"`
-	Notes              string         `json:"notes"`
-	PrURL              string         `json:"pr_url"`
-	PrNumber           int            `json:"pr_number"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	ArchivedAt         *time.Time     `json:"archived_at"`
+	ID                 string               `json:"id"`
+	ExternalID         string               `json:"external_id"`
+	Title              string               `json:"title"`
+	Status             BacklogStatus        `json:"status"`
+	Priority           int                  `json:"priority"`
+	RepoPath           string               `json:"repo_path"`
+	AcceptanceCriteria AcCriteriaJSON       `json:"acceptance_criteria"`
+	Notes              string               `json:"notes"`
+	PrURL              string               `json:"pr_url"`
+	PrNumber           int                  `json:"pr_number"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	ArchivedAt         *time.Time           `json:"archived_at"`
 	ItemSessions       []ItemSessionSummary `json:"-"`
 }
 
@@ -410,12 +475,38 @@ type BacklogItemUpdate struct {
 	RepoPath           *string
 	SkipReviewGate     *bool
 	SkipPlanning       *bool
-	Notes              *string
-	PlanApproved       *bool
-	PlanApprovedAt     *time.Time
-	PlanArtifactsPath  *string
-	PrURL              *string
-	PrNumber           *int
+	AutoSpawnSession   *bool
+	AutoCreatePR       *bool
+	// PipelineMode is a pointer for partial-update presence: nil means "leave
+	// the item's stored pipeline_mode untouched", while a non-nil pointer
+	// (including one pointing at "") explicitly sets/resets it. See
+	// BacklogItemData.PipelineMode for the field's semantics.
+	PipelineMode      *string
+	Notes             *string
+	PlanApproved      *bool
+	PlanApprovedAt    *time.Time
+	PlanArtifactsPath *string
+	PrURL             *string
+	PrNumber          *int
+	// ShippedCheckConclusion, ShippedApprovedCount, ShippedChangesReqCount,
+	// ShippedSnapshotAt, ShippedFileStats, and ShippedSnapshotCaptureFailed
+	// are pointers for partial-update presence, following the existing
+	// convention: nil means "leave the item's stored value untouched", a
+	// non-nil pointer explicitly sets it. See BacklogItemData's fields of
+	// the same name for semantics.
+	ShippedCheckConclusion       *string
+	ShippedApprovedCount         *int
+	ShippedChangesReqCount       *int
+	ShippedSnapshotAt            *time.Time
+	ShippedFileStats             *string
+	ShippedSnapshotCaptureFailed *bool
+	// ReworkCapOverride follows the same single-pointer presence convention as
+	// the fields above: nil means "leave untouched". A non-nil pointer sets the
+	// item's override (0 = unlimited, >0 = this item's own cap). There is
+	// currently no way to explicitly clear an override back to "use the global
+	// default" via this struct — a deliberate simplification; add a
+	// ClearReworkCapOverride bool alongside this if that's needed later.
+	ReworkCapOverride *int
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.

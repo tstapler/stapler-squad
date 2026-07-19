@@ -45,7 +45,7 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 		Title:  "reactive-test",
 		Status: Active,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
 
 	poller.AddInstance(inst)
@@ -91,7 +91,7 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 		Title:  "active-test",
 		Status: Active,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now()
 
 	queue.Add(&ReviewItem{

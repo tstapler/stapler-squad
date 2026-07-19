@@ -631,3 +631,69 @@ func TestListBacklogItemSummaries(t *testing.T) {
 		require.False(t, summaries[0].UpdatedAt.IsZero(), "UpdatedAt must not be zero")
 	})
 }
+
+// IT-011: AppendProgressNote is append-only — two notes for the same criterion both
+// survive and are returned in created_at order, proving the second append does NOT
+// overwrite the first (unlike UpdateAcCriterionStatus, which is overwrite-in-place).
+func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	criteria := []AcCriterion{
+		{Index: 0, Text: "must compile", Status: "pending"},
+	}
+	rawCriteria, err := SerializeAcCriteria(criteria)
+	require.NoError(t, err)
+
+	itemData := BacklogItemData{
+		Title:              "Build feature",
+		Description:        "New feature implementation",
+		AcceptanceCriteria: rawCriteria,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	// 1. Append a first note.
+	err = storage.AppendProgressNote(ctx, createdItem.ID, 0, "started investigating", "in_progress")
+	require.NoError(t, err)
+
+	// 2. Append a second note for the SAME criterion.
+	err = storage.AppendProgressNote(ctx, createdItem.ID, 0, "compiled successfully", "done")
+	require.NoError(t, err)
+
+	// 3. List — both notes must be present, ordered oldest-first, neither overwriting the other.
+	notes, err := storage.ListProgressNotesForItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "both appends must be preserved — history must not overwrite in place")
+
+	require.Equal(t, 0, notes[0].CriterionIndex)
+	require.Equal(t, "started investigating", notes[0].Note)
+	require.Equal(t, "in_progress", notes[0].Status)
+	require.False(t, notes[0].CreatedAt.IsZero())
+
+	require.Equal(t, 0, notes[1].CriterionIndex)
+	require.Equal(t, "compiled successfully", notes[1].Note)
+	require.Equal(t, "done", notes[1].Status)
+	require.False(t, notes[1].CreatedAt.IsZero())
+
+	require.False(t, notes[1].CreatedAt.Before(notes[0].CreatedAt), "notes must be ordered oldest-first")
+
+	// 4. The current-note-per-criterion (existing overwrite behavior) is untouched by
+	// AppendProgressNote — it stays whatever UpdateAcCriterionStatus last set it to.
+	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
+	require.NoError(t, err)
+	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Equal(t, AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
+
+	// 5. GetBacklogItem must also eagerly load ProgressNotes (mirrors StatusEvents'
+	// eager-load) so the audit trail is available wherever an item is fetched, not
+	// just via the dedicated ListProgressNotesForItem call.
+	require.Len(t, fetchedItem.ProgressNotes, 2, "GetBacklogItem must eagerly load the progress note history")
+	require.Equal(t, "started investigating", fetchedItem.ProgressNotes[0].Note)
+	require.Equal(t, "compiled successfully", fetchedItem.ProgressNotes[1].Note)
+}

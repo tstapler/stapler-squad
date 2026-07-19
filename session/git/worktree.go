@@ -3,14 +3,16 @@ package git
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
+	"golang.org/x/sync/singleflight"
 )
 
 func getWorktreeDirectory() (string, error) {
@@ -22,8 +24,32 @@ func getWorktreeDirectory() (string, error) {
 	return filepath.Join(configDir, "worktrees"), nil
 }
 
-// IsDirtyCacheTTL is the duration for which a cached IsDirty result is considered fresh.
-const IsDirtyCacheTTL = 15 * time.Second
+// IsDirtyCacheTTL is the duration for which a dirty (has changes) result is considered fresh.
+// 30s keeps the review queue responsive when uncommitted changes are present.
+// InvalidateDirtyCache() is called after commits/pushes so critical paths remain snappy.
+const IsDirtyCacheTTL = 30 * time.Second
+
+// IsDirtyCleanCacheTTL is the TTL when the worktree is known to be clean.
+// Clean worktrees won't change unless Claude commits or a user modifies files;
+// InvalidateDirtyCache() is called on those code paths, so 5 min is safe and
+// cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
+const IsDirtyCleanCacheTTL = 5 * time.Minute
+
+// IsDirtyErrorCacheTTL is the TTL applied when `git status` itself fails (e.g. the
+// worktree directory is missing — a stale path left behind by a rework/reopen cycle).
+// Without a backoff, a broken worktree gets re-checked on every poller tick (every few
+// seconds), burning a subprocess spawn per tick indefinitely; 60s keeps failure visible
+// in logs at a sane rate while still recovering quickly once the worktree is fixed.
+const IsDirtyErrorCacheTTL = 60 * time.Second
+
+// dirtyCacheState is the immutable snapshot stored in GitWorktree.isDirtyCache.
+// atomic.Value replaces the previous sync.RWMutex + two fields; readers do a
+// lock-free Load() on the hot per-tick path.
+type dirtyCacheState struct {
+	dirty bool
+	time  time.Time
+	err   error
+}
 
 // GitWorktree manages git worktree operations for a session
 type GitWorktree struct {
@@ -40,10 +66,12 @@ type GitWorktree struct {
 	// cmdExec is used to execute commands for this worktree.
 	cmdExec executor.Executor
 
-	// isDirty cache fields — protected by isDirtyCacheMu.
-	isDirtyCacheMu   sync.RWMutex
-	isDirtyCache     bool
-	isDirtyCacheTime time.Time
+	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
+	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
+
+	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
+	// one in-process status check runs at a time.
+	isDirtySF singleflight.Group //nolint:exhaustruct
 }
 
 // NewGitWorktreeFromCommitSHA creates a new GitWorktree that will branch from the given
@@ -227,7 +255,7 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	}
 
 	// Find the repository root from the worktree path
-	repoPath, err := findGitRepoRoot(existingWorktreePath)
+	repoPath, err := findMainRepoPathForWorktree(existingWorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find repository root for worktree '%s': %w", existingWorktreePath, err)
 	}

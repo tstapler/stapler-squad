@@ -38,6 +38,12 @@ const (
 	TagAutonomous      = "autonomous"
 )
 
+// CategoryBacklog is the Session.Category value assigned to all sessions
+// spawned by BacklogService (work, revision, review-gate, re-review) so they
+// group under a "Backlog" bucket in the session list UI instead of falling
+// into "Uncategorized".
+const CategoryBacklog = "Backlog"
+
 // TriggeredBy values for BacklogStatusEvent records.
 const (
 	TriggeredByUser   = "user"
@@ -152,6 +158,7 @@ var (
 	ErrPlanRequired          = domain.ErrPlanRequired
 	ErrPlanArtifactsRequired = domain.ErrPlanArtifactsRequired
 	ErrVerdictRequired       = domain.ErrVerdictRequired
+	ErrCodeNotOnMain         = domain.ErrCodeNotOnMain
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.

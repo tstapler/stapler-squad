@@ -1,0 +1,20 @@
+{
+  "id": "backlog:get-item-ship-status",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "GetBacklogItemShipStatus",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_ship_status.go",
+  "tested": true,
+  "testIds": [
+    "TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL",
+    "TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerged",
+    "TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged",
+    "TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted",
+    "TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil",
+    "TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt",
+    "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage"
+  ],
+  "lastModified": "2026-07-18T00:00:00Z"
+}

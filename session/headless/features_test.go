@@ -123,3 +123,41 @@ func TestSuggestCommitMessage_TruncatesDiff_WhenOver20000Bytes(t *testing.T) {
 	assert.LessOrEqual(t, len(userPrompt), maxDiffSizeCommit+10,
 		"user prompt should be <= maxDiffSizeCommit bytes; got %d", len(userPrompt))
 }
+
+// TestHeadlessReviewSystemPromptWithCodebaseAccess_DistinctFromNormalPrompt verifies
+// the codebase-access prompt (used on the empty-diff path) is a genuinely different
+// string from the normal no-tool-access prompt, not an accidental alias.
+func TestHeadlessReviewSystemPromptWithCodebaseAccess_DistinctFromNormalPrompt(t *testing.T) {
+	assert.NotEqual(t, HeadlessReviewSystemPrompt(), HeadlessReviewSystemPromptWithCodebaseAccess())
+}
+
+// TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresOwnCitation verifies the
+// falsification framing instructs the model to cite evidence it found itself, not
+// merely restate the work session's claim.
+func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresOwnCitation(t *testing.T) {
+	assert.Contains(t, strings.ToLower(HeadlessReviewSystemPromptWithCodebaseAccess()), "your own")
+}
+
+// TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresToolReadsField verifies the
+// prompt requires the model to report which files it actually opened, so the caller
+// can detect and degrade a verdict backed by no real tool use.
+func TestHeadlessReviewSystemPromptWithCodebaseAccess_RequiresToolReadsField(t *testing.T) {
+	assert.Contains(t, HeadlessReviewSystemPromptWithCodebaseAccess(), "tool_reads")
+}
+
+// TestHeadlessReviewSystemPrompt_NoteOnNonEmptyDiffIsInformationalOnly verifies the
+// plain (diff != "") review prompt bounds the evidentiary weight of a criterion's
+// self-reported Note: it must not be sufficient by itself for a PASS.
+func TestHeadlessReviewSystemPrompt_NoteOnNonEmptyDiffIsInformationalOnly(t *testing.T) {
+	prompt := HeadlessReviewSystemPrompt()
+	assert.Contains(t, prompt, "informational")
+	assert.Contains(t, prompt, "Note")
+}
+
+// TestHeadlessReviewSystemPromptWithCodebaseAccess_UnaffectedByEvidentiaryWeightChange
+// is a regression guard: the Note-evidentiary-weight sentence added to the plain
+// (diff != "") prompt must not leak into the codebase-access (diff == "") prompt,
+// which has its own distinct falsification instructions.
+func TestHeadlessReviewSystemPromptWithCodebaseAccess_UnaffectedByEvidentiaryWeightChange(t *testing.T) {
+	assert.NotContains(t, HeadlessReviewSystemPromptWithCodebaseAccess(), "informational context only")
+}

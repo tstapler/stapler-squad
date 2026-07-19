@@ -145,6 +145,10 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var lastDialogAnsweredAt time.Time
 	const dialogCooldown = 5 * time.Second
 
+	// Same guard for directory-access approval prompts (see #165): NeedsApproval
+	// can stay the detected status for several poll ticks after "1\r" is sent.
+	var lastApprovalAnsweredAt time.Time
+
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
@@ -430,11 +434,16 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" && shouldApprovePrompt(output, allowedPath) {
+				if previewErr == nil && output != "" && shouldApprovePromptWithCooldown(output, allowedPath, lastApprovalAnsweredAt, dialogCooldown) {
 					if err := inst.SendKeys("1\r"); err != nil {
 						log.Warn("SessionDriver: failed to approve prompt",
 							"session", inst.Title,
 							"err", err,
+						)
+					} else {
+						lastApprovalAnsweredAt = time.Now()
+						log.Info("SessionDriver: approved directory-access prompt",
+							"session", inst.Title,
 						)
 					}
 				}
@@ -619,11 +628,18 @@ func isStartupDialog(output string) bool {
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
 }
 
+// withinCooldown returns false when detected is true and less than cooldown has
+// elapsed since lastAnsweredAt — the shared double-fire guard used by both the
+// startup-dialog and directory-approval auto-answer paths.
+func withinCooldown(detected bool, lastAnsweredAt time.Time, cooldown time.Duration) bool {
+	return detected && time.Since(lastAnsweredAt) >= cooldown
+}
+
 // shouldAnswerStartupDialog returns true when the terminal output shows a startup
 // dialog and the cooldown since the last answer has elapsed. Extracted to make
 // the double-fire guard directly unit-testable.
 func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
-	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
+	return withinCooldown(isStartupDialog(output), lastAnsweredAt, cooldown)
 }
 
 // outputShowsConversationStarted returns true when live terminal content
@@ -776,4 +792,13 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 		return true
 	}
 	return strings.Contains(output, allowedPath)
+}
+
+// shouldApprovePromptWithCooldown adds the same double-fire guard used by
+// shouldAnswerStartupDialog: NeedsApproval can remain the detected status for
+// several poll ticks after "1\r" is sent (the PTY needs time to redraw), so
+// without a cooldown the driver resends "1" every driverPollInterval until the
+// dialog visibly clears — the repeated-"1" bug in #165.
+func shouldApprovePromptWithCooldown(output, allowedPath string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
+	return withinCooldown(shouldApprovePrompt(output, allowedPath), lastAnsweredAt, cooldown)
 }

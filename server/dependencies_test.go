@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -79,6 +80,52 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 	// The errors should be different messages — nil core vs nil fields.
 	if nilErr.Error() == zeroErr.Error() {
 		t.Logf("note: nil and zero-value CoreDeps produce the same error: %v", nilErr)
+	}
+}
+
+// TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_ConstructingBacklogServiceAndLifecycleListener
+// is the concrete pointer-equality test Story 1.5.1's own acceptance criteria promises
+// (plan.md Task 1.5.1e): BuildRuntimeDeps must construct exactly one
+// *session.CachingPipelineEngine and inject the SAME instance into both BacklogService
+// and BacklogLifecycleListener (transitively ReviewGateRunner) — never two separately
+// constructed engines that could silently drift in cache state after a write.
+func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_ConstructingBacklogServiceAndLifecycleListener(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogService == nil {
+		t.Fatal("expected BacklogService to be wired")
+	}
+	backlogSvcEngine := deps.BacklogService.PipelineEngine()
+	if backlogSvcEngine == nil {
+		t.Fatal("expected BacklogService.PipelineEngine() to be non-nil")
+	}
+
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	listenerEngine := listener.PipelineEngine()
+	if listenerEngine == nil {
+		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
+	}
+
+	backlogCaching, ok := backlogSvcEngine.(*session.CachingPipelineEngine)
+	if !ok {
+		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
+	}
+	listenerCaching, ok := listenerEngine.(*session.CachingPipelineEngine)
+	if !ok {
+		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
+	}
+
+	if backlogCaching != listenerCaching {
+		t.Fatalf("expected BacklogService and BacklogLifecycleListener to share the identical *session.CachingPipelineEngine instance, got distinct pointers %p vs %p", backlogCaching, listenerCaching)
 	}
 }
 

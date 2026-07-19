@@ -1,0 +1,12 @@
+{
+  "id": "backlog-pipeline-mode-selector",
+  "type": "frontend",
+  "name": "Backlog item pipeline-mode selector",
+  "component": "BacklogItemForm",
+  "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
+  "filePath": "web-app/src/components/backlog/BacklogItemForm.tsx",
+  "markerLine": 0,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-16T00:00:00Z"
+}

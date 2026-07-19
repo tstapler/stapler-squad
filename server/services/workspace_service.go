@@ -47,7 +47,17 @@ type branchCacheEntry struct {
 	cachedAt time.Time
 }
 
+// vcsStatusCacheEntry caches the full VCSStatus result for a working directory.
+type vcsStatusCacheEntry struct {
+	status   *vc.VCSStatus
+	cachedAt time.Time
+}
+
 const branchCacheTTL = 5 * time.Minute
+
+// vcsStatusCacheTTL caps repeated git subprocess overhead for frequent GetVCSStatus
+// polls. 15 s matches the GitProvider.branchCacheTTL and keeps the UI feeling fresh.
+const vcsStatusCacheTTL = 15 * time.Second
 
 // WorkspaceService handles all VCS/workspace RPC methods.
 //
@@ -65,6 +75,9 @@ type WorkspaceService struct {
 	// next to GetVCSStatus/GetWorkspaceInfo/ListWorkspaceTargets/SwitchWorkspace,
 	// which all already lived in WorkspaceService).
 	branchCache sync.Map // map[string]branchCacheEntry
+	// vcsStatusCache caches full VCSStatus results per workdir to avoid spawning 6+
+	// git subprocesses on every poll. Keyed by workdir path.
+	vcsStatusCache sync.Map // map[string]vcsStatusCacheEntry
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -136,6 +149,16 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}), nil
 	}
 
+	// Fast path: return cached status if still fresh.
+	if cached, ok := ws.vcsStatusCache.Load(workDir); ok {
+		entry := cached.(vcsStatusCacheEntry)
+		if time.Since(entry.cachedAt) < vcsStatusCacheTTL {
+			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+				VcsStatus: vcsStatusToProto(entry.status),
+			}), nil
+		}
+	}
+
 	var provider vc.VCSProvider
 	gitProvider, err := vc.NewGitProvider(workDir)
 	if err != nil {
@@ -156,6 +179,8 @@ func (ws *WorkspaceService) GetVCSStatus(
 			Error: fmt.Sprintf("failed to get VCS status: %v", err),
 		}), nil
 	}
+
+	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: time.Now()})
 
 	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 		VcsStatus: vcsStatusToProto(status),
@@ -298,6 +323,8 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
+	preWorkDir := instance.Workspace().EffectivePath
+
 	var switchType session.WorkspaceSwitchType
 	switch req.Msg.SwitchType {
 	case sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_DIRECTORY:
@@ -361,6 +388,9 @@ func (ws *WorkspaceService) SwitchWorkspace(
 			log.Warn("failed to save instances after workspace switch", "err", err)
 		}
 	}
+
+	// Evict the status cache for the old path; the new path will be repopulated on next poll.
+	ws.vcsStatusCache.Delete(preWorkDir)
 
 	if ws.eventBus != nil {
 		ws.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"workspace", "branch"}))
@@ -453,10 +483,12 @@ func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
 
 func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 	return &sessionv1.FileChange{
-		Path:     f.Path,
-		Status:   fileStatusToProto(f.Status),
-		IsStaged: f.IsStaged,
-		OldPath:  f.OldPath,
+		Path:      f.Path,
+		Status:    fileStatusToProto(f.Status),
+		IsStaged:  f.IsStaged,
+		OldPath:   f.OldPath,
+		Additions: int32(f.Additions),
+		Deletions: int32(f.Deletions),
 	}
 }
 

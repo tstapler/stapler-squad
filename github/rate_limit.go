@@ -27,12 +27,14 @@ var DefaultRateLimiter = &RateLimiter{}
 // RateLimiter tracks GitHub primary and secondary rate limit state.
 //
 // Primary rate limit — hourly quota per authenticated token (5000 req/hr for PAT).
-//   Signalled by X-RateLimit-Remaining → 0 and X-RateLimit-Reset (Unix epoch, seconds).
-//   Response: 403 or 429 with X-RateLimit-Remaining: 0.
+//
+//	Signalled by X-RateLimit-Remaining → 0 and X-RateLimit-Reset (Unix epoch, seconds).
+//	Response: 403 or 429 with X-RateLimit-Remaining: 0.
 //
 // Secondary rate limit — concurrent connection / per-minute burst limits.
-//   Signalled by 429 or 403 with Retry-After header present.
-//   X-RateLimit-Remaining may still be nonzero.
+//
+//	Signalled by 429 or 403 with Retry-After header present.
+//	X-RateLimit-Remaining may still be nonzero.
 //
 // Detection order: Retry-After present → secondary; remaining == 0 → primary;
 // neither → auth/permission error (do not pause polling).

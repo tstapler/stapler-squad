@@ -252,14 +252,13 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		return fmt.Errorf("failed to create diff stats: %w", err)
 	}
 
-	// Create/associate tags
+	// Create/associate tags — collect all IDs then one bulk AddTagIDs.
 	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
-			// Get or create tag
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
-					// Create new tag
 					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
 					if err != nil {
 						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
@@ -268,11 +267,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
 				}
 			}
-
-			// Associate tag with session
-			if err := tx.Session.UpdateOne(sess).AddTags(t).Exec(ctx); err != nil {
-				return fmt.Errorf("failed to associate tag %s: %w", tagName, err)
-			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
 
@@ -518,12 +516,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 
 	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
-			// Get or create tag
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
-					// Create new tag
 					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
 					if err != nil {
 						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
@@ -532,16 +529,17 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
 				}
 			}
-
-			// Associate tag with session
-			if err := tx.Session.UpdateOne(sess).AddTags(t).Exec(ctx); err != nil {
-				return fmt.Errorf("failed to associate tag %s: %w", tagName, err)
-			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
 
 	// Update Claude session if present
 	if data.ClaudeSession.ConversationUUID != "" {
+		var claudeSessionID int // set by either the create or update branch below
+
 		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
@@ -567,10 +565,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 					claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
 				}
 
-				_, err := claudeCreate.Save(ctx)
+				newClaude, err := claudeCreate.Save(ctx)
 				if err != nil {
 					return fmt.Errorf("failed to create claude session: %w", err)
 				}
+				claudeSessionID = newClaude.ID
 			} else {
 				return fmt.Errorf("failed to query claude session: %w", err)
 			}
@@ -604,13 +603,14 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 			if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existingClaude.ID))).Exec(ctx); err != nil {
 				return fmt.Errorf("failed to clear claude metadata: %w", err)
 			}
+			claudeSessionID = existingClaude.ID
 		}
 
-		// Add metadata entries
+		// Add metadata entries using the already-known Claude session ID.
+		// (pre-fix: this loop re-queried the same ClaudeSession row N times)
 		for key, value := range data.ClaudeSession.Metadata {
-			claudeSess, _ := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 			if _, err := tx.ClaudeMetadata.Create().
-				SetClaudeSessionID(claudeSess.ID).
+				SetClaudeSessionID(claudeSessionID).
 				SetKey(key).
 				SetValue(value).
 				Save(ctx); err != nil {

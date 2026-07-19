@@ -12,12 +12,46 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// resolveStuckOnManualTransition immediately resolves the durable stuck
+// reasons that a manual TransitionBacklogItemStatus call makes obsolete,
+// rather than waiting for the self-heal sweep's next tick (Task 2.1.5b —
+// "manual re-review/transition"). Best-effort: errors are logged, never
+// returned. Mirrors (but does not replace) the reconcile self-heal sweep in
+// session/backlog_lifecycle.go, which remains the correctness backstop for
+// any transition path this handler doesn't cover.
+func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storage, itemID string, to session.BacklogStatus) {
+	if storage == nil {
+		return
+	}
+	var reasons []domain.StuckReason
+	switch to {
+	case session.BacklogStatusInProgress:
+		// Leaving review/pr_pending for rework — the cap-hit and
+		// review-abandonment conditions no longer apply.
+		reasons = []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonAbandonedReview}
+	case session.BacklogStatusDone, session.BacklogStatusArchived:
+		// Terminal — every reason is obsolete.
+		reasons = domain.AllStuckReasons
+	case session.BacklogStatusPRPending:
+		reasons = []domain.StuckReason{domain.StuckReasonAbandonedReview, domain.StuckReasonStaleWork}
+	default:
+		return
+	}
+	for _, reason := range reasons {
+		if _, err := storage.ResolveStuck(ctx, itemID, reason); err != nil {
+			log.WarningLog.Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
+		}
+	}
+}
 
 // encryptAndMergeToken produces a token config JSON string suitable for storage.
 // If key is non-nil the token is AES-GCM encrypted and the result is
@@ -124,6 +158,9 @@ func (s *BacklogService) CreateBacklogItem(
 		RepoPath:           repoPath,
 		SkipReviewGate:     req.Msg.SkipReviewGate,
 		SkipPlanning:       req.Msg.SkipPlanning,
+		AutoSpawnSession:   req.Msg.AutoSpawnSession,
+		AutoCreatePR:       req.Msg.AutoCreatePr,
+		PipelineMode:       req.Msg.GetPipelineMode(),
 		Notes:              req.Msg.Notes,
 	}
 
@@ -198,6 +235,25 @@ func (s *BacklogService) UpdateBacklogItem(
 	update.SkipReviewGate = &skipRG
 	skipP := req.Msg.SkipPlanning
 	update.SkipPlanning = &skipP
+	autoSpawn := req.Msg.AutoSpawnSession
+	update.AutoSpawnSession = &autoSpawn
+	autoCreatePR := req.Msg.AutoCreatePr
+	update.AutoCreatePR = &autoCreatePR
+	// PipelineMode is presence-gated (optional string on the wire): only set
+	// update.PipelineMode when the field was explicitly present on the
+	// request, so an omitted pipeline_mode never clobbers the item's existing
+	// mode back to "". This is deliberately NOT an unconditional wrap like
+	// SkipReviewGate/SkipPlanning/AutoSpawnSession above — see Story 1.4.4.
+	if req.Msg.PipelineMode != nil {
+		update.PipelineMode = req.Msg.PipelineMode
+	}
+	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
+	// only set when the client explicitly sent it, so an omitted field never
+	// clobbers the item's existing override back to "unlimited" (0).
+	if req.Msg.ReworkCapOverride != nil {
+		override := int(*req.Msg.ReworkCapOverride)
+		update.ReworkCapOverride = &override
+	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes
 		update.Notes = &notes
@@ -289,6 +345,43 @@ func (s *BacklogService) DeleteBacklogItem(
 
 // --- TransitionBacklogItemStatus ---
 
+// isCodeShippedToMain reports whether itemID's most recent work-session commit (if
+// any) has actually landed on main — locally or via a merged PR pushed to origin.
+// Returns true when there is nothing to verify (no work session ever committed code)
+// or the commit is confirmed on main; false when there IS a commit that could not be
+// confirmed shipped, or the check itself failed (fails closed — callers must not
+// silently mark an item done just because verification was unavailable).
+//
+// This is the single check shared by every path that can transition an item to
+// done — the RPC handler, TriggerReReview's and SubmitManualReview's auto-transition
+// on a PASS verdict — so "approved" (a review verdict) and "shipped" (code actually on
+// main) stay two independently-enforced gates everywhere, not just at the one call
+// site a human happens to go through.
+func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPath, logPrefix string) bool {
+	itemSessions, err := s.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
+		return false
+	}
+	var lastCommitSha string
+	for _, is := range itemSessions {
+		// Ascending by CreatedAt (ListItemSessions' query order) — keep overwriting
+		// so this ends up holding the *most recent* work session's commit.
+		if is.Role == session.SessionRoleWork && is.LastCommitSha != "" {
+			lastCommitSha = is.LastCommitSha
+		}
+	}
+	if lastCommitSha == "" {
+		return true // nothing was ever committed — nothing to verify
+	}
+	onMain, mainErr := git.IsCommitOnMain(repoPath, prFixMainBranch, lastCommitSha)
+	if mainErr != nil {
+		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to verify commit %s on main for item %s: %v", logPrefix, lastCommitSha, itemID, mainErr)
+		return false
+	}
+	return onMain
+}
+
 // TransitionBacklogItemStatus moves an item through the status state machine.
 // +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
@@ -324,6 +417,18 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
 	}
 
+	// Check for unshipped worktree code when transitioning to done. A PrURL alone
+	// is not proof the code shipped — that PR may still be open, may have been
+	// closed without merging, or may have been reverted — so verify the most
+	// recent work session's commit is actually an ancestor of main (locally or on
+	// origin) rather than trusting the cached PrURL field. This is a distinct
+	// gate from OverallOutcome above: a PASS verdict says the code is good, not
+	// that it has landed on main.
+	var hasUnshippedCode bool
+	if to == session.BacklogStatusDone {
+		hasUnshippedCode = !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "TransitionBacklogItemStatus")
+	}
+
 	// Run transition guard for business rules.
 	guardInput := session.BacklogItemTransitionInput{
 		Status:            from,
@@ -333,12 +438,14 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		PlanArtifactsPath: item.PlanArtifactsPath,
 		OverallOutcome:    overallOutcome,
 		OverrideReason:    req.Msg.OverrideReason,
+		HasUnshippedCode:  hasUnshippedCode,
 	}
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
-			errors.Is(guardErr, session.ErrVerdictRequired) {
+			errors.Is(guardErr, session.ErrVerdictRequired) ||
+			errors.Is(guardErr, session.ErrCodeNotOnMain) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)
@@ -370,6 +477,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to transition backlog item: %w", err))
 	}
+	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 
 	// Best-effort: clean up git worktrees for work sessions on terminal transitions.
 	if to == session.BacklogStatusDone || to == session.BacklogStatusArchived {
@@ -626,5 +734,115 @@ func (s *BacklogService) OverrideVerdict(
 
 	return connect.NewResponse(&sessionv1.OverrideVerdictResponse{
 		Item: backlogItemToProto(updatedItem, s.buildCostLookup()),
+	}), nil
+}
+
+// SubmitManualReview allows a user to submit a review verdict directly,
+// without running an AI review session.
+// +api: backlog:submit-manual-review
+func (s *BacklogService) SubmitManualReview(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SubmitManualReviewRequest],
+) (*connect.Response[sessionv1.SubmitManualReviewResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	if req.Msg.Summary == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("summary is required"))
+	}
+
+	overall := session.ReviewOutcome(req.Msg.OverallOutcome)
+	if !overall.IsValid() {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("overall_outcome must be PASS, FAIL, PARTIAL, or UNVERIFIABLE; got %q", req.Msg.OverallOutcome))
+	}
+
+	// Load item to get AC criteria.
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	// Build per-criterion verdicts: use provided ones or synthesize from overall.
+	var cvs []session.CriterionVerdict
+	if len(req.Msg.PerCriterionVerdicts) > 0 {
+		for _, pv := range req.Msg.PerCriterionVerdicts {
+			cvs = append(cvs, session.CriterionVerdict{
+				CriterionIndex: int(pv.CriterionIndex),
+				Outcome:        session.ReviewOutcome(pv.Outcome),
+				Evidence:       pv.Evidence,
+			})
+		}
+	} else {
+		// Synthesize one verdict per AC using the overall outcome.
+		criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+		for _, ac := range criteria {
+			cvs = append(cvs, session.CriterionVerdict{
+				CriterionIndex: ac.Index,
+				Outcome:        overall,
+				Evidence:       fmt.Sprintf("Manual review: %s", req.Msg.Summary),
+			})
+		}
+	}
+
+	perCriterionJSON, _ := json.Marshal(cvs)
+	now := time.Now()
+
+	// Create a synthetic review ItemSession + verdict atomically.
+	syntheticUUID := "manual-review-" + req.Msg.ItemId[:8] + "-" + fmt.Sprintf("%d", now.UnixNano())
+	is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      req.Msg.ItemId,
+		SessionUUID: syntheticUUID,
+		SessionRole: session.SessionRoleReview,
+		AcSnapshot:  item.AcceptanceCriteria,
+	}, session.ReviewVerdictData{
+		OverallOutcome: overall,
+		PerCriterion:   string(perCriterionJSON),
+		Summary:        req.Msg.Summary,
+		OverrideBy:     "user",
+		OverrideReason: "manual review",
+		OverrideAt:     &now,
+	})
+	if createErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))
+	}
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil {
+		log.WarningLog.Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
+	}
+
+	// If PASS, transition item to done (only from review status) — but only once
+	// the most recent work commit is verified on main. A PASS verdict says the
+	// code is good, not that it has shipped; a manual review here must not
+	// silently mark an item done for code that's still sitting in an open PR.
+	// The item's "Ship PR" action (backlog_service_ship.go) is the intended
+	// recovery path once left here (docs/tasks/backlog-feature-improvement.md,
+	// 2026-07-18 update).
+	if overall == session.ReviewVerdictPass {
+		if item.Status == string(session.BacklogStatusReview) {
+			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
+				log.InfoLog.Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
+			} else {
+				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition); transErr != nil {
+					log.WarningLog.Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
+				}
+			}
+		}
+	}
+
+	// Reload item to return updated state.
+	updated, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reload backlog item: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.SubmitManualReviewResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
 	}), nil
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,9 +16,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 )
+
+// TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
+// runs. NewBacklogService defaults every instance's capabilityCheck field to that
+// package-level singleton (guarded by sync.Once, deliberately cached for the whole
+// process lifetime in production — see capability_check.go). Left unseeded, the
+// first test in this binary to reach the codebase-read gate without calling
+// SetCapabilityCheck "wins" the once.Do race and permanently resolves the
+// singleton based on whether ITS OWN fakeHeadlessPool response happens to contain
+// the capability marker string (it doesn't — the fakes return scripted verdict
+// JSON) — poisoning it to failed for every other test in the package for the rest
+// of the process, regardless of test order or -count. That was the actual root
+// cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
+// order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
+// -count=N in one process). Tests that specifically exercise the capability-check
+// failure/success path still override it per-instance via SetCapabilityCheck.
+func TestMain(m *testing.M) {
+	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
+	os.Exit(m.Run())
+}
 
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
 
@@ -28,19 +50,35 @@ type fakeHeadlessPool struct {
 	responses []string // if set, returned in order (one per call) instead of response
 	err       error
 	delay     time.Duration // simulates a slow LLM call; see TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext
+	cost      float64       // returned as CallBlocking's cost; see TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession
 	calls     []fakePoolCall
 }
 
 type fakePoolCall struct {
-	key        headless.FeatureKey
-	workDir    string
-	userPrompt string
+	key            headless.FeatureKey
+	workDir        string
+	userPrompt     string
+	systemPrompt   string
+	allowedTools   string
+	permissionMode string
+	ctxDeadline    time.Time
+	hasDeadline    bool
 }
 
-func (f *fakeHeadlessPool) CallBlockingWithOptions(ctx context.Context, key headless.FeatureKey, _, userPrompt string, opts headless.CallOptions) (string, error) {
+func (f *fakeHeadlessPool) CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, opts headless.CallOptions) (string, float64, error) {
 	f.mu.Lock()
 	callIndex := len(f.calls)
-	f.calls = append(f.calls, fakePoolCall{key: key, workDir: opts.WorkDir, userPrompt: userPrompt})
+	deadline, hasDeadline := ctx.Deadline()
+	f.calls = append(f.calls, fakePoolCall{
+		key:            key,
+		workDir:        opts.WorkDir,
+		userPrompt:     userPrompt,
+		systemPrompt:   systemPrompt,
+		allowedTools:   opts.AllowedTools,
+		permissionMode: opts.PermissionMode,
+		ctxDeadline:    deadline,
+		hasDeadline:    hasDeadline,
+	})
 	delay := f.delay
 	resp := f.response
 	if callIndex < len(f.responses) {
@@ -53,10 +91,10 @@ func (f *fakeHeadlessPool) CallBlockingWithOptions(ctx context.Context, key head
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", 0, ctx.Err()
 		}
 	}
-	return resp, f.err
+	return resp, f.cost, f.err
 }
 
 func (f *fakeHeadlessPool) callCount() int {
@@ -154,11 +192,32 @@ type mockCreateCall struct {
 	// "written before spawn" from "written after spawn but before the RPC returned."
 	contextFileExistedAtSpawn   bool
 	slashCommandsExistedAtSpawn bool
+	// inst is the *session.Instance returned to the caller, captured here so
+	// tests can inspect post-return mutations (e.g. SetCategory) that the
+	// production code performs on the instance after CreateDirectorySession/
+	// CreateWorktreeSession returns it.
+	inst *session.Instance
 }
 
 func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
+	if m.err != nil {
+		m.calls = append(m.calls, mockCreateCall{
+			title:                       title,
+			path:                        path,
+			prompt:                      prompt,
+			tags:                        tags,
+			oneShot:                     oneShot,
+			contextFileExistedAtSpawn:   contextErr == nil,
+			slashCommandsExistedAtSpawn: slashErr == nil,
+		})
+		return nil, m.err
+	}
+	// Path must round-trip: SpawnSessionFromItem writes slash commands and a
+	// context file to inst.Path. An empty Path here makes those writes land in
+	// the test process's working directory instead of a sandbox.
+	inst := &session.Instance{Title: title, Path: path}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -167,14 +226,9 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 		oneShot:                     oneShot,
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
+		inst:                        inst,
 	})
-	if m.err != nil {
-		return nil, m.err
-	}
-	// Path must round-trip: SpawnSessionFromItem writes slash commands and a
-	// context file to inst.Path. An empty Path here makes those writes land in
-	// the test process's working directory instead of a sandbox.
-	return &session.Instance{Title: title, Path: path}, nil
+	return inst, nil
 }
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
@@ -182,6 +236,19 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, worktreePath, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
+	if m.err != nil {
+		m.calls = append(m.calls, mockCreateCall{
+			title:                       title,
+			path:                        worktreePath,
+			prompt:                      prompt,
+			tags:                        tags,
+			oneShot:                     oneShot,
+			contextFileExistedAtSpawn:   contextErr == nil,
+			slashCommandsExistedAtSpawn: slashErr == nil,
+		})
+		return nil, m.err
+	}
+	inst := &session.Instance{Title: title, Path: worktreePath}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -190,22 +257,20 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		oneShot:                     oneShot,
 		contextFileExistedAtSpawn:   contextErr == nil,
 		slashCommandsExistedAtSpawn: slashErr == nil,
+		inst:                        inst,
 	})
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &session.Instance{Title: title, Path: worktreePath}, nil
+	return inst, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func newBacklogService(t *testing.T) *BacklogService {
 	t.Helper()
-	return NewBacklogService(createTestStorage(t), nil, nil, nil)
+	return NewBacklogService(createTestStorage(t), nil, nil, nil, nil, nil)
 }
 
 func newBacklogServiceNilStorage() *BacklogService {
-	return NewBacklogService(nil, nil, nil, nil)
+	return NewBacklogService(nil, nil, nil, nil, nil, nil)
 }
 
 // ─── CreateBacklogItem ────────────────────────────────────────────────────────
@@ -480,6 +545,58 @@ func TestListBacklogItems_DoneStatusIsTerminal(t *testing.T) {
 	assert.Contains(t, allTitles, "done item", "done items must appear when includeTerminal=true")
 }
 
+// ─── backlogItemToProto ───────────────────────────────────────────────────────
+
+// TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMode
+// verifies backlogItemToProto maps a non-default PipelineMode onto the proto
+// BacklogItem's optional pipeline_mode field (Story 1.4.5).
+func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMode(t *testing.T) {
+	item := &session.BacklogItemData{
+		ID:           "item-1",
+		Title:        "item using quick mode",
+		PipelineMode: "quick",
+	}
+
+	p := backlogItemToProto(item, nil)
+
+	require.NotNil(t, p.PipelineMode)
+	assert.Equal(t, "quick", *p.PipelineMode)
+}
+
+// TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent
+// is the regression test for closing the "reviewer/implementer decisions must be visible
+// in detail" gap: BacklogStatusEvent.Note (the human-readable reason for a transition,
+// e.g. "auto-reopened after FAIL verdict") and the BacklogProgressNote history (the
+// implementer's report_progress audit trail) were both durably persisted already but
+// never made it onto the wire — backlogItemToProto must now include both.
+func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgressNotesPresent(t *testing.T) {
+	note := "auto-reopened after FAIL verdict"
+	item := &session.BacklogItemData{
+		ID:    "item-1",
+		Title: "item with audit history",
+		StatusEvents: []session.BacklogStatusEventData{
+			{ID: "ev-1", FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "system", Note: &note},
+			{ID: "ev-2", FromStatus: "ready", ToStatus: "in_progress", TriggeredBy: "user"},
+		},
+		ProgressNotes: []session.ProgressNoteData{
+			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
+		},
+	}
+
+	p := backlogItemToProto(item, nil)
+
+	require.Len(t, p.StatusEvents, 2)
+	require.NotNil(t, p.StatusEvents[0].Note)
+	assert.Equal(t, note, *p.StatusEvents[0].Note)
+	assert.Nil(t, p.StatusEvents[1].Note, "an event with no recorded reason must not synthesize one")
+
+	require.Len(t, p.ProgressNotes, 1)
+	assert.Equal(t, "pn-1", p.ProgressNotes[0].Id)
+	assert.Equal(t, int32(0), p.ProgressNotes[0].CriterionIndex)
+	assert.Equal(t, "implemented the dedent fix", p.ProgressNotes[0].Note)
+	assert.Equal(t, "done", p.ProgressNotes[0].Status)
+}
+
 // ─── ApprovePlan ──────────────────────────────────────────────────────────────
 
 // UT-032a: ApprovePlan when plan_artifacts_path is empty → CodeFailedPrecondition
@@ -505,7 +622,7 @@ func TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testi
 // UT-032b: ApprovePlan happy path — sets plan_approved=true and plan_approved_at
 func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	// Create item.
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -576,7 +693,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(storage, creator, nil, nil)
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	starter := &fakeAutonomousDriverStarter{}
 	svc.SetAutonomousDriverStarter(starter)
@@ -658,6 +775,11 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	assert.True(t, creator.calls[0].slashCommandsExistedAtSpawn,
 		"slash command files must exist before the session is spawned, not written after")
 
+	// 5b. Backlog work sessions must be categorized "Backlog" so they group
+	// correctly in the session list UI instead of falling into "Uncategorized".
+	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+		"backlog work session should have Category == Backlog")
+
 	// 6. Item should have advanced to in_progress after spawn.
 	finalResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
@@ -672,7 +794,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	storage := createTestStorage(t)
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(storage, creator, nil, nil)
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	starter := &fakeAutonomousDriverStarter{}
 	svc.SetAutonomousDriverStarter(starter)
 
@@ -719,6 +841,357 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 	require.Len(t, starter.calls, 1, "autonomous driver start hook must fire")
 }
 
+// TestSpawnSessionFromItem_Reopen_SetsBacklogCategory verifies that a
+// revision-reopen spawn (item already in_progress, isReopen=true in
+// SpawnSessionFromItem) also gets Category == "Backlog", not just the
+// initial work-session spawn covered by TestBacklogFullLifecycle above.
+func TestSpawnSessionFromItem_Reopen_SetsBacklogCategory(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "reopen item",
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// Drive status straight to in_progress (no real first spawn) so
+	// SpawnSessionFromItem below takes the isReopen=true branch.
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+
+	require.Len(t, creator.calls, 1)
+	assert.Contains(t, creator.calls[0].tags, session.TagBacklogRevision,
+		"reopen spawn should carry the revision tag")
+	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+		"backlog revision-reopen session should have Category == Backlog")
+}
+
+// TestSpawnSessionFromItem_Reopen_ReusesBranch is the regression test for the bug
+// where every reopen/rework spawn minted a brand-new "backlog/<slug>-rN" branch off
+// current HEAD instead of resuming the item's existing branch — see the -rN suffix
+// in buildRevisionTitle leaking into the worktree/branch slug. The fix derives the
+// worktree slug from baseTitle (stable across reopens), not title (which varies).
+// This test drives two real spawns through the real git worktree path (not mocked)
+// and asserts both land on the identical branch.
+func TestSpawnSessionFromItem_Reopen_ReusesBranch(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "reuse branch item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstBranch := currentBranch(t, creator.calls[0].path)
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondBranch := currentBranch(t, creator.calls[1].path)
+
+	assert.Equal(t, firstBranch, secondBranch, "reopen must reuse the same branch, not mint a new -rN branch")
+	assert.NotContains(t, secondBranch, "-r2", "branch name must not pick up the session title's revision suffix")
+}
+
+// TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
+// real bug: reopen used to force-remove and recreate the worktree at the reused
+// path (git.GitWorktree.setupFromExistingBranch always ran `worktree remove -f`
+// before `worktree add`), and cleanupItemWorktrees then ran a second time against
+// that same identical path via priorSessions — either step alone could wipe the
+// worktree the brand-new session had just started using, leaving a still
+// in_progress/review item with no worktree on disk at all (empty diffs, degraded
+// re-review). Both the worktree path and an uncommitted file written before reopen
+// must survive a reopen unchanged.
+func TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "reuse worktree item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstPath := creator.calls[0].path
+
+	uncommitted := filepath.Join(firstPath, "uncommitted.txt")
+	require.NoError(t, os.WriteFile(uncommitted, []byte("not yet committed\n"), 0o644))
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondPath := creator.calls[1].path
+
+	assert.Equal(t, firstPath, secondPath, "reopen must reuse the same worktree path, not mint a new one")
+	assert.FileExists(t, uncommitted, "reopen must not wipe the existing worktree — the file written before reopen must survive")
+}
+
+// currentBranch returns the checked-out branch name at path via the real git CLI.
+func currentBranch(t *testing.T, path string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD") //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git rev-parse failed: %s", out)
+	return strings.TrimSpace(string(out))
+}
+
+// createReadyItemForSpawn creates a SkipPlanning backlog item and advances it to
+// "ready", returning its ID. Reduces boilerplate for WIP-limit and spawn tests
+// that don't care about the triage/planning flow.
+func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title string) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    title,
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
+// TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap verifies that a fresh spawn
+// is rejected with CodeResourceExhausted once maxConcurrentBacklogWorkItems items
+// are already in_progress, and that the blocked item is left untouched (still
+// "ready", no session created for it).
+func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the WIP cap with successful spawns.
+	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err, "spawn %d must succeed while under the cap", i)
+	}
+	require.Len(t, creator.calls, maxConcurrentBacklogWorkItems)
+
+	// One more fresh spawn, at cap, must be rejected.
+	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.Error(t, err, "spawn at the WIP cap must be rejected")
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems, "no session should have been spawned for the over-cap item")
+
+	// The rejected item must be untouched — still "ready", not silently advanced.
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: overCapID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", getResp.Msg.Item.Status)
+}
+
+// TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap verifies that a reopen
+// (revision) spawn for an item that's already in_progress is NOT blocked by the
+// WIP limit, since it doesn't add a new concurrent item — it's already counted.
+func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the WIP cap.
+	var reopenTargetID string
+	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		reopenTargetID = id // reopen the last one filled
+	}
+
+	// End the reopen target's work session — the pre-existing "duplicate active work
+	// session" guard would otherwise block the reopen for an unrelated reason.
+	sessions, err := storage.ListItemSessions(t.Context(), reopenTargetID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	// Reopen (isReopen=true, since reopenTargetID is already in_progress) must
+	// succeed even though the cap is reached.
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
+	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
+	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
+}
+
+// TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions is the regression test for
+// the "WIP limit now undercounts live sessions" gap (docs/tasks/backlog-feature-improvement.md):
+// AutoReopenAfterFailedReview intentionally leaves a work session running (polling for a
+// verdict) after the item's status flips back to "review". A WIP count that only looks at
+// "in_progress" status items misses this live session entirely, letting an operator exceed
+// the cap the 2026-07-12 OOM incident motivated. countLiveBacklogWorkSessions must count it.
+func TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the cap with one item still genuinely in_progress...
+	inProgressID := createReadyItemForSpawn(t, svc, repoPath, "still in progress")
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: inProgressID}))
+	require.NoError(t, err)
+
+	// ...and one item whose work session is still alive but whose status has moved to
+	// "review" (the AutoReopenAfterFailedReview live-session-reuse case) — this must
+	// still count toward the cap even though it is no longer "in_progress".
+	reviewID := createReadyItemForSpawn(t, svc, repoPath, "alive but in review")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reviewID}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       reviewID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 2, maxConcurrentBacklogWorkItems, "test assumes the default cap of 2; update the fixture if this changes")
+
+	// A fresh spawn for a third item must now be rejected: two agents (one in_progress,
+	// one live-in-review) are already running, at the cap.
+	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.Error(t, err, "spawn must be rejected — the review-status session is still live")
+	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+}
+
+// TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn is the regression
+// test for a live production bug: a work session that never reached its normal
+// completion path (crash, kill, server restart) left an open (EndedAt nil) work-role
+// ItemSession behind. Every subsequent spawn attempt (e.g. AutoReopenForPRFix retrying
+// every ~60s) was rejected by hasActiveWorkSession's guard forever, since nothing ever
+// checked whether that session was actually still alive — the item bounced
+// in_progress<->pr_pending indefinitely with zero progress. tombstoneOrphanWorkSessions
+// must clear a confirmed-dead session so a fresh spawn succeeds.
+func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with dead work session")
+
+	// Simulate a work session that died without ever calling UpdateItemSessionEnded —
+	// same shape as the live bug (created hours ago, EndedAt still nil).
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "dead-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// TransitionBacklogItemStatus above already moved the item to "ready"; put it back
+	// to "in_progress" the way a real reopen scenario would leave it (dead session, but
+	// item still shows as actively worked).
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	// Before the fix, this would fail with CodeAlreadyExists forever.
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err, "a dead work session must not permanently block respawning")
+	assert.Len(t, creator.calls, 1)
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	var deadEnded, newOpen bool
+	for _, is := range sessions {
+		if is.SessionUUID == "dead-work-session-uuid" {
+			deadEnded = is.EndedAt != nil
+		} else if is.Role == string(session.SessionRoleWork) {
+			newOpen = is.EndedAt == nil
+		}
+	}
+	assert.True(t, deadEnded, "the dead session must be tombstoned (EndedAt set)")
+	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn verifies
+// tombstoneOrphanWorkSessions does NOT reap a work session that IsSessionLive
+// confirms is genuinely still running — the fix must not weaken the duplicate-spawn
+// guard for the common case.
+func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"live-work-session-uuid": true}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with live work session")
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "live-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "a genuinely live work session must still block a duplicate spawn")
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Empty(t, creator.calls)
+}
+
 // ─── AttachSessionToItem ──────────────────────────────────────────────────────
 
 // TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions is a
@@ -730,7 +1203,7 @@ func TestSpawnSessionFromItem_AutonomousBypassesPlanningGate(t *testing.T) {
 // SpawnSessionFromItem.
 func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	repoPath := t.TempDir()
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -820,7 +1293,7 @@ func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 	// wrong: a cleanupCtx created before this delay would already be expired by
 	// the time it's used afterward.
 	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 3 * time.Second}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	// Reduced but kept generous enough (2s) that the real SQLite writes below
 	// can't flake under CI load or a busy test machine — the bug being tested
@@ -885,7 +1358,7 @@ func TestTriggerReReview_NotInReviewStatus_ReturnsFailedPrecondition(t *testing.
 // UT-040b: TriggerReReview on item with no repo_path → CodeFailedPrecondition
 func TestTriggerReReview_MissingRepoPath_ReturnsFailedPrecondition(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	// Create item with AC so it can transition to ready.
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -974,13 +1447,495 @@ func TestTriggerReReview_HappyPath_NoSessionCreator_ReturnsPlaceholder(t *testin
 	assert.Equal(t, "re-review-triggered", resp.Msg.ItemSession.SessionRole)
 }
 
+// TestTriggerReReview_HeadlessPassAutoTransitionsToDone verifies that a PASS
+// verdict from the headless re-review path moves the item straight to "done"
+// without requiring a manual "Approve — Mark Done" click — matching the
+// behavior of the tmux-driven submit_review_verdict MCP tool and
+// SubmitManualReview, which already auto-transition on PASS.
+func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	// No work session/diff exists in this fixture, so TriggerReReview's review call
+	// takes the "codebase-read" (empty-diff) path and DegradeIfUnverified requires
+	// tool_reads evidence pointing at a real, existing file under RepoPath, or it
+	// downgrades PASS to UNVERIFIABLE regardless of what the fake pool returns.
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: repoDir,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	for _, status := range []string{
+		string(session.BacklogStatusReady),
+		string(session.BacklogStatusInProgress),
+		string(session.BacklogStatusReview),
+	} {
+		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: status,
+		}))
+		require.NoError(t, err)
+	}
+
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+
+	updated, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
+		"PASS verdict from headless re-review should auto-transition item to done")
+}
+
+// TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR is the
+// regression test for the 2026-07-18 finding (docs/tasks/backlog-feature-improvement.md):
+// TriggerReReview's headless-PASS branch transitions review->done via the storage
+// layer directly, which bypasses the TransitionBacklogItemStatus RPC handler's
+// ErrPRRequired guard entirely. Before this fix, a PASS verdict here could mark an
+// item "done" even though its work session had committed code that was never
+// pushed or turned into a PR — silently losing the ship step. The item must now
+// stay in review so the "Ship PR" action can recover it.
+func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: repoDir,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	for _, status := range []string{
+		string(session.BacklogStatusReady),
+		string(session.BacklogStatusInProgress),
+	} {
+		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:       itemID,
+			TargetStatus: status,
+		}))
+		require.NoError(t, err)
+	}
+
+	// Seed a work session with committed-but-unpushed code — the scenario the
+	// ErrPRRequired guard (and this replicated check) exists for.
+	workIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionGitActivity(t.Context(), workIS.ID, "abc123", "wip", time.Now(), 1))
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+
+	updated, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), updated.Msg.Item.Status,
+		"PASS verdict with unshipped work-session code and no PR must stay in review for the Ship PR action, not silently transition to done")
+}
+
+// TestTriggerReReview_SetsBacklogCategory verifies that TriggerReReview with a
+// SessionCreator wired spawns the re-review session with Category == "Backlog"
+// so it groups correctly in the session list UI.
+func TestTriggerReReview_SetsBacklogCategory(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: "/tmp/test-repo",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// Transition through states to reach review.
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+
+	require.Len(t, creator.calls, 1)
+	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+		"re-review session should have Category == Backlog")
+}
+
+// ─── TriggerReReview: BuildReviewCallOptions wiring (Story 2.2.3) + timeout degrade (Story 2.2.4) ──
+
+// setupItemInReview creates a backlog item with repoPath and no worktree/work session,
+// transitions it ready -> in_progress -> review, and returns its ID. With no work
+// session, TriggerReReview's getWorkSessionDiff returns "" unconditionally, guaranteeing
+// the empty-diff (codebase-read) path for tests that don't need real diff content.
+func setupItemInReview(t *testing.T, svc *BacklogService, repoPath string) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.NoError(t, err)
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
+// TestTriggerReReview_EmptyDiff_UsesWorkDirAndCodebaseAccessPrompt verifies that an
+// empty-diff re-review call is routed through BuildReviewCallOptions' codebase-access
+// branch: WorkDir is set to the resolved codebase work dir (item.RepoPath, since no
+// work session/worktree is recorded), and the resulting PASS verdict (backed by real
+// tool_reads evidence) is persisted as-is.
+func TestTriggerReReview_EmptyDiff_UsesWorkDirAndCodebaseAccessPrompt(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	// Bypass the Story 2.2.6 capability self-check: it would otherwise consume the
+	// fake pool's single scripted response for its own marker-file smoke test
+	// before the real re-review call this test is asserting on ever runs.
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	require.Equal(t, 1, pool.callCount())
+	call := pool.firstCall()
+	assert.Equal(t, repoDir, call.workDir, "empty-diff re-review must be granted WorkDir access to the codebase")
+	assert.Equal(t, headless.CodebaseReadAllowedTools, call.allowedTools)
+	assert.Equal(t, session.PermissionModeBypassPermissions, call.permissionMode)
+	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), call.systemPrompt)
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictPass, outcome)
+}
+
+// TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt is a wiring-level test
+// proving that on the codebase-read (empty-diff) path, TriggerReReview actually
+// fetches prior review sessions, the full notes history, and the item's Description,
+// and that all of this reaches the actual prompt text sent to the pool.
+func TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+
+	createdItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:              "Context extras re-review test",
+		Description:        "Add OAuth2 login support end to end",
+		AcceptanceCriteria: `[{"index":0,"text":"test","status":"pending"}]`,
+		Status:             string(session.BacklogStatusReview),
+		RepoPath:           repoDir,
+	})
+	require.NoError(t, err)
+	itemID := createdItem.ID
+
+	// A prior review session+verdict — must surface in "## Prior Review Attempts".
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "prior-review-1",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictUnverifiable,
+		Summary:        "prior attempt could not locate satisfying evidence",
+	})
+	require.NoError(t, err)
+
+	// A report_progress note — must surface in "## Full Notes History".
+	require.NoError(t, storage.AppendProgressNote(t.Context(), itemID, 0, "investigated the auth package first", "in_progress"))
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	require.Equal(t, 1, pool.callCount())
+	prompt := pool.firstCall().userPrompt
+
+	assert.Contains(t, prompt, "## Prior Review Attempts", "prior review sessions must be fetched and rendered")
+	assert.Contains(t, prompt, "prior attempt could not locate satisfying evidence")
+	assert.Contains(t, prompt, "## Full Notes History", "progress notes must be fetched and rendered")
+	assert.Contains(t, prompt, "investigated the auth package first")
+	assert.Contains(t, prompt, "## Item Context", "item description must reach the prompt")
+	assert.Contains(t, prompt, "Add OAuth2 login support end to end")
+}
+
+// TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession verifies (MUST FIX #3)
+// that TriggerReReview's success path captures headlessPool.CallBlocking's returned
+// cost and persists it as the ItemSession's EstimatedCostUsd, matching the sibling
+// ReviewGateRunner.Run behavior — previously the cost was discarded via `_`.
+func TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	const wantCost = 0.0421
+	pool := &fakeHeadlessPool{
+		response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`,
+		cost:     wantCost,
+	}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.InDelta(t, wantCost, resp.Msg.ItemSession.EstimatedCostUsd, 1e-9,
+		"TriggerReReview's success path must thread CallBlocking's cost into the persisted ItemSession")
+}
+
+// TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout verifies the empty-diff
+// re-review call runs under headless.CodebaseReadCallTimeout (600s), not the plain
+// headless.DefaultCallTimeout (900s).
+func TestTriggerReReview_EmptyDiff_UsesShorterCodebaseReadTimeout(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","tool_reads":[],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	before := time.Now()
+	_, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, pool.callCount())
+	call := pool.firstCall()
+	require.True(t, call.hasDeadline, "empty-diff re-review call must run under a bounded context deadline")
+	remaining := call.ctxDeadline.Sub(before)
+	assert.Less(t, remaining, headless.DefaultCallTimeout, "empty-diff call must use a timeout shorter than the plain DefaultCallTimeout")
+	assert.InDelta(t, headless.CodebaseReadCallTimeout.Seconds(), remaining.Seconds(), 5, "empty-diff call must use CodebaseReadCallTimeout specifically")
+}
+
+// TestTriggerReReview_CodebaseReadTimeout_RecordsUnverifiableNotFail verifies that a
+// context.DeadlineExceeded on the codebase-read (empty-diff) path degrades to
+// UNVERIFIABLE — not a generic RPC error and not FAIL — per ADR-001's 2026-07-14
+// Repair Pass Addendum.
+func TestTriggerReReview_CodebaseReadTimeout_RecordsUnverifiableNotFail(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	// delay is deliberately longer than the short outer ctx below, so CallBlocking
+	// naturally observes ctx.Done() (context.DeadlineExceeded) instead of completing.
+	pool := &fakeHeadlessPool{delay: 5 * time.Second}
+	svc.SetHeadlessPool(pool)
+	// Bypass the Story 2.2.6 capability self-check so this test exercises the
+	// call-timeout degrade path it's actually named for, not the (also-UNVERIFIABLE,
+	// but different) capability-self-check-failure path.
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	shortCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	resp, err := svc.TriggerReReview(shortCtx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err, "a codebase-read timeout must not surface as an RPC error — it must be recorded as an UNVERIFIABLE verdict")
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a codebase-read timeout must degrade to UNVERIFIABLE, never be recorded as FAIL")
+}
+
+// TestTriggerReReview_CodebaseReadEmptyToolReads_DowngradesPassToUnverifiable verifies
+// that a PASS verdict returned on the codebase-read path with an empty tool_reads list
+// is downgraded to UNVERIFIABLE before being persisted.
+func TestTriggerReReview_CodebaseReadEmptyToolReads_DowngradesPassToUnverifiable(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"trust me, it's already implemented","tool_reads":[],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a PASS with no tool_reads evidence on the codebase-read path must be downgraded")
+}
+
+// TestTriggerReReview_CodebaseReadFabricatedToolReadsPath_DowngradesPassToUnverifiable
+// verifies that a PASS verdict citing a tool_reads path that does not actually exist
+// under the codebase work dir is downgraded to UNVERIFIABLE.
+func TestTriggerReReview_CodebaseReadFabricatedToolReadsPath_DowngradesPassToUnverifiable(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir() // deliberately empty — no files created here
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["does/not/exist.go"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a PASS citing a fabricated tool_reads path must be downgraded")
+}
+
+// TestTriggerReReview_CapabilitySelfCheckFails_RecordsUnverifiableWithoutAttemptingCodebaseReadCall
+// verifies that when the codebase-read capability self-check has already failed,
+// TriggerReReview records an UNVERIFIABLE verdict directly and never attempts the real
+// AllowedTools/PermissionMode-bearing codebase-read call — shares
+// headless.CodebaseReadCapabilitySelfCheck's contract with ReviewGateRunner (Story
+// 2.2.6c: a failure discovered via either call site short-circuits the other).
+func TestTriggerReReview_CapabilitySelfCheckFails_RecordsUnverifiableWithoutAttemptingCodebaseReadCall(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"found it","tool_reads":["marker.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewFailedCapabilitySelfCheckForTesting())
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err, "a failed capability self-check must not surface as an RPC error — it must be recorded as an UNVERIFIABLE verdict")
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.Equal(t, 0, pool.callCount(), "no real codebase-read call should have been attempted once the capability self-check has failed")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a failed capability self-check must degrade the re-review to UNVERIFIABLE")
+}
+
+// TestResolveACSnapshot_MergesLiveNoteIntoStaleWorkSessionSnapshot verifies that
+// a Note written via report_progress onto the live item's AcceptanceCriteria after
+// the work session's AcSnapshot was captured at spawn time is merged into the
+// snapshot returned by resolveACSnapshot, so TriggerReReview doesn't hand the
+// reviewer a stale, note-less AC list.
+func TestResolveACSnapshot_MergesLiveNoteIntoStaleWorkSessionSnapshot(t *testing.T) {
+	staleSnapshot := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"pending"}]`)
+	liveAC := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"finished via report_progress"}]`)
+
+	workSession := &session.ItemSessionSummary{AcSnapshot: staleSnapshot}
+
+	result := resolveACSnapshot(workSession, liveAC)
+
+	require.Len(t, result, 1)
+	assert.Equal(t, "finished via report_progress", result[0].Note)
+	assert.Equal(t, session.AcStatusDone, result[0].Status)
+}
+
+// TestResolveACSnapshot_NoWorkSession_ReturnsLiveAC verifies the live AC criteria
+// are returned unchanged when there is no work session snapshot to merge against.
+func TestResolveACSnapshot_NoWorkSession_ReturnsLiveAC(t *testing.T) {
+	liveAC := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"live note"}]`)
+
+	result := resolveACSnapshot(nil, liveAC)
+
+	require.Len(t, result, 1)
+	assert.Equal(t, "live note", result[0].Note)
+	assert.Equal(t, session.AcStatusDone, result[0].Status)
+}
+
 // ─── T-11: Auto-triage, double-trigger guard, itemSessionToProto ─────────────
 
 // TestCreateBacklogItem_SkipsTriageWhenSkipTriageTrue: skip_triage=true → triage_triggered=false,
 // no CreateDirectorySession call.
 func TestCreateBacklogItem_SkipsTriageWhenSkipTriageTrue(t *testing.T) {
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(createTestStorage(t), creator, nil, nil)
+	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:      "item with repo",
@@ -995,7 +1950,7 @@ func TestCreateBacklogItem_SkipsTriageWhenSkipTriageTrue(t *testing.T) {
 // TestCreateBacklogItem_SkipsTriageWhenRepoPathEmpty: no repo_path → triage_triggered=false.
 func TestCreateBacklogItem_SkipsTriageWhenRepoPathEmpty(t *testing.T) {
 	creator := &mockSessionCreator{}
-	svc := NewBacklogService(createTestStorage(t), creator, nil, nil)
+	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    "item without repo",
@@ -1012,7 +1967,7 @@ func TestTriggerTriage_DoubleTriggerGuard(t *testing.T) {
 	storage := createTestStorage(t)
 	const liveUUID = "00000000-0000-0000-0000-000000000001"
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{liveUUID: true}}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetSessionStopper(stopper)
 
 	// Create an item with a repo path so TriggerTriage can reach the guard.
@@ -1136,7 +2091,7 @@ func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _, _, _ 
 // (default in newBacklogService), the guard skips auto-triage gracefully.
 func TestCreateBacklogItem_AutoTriggersTriageWhenRepoPathSet(t *testing.T) {
 	creator := &errSessionCreator{err: errors.New("no tmux in tests")}
-	svc := NewBacklogService(createTestStorage(t), creator, nil, nil)
+	svc := NewBacklogService(createTestStorage(t), creator, nil, nil, nil, nil)
 	// headlessPool is nil → auto-trigger guard skips triage; triage_triggered must be false.
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    "item triggers triage",
@@ -1152,7 +2107,7 @@ func TestCreateBacklogItem_AutoTriggersTriageWhenRepoPathSet(t *testing.T) {
 // TestTriggerTriage_NilPool: returns CodeUnimplemented when no headless pool is wired.
 func TestTriggerTriage_NilPool(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
 		Title:    "triage test",
@@ -1175,7 +2130,7 @@ func TestTriggerTriage_NilPool(t *testing.T) {
 func TestTriggerTriage_Success(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
@@ -1211,6 +2166,140 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
 }
 
+// TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick verifies the
+// opt-in auto-spawn-session toggle: when AutoSpawnSession is true, TriggerTriage's
+// completion goroutine spawns a work session automatically (Autonomous: true, bypassing
+// the planning-approval gate) once the item reaches ready — no manual "Spawn Session"
+// click required.
+func TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:            "auto-spawn triage item",
+		Status:           string(session.BacklogStatusIdea),
+		Priority:         3,
+		RepoPath:         repoPath,
+		AutoSpawnSession: true,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	// Poll for the final state directly (in_progress), not just the spawn call — the
+	// creator call and the subsequent in_progress transition both happen inside the same
+	// synchronous SpawnSessionFromItem call, but from a different goroutine than this
+	// test, so checking creator.calls alone races with the transition that follows it.
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
+	}, 5*time.Second, 50*time.Millisecond, "auto-spawn must carry the item all the way to in_progress, not leave it sitting at ready")
+
+	assert.Len(t, creator.calls, 1, "a work session should be auto-spawned once triage completes")
+}
+
+// TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn is the
+// default-behavior guard: with AutoSpawnSession left false (the default), the existing
+// manual-click flow must be completely unchanged.
+func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "manual-spawn triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+		// AutoSpawnSession left at its zero value (false).
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	assert.Empty(t, creator.calls, "no session should be spawned without the opt-in toggle")
+}
+
+// TestTriggerTriage_PersistFailurePublishesNotification verifies the fix for the
+// swallowed-persistence-error bug: when the final idea->ready status transition fails
+// after a successful triage (e.g. a concurrent status change broke its precondition), the
+// operator must get a notification — previously this only reached the log file, leaving
+// the item stuck at 'idea' with zero operator-visible signal that anything went wrong.
+func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
+	storage := createTestStorage(t)
+	// Delay the fake LLM call so the test can race a status change in underneath it,
+	// deterministically forcing the final TransitionBacklogItemStatus precondition to fail.
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 200 * time.Millisecond}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	eventBus := events.NewEventBus(4)
+	svc.SetEventBus(eventBus)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "persist failure test item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	// Move the item off 'idea' while the delayed headless call is still in flight.
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil)
+	require.NoError(t, err)
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(3 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "a persistence failure during triage completion must publish an operator notification")
+	assert.Contains(t, notif.NotificationTitle, "save step failed")
+	assert.Contains(t, notif.NotificationMessage, "advancing the item to Ready")
+
+	// The item must remain wherever the test left it (review) — not silently ready.
+	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, string(session.BacklogStatusReview), updated.Status)
+}
+
 // TestTriggerTriage_RefineWithFeedback: a second TriggerTriage call with feedback
 // set produces a distinct revised result (iteration 2), embeds the prior result and
 // the feedback text in the prompt, and both triage ItemSessions are retained.
@@ -1218,7 +2307,7 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	storage := createTestStorage(t)
 	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
 	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1271,7 +2360,7 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 func TestTriggerTriage_RefineWithFeedback_RequiresPriorResult(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1295,7 +2384,7 @@ func TestTriggerTriage_RefineWithFeedback_RequiresPriorResult(t *testing.T) {
 func TestTriggerTriage_HeadlessPoolError(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{err: errors.New("claude binary not found")}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1328,7 +2417,7 @@ func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"live-triage-uuid": true}}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	svc.SetSessionStopper(stopper)
 
@@ -1361,7 +2450,7 @@ func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
 func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
@@ -1447,7 +2536,7 @@ func TestTriggerSync_ReturnsFailedPreconditionWhenFeatureDisabled(t *testing.T) 
 
 func TestTriggerSync_SucceedsWhenFeatureEnabledCheckReturnsTrue(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{items: []session.ExternalItem{{ExternalID: "e1", Title: "Item"}}}
 	registry.Register(plugin)
@@ -1507,7 +2596,7 @@ func TestTriggerSync_ReturnsInvalidArgumentForMalformedSourceID(t *testing.T) {
 
 func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{items: []session.ExternalItem{{ExternalID: "e1", Title: "Synced Item"}}}
 	registry.Register(plugin)
@@ -1536,7 +2625,7 @@ func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
 // (wrong key func, or the branch removed) wouldn't be caught without this.
 func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{}
 	registry.Register(plugin)
@@ -1565,7 +2654,7 @@ func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
 
 func TestTriggerSync_PropagatesFetchError(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	registry := session.NewPluginRegistry()
 	plugin := &fakeSourcePlugin{fetchErr: errors.New("upstream boom")}
 	registry.Register(plugin)
@@ -1608,7 +2697,7 @@ func TestGetSyncHistory_ReturnsInvalidArgumentForMalformedSourceID(t *testing.T)
 
 func TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
 		PluginID:    "fake_source",
@@ -1628,7 +2717,7 @@ func TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns(t *testing.T) {
 // fully shown" indicator instead of silently capping at 200 with no explanation.
 func TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
 		PluginID:    "fake_source",
@@ -1646,4 +2735,42 @@ func TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap(t *testing.T) {
 	require.NoError(t, histErr)
 	assert.Len(t, resp.Msg.Events, 200)
 	assert.True(t, resp.Msg.Truncated)
+}
+
+// TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace is a regression test
+// for a real data race: BacklogService.scrollbackManager used to be a bare, unguarded
+// field, set via SetScrollbackManager and read directly by TriggerReReview. In
+// production, server/dependencies.go wires SetScrollbackManager well after the HTTP
+// server can already be serving TriggerReReview RPCs (the server starts controllers
+// and begins accepting requests before all dependency wiring, including
+// SetScrollbackManager, completes), so the field is genuinely read and written
+// concurrently. This test concurrently calls SetScrollbackManager and the internal
+// getScrollbackManager (the same accessor TriggerReReview now uses) many times; run
+// with `go test -race`, it fails on the pre-fix bare field and passes once the field
+// is guarded by scrollbackMu.
+func TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	sm1 := scrollback.NewScrollbackManager(scrollback.DefaultScrollbackConfig())
+	sm2 := scrollback.NewScrollbackManager(scrollback.DefaultScrollbackConfig())
+
+	var wg sync.WaitGroup
+	const n = 100
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				svc.SetScrollbackManager(sm1)
+			} else {
+				svc.SetScrollbackManager(sm2)
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = svc.getScrollbackManager()
+		}()
+	}
+	wg.Wait()
 }

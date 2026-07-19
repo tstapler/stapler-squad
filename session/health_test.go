@@ -88,10 +88,10 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	// Create a minimal instance that appears started but has no tmux session.
 	// TmuxAlive() returns false because tmuxManager.HasSession() is false.
 	inst := &Instance{
-		Title:   "debounce-test",
-		started: true,
-		Status:  Running,
+		Title:  "debounce-test",
+		Status: Running,
 	}
+	inst.started.Store(true)
 
 	// First call: count=1, below threshold (2), no recovery attempted.
 	result1 := checker.checkSingleSession(inst)
@@ -123,5 +123,148 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	checker.failureCountsMu.Unlock()
 	if count != 0 {
 		t.Errorf("expected failure count=0 after recovery attempt, got %d", count)
+	}
+}
+
+// deadPaneMock wraps mockTmuxManager to simulate the real TmuxProcessManager's
+// state transition on Close(): a real KillSession() makes DoesSessionExist()
+// (and therefore IsAlive()) start returning false. The shared mockTmuxManager
+// has static return fields and can't model that transition, which is exactly
+// the distinction this regression test needs: recovery is only genuine if
+// Start(false) is called AFTER the stale session is torn down (so it takes
+// the cold-restore path and relaunches the program), not before (which would
+// just reattach to the still-"alive" dead pane via RestoreWithWorkDir).
+type deadPaneMock struct {
+	*mockTmuxManager
+	killed bool
+}
+
+func (d *deadPaneMock) Close() error {
+	d.killed = true
+	return d.mockTmuxManager.Close()
+}
+
+func (d *deadPaneMock) IsAlive() bool {
+	if d.killed {
+		return false
+	}
+	return d.mockTmuxManager.IsAlive()
+}
+
+// TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRespawn
+// is the regression test for the "all my panes show as dead and haven't
+// respawned" bug: remain-on-exit keeps the tmux session object alive as a
+// "Pane is dead (signal N, ...)" placeholder after the wrapped program is
+// killed (e.g. OOM SIGKILL) or crashes. TmuxAlive() only checks session
+// existence, so it reported this state as healthy forever and the health
+// checker never attempted recovery. This pins two fixed behaviors:
+//  1. checkSingleSession must flag the session unhealthy once PaneProcessDead()
+//     is true, even though TmuxAlive() is true.
+//  2. Recovery must kill the stale session (Close()) BEFORE calling Start(false)
+//     -- otherwise Start(false) sees an existing tmux session and just
+//     reattaches to the same dead pane via RestoreWithWorkDir() instead of
+//     actually relaunching the wrapped program.
+func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRespawn(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true, // tmux session object still exists
+		paneExitCode:     137,
+		paneExitSignal:   "SIGKILL",
+		paneExitDead:     true, // but the wrapped program has exited
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{
+		Title:  "pane-dead-test",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// First failure: below threshold, no recovery attempted yet.
+	result1 := checker.checkSingleSession(inst)
+	if result1.IsHealthy {
+		t.Error("first failure: expected IsHealthy=false when pane process has exited")
+	}
+	if result1.RecoveryAttempted {
+		t.Error("first failure: expected RecoveryAttempted=false (below threshold)")
+	}
+	if mock.closeCalls != 0 {
+		t.Errorf("first failure: expected no Close() calls yet, got %d", mock.closeCalls)
+	}
+
+	// Second failure: threshold reached, recovery attempted. The stale session
+	// must be torn down (Close()) before Start() is retried.
+	result2 := checker.checkSingleSession(inst)
+	if !result2.RecoveryAttempted {
+		t.Error("second failure: expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.closeCalls == 0 {
+		t.Error("expected KillSession() to call Close() on the stale dead-pane session before Start()")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected Start() to be retried after killing the stale session")
+	}
+}
+
+// --- checkInstances multi-socket regression tests ---
+//
+// CheckAllSessions previously derived a single socket from the first instance that
+// had one set and used tmux.IsServerDown on only that socket for every instance.
+// An instance on a different socket than the one picked would either be falsely
+// skipped ("server is down" when its own socket was fine) or falsely checked
+// (missing a real "server is down" on its own socket). These tests pin the fixed
+// behavior: each instance's down-check is scoped to its own socket.
+
+// TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances is the
+// direct regression test: one instance's socket is down, another's is healthy. Under
+// the old single-socket assumption, whichever socket was picked would apply its
+// down/up state to both instances.
+func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+	querier := newFakeTmuxSocketQuerier()
+	checker.tmuxSocket = querier
+	querier.setDown("custom", true) // "" (default) stays up
+
+	instHealthy := &Instance{Title: "healthy-default-socket", Status: Running, TmuxServerSocket: ""}
+	instHealthy.started.Store(true)
+	instDown := &Instance{Title: "down-custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instDown.started.Store(true)
+
+	results := checker.checkInstances([]*Instance{instHealthy, instDown})
+
+	if len(results) != 1 {
+		t.Fatalf("expected exactly 1 result (down-socket instance skipped), got %d: %+v", len(results), results)
+	}
+	if results[0].InstanceTitle != instHealthy.Title {
+		t.Errorf("expected the healthy-socket instance to be checked, got result for %q", results[0].InstanceTitle)
+	}
+
+	sockets := querier.socketsQueried()
+	if len(sockets) != 2 {
+		t.Errorf("expected both sockets to be queried independently, got %v", sockets)
+	}
+}
+
+// TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked verifies
+// that when no socket is down, every instance is checked regardless of which socket
+// it's on (i.e. instances on a non-default socket are not skipped just because they
+// weren't the socket the (old, buggy) code happened to pick).
+func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+	querier := newFakeTmuxSocketQuerier()
+	checker.tmuxSocket = querier
+	// Neither socket is marked down -- both should be checked.
+
+	instDefault := &Instance{Title: "default-socket", Status: Running, TmuxServerSocket: ""}
+	instDefault.started.Store(true)
+	instCustom := &Instance{Title: "custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instCustom.started.Store(true)
+
+	results := checker.checkInstances([]*Instance{instDefault, instCustom})
+
+	if len(results) != 2 {
+		t.Fatalf("expected both instances to be checked, got %d results: %+v", len(results), results)
 	}
 }

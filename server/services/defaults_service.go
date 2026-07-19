@@ -76,6 +76,7 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.SessionDefaults.CLIFlags = req.Msg.CliFlags
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
+	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -427,14 +428,15 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:        sd.Program,
-		AutoYes:        sd.AutoYes,
-		Tags:           sd.Tags,
-		EnvVars:        sd.EnvVars,
-		CliFlags:       sd.CLIFlags,
-		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:  cfg.OneOffBaseDir,
+		Program:                 sd.Program,
+		AutoYes:                 sd.AutoYes,
+		Tags:                    sd.Tags,
+		EnvVars:                 sd.EnvVars,
+		CliFlags:                sd.CLIFlags,
+		Profiles:                make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules:          make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:           cfg.OneOffBaseDir,
+		MaxAutoReworkIterations: int32(cfg.MaxAutoReworkIterationsOrDefault()),
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {
