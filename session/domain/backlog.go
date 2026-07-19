@@ -362,7 +362,19 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		return nil
 
-	case from == BacklogStatusReview && to == BacklogStatusDone:
+	case to == BacklogStatusDone:
+		// Applies to both review->done and pr_pending->done — the only two edges
+		// in validTransitions that reach "done". Previously this guard only
+		// matched from == BacklogStatusReview, so a pr_pending item could be
+		// marked done (e.g. via a manual "Approve" click) with no verdict/shipped
+		// check at all: found live when a real backlog item reached done while
+		// its GitHub PR was still open with merge conflicts, permanently
+		// orphaning that PR from ReconcilePRPending's monitoring (which only
+		// polls pr_pending-status items). The automated ReconcilePRPending path
+		// that legitimately drives pr_pending->done already verifies
+		// IsPRMerged() itself before calling this transition, so it always
+		// carries a genuine PASS verdict and shipped code — this guard does not
+		// change its behavior, only closes the gap for other callers.
 		if item.OverrideReason != "" {
 			return nil
 		}
