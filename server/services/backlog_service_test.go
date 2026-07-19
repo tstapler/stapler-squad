@@ -22,6 +22,25 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
+// TestMain pre-seeds headless.DefaultCapabilitySelfCheck as passed before any test
+// runs. NewBacklogService defaults every instance's capabilityCheck field to that
+// package-level singleton (guarded by sync.Once, deliberately cached for the whole
+// process lifetime in production — see capability_check.go). Left unseeded, the
+// first test in this binary to reach the codebase-read gate without calling
+// SetCapabilityCheck "wins" the once.Do race and permanently resolves the
+// singleton based on whether ITS OWN fakeHeadlessPool response happens to contain
+// the capability marker string (it doesn't — the fakes return scripted verdict
+// JSON) — poisoning it to failed for every other test in the package for the rest
+// of the process, regardless of test order or -count. That was the actual root
+// cause behind TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns'
+// order-dependent flake (reliably 1-pass-then-every-subsequent-run-fails under
+// -count=N in one process). Tests that specifically exercise the capability-check
+// failure/success path still override it per-instance via SetCapabilityCheck.
+func TestMain(m *testing.M) {
+	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
+	os.Exit(m.Run())
+}
+
 // ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
 
 // fakeHeadlessPool is a test stub implementing headless.PoolClient.
@@ -871,6 +890,48 @@ func TestSpawnSessionFromItem_Reopen_ReusesBranch(t *testing.T) {
 
 	assert.Equal(t, firstBranch, secondBranch, "reopen must reuse the same branch, not mint a new -rN branch")
 	assert.NotContains(t, secondBranch, "-r2", "branch name must not pick up the session title's revision suffix")
+}
+
+// TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace is a regression test for a
+// real bug: reopen used to force-remove and recreate the worktree at the reused
+// path (git.GitWorktree.setupFromExistingBranch always ran `worktree remove -f`
+// before `worktree add`), and cleanupItemWorktrees then ran a second time against
+// that same identical path via priorSessions — either step alone could wipe the
+// worktree the brand-new session had just started using, leaving a still
+// in_progress/review item with no worktree on disk at all (empty diffs, degraded
+// re-review). Both the worktree path and an uncommitted file written before reopen
+// must survive a reopen unchanged.
+func TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "reuse worktree item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstPath := creator.calls[0].path
+
+	uncommitted := filepath.Join(firstPath, "uncommitted.txt")
+	require.NoError(t, os.WriteFile(uncommitted, []byte("not yet committed\n"), 0o644))
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondPath := creator.calls[1].path
+
+	assert.Equal(t, firstPath, secondPath, "reopen must reuse the same worktree path, not mint a new one")
+	assert.FileExists(t, uncommitted, "reopen must not wipe the existing worktree — the file written before reopen must survive")
 }
 
 // currentBranch returns the checked-out branch name at path via the real git CLI.

@@ -1,9 +1,11 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"time"
 )
@@ -23,6 +25,16 @@ type SessionHealthChecker struct {
 // failureThreshold is the number of consecutive failed health checks before
 // a recovery attempt is triggered. Set to 2 to require two consecutive misses.
 const failureThreshold = 2
+
+// markStartFailed fails an instance with a human-readable reason instead of
+// leaving it stuck retrying against a directory that will never come back.
+// Reuses the CreationProgress + Stopped pattern CreateSession already uses for
+// startup failures (see server/services/session_service.go).
+func markStartFailed(instance *Instance, err error) {
+	instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", err.Error()))
+	instance.ForceStatus(Stopped)
+	log.ForSession(instance.Title).Error("session failed: working directory missing, giving up", "err", err)
+}
 
 // NewSessionHealthChecker creates a new session health checker
 func NewSessionHealthChecker(storage *Storage) *SessionHealthChecker {
@@ -168,9 +180,17 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 					result.Issues = append(result.Issues, fmt.Sprintf("Recovery failed: %v", err))
 					result.RecoverySuccess = false
 					result.Actions = append(result.Actions, "Failed to recreate tmux session")
+					if errors.Is(err, tmux.ErrWorkDirMissing) {
+						// Its working directory is gone (e.g. a pruned worktree) and won't
+						// come back on its own — stop retrying every health-check cycle and
+						// fail the session with a status the user can actually see.
+						markStartFailed(instance, err)
+						result.Actions = append(result.Actions, "Session failed: working directory missing")
+					}
 				} else {
 					result.RecoverySuccess = true
 					result.Actions = append(result.Actions, "Successfully recreated tmux session")
+					instance.SetCreationProgress("") // clear any stale "Session failed: ..." message
 					// Re-check health after recovery
 					if instance.TmuxAlive() {
 						result.IsHealthy = true
@@ -210,9 +230,14 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 					result.Issues = append(result.Issues, fmt.Sprintf("Recovery failed: %v", err))
 					result.RecoverySuccess = false
 					result.Actions = append(result.Actions, "Failed to respawn dead pane")
+					if errors.Is(err, tmux.ErrWorkDirMissing) {
+						markStartFailed(instance, err)
+						result.Actions = append(result.Actions, "Session failed: working directory missing")
+					}
 				} else {
 					result.RecoverySuccess = true
 					result.Actions = append(result.Actions, "Respawned dead pane by recreating tmux session")
+					instance.SetCreationProgress("") // clear any stale "Session failed: ..." message
 					if instance.TmuxAlive() && !instance.PaneProcessDead() {
 						result.IsHealthy = true
 					} else {

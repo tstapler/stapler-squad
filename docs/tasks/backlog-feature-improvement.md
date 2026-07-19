@@ -499,7 +499,7 @@ compounding causes, not one:
    confirming `done`→`pr_pending` is a sane state-machine transition — out of scope for this pass;
    flagged for a follow-up rather than guessed at here.
 
-**Files touched**: `proto/session/v1/backlog.proto` (`TriggerShipPRRequest/Response` + RPC) →
+**Files touched (Ship PR action)**: `proto/session/v1/backlog.proto` (`TriggerShipPRRequest/Response` + RPC) →
 `server/services/backlog_service_ship.go` (new: `PRRunner` interface, `SetOneShotRunner`,
 `TriggerShipPR` handler) → `server/services/backlog_service.go` (`oneShotRunner` field) →
 `server/services/backlog_service_lifecycle.go` (`SubmitManualReview` guard, using the pre-existing
@@ -531,3 +531,205 @@ existing `BacklogItemDetail.*.test.tsx` mocks. Full `go test ./server/... ./sess
 own commit history for the exact pass/fail counts at merge time). No e2e spec added — follows the
 same established pattern as `AutoSpawnSession`/`AutoCreatePR` (Go + Jest only, no e2e), per
 `.claude/rules/feature-registry.md`'s existing precedent in this file.
+
+## Update — 2026-07-18 (full skill re-run): live-item regression + a new same-day CRITICAL bug
+
+Full `backlog-feature-improvement` skill pass: live-state pull, UI walkthrough
+(`/backlog`, `/backlog/board`, `/review-queue/`, `/notifications/`), and four parallel
+quality-skill agents (`quality:architecture-review`, `ux:review`, `code:review`,
+`code:is-it-ready`) scoped to the same files as prior runs.
+
+### Live state got worse, not better, since 2026-07-17
+
+`ListStuckBacklogItems` at 2026-07-18T21:07Z: **12 unique stuck items** (up from 6 on
+2026-07-17), 26 total stuck-reason rows. Nearly all in `review` status. One item —
+"Inserting blocks insert out of order with links" — is currently stuck on all three of
+`ABANDONED_REVIEW`, `REWORK_CAP`, and `BOUNCING` simultaneously. Its gate verdict (read
+live via the item detail panel) shows the FAILED reason in unusual detail: the work
+session's self-reported note claimed a specific mutex fix (`contentMutationMutex` routing
+through `addNewBlock`/`splitBlock`/`updateBlockContent`), but **the actual diff touches
+none of those files** — only unrelated uncommitted changes to an OPFS/live-sync feature
+(`OpfsInterop.kt`, `PlatformFileSystem.kt`) that was already merged in a prior PR. The
+gate correctly caught this (working as designed) — but see the CRITICAL bug below, which
+is a plausible root cause for *why* a rework session's diff would be someone else's
+unrelated in-progress work: its own worktree may have been silently swapped/deleted mid-run.
+
+Review Queue: 20 items, 1 input needed, 15 stale, 3 complete (worse than 2026-07-17's
+18/15/2 — trend continues, not fixed by the AutoCreatePR/Ship-PR closures above).
+Notifications: 46 unread, oldest ~1h, several items repeating the same
+TASK_COMPLETE/stale notification 2–10× (`x10` on one) — degrades signal quality for
+whoever is meant to notice `bouncing`/`orphaned_triage` while genuinely-repeating noise
+dominates.
+
+### [1, CRITICAL, NEW] Reopen/rework spawns delete their own just-created worktree
+
+Same-day regression, introduced by this morning's own fix. Commit `3675da97` ("reuse the
+same branch across rework/reopen spawns", `backlog_service_triage.go:316-326`) changed the
+worktree/branch slug from the display title (unique per `-rN` reopen) to `baseTitle`
+(stable across reopens) — deliberately, so `git.NewGitWorktreeWithBranch` →
+`findExistingWorktreeForBranch` (`session/git/worktree.go:181-190`, backed by real `git
+worktree list --porcelain`) resumes the *same physical worktree directory* on every
+reopen instead of minting an orphaned branch each time. Verified directly in
+`session/git/worktree.go:180-191` and `session/instance_worktree.go:103-116` — confirmed
+real, not a false positive.
+
+But `SpawnSessionFromItem` step 12c (`backlog_service_triage.go:402-406`) was never
+updated for this: on every reopen it calls `cleanupItemWorktrees(ctx, priorSessions)`
+(`backlog_service.go:615-632`), which looks up each **prior** session's stored
+`WorktreePath` and force-runs `git worktree remove -f` on it
+(`session/git/worktree_ops.go:211,240`). Since the branch/slug is now stable across
+reopens, the prior session's `WorktreePath` **is the same directory** the brand-new
+session was just spawned into and is actively running in — step 12c deletes the new
+session's own working directory out from under it, moments after creating it. This fires
+on every automated rework loop (`AutoReopenAfterFailedReview`, `AutoReopenForPRFix`) and
+every manual "Reopen for Revision" click.
+
+The regression test added alongside `3675da97`
+(`TestSpawnSessionFromItem_Reopen_ReusesBranch`) passes only because its mock session
+creator fabricates an unstarted `&session.Instance{}`, so `Storage.SaveInstances` silently
+skips persisting a `Worktree` row for it (`session/storage.go:250`,
+`if !inst.Started() { continue }`) — `cleanupItemWorktrees`'s lookup then returns
+not-found and no-ops, masking the bug. In production, `CreateWorktreeSession` really does
+call `instance.Start(true)` (`server/services/session_service.go:807-830`), so the row is
+persisted and the collision fires for real.
+
+**Fix direction**: step 12c should skip cleanup for any prior session whose resolved
+`WorktreePath` equals the new session's `worktreePath` (the just-reused directory) —
+only remove worktrees genuinely orphaned by this spawn, never the one the new session is
+standing in. Routed to `sdd:fix-bug` — see Recommended Next Actions below. Priority:
+highest in this update; likely explains a nontrivial share of the "rework session
+produced garbage/unrelated diff" pattern seen live above, and this repo has already lost
+work once to an adjacent worktree-cleanup bug (the `stop_session`-deletes-branch incident
+logged earlier in this file).
+
+### [1] Confirmed unchanged from 2026-07-17
+
+- `autonomous_orchestration_service.go:229-231` — `inst.AutonomousMode/AutonomousTurn/AutonomousMaxTurns` still mutated with no lock in `onAutonomousDriverComplete`; comment still cites pending "Epic 5". **New**: the identical unguarded-write pattern also exists in `buildTurnCallback` (lines 136-140), writing `liveInst.AutonomousTurn`/`AutonomousMaxTurns` from a different callback path — not covered by the existing comment's scope, same race class.
+- `autonomous_orchestration_service.go:273-274,320` — still raw magic ints for notification type/priority (`int32(9)`, `int32(2)`, and a newly-spotted `int32(10)` at line 320).
+
+### [1, NEW, lower confidence] WIP limit now undercounts live sessions
+
+`d0d22371` (today, "configurable rework cap + surface review verdicts to running
+sessions") added a `hasActiveWorkSession` early-return in `AutoReopenAfterFailedReview`
+(`backlog_service_triage.go:546-549`) so a work session can now legitimately stay alive —
+polling `get_backlog_item` in a loop to discover PASS/FAIL feedback — while the item's
+status is `review` rather than `in_progress`. `maxConcurrentBacklogWorkItems`
+(`backlog_service_triage.go:151,247-256`) only counts `in_progress`-status items, so these
+looping "review" sessions are invisible to the WIP cap. An operator can now exceed the
+intended concurrent-agent limit — directly relevant to the 2026-07-12 OOM incident that
+cap exists to prevent. Not traced to a concrete repro of a second OOM; flagged as a
+design gap introduced as a side effect of today's verdict-polling improvement, worth a
+look before it causes one.
+
+### Positive deltas since 2026-07-14/17 (verified, not just claimed)
+
+- **`maxAutoReworkIterations` is no longer a hardcoded global.** `d0d22371` added
+  `config.Config.MaxAutoReworkIterations` (default 3, operator-tunable) — closes half of
+  the long-standing "operational tuning knobs hardcoded" bucket-3 finding.
+  `maxConcurrentBacklogWorkItems` remains a hardcoded const (still open, see WIP-limit
+  finding above for why it also needs to become correctness-aware, not just configurable).
+- **Rework loop no longer purely retries blind**: the same commit threads the latest
+  review verdict into `get_backlog_item`'s context so a still-running session discovers
+  PASS/FAIL feedback without being killed and respawned — a real (partial) answer to the
+  "bouncing has no escalation/different-approach retry" gap flagged 2026-07-17.
+- **`session/backlog_commands.go`'s "every item gets the identical fixed slash-command
+  set" finding (2026-07-14/17) is now stale.** `WriteSlashCommands(engine PipelineEngine,
+  item, worktreePath)` (`backlog_commands.go:30`) now delegates to
+  `engine.SlashCommandSet(item)`, resolving a per-item `BacklogItemData.PipelineMode` slug
+  via `CachingPipelineEngine` (`session/pipeline_engine.go:326-365`). Landed via commits
+  `37daaed8`/`edcf2f23` (2026-07-15) and confirmed independently by both the architecture
+  and code-review agents this run.
+- **`session/repository.go`'s `BacklogItemData.PipelineMode` field-doc-comment claiming
+  "NOT yet wired to storage/proto/RPC" (written 2026-07-17, this file's own earlier
+  update) is now stale — correcting it here.** The field is fully wired end-to-end: ent
+  schema (`session/ent/schema/backlog_item.go:49`), proto (`backlog.proto:121,190,315` +
+  full `PipelineMode` CRUD RPC set at `backlog.proto:482-539,620-633`),
+  `backlog_service.go:507`. **However**, live-verified against a real stuck item
+  (`GetBacklogItem` RPC on "Inserting blocks..."): `pipelineMode = ""` — the plumbing
+  exists but zero real items have one assigned yet, because (per the UX review below)
+  there is still no UI control to set it, only a Settings page to define modes and a
+  read-only display of which mode a session snapshot ran with.
+- **Role→status switch default-case fix (bucket 1, item 4, 2026-07-16) confirmed still
+  correct** and not regressed by any of today's changes.
+- **Complexity dropped on several prior hotspots** (attributed to the `WorkflowEngine`/
+  `PipelineEngine` extraction): `TransitionBacklogItemStatus` 41→27, `AttachSessionToItem`
+  38→23, `onAutonomousDriverComplete` 42→21, `SpawnSessionFromItem` 41→38, `TriggerTriage`
+  35→32. **But `TriggerReReview` rose 29→40** (`backlog_service_triage.go:1125`) and is now
+  the single highest-complexity function in the subsystem — worth a follow-up refactor
+  pass, not investigated further in this run.
+
+### ADR-013 (`WorkflowEngine`) status: still only a partial seam
+
+`DefaultWorkflowEngine` is genuinely injected and used (`server/dependencies.go:459`,
+consumed via `s.engine.CanTransition` at `backlog_service_lifecycle.go:400`), but it still
+wraps the same static `validTransitions` map (`session/backlog.go:148-152`) — **one call
+site still bypasses the engine entirely and calls the free function directly**
+(`backlog_service_lifecycle.go:708: session.CanTransitionBacklog(...)`). No
+`ConfiguredWorkflowEngine` exists anywhere in the tree; ADR-013 remains status
+**"Proposed"**, not accepted or shipped. Phase-2 custom states (S2/S3) are unimplemented —
+only the Phase-1 seam exists.
+
+**New architectural finding, useful for bucket-3 planning**: `session/pipeline_engine.go`
+(lines 1-18) explicitly documents `PipelineEngine` as a deliberate **sibling** of
+`WorkflowEngine`, not an extension — content-selection (which skills/prompt run) and
+gate-legality (which status transitions are allowed) are architecturally separated by
+design, per `project_plans/backlog-configurable-pipeline/implementation/plan.md`. Meaning:
+"use my SDD skills for this item" is now solvable via `PipelineMode` once a selector UI
+exists; "skip the review gate for this item" is a *different*, already-existing mechanism
+(`SkipReviewGate bool`) that a unified per-item pipeline config UI would need to compose
+with `PipelineMode`, not replace.
+
+### UX review: pipeline mode is now visible, still not selectable — plus 4 silent-failure spots
+
+Confirms the exact gap above from the UI side, plus new specific findings not in the
+2026-07-14/17 passes:
+
+- `BacklogItemDetail.tsx:1301-1413` — the per-session `PipelineMode` snapshot **is now
+  displayed** (Epic 3.4), but there is still no control anywhere in `BacklogItemForm`,
+  the item detail Actions panel, or any creation flow to *select* a mode before spawning —
+  matches the live-verified empty-`pipelineMode` finding above exactly.
+- `GateVerdictBox.tsx:449-488` — "Skip gate" is a 3-interaction flow (toggle → confirm
+  dialog → confirm click) even when `item.skipReviewGate` is already `true` in the data
+  model; the component never reads that flag to auto-skip. Fix: when `skipReviewGate` is
+  true, bypass the gate box render entirely instead of still requiring the manual confirm.
+- `BacklogItemDetail.tsx:769` — while any action is in flight, the Cancel-triage button
+  silently becomes a no-op (`onCancel={actionLoading !== null ? () => {} : ...}`) with no
+  disabled styling or toast — a user clicking it during a hung triage gets zero feedback.
+- `SessionMonitor.tsx:37-45` and `ReviewChangesModal.tsx:41-46` — both swallow fetch
+  failures into a misleading "empty" state (`SessionMonitor` stays on "No output yet…"
+  forever; `ReviewChangesModal`'s `.catch` sets a false `{content: "", added: 0, removed:
+  0}` "no changes" result) instead of surfacing a distinct error/retry state. Worth
+  closing even though it wasn't the cause of today's specific FAILED verdict (that verdict
+  came from the backend's own diff computation, unaffected by this frontend bug).
+- `BacklogItemPanel.tsx:93-98` and list `page.tsx:474-481` — both show only a status chip,
+  no pipeline-mode indicator, forcing a full detail-panel open + scroll to discover it.
+
+### is-it-ready verdict: FIX-THEN-SHIP (unchanged from provisional, now with live confirmation)
+
+Top reason: the stuck-item count is trending in the wrong direction (6→12 over one day)
+despite continuous targeted fixes, and one item hit three different `StuckReason`s
+simultaneously — a sign the reconciliation loop patches individual symptoms rather than
+converging. `PipelineMode` is genuine progress but only reshapes prompt content, not the
+stage graph (`BacklogBoard.tsx`'s `COLUMNS`, `pushAndCreatePR`, `autonomous_driver.go`'s
+orchestration are all still fixed). Would flip to GO once: the reconciliation loop stops
+producing net-new stuck items over a 48h window, `bouncing`/`rework_cap` get an escalation
+path, and Test Quality + Security passes actually complete (unreached again this run).
+
+### Recommended Next Actions (routing per skill Phase 5)
+
+1. **`sdd:fix-bug` — the worktree self-deletion bug (bucket 1, CRITICAL, above).** Highest
+   priority: isolated, root-caused, clear fix, actively corrupting rework attempts right
+   now on every reopen. Not yet started.
+2. **`sdd:fix-bug` — WIP-limit undercount** (bucket 1, above): make
+   `maxConcurrentBacklogWorkItems`'s counting query aware of live-but-`review`-status
+   sessions, not just `in_progress`. Lower urgency than #1; no confirmed second OOM yet.
+3. **`sdd:quick` — pipeline-mode selector UI**: add the missing per-item `PipelineMode`
+   picker (`BacklogItemForm.tsx` alongside the existing `SkipReviewGate`/`SkipPlanning`/
+   `AutoSpawnSession`/`AutoCreatePR` toggles) so the now-fully-wired backend feature is
+   actually reachable by a user. This is the last hop of the "use my SDD skills for this
+   item" ask — everything downstream of item-level `PipelineMode` already works.
+4. **`sdd:quick` — GateVerdictBox `skipReviewGate`-aware auto-bypass** and the two silent
+   fetch-catch fixes (`SessionMonitor`, `ReviewChangesModal`) — small, independent UX/
+   correctness fixes, batchable into one pass.
+5. Notification volume/dedup (46 unread, some ×10) not yet scoped — flag for a future
+   pass if it starts masking real signals; not urgent enough to route this session.

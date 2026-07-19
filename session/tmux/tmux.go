@@ -825,6 +825,30 @@ func (t *TmuxSession) setRemainOnExit() {
 	}
 }
 
+// ErrWorkDirMissing indicates a session's working directory is unset or no
+// longer exists on disk (e.g. a pruned git worktree). Callers can match on it
+// with errors.Is to distinguish a permanent failure — the session should be
+// failed with a clear status, not silently retried against a guessed directory.
+var ErrWorkDirMissing = errors.New("session working directory missing")
+
+// validateWorkDir rejects an empty or nonexistent working directory instead of
+// letting a caller silently fall back to a guessed directory (e.g. os.Getwd(),
+// which for a long-running server process is often $HOME) — see start() and
+// RestoreWithWorkDir()'s recreate path.
+func validateWorkDir(workDir string) error {
+	if workDir == "" {
+		return fmt.Errorf("working directory not set: %w", ErrWorkDirMissing)
+	}
+	info, err := os.Stat(workDir)
+	if err != nil {
+		return fmt.Errorf("working directory %q is not accessible: %w: %w", workDir, ErrWorkDirMissing, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("working directory %q is not a directory: %w", workDir, ErrWorkDirMissing)
+	}
+	return nil
+}
+
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
 	// Use a no-cache check here to detect stale sessions from previous server runs.
@@ -843,6 +867,10 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		}
 
 		return nil
+	}
+
+	if err := validateWorkDir(workDir); err != nil {
+		return fmt.Errorf("cannot start tmux session %s: %w", t.sanitizedName, err)
 	}
 
 	// Create a new detached tmux session and start the program in it.
@@ -1011,14 +1039,12 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// Session truly doesn't exist after all checks - safe to create new one
 			log.Warn("tmux session doesn't exist after all attempts, creating new session instead of restoring", "session", t.sanitizedName, "attempts", maxRetries)
 
-			// Use the provided working directory, fall back to current directory if not provided
-			if workDir == "" {
-				var err error
-				workDir, err = os.Getwd()
-				if err != nil {
-					log.Warn("could not get working directory for session", "session", t.sanitizedName, "err", err)
-					workDir = "."
-				}
+			// ponytail: never guess a directory here (e.g. os.Getwd(), which for a
+			// long-running server process is often $HOME) — a wrong guess silently
+			// reconnects the session to the wrong workspace. Fail loudly instead so
+			// the caller can surface a clear status to the user.
+			if err := validateWorkDir(workDir); err != nil {
+				return fmt.Errorf("cannot recreate tmux session %s: %w", t.sanitizedName, err)
 			}
 
 			// Create a new detached tmux session directly (avoid recursive call to Start).

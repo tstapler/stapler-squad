@@ -613,6 +613,21 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 // Call commitAndPushItemWorktrees first to ensure changes are durable.
 // Errors are logged but do not fail the caller — cleanup is best-effort.
 func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) {
+	s.cleanupItemWorktreesExcept(ctx, sessions, "")
+}
+
+// cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
+// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
+// creating a fresh one, so a prior work session's worktree row can point at the exact
+// path the brand-new session just started using. Cleaning that up unconditionally —
+// as every caller used to — deleted the directory out from under the session that
+// just reused it, leaving a still-in_progress/review item with no worktree at all
+// (diffs and re-review's codebase-read verification both came up empty). exceptPath
+// lets the reopen call site keep that one path alive while still clearing out any
+// genuinely stale worktree from an earlier, differently-named revision (e.g. the
+// item's title changed between rework rounds).
+func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) {
 	for _, is := range sessions {
 		if is.SessionUUID == "" {
 			continue
@@ -622,6 +637,9 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
 		if err != nil || wt.WorktreePath == "" {
+			continue
+		}
+		if exceptPath != "" && wt.WorktreePath == exceptPath {
 			continue
 		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)

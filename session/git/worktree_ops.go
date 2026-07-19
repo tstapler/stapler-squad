@@ -59,11 +59,29 @@ func (g *GitWorktree) Setup() error {
 	return g.setupNewWorktree()
 }
 
-// setupFromExistingBranch creates a worktree from an existing branch
+// setupFromExistingBranch creates a worktree from an existing branch, reusing one
+// already checked out at g.worktreePath in place rather than tearing it down and
+// recreating it. Backlog rework/reopen spawns intentionally reuse the same
+// "backlog/<item>" branch and worktree path across every revision (see
+// SpawnSessionFromItem's reopen comment) — force-removing and re-adding the worktree
+// here on every single reopen discarded whatever uncommitted state the worktree held
+// and needlessly recreated the directory, which is exactly the behavior that left a
+// still in_progress/review item with a missing worktree once anything else (a
+// concurrent cleanup call, or simply a slow-running review) touched it mid-recreation.
 func (g *GitWorktree) setupFromExistingBranch() error {
 	// Directory already created in Setup(), skip duplicate creation
 
-	// Clean up any existing worktree first
+	if g.worktreeAlreadyRegisteredForBranch() {
+		log.Info("worktree already checked out for branch, reusing in place", "branch", g.branchName, "path", g.worktreePath)
+		g.initBaseCommitSHA()
+		return nil
+	}
+
+	// Clean up any existing worktree first. Unlock before removing: a worktree left
+	// locked (initializing) by an interrupted `worktree add` — the exact state
+	// worktreeAlreadyRegisteredForBranch just rejected above — otherwise refuses
+	// `remove` regardless of -f, leaving the broken checkout stuck forever.
+	_, _ = g.runGitCommand(g.repoPath, "worktree", "unlock", g.worktreePath)     // Ignore error if not locked
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 
 	// Create a new worktree from the existing branch
@@ -116,6 +134,54 @@ func (g *GitWorktree) initBaseCommitSHA() {
 		}
 	}
 	log.Warn("could not find merge-base for branch with any default branch (main/master/develop/trunk)", "branch", g.branchName)
+}
+
+// worktreeAlreadyRegisteredForBranch reports whether g.worktreePath is already a live,
+// fully-set-up git worktree checked out to g.branchName — i.e. reused in place rather
+// than removed and recreated. Requires:
+//   - git registration for this exact path+branch (via 'worktree list --porcelain'),
+//   - the directory's actual presence on disk ('git worktree list' still reports
+//     prunable entries for directories deleted out from under git, e.g. by an external
+//     rm -rf, and reusing one of those would hand back a path that doesn't exist), and
+//   - NOT locked with git's "initializing" marker. `worktree add` briefly holds this
+//     lock while it populates the checkout and clears it on success; a worktree still
+//     locked here means an earlier `worktree add` was interrupted mid-checkout (e.g.
+//     killed by runGitCommand's 30s timeout under load) and left a half-populated
+//     directory — reusing that in place would silently hand a broken checkout to the
+//     new session instead of self-healing via a fresh remove+add, exactly the failure
+//     this reuse-in-place logic exists to prevent for the *good* case.
+func (g *GitWorktree) worktreeAlreadyRegisteredForBranch() bool {
+	if _, statErr := os.Stat(g.worktreePath); statErr != nil {
+		return false
+	}
+	output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	path, found := g.findWorktreeForBranch(output, g.branchName)
+	if !found || path != g.worktreePath {
+		return false
+	}
+	return !isWorktreeLocked(output, g.worktreePath)
+}
+
+// isWorktreeLocked reports whether the worktree at targetPath is marked "locked" in
+// 'git worktree list --porcelain' output (with or without a reason).
+func isWorktreeLocked(porcelainOutput, targetPath string) bool {
+	lines := strings.Split(strings.TrimSpace(porcelainOutput), "\n")
+	var currentWorktreePath string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			currentWorktreePath = ""
+		case strings.HasPrefix(line, "worktree "):
+			currentWorktreePath = strings.TrimPrefix(line, "worktree ")
+		case currentWorktreePath == targetPath && (line == "locked" || strings.HasPrefix(line, "locked ")):
+			return true
+		}
+	}
+	return false
 }
 
 // findWorktreeForBranch parses the output of 'git worktree list --porcelain'

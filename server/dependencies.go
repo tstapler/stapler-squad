@@ -822,6 +822,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
+			if err := unfinished.RegisterMetrics(); err != nil {
+				log.Warn("failed to register unfinished OTel metrics", "err", err)
+			}
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.

@@ -401,8 +401,12 @@ func (s *BacklogService) SpawnSessionFromItem(
 
 	// 12c. On reopen, clean up git worktrees from prior work sessions now that the
 	// new session is safely persisted. Best-effort only — errors are logged, not returned.
+	// worktreePath itself is exempted: step 10 reuses the same "backlog/<item>" worktree
+	// across reopens (same branch slug every revision), so priorSessions still contains a
+	// worktree row pointing at this exact path — cleaning it up here would delete the
+	// directory the session spawned above just started using.
 	if isReopen {
-		s.cleanupItemWorktrees(ctx, priorSessions)
+		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
 	}
 
 	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
@@ -1480,6 +1484,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	if s.sessionStopper == nil {
 		return
 	}
+	var freed []session.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
 		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
@@ -1495,6 +1500,14 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 		}
 		log.InfoLog.Printf("[tombstoneOrphanWorkSessions] item=%s tombstoned dead work session=%s (created %s)", itemID, is.ID, is.CreatedAt)
 		is.EndedAt = &now
+		freed = append(freed, *is)
+	}
+	// Prune the worktree for every session just tombstoned here, rather than leaving it
+	// on disk until the item is reopened/re-triaged — a dead work session's directory
+	// otherwise lingers indefinitely and can later be found "missing" by a session that
+	// still references it.
+	if len(freed) > 0 {
+		s.cleanupItemWorktrees(ctx, freed)
 	}
 }
 
