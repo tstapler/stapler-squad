@@ -115,6 +115,40 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	))
 }
 
+// notifyRepeatedFailure publishes an operator-facing notification and durable
+// BacklogStuckState row (reused StuckReasonBouncing — same "non-converging
+// cycle with no PASS verdict" semantics as the periodic bounce sweep, just
+// tripped immediately on two identical verdicts instead of waiting for
+// bounceThreshold cycles within bounceLookback) when session.IsRepeatedFailure
+// stops the auto-reopen loop. Mirrors notifyReworkCapHit's structure: a
+// MarkStuck/MarkStuckNotified failure is logged but never suppresses the
+// notification itself.
+func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, failureSummary string) {
+	if s.storage != nil {
+		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
+			fmt.Sprintf("stopped auto-rework — the last two attempts failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", failureSummary))
+		if err != nil {
+			log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
+		} else if applied {
+			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBouncing); notifyErr != nil {
+				log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			}
+		}
+	}
+
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		"", "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Auto-rework stopped — repeated failure",
+		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // notifyTriagePersistFailure publishes an operator-facing notification when one or more of
 // the post-triage persistence steps (saving the triage result, saving the plan artifacts
 // path, or transitioning the item to Ready) fails. These failures previously only reached
@@ -308,6 +342,15 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// hours, bouncing the item in_progress<->pr_pending with no progress (see
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
+
+	// 8a2. Close the tmux pane of every already-ended work-session round before
+	// spawning the next one. Each rework round gets its own "-rN" title (see
+	// buildRevisionTitle) so the session list stays readable across rounds, but
+	// nothing previously closed a finished round's tmux pane — it sat around
+	// indefinitely as an idle "[exited]" pane, accumulating with every rework
+	// cycle. KillTmuxPaneOnly (not StopSessionByUUID/Instance.Kill) leaves the
+	// worktree alone, since rework rounds share one worktree/branch.
+	s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
 	if hasActiveWorkSession(priorSessions) {
@@ -598,6 +641,21 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// live session instead keeps its conversation (and prompt cache) intact.
 	if hasActiveWorkSession(sessions) {
 		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s already has an active work session; leaving it in place to pick up the verdict instead of respawning", itemID)
+		return nil
+	}
+
+	// Circuit breaker: if the last two verdicts failed for the identical reason,
+	// another rework attempt won't change anything either — stop before burning
+	// through the (possibly much larger) rework cap and park the item for
+	// automated or human remediation instead. Checked ahead of the cap so a
+	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
+	// the whole cap in minutes.
+	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+	if verdictErr != nil {
+		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
+	} else if session.IsRepeatedFailure(recentVerdicts) {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s failed the same way twice in a row; leaving in review for remediation instead of reopening", itemID)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), recentVerdicts[0].Summary)
 		return nil
 	}
 
@@ -1557,6 +1615,27 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	// still references it.
 	if len(freed) > 0 {
 		s.cleanupItemWorktrees(ctx, freed)
+	}
+}
+
+// killEndedWorkSessionPanes closes the tmux pane for every already-ended work
+// session in the given list. Best-effort and nil-safe (no-op if sessionStopper
+// isn't wired) — called right before spawning a new rework round so a
+// finished round's pane doesn't linger forever. Uses KillTmuxPaneOnly, not
+// StopSessionByUUID, since rework rounds share one worktree/branch across
+// their "-rN" revisions (see buildRevisionTitle) and StopSessionByUUID's
+// Instance.Kill also runs CleanupWorktree.
+func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) {
+	if s.sessionStopper == nil {
+		return
+	}
+	for _, is := range sessions {
+		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+			continue
+		}
+		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[killEndedWorkSessionPanes] session=%s: %v", is.SessionUUID, err)
+		}
 	}
 }
 

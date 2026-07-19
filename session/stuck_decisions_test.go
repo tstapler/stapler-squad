@@ -99,3 +99,40 @@ func TestIsBouncing_should_returnFalse_When_TwoCyclesOrHasPass(t *testing.T) {
 	assert.False(t, isBouncing(2, false), "below threshold must not flag")
 	assert.False(t, isBouncing(3, true), "a recorded PASS must not flag even at/above threshold")
 }
+
+func TestIsRepeatedFailure_should_returnTrue_When_LastTwoVerdictsIdentical(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+	}
+	assert.True(t, IsRepeatedFailure(recent))
+}
+
+func TestIsRepeatedFailure_should_returnFalse_When_FewerThanTwoVerdicts(t *testing.T) {
+	assert.False(t, IsRepeatedFailure(nil))
+	assert.False(t, IsRepeatedFailure([]ReviewVerdictSummary{{OverallOutcome: string(ReviewOutcomeFail), Summary: "x"}}))
+}
+
+func TestIsRepeatedFailure_should_returnFalse_When_LatestIsPass(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomePass), Summary: "diff computation failed"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+	}
+	assert.False(t, IsRepeatedFailure(recent), "a PASS must never be treated as a repeated failure")
+}
+
+func TestIsRepeatedFailure_should_returnFalse_When_SummariesDiffer(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: "diff computation failed"},
+	}
+	assert.False(t, IsRepeatedFailure(recent), "different failure reasons must not trip the breaker")
+}
+
+func TestIsRepeatedFailure_should_returnFalse_When_SummariesAreBothEmpty(t *testing.T) {
+	recent := []ReviewVerdictSummary{
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: ""},
+		{OverallOutcome: string(ReviewOutcomeFail), Summary: ""},
+	}
+	assert.False(t, IsRepeatedFailure(recent), "two empty summaries carry no signal and must not trip the breaker")
+}

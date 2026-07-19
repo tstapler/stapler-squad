@@ -69,7 +69,26 @@ const summarizeSystemPrompt = `You are a backlog analyst. Produce a one-paragrap
 const acSystemPrompt = `You are a product analyst. Output exactly 3-5 acceptance criteria as a JSON array of strings. Each criterion must be testable and specific.`
 
 // prDescriptionSystemPrompt is the stable system prompt for DraftPRDescription.
-const prDescriptionSystemPrompt = `You are a technical writer. Draft a pull request description using Conventional Commit conventions. Format: ## Summary, ## Changes, ## Test plan.`
+//
+// The output contract is deliberately strict: found live (PRs #174, #175 on this
+// repo) that a looser prompt lets the model respond conversationally — asking for
+// the "real" diff, refusing on an empty diff, ending with a clarifying question —
+// instead of producing a usable PR body. The caller (pushAndCreatePR) pastes this
+// output directly into `gh pr create --body`, so anything other than the described
+// Markdown structure ships to GitHub verbatim.
+const prDescriptionSystemPrompt = `You are drafting the body of a GitHub pull request for a completed backlog item. Output ONLY the PR body as Markdown — no preamble, no meta-commentary, no clarifying questions, and never ask for more information; describe what the given diff actually contains even if it looks incomplete or inconsistent with the branch name.
+
+Structure exactly as:
+## Summary
+1-3 sentences on WHY this change was made — tie it back to the backlog item's problem statement given below, not just a restatement of the diff.
+
+## What Changed
+2-5 bullets summarizing the diff at a glance. Group related changes; do not restate every hunk.
+
+## Test plan
+A checklist ("- [ ] ...") of concrete verification steps a reviewer or CI can run — specific commands or specific manual checks. Never write a step you cannot make concrete (e.g. no bare "tests pass").
+
+Never end the body with a question or a request for clarification.`
 
 // commitMessageSystemPrompt is the stable system prompt for SuggestCommitMessage.
 const commitMessageSystemPrompt = `You are a commit message expert. Output a single Conventional Commit message (type(scope): description). No extra text.`
@@ -218,13 +237,28 @@ func GenerateAcceptanceCriteria(ctx context.Context, pool *Pool, title, descript
 	return criteria, nil
 }
 
-// DraftPRDescription calls the LLM to draft a pull request description.
-// Diffs longer than maxDiffSizePR bytes are truncated before sending.
-func DraftPRDescription(ctx context.Context, pool *Pool, diff, branchName string) (string, error) {
+// DraftPRDescription calls the LLM to draft a pull request description tied to
+// the backlog item the diff closes. itemTitle/itemDescription supply the "why"
+// this diff exists — a diff alone never expresses intent, and without this
+// context the model has nothing to tie the Summary section back to (root cause
+// of PR #175 on this repo, which described the diff but couldn't explain why it
+// existed and asked the caller to clarify instead). Diffs longer than
+// maxDiffSizePR bytes are truncated before sending.
+//
+// Returns an error without calling the LLM if diff is empty/whitespace-only —
+// there is nothing to describe, and sending an empty diff previously produced a
+// conversational non-answer (PR #174: "Empty diff — nothing to describe. Do you
+// want me to check the branch/PR directly...") instead of a usable body. Callers
+// should fall back to a boilerplate body on this error, same as any other.
+func DraftPRDescription(ctx context.Context, pool *Pool, itemTitle, itemDescription, diff, branchName string) (string, error) {
+	if strings.TrimSpace(diff) == "" {
+		return "", fmt.Errorf("DraftPRDescription: empty diff, nothing to describe")
+	}
 	if len(diff) > maxDiffSizePR {
 		diff = diff[:maxDiffSizePR]
 	}
-	userPrompt := fmt.Sprintf("Branch: %s\n\nDiff:\n%s", branchName, diff)
+	userPrompt := fmt.Sprintf("Backlog item: %s\n\nProblem statement:\n%s\n\nBranch: %s\n\nDiff:\n%s",
+		itemTitle, itemDescription, branchName, diff)
 	raw, _, err := pool.CallBlocking(ctx, FeatureKeyPRDescription, prDescriptionSystemPrompt, userPrompt, CallOptions{})
 	if err != nil {
 		return "", fmt.Errorf("DraftPRDescription: %w", err)

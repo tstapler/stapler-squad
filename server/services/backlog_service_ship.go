@@ -31,8 +31,9 @@ import (
 // same literal now exist across the manual, opt-in-automatic, and detail-page
 // triggers for PR creation. Kept in sync manually, same as the other two; see
 // server/review_queue_manager.go's autoCreatePRPrompt doc comment for the
-// established rationale (no CI check catches drift today).
-const shipPRPrompt = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made."
+// established rationale (no CI check catches drift today) and for why the
+// format is spelled out explicitly rather than left to the agent's judgment.
+const shipPRPrompt = "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes."
 
 // PRRunner runs a one-shot LLM prompt against a session's worktree, returning
 // the PR URL the prompt produced (or "" if none was created). Defined here —

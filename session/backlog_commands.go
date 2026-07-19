@@ -105,8 +105,11 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 		"   the human reviewer.\n\n" +
 		"2. Once `/github:pr-ship` reports all gates green, request the automated review:\n" +
 		"   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.\n\n" +
-		"Note: if the repository has no GitHub remote, use `gh pr create --fill` to create the PR manually,\n" +
-		"then run `/backlog/review`.\n"
+		"Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which\n" +
+		"just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format\n" +
+		"and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),\n" +
+		"`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).\n" +
+		"Then run `/backlog/review`.\n"
 
 	// help.md — list all available commands
 	var helpSb strings.Builder

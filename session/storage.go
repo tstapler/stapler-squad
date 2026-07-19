@@ -940,6 +940,16 @@ func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID 
 	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
 }
 
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
+// most recent first. Returns nil (not an error) when the repo isn't ent-backed.
+func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
+}
+
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
 func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) error {
 	er, ok := s.repo.(*EntRepository)
