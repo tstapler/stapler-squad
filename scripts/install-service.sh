@@ -137,11 +137,40 @@ install_linux() {
     # backlog triage no-ops with only a log warning (see server/dependencies.go).
     service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+    # Cgroup memory bound: this service's cgroup covers the Go binary AND every
+    # process it forks (tmux server + all spawned Claude agent sessions), since
+    # children inherit their parent's cgroup at fork time regardless of tmux
+    # daemonizing/detaching. Capping it keeps a runaway burst of concurrent agents
+    # (the 2026-07-12 OOM incident: 57/61GB used, swap exhausted) from taking down
+    # the whole box — the kernel's cgroup-aware OOM killer instead picks a victim
+    # from within this budget, leaving unrelated system processes alone.
+    # MemoryHigh (soft: throttle/reclaim, no kill) at 60% and MemoryMax (hard kill
+    # boundary) at 80% of total RAM, both computed from this machine's actual
+    # /proc/meminfo rather than a hardcoded value so the same script is safe on a
+    # small VM or a large workstation alike. Skipped entirely if detection fails.
+    mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)
+    memory_limit_lines=""
+    if [ -n "$mem_total_kb" ]; then
+        mem_high_mb=$((mem_total_kb * 60 / 100 / 1024))
+        mem_max_mb=$((mem_total_kb * 80 / 100 / 1024))
+        memory_limit_lines="MemoryHigh=${mem_high_mb}M
+MemoryMax=${mem_max_mb}M"
+    else
+        log_warning "Could not read /proc/meminfo; skipping MemoryHigh/MemoryMax cgroup limits"
+    fi
+
     cat > "$service_file" << EOF
 [Unit]
 Description=Stapler Squad — AI Agent Session Manager
 Documentation=https://github.com/tstapler/stapler-squad
 After=network.target
+# Tolerate a burst of OOM-kill/restart cycles during sustained memory pressure
+# without systemd permanently giving up (default is 5 restarts / 10s — a 5s
+# RestartSec can blow through that in one bad episode, leaving the service
+# down until a manual 'systemctl reset-failed'). It still gives up eventually
+# if genuinely crash-looping forever.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -150,6 +179,14 @@ WorkingDirectory=$HOME
 Restart=on-failure
 RestartSec=5s
 KillMode=process
+# Mild protective bias for the coordinator process itself (also inherited by
+# spawned children — a coarse, honestly-scoped tradeoff; per-session cgroup
+# delegation would be needed to bias only the coordinator, which is out of
+# scope here). In practice the kernel's OOM badness score is dominated by RSS,
+# and Claude agent subprocesses are the memory-heavy ones, so this mostly just
+# nudges ties in the coordinator's favor.
+OOMScoreAdjust=-500
+$memory_limit_lines
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment="HOME=$HOME"
