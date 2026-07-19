@@ -1276,7 +1276,7 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	// TransitionBacklogItemStatus above already moved the item to "ready"; put it back
 	// to "in_progress" the way a real reopen scenario would leave it (dead session, but
 	// item still shows as actively worked).
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Before the fix, this would fail with CodeAlreadyExists forever.
@@ -1404,7 +1404,7 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2604,7 +2604,7 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Move the item off 'idea' while the delayed headless call is still in flight.
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	var notif *events.Event

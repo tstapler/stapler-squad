@@ -689,7 +689,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedStatus:    string(BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition); err != nil {
+	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, TriggeredBySystem); err != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] TransitionBacklogItemStatus item=%s to=%s: %v", item.ID, toStatus, err)
 		return
 	}
@@ -1113,7 +1113,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	archived := 0
 	for _, item := range items {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition); transErr != nil {
+		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
 			continue
 		}
@@ -2210,7 +2210,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s falling back to done: %s", item.ID, reason)
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil); transErr != nil {
+		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
 		}
 	}
@@ -2364,7 +2364,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 // if any, so callers can apply their own logging/fallback behavior.
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: note}
-	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition); transErr != nil {
+	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
 		return transErr
 	}
 	if er, ok := l.storage.repo.(*EntRepository); ok {
@@ -2768,7 +2768,7 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			}
 
 			precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
-			if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition); transErr != nil {
+			if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
 			} else {
 				log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → done (PR #%d merged)", item.ID, item.PrNumber)

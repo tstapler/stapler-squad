@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -21,6 +22,26 @@ import (
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
+
+// recordStatusEvent appends an immutable BacklogStatusEvent audit row. Pass
+// r.client.BacklogStatusEvent for a standalone write, or tx.BacklogStatusEvent to
+// write inside an existing transaction — required when called from ReconcileStuckItems
+// since SQLite is capped to one connection (SetMaxOpenConns(1)) and calling back through
+// the non-tx client would self-deadlock. A write failure is logged, not returned: an
+// audit-log gap must never block the status transition itself.
+func recordStatusEvent(ctx context.Context, evClient *ent.BacklogStatusEventClient, itemID uuid.UUID, fromStatus, toStatus, triggeredBy, note string) {
+	evCreate := evClient.Create().
+		SetItemID(itemID).
+		SetFromStatus(fromStatus).
+		SetToStatus(toStatus).
+		SetTriggeredBy(triggeredBy)
+	if note != "" {
+		evCreate = evCreate.SetNote(note)
+	}
+	if _, err := evCreate.Save(ctx); err != nil {
+		log.ErrorLog.Printf("[recordStatusEvent] failed to record item=%s %s->%s triggeredBy=%s: %v", itemID, fromStatus, toStatus, triggeredBy, err)
+	}
+}
 
 // --- converters ---
 
@@ -582,6 +603,14 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
+	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
+	}
+
 	now := time.Now()
 	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
 		SetArchivedAt(now).
@@ -594,6 +623,9 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 		}
 		return nil, fmt.Errorf("failed to archive backlog item %s: %w", id, err)
 	}
+
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), TriggeredByUser, "")
+
 	result := backlogItemToData(item)
 	return &result, nil
 }
@@ -655,7 +687,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // had, in the meantime, already legitimately shipped to "done" — see
 // docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md for the
 // live 2026-07-20 repro (item 0fd4a940, PR #176) this closes.
-func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -720,18 +752,11 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	if precondition != nil && precondition.ExpectedStatus != "" {
 		fromStatus = precondition.ExpectedStatus
 	}
-	evCreate := r.client.BacklogStatusEvent.Create().
-		SetItemID(parsedID).
-		SetFromStatus(fromStatus).
-		SetToStatus(string(toStatus)).
-		SetTriggeredBy(TriggeredBySystem)
-	if precondition != nil && precondition.Note != "" {
-		evCreate = evCreate.SetNote(precondition.Note)
+	note := ""
+	if precondition != nil {
+		note = precondition.Note
 	}
-	if _, evErr := evCreate.Save(ctx); evErr != nil {
-		// Non-fatal: audit log failure should not block the transition itself.
-		_ = evErr
-	}
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, fromStatus, string(toStatus), triggeredBy, note)
 
 	result := backlogItemToData(item)
 	return &result, nil

@@ -480,6 +480,7 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		if updateErr != nil {
 			continue
 		}
+		recordStatusEvent(ctx, tx.BacklogStatusEvent, item.ID, item.Status, string(BacklogStatusReview), TriggeredBySystem, "")
 		count++
 	}
 
