@@ -208,6 +208,60 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // implements session.ReviewRespawner and is the mechanism markAbandonedReview now
 // dispatches into.
 
+// --- Repeated-failure circuit breaker (session.IsRepeatedFailure) ---
+
+// TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies is
+// the regression test for a fast-looping non-converging rework cycle (e.g. an
+// infrastructure fault like a broken worktree diff, reproduced identically on
+// every attempt): once the last two review verdicts fail for the exact same
+// reason, AutoReopenAfterFailedReview must stop reopening — ahead of the
+// (possibly much larger) rework cap — and park the item via the same durable
+// stuck-state/notification path notifyReworkCapHit uses.
+func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Item that fails the same way every time",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Two prior review rounds, both ending in an identical FAIL verdict — the
+	// shape left behind by a persistent infrastructure fault that a fresh
+	// rework attempt can never fix on its own.
+	for i := 0; i < 2; i++ {
+		is, isErr := storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+			ItemSessionID:  is.ID,
+			OverallOutcome: session.ReviewOutcomeFail,
+			Summary:        "Review blocked: could not compute a diff for this session",
+		}))
+	}
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "stopping the loop is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not spin on an identical failure")
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason, "reuses the bouncing reason — same non-converging-cycle semantics, tripped immediately instead of waiting for the periodic sweep")
+}
+
 // TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies is the regression
 // test for the runaway-loop risk this fix introduces if left unbounded: unlike
 // AutoReopenAfterFailedReview/AutoReopenForPRFix, AutoRespawnReview never adds a
