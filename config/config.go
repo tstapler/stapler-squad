@@ -73,6 +73,24 @@ func IsNamedInstance() bool {
 	return instanceID != "" && instanceID != "shared"
 }
 
+// IsIsolatedInstance reports whether this process's config/DB state is
+// isolated from the shared default (~/.stapler-squad) directory by ANY known
+// mechanism: a `go test` binary (IsTestMode), an explicit named instance
+// (IsNamedInstance), or a STAPLER_SQUAD_TEST_DIR override (GetConfigDirForDir
+// priority 1 — used by --test-mode harnesses like tests/demo/helpers.go's
+// StartDemoServer). Isolated DB state does NOT imply an isolated tmux socket
+// under any of these mechanisms — see IsNamedInstance's doc comment for the
+// confirmed incident that motivated this check. Call sites that could
+// otherwise touch shared, non-isolated resources (like the default tmux
+// socket in ReconcileOrphanedTmuxSessions) must skip when this is true.
+// STAPLER_SQUAD_TEST_DIR was the still-missing case: a demo/test-mode harness
+// process gets a fully isolated DB via GetConfigDirForDir but, before this
+// check existed, its startup orphan sweep still targeted the shared default
+// tmux socket — killing every real production session it didn't recognize.
+func IsIsolatedInstance() bool {
+	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
