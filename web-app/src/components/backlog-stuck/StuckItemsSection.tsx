@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { getStuckReasonLabel } from "./stuckReason";
 import { StuckItem } from "./StuckItem";
 import * as styles from "./StuckItemsSection.css";
@@ -20,6 +21,7 @@ const GROUP_ORDER: StuckReason[] = [
   StuckReason.STALE_WORK,
   StuckReason.ORPHANED_TRIAGE,
   StuckReason.REWORK_CAP,
+  StuckReason.AUTONOMOUS_STUCK,
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
 ];
@@ -46,6 +48,7 @@ interface ResolvedGhost {
  */
 export function StuckItemsSection() {
   const { items, isLoading, error, lastFetched, refetch, snooze } = useStuckBacklogItems();
+  const { updateBacklogItem, transitionStatus, spawnSessionFromItem } = useBacklogService();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
@@ -116,6 +119,30 @@ export function StuckItemsSection() {
   }, []);
 
   const handleClearFilter = useCallback(() => setFilter("all"), []);
+
+  // rework_cap "continue automatically" action: sets the item's per-item
+  // override then immediately reopens it — mirrors BacklogItemDetail.tsx's
+  // handleGateReopen exactly (transition to in_progress, spawn a fresh work
+  // session), so the item starts working again in the same click instead of
+  // requiring a separate "Reopen for Revision" click elsewhere. On success,
+  // future automatic rework/re-review rounds for this item use the raised
+  // cap instead of the global default (see effectiveReworkCap on the backend).
+  const handleReworkCapOverride = useCallback(
+    async (itemId: string, override: number): Promise<boolean> => {
+      try {
+        const updated = await updateBacklogItem(itemId, { reworkCapOverride: override });
+        if (!updated) return false;
+        await transitionStatus(itemId, "in_progress");
+        await spawnSessionFromItem(itemId);
+        await refetch();
+        return true;
+      } catch (err) {
+        console.error("[StuckItemsSection] reworkCapOverride reopen failed:", err);
+        return false;
+      }
+    },
+    [updateBacklogItem, transitionStatus, spawnSessionFromItem, refetch]
+  );
 
   // Visible items: the filtered set actually rendered. Cross-reference badges
   // are computed from this set so they auto-suppress once a filter narrows an
@@ -241,6 +268,7 @@ export function StuckItemsSection() {
                       justResolved={ghost !== undefined}
                       resolvedMessage={ghost?.message}
                       onSnooze={snooze}
+                      onReworkCapOverride={handleReworkCapOverride}
                     />
                   );
                 })}

@@ -3014,6 +3014,8 @@ type BacklogItemMutation struct {
 	shipped_snapshot_at             *time.Time
 	shipped_file_stats              *string
 	shipped_snapshot_capture_failed *bool
+	rework_cap_override             *int
+	addrework_cap_override          *int
 	created_at                      *time.Time
 	updated_at                      *time.Time
 	clearedFields                   map[string]struct{}
@@ -4432,6 +4434,76 @@ func (m *BacklogItemMutation) ResetShippedSnapshotCaptureFailed() {
 	delete(m.clearedFields, backlogitem.FieldShippedSnapshotCaptureFailed)
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (m *BacklogItemMutation) SetReworkCapOverride(i int) {
+	m.rework_cap_override = &i
+	m.addrework_cap_override = nil
+}
+
+// ReworkCapOverride returns the value of the "rework_cap_override" field in the mutation.
+func (m *BacklogItemMutation) ReworkCapOverride() (r int, exists bool) {
+	v := m.rework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReworkCapOverride returns the old "rework_cap_override" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldReworkCapOverride(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReworkCapOverride is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReworkCapOverride requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReworkCapOverride: %w", err)
+	}
+	return oldValue.ReworkCapOverride, nil
+}
+
+// AddReworkCapOverride adds i to the "rework_cap_override" field.
+func (m *BacklogItemMutation) AddReworkCapOverride(i int) {
+	if m.addrework_cap_override != nil {
+		*m.addrework_cap_override += i
+	} else {
+		m.addrework_cap_override = &i
+	}
+}
+
+// AddedReworkCapOverride returns the value that was added to the "rework_cap_override" field in this mutation.
+func (m *BacklogItemMutation) AddedReworkCapOverride() (r int, exists bool) {
+	v := m.addrework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (m *BacklogItemMutation) ClearReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	m.clearedFields[backlogitem.FieldReworkCapOverride] = struct{}{}
+}
+
+// ReworkCapOverrideCleared returns if the "rework_cap_override" field was cleared in this mutation.
+func (m *BacklogItemMutation) ReworkCapOverrideCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldReworkCapOverride]
+	return ok
+}
+
+// ResetReworkCapOverride resets all changes to the "rework_cap_override" field.
+func (m *BacklogItemMutation) ResetReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	delete(m.clearedFields, backlogitem.FieldReworkCapOverride)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -4847,7 +4919,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 29)
+	fields := make([]string, 0, 30)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -4929,6 +5001,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.shipped_snapshot_capture_failed != nil {
 		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
 	}
+	if m.rework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
 	}
@@ -4997,6 +5072,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedFileStats()
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		return m.ShippedSnapshotCaptureFailed()
+	case backlogitem.FieldReworkCapOverride:
+		return m.ReworkCapOverride()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -5064,6 +5141,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedFileStats(ctx)
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		return m.OldShippedSnapshotCaptureFailed(ctx)
+	case backlogitem.FieldReworkCapOverride:
+		return m.OldReworkCapOverride(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -5266,6 +5345,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetShippedSnapshotCaptureFailed(v)
 		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReworkCapOverride(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -5300,6 +5386,9 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addshipped_changes_req_count != nil {
 		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
 	}
+	if m.addrework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	return fields
 }
 
@@ -5316,6 +5405,8 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedShippedApprovedCount()
 	case backlogitem.FieldShippedChangesReqCount:
 		return m.AddedShippedChangesReqCount()
+	case backlogitem.FieldReworkCapOverride:
+		return m.AddedReworkCapOverride()
 	}
 	return nil, false
 }
@@ -5352,6 +5443,13 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddShippedChangesReqCount(v)
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReworkCapOverride(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -5414,6 +5512,9 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldShippedSnapshotCaptureFailed) {
 		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
+	}
+	if m.FieldCleared(backlogitem.FieldReworkCapOverride) {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
 	return fields
 }
@@ -5482,6 +5583,9 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		m.ClearShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ClearReworkCapOverride()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
@@ -5571,6 +5675,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		m.ResetShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ResetReworkCapOverride()
 		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()

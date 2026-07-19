@@ -7,8 +7,15 @@
   "tested": true,
   "testIds": [
     "BacklogItemDetail — background refresh must not unmount the view",
+<<<<<<< HEAD
     "BacklogItemDetail — description markdown rendering",
     "BacklogItemDetail — Ship PR action"
+||||||| 09d19ba3
+    "BacklogItemDetail — Ship PR action"
+=======
+    "BacklogItemDetail — Ship PR action",
+    "e2e:plan-gate-blocks-spawn-until-approved-or-skipped"
+>>>>>>> origin/main
   ],
-  "lastModified": "2026-07-18T00:00:00Z"
+  "lastModified": "2026-07-19T00:00:00Z"
 }

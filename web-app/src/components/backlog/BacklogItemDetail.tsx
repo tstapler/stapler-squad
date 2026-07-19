@@ -1416,6 +1416,21 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                       </>
                     )}
                   </div>
+                  {s.reviewVerdict && (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
+                    <div className={styles.verdictDetail} aria-label="Review verdict detail">
+                      {s.reviewVerdict.summary && (
+                        <span className={styles.verdictSummary}>
+                          <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
+                        </span>
+                      )}
+                      {s.reviewVerdict.perCriterion?.map((c) => (
+                        <div key={c.criterionIndex} className={styles.verdictCriterion}>
+                          <span>#{c.criterionIndex} {c.outcome}</span>
+                          {c.evidence && <span>— {c.evidence}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   </div>
                 );
               })}
@@ -1459,13 +1474,41 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <div className={styles.workflowTimeline} role="list" aria-label="Status history">
               {item.statusEvents.map((ev) => (
                 <div key={ev.id} className={styles.workflowEvent} role="listitem">
-                  <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
-                  <span className={styles.workflowEventArrow}>→</span>
-                  <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
-                  <span className={styles.workflowEventMeta}>
-                    {ev.createdAt ? formatDate(ev.createdAt) : ""}
-                    {ev.triggeredBy === "user" ? " · user" : ""}
-                  </span>
+                  <div className={styles.workflowEventRow}>
+                    <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
+                    <span className={styles.workflowEventArrow}>→</span>
+                    <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
+                    <span className={styles.workflowEventMeta}>
+                      {ev.createdAt ? formatDate(ev.createdAt) : ""}
+                      {" · "}{ev.triggeredBy}
+                    </span>
+                  </div>
+                  {ev.note && <span className={styles.workflowEventNote}>{ev.note}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Progress History — the implementer's report_progress audit trail */}
+        {item.progressNotes.length > 0 && (
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Progress History</h3>
+            <div className={styles.progressNoteList} role="list" aria-label="Implementer progress history">
+              {item.progressNotes.map((n) => (
+                <div key={n.id} className={styles.progressNoteItem} role="listitem">
+                  <div className={styles.progressNoteMeta}>
+                    <span>Criterion #{n.criterionIndex}</span>
+                    <span>·</span>
+                    <span>{n.status}</span>
+                    {n.createdAt && (
+                      <>
+                        <span>·</span>
+                        <span>{formatDate(n.createdAt)}</span>
+                      </>
+                    )}
+                  </div>
+                  {n.note && <span>{n.note}</span>}
                 </div>
               ))}
             </div>

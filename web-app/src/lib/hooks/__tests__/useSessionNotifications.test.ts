@@ -177,6 +177,20 @@ describe("useSessionNotifications", () => {
         expect(mockAddNotification).not.toHaveBeenCalled();
       }
     );
+
+    it("sessionless history-only event passes through empty sessionName, not a placeholder", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      act(() => {
+        result.current({ ...makeEvent(NT.INFO), sessionId: "", sessionName: "" });
+      });
+
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionName: "" })
+      );
+    });
   });
 
   // ── 2. Toast-worthy types ────────────────────────────────────────────────
@@ -205,6 +219,20 @@ describe("useSessionNotifications", () => {
       });
 
       expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("sessionless event (e.g. notifyReworkCapHit) passes through empty sessionName, not a placeholder", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      act(() => {
+        result.current({ ...makeEvent(NT.WARNING), sessionId: "", sessionName: "" });
+      });
+
+      expect(mockAddNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionName: "" })
+      );
     });
 
     it("APPROVAL_NEEDED fires addNotification", () => {

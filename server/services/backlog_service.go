@@ -521,6 +521,10 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
+	if item.ReworkCapOverride != nil {
+		override := int32(*item.ReworkCapOverride)
+		p.ReworkCapOverride = &override
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
@@ -561,9 +565,26 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 				ToStatus:    ev.ToStatus,
 				TriggeredBy: ev.TriggeredBy,
 				CreatedAt:   timestamppb.New(ev.CreatedAt),
+				Note:        ev.Note,
 			}
 		}
 		p.StatusEvents = protoEvents
+	}
+
+	// Populate progress notes (the implementer's report_progress audit trail)
+	// when they were eagerly loaded.
+	if len(item.ProgressNotes) > 0 {
+		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
+		for i, n := range item.ProgressNotes {
+			protoNotes[i] = &sessionv1.BacklogProgressNote{
+				Id:             n.ID,
+				CriterionIndex: int32(n.CriterionIndex),
+				Note:           n.Note,
+				Status:         n.Status,
+				CreatedAt:      timestamppb.New(n.CreatedAt),
+			}
+		}
+		p.ProgressNotes = protoNotes
 	}
 
 	return p

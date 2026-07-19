@@ -28,6 +28,8 @@ interface StuckItemProps {
   resolvedMessage?: string;
   /** Imperative snooze action from useStuckBacklogItems — omitted disables the snooze control entirely. */
   onSnooze?: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
+  /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
+  onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -90,6 +92,7 @@ export function StuckItem({
   justResolved = false,
   resolvedMessage,
   onSnooze,
+  onReworkCapOverride,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -310,7 +313,9 @@ export function StuckItem({
         </div>
       )}
 
-      {isExpanded && !justResolved && <StuckItemDetail item={item} />}
+      {isExpanded && !justResolved && (
+        <StuckItemDetail item={item} onReworkCapOverride={onReworkCapOverride} />
+      )}
     </div>
   );
 }

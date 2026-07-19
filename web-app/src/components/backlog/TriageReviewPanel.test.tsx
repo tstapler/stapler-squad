@@ -42,6 +42,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     acCriteria: [],
     linkedSessions: [],
     statusEvents: [],
+    progressNotes: [],
     totalEstimatedCostUsd: 0,
     triageStatus: "completed",
     triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,

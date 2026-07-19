@@ -192,6 +192,71 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
 }
 
+// TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflictedPR
+// is the regression test for the live incident this guard was extended to catch:
+// TransitionGuard previously only matched from==review, so a pr_pending item
+// (already past review, sitting on an open, unmerged, conflicted PR) could be
+// marked done via a bare TransitionBacklogItemStatus("done") call — e.g. a
+// human clicking "Approve" without noticing the PR had a merge conflict — with
+// no verdict/shipped-code check at all. Once done, the item became permanently
+// invisible to ReconcilePRPending (which only polls pr_pending-status items),
+// orphaning the real GitHub PR from any further conflict/CI monitoring. The
+// fix widens the guard to `to == done` regardless of from, reusing the exact
+// git-ancestry fixture pattern from
+// TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotOnMain.
+func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflictedPR(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+
+	// A commit that exists only on a feature branch — mirroring a PR that's
+	// still open (and, in the real incident, conflicted) rather than merged.
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work behind an open, conflicted PR")
+	unshippedSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with an open, conflicted PR",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrURL:    "https://github.com/example/repo/pull/172",
+		PrNumber: 172,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "unmerged-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, unshippedSHA, "work behind an open, conflicted PR", time.Now(), 1))
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "done",
+	}))
+	require.Error(t, err, "a pr_pending item whose PR was never merged must not reach done")
+	assert.Contains(t, err.Error(), "must actually be on main")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
+}
+
 // ─── SubmitManualReview PASS→done guard (2026-07-18 finding) ──────────────────
 //
 // docs/tasks/backlog-feature-improvement.md's 2026-07-18 update: SubmitManualReview

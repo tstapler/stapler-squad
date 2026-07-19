@@ -247,6 +247,13 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.PipelineMode != nil {
 		update.PipelineMode = req.Msg.PipelineMode
 	}
+	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
+	// only set when the client explicitly sent it, so an omitted field never
+	// clobbers the item's existing override back to "unlimited" (0).
+	if req.Msg.ReworkCapOverride != nil {
+		override := int(*req.Msg.ReworkCapOverride)
+		update.ReworkCapOverride = &override
+	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes
 		update.Notes = &notes

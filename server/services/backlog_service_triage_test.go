@@ -37,7 +37,7 @@ func TestNotifyReworkCapHit_should_markStuckReworkCapImmediately_When_CapHit(t *
 	require.NoError(t, err)
 
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	svc.notifyReworkCapHit(ctx, item.ID, item.Title, session.BacklogStatusReview, "after a failed review verdict")
+	svc.notifyReworkCapHit(ctx, item.ID, item.Title, session.BacklogStatusReview, "after a failed review verdict", 3)
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestNotifyReworkCapHit_should_stillPublishNotification_When_MarkStuckReturn
 	defer cancel()
 	ch, _ := bus.Subscribe(subCtx)
 
-	svc.notifyReworkCapHit(ctx, "not-a-valid-item-uuid", "Broken Item", session.BacklogStatusReview, "after a failed review verdict")
+	svc.notifyReworkCapHit(ctx, "not-a-valid-item-uuid", "Broken Item", session.BacklogStatusReview, "after a failed review verdict", 3)
 
 	select {
 	case ev := <-ch:
@@ -99,7 +99,7 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 		itemID = item.ID
 
 		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-		svc.notifyReworkCapHit(context.Background(), itemID, item.Title, session.BacklogStatusPRPending, "while fixing PR #7")
+		svc.notifyReworkCapHit(context.Background(), itemID, item.Title, session.BacklogStatusPRPending, "while fixing PR #7", 3)
 	}()
 
 	repo2, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
@@ -219,7 +219,12 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 // two rework loops — actually stops it.
 func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	// Explicit cap (rather than relying on the nil-config default, which is 20 —
+	// raised from 3 since real, ultimately-fixable items were routinely tripping
+	// the old default before they were actually stuck) so this test's intent
+	// (verify the cap-hit behavior itself) stays independent of that default's
+	// exact value.
+	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
 
 	repoPath := t.TempDir()
 	initGitRepoWithCommit(t, repoPath)
@@ -290,6 +295,83 @@ func TestAutoRespawnReview_ReworkCapHit_UsesConfiguredCap_When_MaxAutoReworkIter
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
 	assert.Contains(t, open[0].Context, "1-iteration rework cap", "context must reflect the configured cap, not the default")
+}
+
+// TestAutoRespawnReview_ReworkCapOverride_AllowsMoreRoundsThanGlobalDefault is the
+// regression test for the per-item rework-cap override: an item whose
+// ReworkCapOverride is set higher than the global default (3) must keep
+// auto-respawning past that default, using its own cap instead.
+func TestAutoRespawnReview_ReworkCapOverride_AllowsMoreRoundsThanGlobalDefault(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	override := 5
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:             "Item with a raised rework cap",
+		RepoPath:          repoPath,
+		Status:            string(session.BacklogStatusReview),
+		ReworkCapOverride: &override,
+	})
+	require.NoError(t, err)
+
+	// 4 prior review sessions: past the global default (3) but under this
+	// item's override (5) — the automatic respawn must still proceed.
+	for i := 0; i < 4; i++ {
+		is, isErr := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
+	}
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
+	require.NoError(t, respawnErr)
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item under its own raised cap must not be parked as rework_cap")
+}
+
+// TestAutoRespawnReview_ReworkCapOverride_ZeroMeansUnlimited verifies the 0
+// sentinel disables the cap entirely for that item, even with many prior
+// review sessions well past the global default.
+func TestAutoRespawnReview_ReworkCapOverride_ZeroMeansUnlimited(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, &config.Config{MaxAutoReworkIterations: 3}, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	unlimited := 0
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:             "Item with an unlimited rework cap",
+		RepoPath:          repoPath,
+		Status:            string(session.BacklogStatusReview),
+		ReworkCapOverride: &unlimited,
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		is, isErr := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
+			SessionRole: session.SessionRoleReview,
+		})
+		require.NoError(t, isErr)
+		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
+	}
+
+	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
+	require.NoError(t, respawnErr)
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, open, "override=0 must mean unlimited retries, never hitting rework_cap")
 }
 
 // TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn verifies

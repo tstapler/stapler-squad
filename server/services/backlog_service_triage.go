@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,9 +64,24 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 	return s.pipelineEngine.ReviewPromptFor(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 }
 
+// effectiveReworkCap returns item's own per-item rework-cap override if set
+// (BacklogItemData.ReworkCapOverride), otherwise the global default
+// (config.Config.MaxAutoReworkIterationsOrDefault). 0 on the override means
+// "unlimited retries for this item" — represented as math.MaxInt so every
+// count comparison (workCount/reviewCount >= reworkCap) never trips.
+func (s *BacklogService) effectiveReworkCap(item *session.BacklogItemData) int {
+	if item != nil && item.ReworkCapOverride != nil {
+		if *item.ReworkCapOverride == 0 {
+			return math.MaxInt
+		}
+		return *item.ReworkCapOverride
+	}
+	return s.cfg.MaxAutoReworkIterationsOrDefault()
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
-// loop (review→rework or PR-fix→rework) hits maxAutoReworkIterations and leaves an
-// item stranded for manual action. No-op if no event bus is wired.
+// loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
+// leaves an item stranded for manual action. No-op if no event bus is wired.
 //
 // Story 2.1.2: also writes a durable rework_cap BacklogStuckState row (threshold
 // 0 — the cap hit is a discrete, definitive event, marked the moment it's hit)
@@ -73,8 +89,7 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 // a missed toast. The durable write is additive to the notification, not a
 // gate: a MarkStuck/MarkStuckNotified failure is logged but must never
 // suppress the notification itself.
-func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string) {
-	reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault()
+func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string, reworkCap int) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
 			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
@@ -244,16 +259,14 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// point is to cap total concurrent agent load regardless of how a spawn was
 	// triggered.
 	if !isReopen {
-		inProgress, wipErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-			Statuses: []string{string(session.BacklogStatusInProgress)},
-		})
+		liveCount, wipErr := s.countLiveBacklogWorkSessions(ctx)
 		if wipErr != nil {
 			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
-		} else if len(inProgress) >= maxConcurrentBacklogWorkItems {
-			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit blocked spawn item=%s in_progress=%d cap=%d", item.ID, len(inProgress), maxConcurrentBacklogWorkItems)
+		} else if liveCount >= maxConcurrentBacklogWorkItems {
+			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit blocked spawn item=%s live=%d cap=%d", item.ID, liveCount, maxConcurrentBacklogWorkItems)
 			return nil, connect.NewError(connect.CodeResourceExhausted,
-				fmt.Errorf("%d backlog items are already in progress (cap %d) — wait for one to finish or review/ship it first",
-					len(inProgress), maxConcurrentBacklogWorkItems))
+				fmt.Errorf("%d backlog items already have an active agent running (cap %d) — wait for one to finish or review/ship it first",
+					liveCount, maxConcurrentBacklogWorkItems))
 		}
 	}
 
@@ -449,6 +462,42 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 	return item, nil
 }
 
+// countLiveBacklogWorkSessions counts backlog items that currently have an active
+// (unended) work-session agent running, across both "in_progress" and "review" status —
+// not just "in_progress". AutoReopenAfterFailedReview intentionally leaves a work session
+// alive (polling for a review verdict) after the item's status flips back to "review", so
+// counting "in_progress" items alone undercounts real concurrent agent load and lets the
+// WIP cap (maxConcurrentBacklogWorkItems) be silently exceeded — see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live sessions"
+// finding, tied to the 2026-07-12 OOM incident the cap exists to prevent.
+func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int, error) {
+	candidates, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
+	})
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, item := range candidates {
+		if item.Status == string(session.BacklogStatusInProgress) {
+			count++
+			continue
+		}
+		// review status only counts toward the cap if a work session is still
+		// actually running (the case AutoReopenAfterFailedReview's live-session
+		// reuse makes invisible to a naive in_progress-only count).
+		sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[countLiveBacklogWorkSessions] list sessions failed item=%s: %v; assuming no active session", item.ID, sessErr)
+			continue
+		}
+		if hasActiveWorkSession(sessions) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // hasActiveWorkSession reports whether any of the provided ItemSessions is an
 // open (not yet ended) work-role session.
 func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
@@ -558,9 +607,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 			workCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); workCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict")
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
 		return nil
 	}
 
@@ -646,9 +695,9 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 			workCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); workCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.InfoLog.Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber))
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
 		return nil
 	}
 
@@ -784,9 +833,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 			reviewCount++
 		}
 	}
-	if reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault(); reviewCount >= reworkCap {
+	if reworkCap := s.effectiveReworkCap(item); reviewCount >= reworkCap {
 		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session")
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
 		return nil
 	}
 

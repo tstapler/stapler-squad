@@ -69,6 +69,8 @@ const (
 	FieldShippedFileStats = "shipped_file_stats"
 	// FieldShippedSnapshotCaptureFailed holds the string denoting the shipped_snapshot_capture_failed field in the database.
 	FieldShippedSnapshotCaptureFailed = "shipped_snapshot_capture_failed"
+	// FieldReworkCapOverride holds the string denoting the rework_cap_override field in the database.
+	FieldReworkCapOverride = "rework_cap_override"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -159,6 +161,7 @@ var Columns = []string{
 	FieldShippedSnapshotAt,
 	FieldShippedFileStats,
 	FieldShippedSnapshotCaptureFailed,
+	FieldReworkCapOverride,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -370,6 +373,11 @@ func ByShippedFileStats(opts ...sql.OrderTermOption) OrderOption {
 // ByShippedSnapshotCaptureFailed orders the results by the shipped_snapshot_capture_failed field.
 func ByShippedSnapshotCaptureFailed(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldShippedSnapshotCaptureFailed, opts...).ToFunc()
+}
+
+// ByReworkCapOverride orders the results by the rework_cap_override field.
+func ByReworkCapOverride(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldReworkCapOverride, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

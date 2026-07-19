@@ -400,6 +400,20 @@ func (_c *BacklogItemCreate) SetNillableShippedSnapshotCaptureFailed(v *bool) *B
 	return _c
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_c *BacklogItemCreate) SetReworkCapOverride(v int) *BacklogItemCreate {
+	_c.mutation.SetReworkCapOverride(v)
+	return _c
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableReworkCapOverride(v *int) *BacklogItemCreate {
+	if v != nil {
+		_c.SetReworkCapOverride(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *BacklogItemCreate) SetCreatedAt(v time.Time) *BacklogItemCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -821,6 +835,10 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ShippedSnapshotCaptureFailed(); ok {
 		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
 		_node.ShippedSnapshotCaptureFailed = value
+	}
+	if value, ok := _c.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+		_node.ReworkCapOverride = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(backlogitem.FieldCreatedAt, field.TypeTime, value)
@@ -1435,6 +1453,30 @@ func (u *BacklogItemUpsert) ClearShippedSnapshotCaptureFailed() *BacklogItemUpse
 	return u
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsert) SetReworkCapOverride(v int) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldReworkCapOverride, v)
+	return u
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateReworkCapOverride() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldReworkCapOverride)
+	return u
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsert) AddReworkCapOverride(v int) *BacklogItemUpsert {
+	u.Add(backlogitem.FieldReworkCapOverride, v)
+	return u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsert) ClearReworkCapOverride() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldReworkCapOverride)
+	return u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (u *BacklogItemUpsert) SetUpdatedAt(v time.Time) *BacklogItemUpsert {
 	u.Set(backlogitem.FieldUpdatedAt, v)
@@ -2027,6 +2069,34 @@ func (u *BacklogItemUpsertOne) UpdateShippedSnapshotCaptureFailed() *BacklogItem
 func (u *BacklogItemUpsertOne) ClearShippedSnapshotCaptureFailed() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearShippedSnapshotCaptureFailed()
+	})
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) SetReworkCapOverride(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetReworkCapOverride(v)
+	})
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) AddReworkCapOverride(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddReworkCapOverride(v)
+	})
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateReworkCapOverride() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateReworkCapOverride()
+	})
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) ClearReworkCapOverride() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearReworkCapOverride()
 	})
 }
 
@@ -2791,6 +2861,34 @@ func (u *BacklogItemUpsertBulk) UpdateShippedSnapshotCaptureFailed() *BacklogIte
 func (u *BacklogItemUpsertBulk) ClearShippedSnapshotCaptureFailed() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearShippedSnapshotCaptureFailed()
+	})
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) SetReworkCapOverride(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetReworkCapOverride(v)
+	})
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) AddReworkCapOverride(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddReworkCapOverride(v)
+	})
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateReworkCapOverride() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateReworkCapOverride()
+	})
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) ClearReworkCapOverride() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearReworkCapOverride()
 	})
 }
 

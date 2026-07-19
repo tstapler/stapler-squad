@@ -191,6 +191,11 @@ func ShippedSnapshotCaptureFailed(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotCaptureFailed, v))
 }
 
+// ReworkCapOverride applies equality check predicate on the "rework_cap_override" field. It's identical to ReworkCapOverrideEQ.
+func ReworkCapOverride(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldReworkCapOverride, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldCreatedAt, v))
@@ -1604,6 +1609,56 @@ func ShippedSnapshotCaptureFailedIsNil() predicate.BacklogItem {
 // ShippedSnapshotCaptureFailedNotNil applies the NotNil predicate on the "shipped_snapshot_capture_failed" field.
 func ShippedSnapshotCaptureFailedNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedSnapshotCaptureFailed))
+}
+
+// ReworkCapOverrideEQ applies the EQ predicate on the "rework_cap_override" field.
+func ReworkCapOverrideEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideNEQ applies the NEQ predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideIn applies the In predicate on the "rework_cap_override" field.
+func ReworkCapOverrideIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldReworkCapOverride, vs...))
+}
+
+// ReworkCapOverrideNotIn applies the NotIn predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNotIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldReworkCapOverride, vs...))
+}
+
+// ReworkCapOverrideGT applies the GT predicate on the "rework_cap_override" field.
+func ReworkCapOverrideGT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideGTE applies the GTE predicate on the "rework_cap_override" field.
+func ReworkCapOverrideGTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideLT applies the LT predicate on the "rework_cap_override" field.
+func ReworkCapOverrideLT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideLTE applies the LTE predicate on the "rework_cap_override" field.
+func ReworkCapOverrideLTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideIsNil applies the IsNil predicate on the "rework_cap_override" field.
+func ReworkCapOverrideIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldReworkCapOverride))
+}
+
+// ReworkCapOverrideNotNil applies the NotNil predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldReworkCapOverride))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

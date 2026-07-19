@@ -775,6 +775,40 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 	return items, nil
 }
 
+// FindReviewItemsWithUnprocessedVerdict returns backlog items in "review" status
+// whose most recent review-role ItemSession already has a terminal ReviewVerdict
+// recorded. Distinct from FindZombieReviewItems: that detector requires EVERY open
+// review-or-work session on the item to be confirmed dead before acting, but
+// AutoReopenAfterFailedReview's live-session-reuse (a work session intentionally
+// stays open polling for the verdict once the item is back in "review" — see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live
+// sessions" finding) means the item never looks like a full zombie even when the
+// review session itself died with its verdict never actioned (handleReviewSessionExited
+// never fired — a server restart or crash mid-exit, the same class of gap as the
+// crash-resilience fixes elsewhere in this package). Each returned item eager-loads
+// its review-role sessions (most recent first) with their ReviewVerdict, so the
+// caller can act on the newest one without a second round-trip.
+func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(
+			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.HasItemSessionsWith(
+				itemsession.SessionRole(SessionRoleReview),
+				itemsession.HasReviewVerdict(),
+			),
+		).
+		WithItemSessions(func(q *ent.ItemSessionQuery) {
+			q.Where(itemsession.SessionRole(SessionRoleReview)).
+				WithReviewVerdict().
+				Order(ent.Desc(itemsession.FieldCreatedAt))
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query review items with unprocessed verdict: %w", err)
+	}
+	return items, nil
+}
+
 // GetMostRecentStatusEventAt returns the created_at timestamp of the most
 // recent BacklogStatusEvent for itemID whose to_status equals toStatus.
 // Returns (zero time, false, nil) when no such event exists (e.g. an item

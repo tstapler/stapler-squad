@@ -90,6 +90,23 @@ message BacklogStatusEvent {
   string to_status = 3;
   string triggered_by = 4; // "user" or "system"
   google.protobuf.Timestamp created_at = 5;
+  // note is the human-readable reason for this transition, e.g. "auto-reopened
+  // after FAIL verdict" or "PASS verdict — pushed branch and opened PR". Already
+  // captured durably (session.BacklogStatusEventData.Note) but previously never
+  // surfaced over the wire — the "why" behind reviewer/system decisions.
+  optional string note = 6;
+}
+
+// BacklogProgressNote records a single report_progress call against one of a
+// backlog item's acceptance criteria — the implementer's audit trail. Unlike
+// AcCriterion.status (current status per criterion, overwritten on each call),
+// this is an append-only history: every call is preserved.
+message BacklogProgressNote {
+  string id = 1;
+  int32 criterion_index = 2;
+  string note = 3;
+  string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
 }
 
 // BacklogItem represents a unit of work in the backlog.
@@ -120,6 +137,13 @@ message BacklogItem {
   bool auto_spawn_session = 24;
   optional string pipeline_mode = 25;
   bool auto_create_pr = 26;
+  // progress_notes is the implementer's append-only report_progress audit
+  // trail — eagerly loaded alongside status_events (see GetBacklogItem).
+  repeated BacklogProgressNote progress_notes = 27;
+  // rework_cap_override: unset means "use the global default"
+  // (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
+  // >0 = this item's own cap, replacing the global value.
+  optional int32 rework_cap_override = 28;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -314,6 +338,10 @@ message UpdateBacklogItemRequest {
   bool auto_spawn_session = 12;
   optional string pipeline_mode = 13;
   bool auto_create_pr = 14;
+  // rework_cap_override is a per-item override for the auto-rework cap.
+  // Unset = leave the item's stored override untouched. 0 = unlimited retries
+  // for this item. >0 = this item's own cap, replacing the global default.
+  optional int32 rework_cap_override = 15;
 }
 
 message UpdateBacklogItemResponse {
@@ -800,6 +828,7 @@ enum StuckReason {
   STUCK_REASON_BOUNCING = 5;
   STUCK_REASON_PUSH_FAILED = 6;
   STUCK_REASON_ORPHANED_TRIAGE = 7;
+  STUCK_REASON_AUTONOMOUS_STUCK = 8;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

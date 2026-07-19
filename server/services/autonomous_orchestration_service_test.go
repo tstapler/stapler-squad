@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -223,6 +224,100 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	require.NotNil(t, notif, "expected a notification event")
 	assert.Contains(t, notif.NotificationTitle, "status update failed", "operator must be told the status update failed, not just 'complete'")
 	assert.Equal(t, int32(9), notif.NotificationType, "a divergence between driver-done and status-update-failed must surface as a FAILURE notification")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomousStuck_When_NotDone
+// is the regression test for closing the "conversions limit" visibility gap: a
+// stuck (outcome.Done=false) autonomous run on a backlog-linked session must
+// write a durable autonomous_stuck BacklogStuckState row — previously only an
+// ephemeral "Autonomous fix stuck" notification, invisible to the Unfinished
+// tab's stuck-reason system every other detector participates in.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomousStuck_When_NotDone(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-stuck-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous stuck test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "20 turns")
+	assert.NotNil(t, open[0].NotifiedAt, "dedup must be pre-set since the notification already fired")
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_When_Done verifies
+// a successful (Done=true) completion never writes an autonomous_stuck row.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_When_Done(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "autonomous-done-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous done test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 5}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a successful completion must never write an autonomous_stuck row")
 }
 
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,

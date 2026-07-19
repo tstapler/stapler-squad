@@ -11,6 +11,7 @@ import {
   ItemSession as ItemSessionProto,
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
+  BacklogProgressNote as BacklogProgressNoteProto,
   PipelineMode as PipelineModeProto,
 } from "@/gen/session/v1/backlog_pb";
 
@@ -119,6 +120,8 @@ export interface BacklogItem {
   triageResult?: TriageResult;
   /** Status transition history for this item (audit log) */
   statusEvents: StatusEvent[];
+  /** Implementer's report_progress audit trail (audit log) */
+  progressNotes: ProgressNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -127,6 +130,12 @@ export interface BacklogItem {
   prNumber?: number;
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
+  /**
+   * Per-item override for the auto-rework cap. Undefined = use the global
+   * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
+   * this item's own cap, replacing the global value.
+   */
+  reworkCapOverride?: number;
 }
 
 /**
@@ -189,6 +198,17 @@ export interface StatusEvent {
   toStatus: string;
   triggeredBy: string;
   createdAt?: string;
+  /** Human-readable reason for this transition, e.g. "auto-reopened after FAIL verdict". */
+  note?: string;
+}
+
+/** A single report_progress call — the implementer's append-only decision history. */
+export interface ProgressNote {
+  id: string;
+  criterionIndex: number;
+  note: string;
+  status: string;
+  createdAt?: string;
 }
 
 export interface BacklogItemInput {
@@ -205,6 +225,8 @@ export interface BacklogItemInput {
   skipTriage?: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode?: string;
+  /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
+  reworkCapOverride?: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -289,6 +311,17 @@ function mapStatusEvent(e: BacklogStatusEventProto): StatusEvent {
     toStatus: e.toStatus,
     triggeredBy: e.triggeredBy,
     createdAt: e.createdAt ? new Date(Number(e.createdAt.seconds) * 1000).toISOString() : undefined,
+    note: e.note,
+  };
+}
+
+function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
+  return {
+    id: n.id,
+    criterionIndex: n.criterionIndex,
+    note: n.note,
+    status: n.status,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
   };
 }
 
@@ -380,10 +413,12 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageStatus,
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
+    progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
+    reworkCapOverride: p.reworkCapOverride,
   };
 }
 
@@ -586,6 +621,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
+          reworkCapOverride: data.reworkCapOverride,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {

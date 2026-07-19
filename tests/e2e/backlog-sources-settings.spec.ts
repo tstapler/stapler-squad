@@ -117,3 +117,18 @@ test.describe("backlog-sources-settings", () => {
     await expect(row.getByText("No sync runs yet.")).toBeVisible();
   });
 });
+
+test.describe("backlog-sources-settings - feature flag off", () => {
+  test.beforeAll(async ({ request }) => {
+    await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+      headers: { "Content-Type": "application/json" },
+      data: { name: "backlog", enabled: false },
+    });
+  });
+
+  test("AC-06 direct navigation redirects to / when the flag is off", async ({ page }) => {
+    await page.goto(`${BASE_URL}/settings/backlog-sources`, { waitUntil: "domcontentloaded" });
+    await page.waitForURL(`${BASE_URL}/`, { timeout: 10000 });
+    await expect(page).toHaveURL(`${BASE_URL}/`);
+  });
+});

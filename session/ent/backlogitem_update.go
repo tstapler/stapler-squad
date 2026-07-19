@@ -549,6 +549,33 @@ func (_u *BacklogItemUpdate) ClearShippedSnapshotCaptureFailed() *BacklogItemUpd
 	return _u
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) SetReworkCapOverride(v int) *BacklogItemUpdate {
+	_u.mutation.ResetReworkCapOverride()
+	_u.mutation.SetReworkCapOverride(v)
+	return _u
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableReworkCapOverride(v *int) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetReworkCapOverride(*v)
+	}
+	return _u
+}
+
+// AddReworkCapOverride adds value to the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) AddReworkCapOverride(v int) *BacklogItemUpdate {
+	_u.mutation.AddReworkCapOverride(v)
+	return _u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (_u *BacklogItemUpdate) ClearReworkCapOverride() *BacklogItemUpdate {
+	_u.mutation.ClearReworkCapOverride()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdate) SetUpdatedAt(v time.Time) *BacklogItemUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -974,6 +1001,15 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
+	}
+	if value, ok := _u.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReworkCapOverride(); ok {
+		_spec.AddField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if _u.mutation.ReworkCapOverrideCleared() {
+		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)
@@ -1766,6 +1802,33 @@ func (_u *BacklogItemUpdateOne) ClearShippedSnapshotCaptureFailed() *BacklogItem
 	return _u
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) SetReworkCapOverride(v int) *BacklogItemUpdateOne {
+	_u.mutation.ResetReworkCapOverride()
+	_u.mutation.SetReworkCapOverride(v)
+	return _u
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableReworkCapOverride(v *int) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetReworkCapOverride(*v)
+	}
+	return _u
+}
+
+// AddReworkCapOverride adds value to the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) AddReworkCapOverride(v int) *BacklogItemUpdateOne {
+	_u.mutation.AddReworkCapOverride(v)
+	return _u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (_u *BacklogItemUpdateOne) ClearReworkCapOverride() *BacklogItemUpdateOne {
+	_u.mutation.ClearReworkCapOverride()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *BacklogItemUpdateOne) SetUpdatedAt(v time.Time) *BacklogItemUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
@@ -2221,6 +2284,15 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ShippedSnapshotCaptureFailedCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool)
+	}
+	if value, ok := _u.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReworkCapOverride(); ok {
+		_spec.AddField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+	}
+	if _u.mutation.ReworkCapOverrideCleared() {
+		_spec.ClearField(backlogitem.FieldReworkCapOverride, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(backlogitem.FieldUpdatedAt, field.TypeTime, value)

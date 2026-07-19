@@ -319,6 +319,7 @@ type BacklogStatusEventData struct {
 // Unlike the current-note-per-criterion stored on BacklogItem.AcceptanceCriteria, this
 // represents a single append-only history entry from one report_progress call.
 type ProgressNoteData struct {
+	ID             string
 	CriterionIndex int
 	Note           string
 	Status         string
@@ -357,6 +358,12 @@ type BacklogItemData struct {
 	// deliberate opt-in, since it removes the human review-the-prompt
 	// checkpoint before an LLM-authored PR is created.
 	AutoCreatePR bool
+	// ReworkCapOverride is a per-item override for the auto-rework cap
+	// (config.Config.MaxAutoReworkIterationsOrDefault). Nil = use the global
+	// default. 0 = unlimited retries for this item. >0 = this item's own cap,
+	// replacing (not adding to) the global value. See effectiveReworkCap in
+	// server/services/backlog_service_triage.go.
+	ReworkCapOverride *int
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
 	// string (PipelineModeDefault) means the built-in, hardcoded pipeline.
@@ -407,6 +414,10 @@ type BacklogItemData struct {
 	// StatusEvents holds the eagerly-loaded status transition history.
 	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
 	StatusEvents []BacklogStatusEventData
+	// ProgressNotes holds the eagerly-loaded report_progress audit trail (the
+	// implementer's decision history). Only populated when explicitly loaded by
+	// the caller (e.g. GetBacklogItem) — see StatusEvents for the same pattern.
+	ProgressNotes []ProgressNoteData
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.
@@ -489,6 +500,13 @@ type BacklogItemUpdate struct {
 	ShippedSnapshotAt            *time.Time
 	ShippedFileStats             *string
 	ShippedSnapshotCaptureFailed *bool
+	// ReworkCapOverride follows the same single-pointer presence convention as
+	// the fields above: nil means "leave untouched". A non-nil pointer sets the
+	// item's override (0 = unlimited, >0 = this item's own cap). There is
+	// currently no way to explicitly clear an override back to "use the global
+	// default" via this struct — a deliberate simplification; add a
+	// ClearReworkCapOverride bool alongside this if that's needed later.
+	ReworkCapOverride *int
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.

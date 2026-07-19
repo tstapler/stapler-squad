@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -918,6 +919,13 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileStuckReviewItems(ctx, er)
 	})
 
+	// Apply a review verdict that was recorded but never actioned because the
+	// review session died before its exit event fired — distinct from the
+	// zombie detection above (see reconcileUnprocessedReviewVerdicts doc comment).
+	l.runStuckDetector("unprocessed_review_verdict", &okNames, &panickedNames, func() {
+		l.reconcileUnprocessedReviewVerdicts(ctx, er)
+	})
+
 	// Bouncing (non-converging in_progress<->review cycle) detector — wired
 	// before merge detection per Task 2.1.4b so a panic here can't skip it
 	// (also guarded by its own recover() below regardless of ordering).
@@ -1033,6 +1041,71 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 			continue // still abandoned this tick
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonAbandonedReview, "reconcileStuckReviewItems")
+	}
+}
+
+// reconcileUnprocessedReviewVerdicts closes the gap where a review session
+// submitted its verdict (PASS/FAIL/PARTIAL/UNVERIFIABLE) but died — crash, OOM,
+// server restart — before its exit event ever reached handleReviewSessionExited,
+// the one place that acts on a verdict (push+PR on PASS, auto-reopen otherwise).
+// The item is left stuck in "review" with a recorded verdict nothing ever
+// processes.
+//
+// This is deliberately separate from reconcileStuckReviewItems' zombie detection:
+// that path requires EVERY open review-or-work session on the item to be
+// confirmed dead, but AutoReopenAfterFailedReview intentionally leaves a work
+// session alive polling for the verdict once the item is back in "review" (see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live
+// sessions" finding) — so the item never looks like a full zombie even though
+// the review session itself is the one that died with unactioned output. Found
+// live: a work session correctly detected its own item had an already-recorded
+// PASS verdict and all criteria done, but had no way to force the review→done
+// transition itself (by design — that's this function's job, not a work
+// session's), so it looped forever re-requesting a review the backlog system
+// correctly rejected (item already past "in_progress").
+//
+// Acts on the most recent review-role session only, once it is confirmed not
+// still wrapping up on its own (EndedAt already set, or the liveness checker
+// says it's dead) — a session that's merely slow to exit is left alone.
+// Best-effort: query/tombstone failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx context.Context, er *EntRepository) {
+	items, err := er.FindReviewItemsWithUnprocessedVerdict(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts query error: %v", err)
+		return
+	}
+	checker := l.getSessionLivenessChecker()
+	for _, item := range items {
+		if len(item.Edges.ItemSessions) == 0 {
+			continue
+		}
+		latest := item.Edges.ItemSessions[0] // most recent review-role session (query orders desc)
+		if latest.Edges.ReviewVerdict == nil {
+			continue // defensive: query already filters on HasReviewVerdict()
+		}
+
+		dead := latest.EndedAt != nil
+		if !dead && checker != nil {
+			dead = !checker(latest.SessionUUID)
+		}
+		if !dead {
+			continue // still plausibly wrapping up on its own — leave it alone
+		}
+
+		if latest.EndedAt == nil {
+			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
+			}
+		}
+
+		log.WarningLog.Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
+			item.ID, latest.SessionUUID, latest.Edges.ReviewVerdict.OverallOutcome)
+		l.handleReviewSessionExited(ctx, ItemSessionSummary{
+			ID:            latest.ID.String(),
+			BacklogItemID: item.ID.String(),
+			SessionUUID:   latest.SessionUUID,
+			Role:          string(SessionRoleReview),
+		})
 	}
 }
 
@@ -1156,6 +1229,25 @@ func findOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason doma
 // magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
 const maxWorkSessionStaleness = 2 * time.Hour
 
+// headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
+// headlessTriageUUIDPrefix constant (duplicated here rather than imported: server/services
+// imports this package, so the reverse import would cycle). Headless triage sessions have
+// no live in-memory Instance to check liveness against — per that file's
+// tombstoneOrphanTriageSessions, an "open" (EndedAt nil) row found later means the call
+// that would have closed it on completion already finished or crashed, not that it's
+// genuinely still running — so they warrant a much shorter staleness threshold than the
+// general 2h ceiling below.
+const headlessTriageSessionUUIDPrefix = "headless-triage-"
+
+// maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
+// trusted before reconcileOrphanedTriageItems flags it as orphaned. Headless triage calls
+// routinely run 7-15 minutes (see that function's doc comment); 30 minutes gives 2x margin
+// over that ceiling while closing the "triage session died before submit_triage_result,
+// item silently stuck in idea" gap (docs/tasks/triage-validation-*/research/pitfalls.md,
+// GAP-20/21) far faster than waiting out the general-purpose 2h threshold, which was tuned
+// for interactive/foreground triage sessions where a liveness signal isn't available here.
+const maxHeadlessTriageSessionStaleness = 30 * time.Minute
+
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
 // active work session has gone longer than maxWorkSessionStaleness without progress.
 // Notify-once dedup and "since when" are DB-backed (durable BacklogStuckState
@@ -1260,7 +1352,10 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 // Pure staleness gate — no liveness checker — matching reconcileStaleWorkSessions'
 // established pattern for the closest analogous detector in this file: a headless
 // triage call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-// here; maxWorkSessionStaleness (2h) alone is the reliable signal. Best-effort:
+// here; staleness alone is the reliable signal. Headless-triage sessions (the common
+// case) get the much shorter maxHeadlessTriageSessionStaleness (30m) rather than the
+// general-purpose maxWorkSessionStaleness (2h): an open headless row found later
+// reliably means dead, not slow (see that constant's doc comment). Best-effort:
 // query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
@@ -1283,8 +1378,15 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				latestTriage = &sessions[i]
 			}
 		}
-		if latestTriage == nil || time.Since(latestTriage.CreatedAt) <= maxWorkSessionStaleness {
-			continue // no open triage session, or still plausibly running
+		if latestTriage == nil {
+			continue // no open triage session
+		}
+		staleness := maxWorkSessionStaleness
+		if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
+			staleness = maxHeadlessTriageSessionStaleness
+		}
+		if time.Since(latestTriage.CreatedAt) <= staleness {
+			continue // still plausibly running
 		}
 
 		// Tombstone the dead row now rather than leaving it open until a human
@@ -1433,8 +1535,16 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed:
-			continue // event-shaped: resolved only at their explicit call sites
+		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed, domain.StuckReasonAutonomousStuck:
+			// Event-shaped: resolved only at an explicit call site, not by anchoring
+			// on item status. autonomous_stuck specifically cannot anchor on the
+			// item's status at mark-time: onAutonomousDriverComplete's SessionRoleWork
+			// case transitions in_progress->review even when the driver is stuck (a
+			// separate, flagged behavior — see that function's doc comment), so an
+			// in_progress anchor would immediately false-resolve on the very next
+			// tick once the status-transition below it runs, before an operator ever
+			// sees the row.
+			continue
 		default:
 			continue
 		}
