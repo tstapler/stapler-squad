@@ -54,6 +54,13 @@ type SessionStopper interface {
 	// sessions that exited but whose DB records were not closed (e.g. after a
 	// server restart that killed the underlying process).
 	IsSessionLive(sessionUUID string) bool
+	// KillTmuxPaneOnly closes the tmux pane for sessionUUID without touching its
+	// worktree — unlike StopSessionByUUID/Instance.Kill, which also runs
+	// CleanupWorktree. Rework rounds share one worktree/branch across their "-rN"
+	// revisions (see buildRevisionTitle), so tearing down a finished round's
+	// worktree would destroy the next round's checkout. No-op if the session
+	// isn't tracked live (already gone).
+	KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error
 }
 
 // itemSourceBackend is a narrow interface for item source persistence; satisfied by *session.Storage.

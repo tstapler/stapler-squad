@@ -151,7 +151,8 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs map[string]bool
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -161,6 +162,11 @@ func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, _ string) error { return nil }
 
 func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
+	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
 	return nil
 }
 
@@ -1190,6 +1196,43 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	require.Error(t, err, "a genuinely live work session must still block a duplicate spawn")
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
 	assert.Empty(t, creator.calls)
+}
+
+// TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane is the regression test for
+// a real complaint: each rework round gets its own "-rN" title (buildRevisionTitle),
+// but nothing ever closed a finished round's tmux pane — it sat around indefinitely as
+// an idle "[exited]" pane, accumulating with every rework cycle. A fresh reopen spawn
+// must close the previous round's pane via KillTmuxPaneOnly (not StopSessionByUUID,
+// which would also delete the worktree the new round is about to reuse).
+func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a finished rework round")
+
+	// Simulate a normally-completed prior work session (round 1): EndedAt set, the way
+	// handleReviewSessionExited leaves it once a review verdict is processed.
+	endedAt := time.Now().Add(-time.Hour)
+	priorSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "round-1-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Len(t, creator.calls, 1, "round 2 must spawn since round 1 already ended")
+	assert.Contains(t, stopper.killedPaneUUIDs, "round-1-uuid", "round 1's tmux pane must be closed once round 2 spawns")
 }
 
 // ─── AttachSessionToItem ──────────────────────────────────────────────────────

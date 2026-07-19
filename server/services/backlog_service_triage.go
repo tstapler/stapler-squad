@@ -343,6 +343,15 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
 
+	// 8a2. Close the tmux pane of every already-ended work-session round before
+	// spawning the next one. Each rework round gets its own "-rN" title (see
+	// buildRevisionTitle) so the session list stays readable across rounds, but
+	// nothing previously closed a finished round's tmux pane — it sat around
+	// indefinitely as an idle "[exited]" pane, accumulating with every rework
+	// cycle. KillTmuxPaneOnly (not StopSessionByUUID/Instance.Kill) leaves the
+	// worktree alone, since rework rounds share one worktree/branch.
+	s.killEndedWorkSessionPanes(ctx, priorSessions)
+
 	// 8b. Guard against spawning a duplicate work session when one is already active.
 	if hasActiveWorkSession(priorSessions) {
 		return nil, connect.NewError(connect.CodeAlreadyExists,
@@ -1606,6 +1615,27 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	// still references it.
 	if len(freed) > 0 {
 		s.cleanupItemWorktrees(ctx, freed)
+	}
+}
+
+// killEndedWorkSessionPanes closes the tmux pane for every already-ended work
+// session in the given list. Best-effort and nil-safe (no-op if sessionStopper
+// isn't wired) — called right before spawning a new rework round so a
+// finished round's pane doesn't linger forever. Uses KillTmuxPaneOnly, not
+// StopSessionByUUID, since rework rounds share one worktree/branch across
+// their "-rN" revisions (see buildRevisionTitle) and StopSessionByUUID's
+// Instance.Kill also runs CleanupWorktree.
+func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) {
+	if s.sessionStopper == nil {
+		return
+	}
+	for _, is := range sessions {
+		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+			continue
+		}
+		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[killEndedWorkSessionPanes] session=%s: %v", is.SessionUUID, err)
+		}
 	}
 }
 
