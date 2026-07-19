@@ -110,6 +110,36 @@ func TestStartTmuxSession(t *testing.T) {
 	// so we focus on testing the behavioral contract rather than implementation details
 }
 
+func TestStartTmuxSession_IncludesTmuxStderrOnFailure(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+
+	const wantStderr = "tmux: unrecognized option '-e'"
+	cmdExec := MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "new-session") {
+				if cmd.Stderr != nil {
+					_, _ = cmd.Stderr.Write([]byte(wantStderr))
+				}
+				return fmt.Errorf("exit status 1")
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				return nil, fmt.Errorf("no server running")
+			}
+			return []byte("output"), nil
+		},
+	}
+
+	workdir := t.TempDir()
+	session := newTmuxSessionWithSocket("test-session-fail", "echo", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
+
+	err := session.Start(workdir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), wantStderr)
+}
+
 // --- serverNotRunning detection tests ---
 
 func TestServerNotRunning(t *testing.T) {

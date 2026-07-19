@@ -53,6 +53,19 @@ rotate_log_if_large() {
     fi
 }
 
+# Remove duplicate ':'-separated PATH entries, keeping first occurrence order.
+# The unit/plist below bakes in "$PATH:<fallbacks>" verbatim from the invoking
+# shell; re-running this script from a shell whose own PATH already carries
+# duplicates (e.g. nested tool/plugin PATH prepends) writes those duplicates
+# into the persisted service file, and each subsequent install compounds it
+# further since the new shell inherits the bloated PATH. Once large enough,
+# every spawned tmux session re-embeds PATH via `-e PATH=...`, and the total
+# `tmux new-session` command line exceeds tmux's message-size limit — every
+# session/tmux spawn then fails with "command too long" (exit status 1).
+dedup_path() {
+    printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -124,18 +137,8 @@ install_linux() {
     # install to ~/.local/bin) without a subsequent `make install-service`,
     # the headless LLM pool's exec.LookPath("claude") silently fails and
     # backlog triage no-ops with only a log warning (see server/dependencies.go).
-    service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-    # Build a PATH that preserves the current shell's PATH first (so custom
-    # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
-    # but appends standard fallback locations, mirroring install_macos's
-    # LaunchAgent PATH below. Without this, the unit bakes in a raw PATH
-    # snapshot from install time with no fallback: if claude/tmux/git later
-    # move (nvm/asdf reinstall, a fresh `pip install --user`/npm global
-    # install to ~/.local/bin) without a subsequent `make install-service`,
-    # the headless LLM pool's exec.LookPath("claude") silently fails and
-    # backlog triage no-ops with only a log warning (see server/dependencies.go).
-    service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    service_path=$(dedup_path "$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     # Cgroup memory bound: this service's cgroup covers the Go binary AND every
     # process it forks (tmux server + all spawned Claude agent sessions), since
@@ -291,7 +294,8 @@ install_macos() {
     # go/bin, nvm, rbenv, etc. take precedence), then appends both Homebrew
     # prefixes (Apple Silicon + Intel) as a fallback so tools like tmux, git,
     # and claude are found even if not already on the shell PATH.
-    plist_path="$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    plist_path=$(dedup_path "$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin")
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
