@@ -2,6 +2,7 @@
 // +feature: backlog:item-form
 
 import { useState, useCallback, useMemo, useEffect } from "react";
+import Link from "next/link";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
@@ -9,6 +10,7 @@ import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
 import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { routes } from "@/lib/routes";
 import * as styles from "./BacklogItemForm.css";
 
 // The 9 content-template fields on PipelineMode — used to detect whether the
@@ -124,6 +126,13 @@ export function BacklogItemForm({
       })),
     ];
   }, [modesLoading, modesError, availableModes]);
+
+  // The fetch succeeded but no enabled modes exist yet — distinct from
+  // loading/error: without this, a picker with nothing to pick from looks
+  // identical to a picker that's broken or hasn't fetched at all (the exact
+  // "single greyed Default button, clicking it does nothing" confusion
+  // flagged in docs/tasks/backlog-feature-improvement.md's 2026-07-19 audit).
+  const hasNoAvailableModes = !modesLoading && !modesError && availableModes.length === 0;
 
   // G-2: an item's stored pipelineMode may reference a mode that's since been
   // deleted or disabled. Only evaluate once the fetch has actually succeeded —
@@ -353,6 +362,14 @@ export function BacklogItemForm({
         {modesError && (
           <span role="status" className={styles.checkboxHint} data-testid="backlog-pipeline-mode-fetch-error">
             {PIPELINE_MODE_FETCH_ERROR_NOTICE}
+          </span>
+        )}
+        {hasNoAvailableModes && (
+          <span className={styles.pipelineModeEmptyHint} data-testid="backlog-pipeline-mode-empty-hint">
+            No custom pipeline modes exist yet.{" "}
+            <Link href={routes.settingsPipelineModes} className={styles.pipelineModeEmptyHintLink}>
+              Create one in Settings →
+            </Link>
           </span>
         )}
       </div>

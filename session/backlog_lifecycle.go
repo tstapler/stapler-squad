@@ -356,7 +356,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
 		prCreatorFactory:        defaultPRCreatorFactory,
 	}
-	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator)
+	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
 }
 

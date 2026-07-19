@@ -6,7 +6,16 @@
   "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
   "filePath": "web-app/src/components/backlog/BacklogItemForm.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-16T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > defaults to 'Default' selected on a new-item mount",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > includes the selected mode slug in the onSubmit payload",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > G-4: only 'Default' is selectable while the mode fetch is pending, and submit is never blocked by it",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > G-3: shows the fetch-failure notice, keeps 'Default' selectable, and stays submittable",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > shows a hint linking to Settings when the fetch succeeds but no pipeline modes exist yet",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > does not show the empty-modes hint once real pipeline modes are available",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > G-2: renders a synthetic disabled 'Unknown mode' option when the item's stored slug is unresolvable, and never falls back to Default",
+    "BacklogItemForm — pipeline mode selector (Epic 3.2) > G-1: warns (non-blocking) when the selected mode needs {{repo_path}} but the item's repoPath is empty"
+  ],
+  "lastModified": "2026-07-19T00:00:00Z"
 }

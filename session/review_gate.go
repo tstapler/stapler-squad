@@ -21,24 +21,47 @@ type ReviewGateRunner struct {
 	getAutoReopener   func() AutoReopenSpawner
 	getNotifier       func() Notifier
 	getSessionCreator func() ReviewGateSpawner
+
+	// pipelineEngine resolves a custom PipelineMode's ReviewPromptTemplate for
+	// the real review session prompt built in Run. May be nil (many tests and
+	// some constructors predate PipelineEngine wiring) — reviewPromptFor falls
+	// back to BuildReviewPrompt directly in that case, matching
+	// BacklogService.reviewPromptFor's identical nil-safe pattern
+	// (server/services/backlog_service_triage.go). Set once at construction,
+	// never mutated afterward — mirrors BacklogLifecycleListener.pipelineEngine.
+	pipelineEngine PipelineEngine
 }
 
 // NewReviewGateRunner constructs a ReviewGateRunner.
 // getAutoReopener, getNotifier, and getSessionCreator are getter functions
 // (typically method values from BacklogLifecycleListener) so the runner sees
 // the latest values when dynamic setters are called after construction.
+// pipelineEngine may be nil — see the field's doc comment for the fallback.
 func NewReviewGateRunner(
 	storage *Storage,
 	getAutoReopener func() AutoReopenSpawner,
 	getNotifier func() Notifier,
 	getSessionCreator func() ReviewGateSpawner,
+	pipelineEngine PipelineEngine,
 ) *ReviewGateRunner {
 	return &ReviewGateRunner{
 		storage:           storage,
 		getAutoReopener:   getAutoReopener,
 		getNotifier:       getNotifier,
 		getSessionCreator: getSessionCreator,
+		pipelineEngine:    pipelineEngine,
 	}
+}
+
+// reviewPromptFor returns r.pipelineEngine.InteractiveReviewPromptFor(...) when
+// pipelineEngine is wired, or the default BuildReviewPrompt otherwise — mirrors
+// BacklogService.reviewPromptFor's identical nil-safe fallback pattern
+// (server/services/backlog_service_triage.go) for the headless-review seam.
+func (r *ReviewGateRunner) reviewPromptFor(item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+	if r.pipelineEngine == nil {
+		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+	}
+	return r.pipelineEngine.InteractiveReviewPromptFor(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 }
 
 // Run executes the review gate for a backlog item session.
@@ -247,7 +270,7 @@ func (r *ReviewGateRunner) Run(
 		acSnapshot = MergeLiveCriterionNotes(acSnapshot, liveAC)
 	}
 
-	prompt := BuildReviewPrompt(item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
+	prompt := r.reviewPromptFor(item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
 
 	// Spawn a real, hidden, tagged review session.Instance so the review
 	// participates in the same visibility/attention mechanism (idle/error/approval
@@ -256,16 +279,17 @@ func (r *ReviewGateRunner) Run(
 	// submit_review_verdict MCP tool, and BacklogLifecycleListener.
 	// handleReviewSessionExited processes the outcome once that session exits.
 	//
-	// Note: prompt is built via BuildReviewPrompt (tool-call/submit_review_verdict
-	// style), not via PipelineEngine.ReviewPromptFor/BuildHeadlessReviewPrompt.
-	// The latter pair asks for a bare JSON object on stdout — correct for the
-	// still-headless callers that use it (TriggerReReview in
+	// Note: prompt is built via reviewPromptFor, which routes through
+	// PipelineEngine.InteractiveReviewPromptFor (tool-call/submit_review_verdict
+	// style) rather than ReviewPromptFor/BuildHeadlessReviewPrompt. The latter
+	// pair asks for a bare JSON object on stdout — correct for the still-headless
+	// callers that use it (TriggerReReview in
 	// server/services/backlog_service_triage.go), but wrong here: this session is
 	// a real, tool-using Claude Code agent that must call the submit_review_verdict
 	// MCP tool, not print JSON, so handleReviewSessionExited has a verdict to read
-	// once it exits. PipelineEngine customization of review content for real
-	// sessions (if wanted) would need a tool-call-compatible template path, which
-	// doesn't exist yet — out of scope for this reconciliation.
+	// once it exits. PipelineModeDefault (or a nil pipelineEngine) still renders
+	// BuildReviewPrompt directly, so this is behavior-preserving for every item
+	// that hasn't opted into a custom PipelineMode.
 	sessionCreator := r.getSessionCreator()
 	if sessionCreator == nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate item=%s: no review mechanism configured", item.ID)
