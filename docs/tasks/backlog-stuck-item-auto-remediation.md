@@ -50,11 +50,12 @@ Add two nullable-safe fields to `BacklogStuckState` (`session/ent/schema/backlog
   is actually attempted (not each detection-sweep tick).
 - `next_remediation_at *time.Time` (nullable) - when the row becomes eligible for the
   next attempt. `nil` after the row is first opened means "eligible immediately" (attempt
-  1 fires on first detection, no initial delay). Set to `nil` again once
-  `remediation_attempts >= 5` - that state (attempts exhausted, `next_remediation_at` nil,
-  row still open/unresolved) is exactly how "parked" is represented; no separate boolean
-  needed if the dispatcher checks `remediation_attempts >= maxRemediationAttempts` before
-  it ever looks at `next_remediation_at`.
+  1 fires on first detection, no initial delay). "Parked" (attempts exhausted) is
+  represented purely by `remediation_attempts >= 5` - the dispatcher checks that BEFORE
+  it ever looks at `next_remediation_at`, so no separate boolean is needed and
+  `next_remediation_at` does not need to be forced back to `nil` on the attempt that
+  parks the row; whatever schedule-derived value it holds at that point is simply never
+  consulted again.
 
 Regenerate via the exact command in `session/ent/generate.go`
 (`--feature sql/upsert` - see `.claude/rules/ent-schema-generation.md`, omitting this flag
@@ -171,3 +172,27 @@ already-working recovery paths before extending to net-new remediation logic.
 **Phase B (follow-on PR, NOT your scope):** the 5 new remediation actions (`push_failed`,
 `pr_ready_unmerged`, `orphaned_triage`, `rework_cap`, `stale_work`) - each is independent,
 could even be split further/parallelized.
+
+## Addendum (2026-07-20, post-brief): manual "kick off remediation now"
+
+User request after the original design conversation: an operator-triggered escape hatch
+that runs a remediation attempt immediately, without waiting on `next_remediation_at`.
+
+Add a third RPC alongside `ResetStuckRemediation`/`BulkResetStuckRemediation`:
+
+- **`TriggerRemediationNow(item_id, reason)`** - immediately calls the same
+  reason-specific remediation action the dispatcher would call, bypassing only the
+  `next_remediation_at` timer check. It still goes through every other gate: it
+  increments `remediation_attempts` exactly like a normal dispatcher-triggered attempt
+  (an operator-initiated attempt is still a real attempt - it counts toward the 5-attempt
+  cap, so this cannot be used to quietly exceed the safety limit), and it is still subject
+  to whatever circuit breaker the wrapped action itself checks
+  (`IsRepeatedFailure`/`IsRepeatedNoVerdictFailure`). If the row is already parked
+  (`remediation_attempts >= 5`), reject with a clear error pointing the operator at the
+  reset RPC instead of silently un-parking it - "retry now" and "reset the counter" stay
+  two distinct, explicit operator actions, never combined into one implicit behavior.
+
+Frontend: a "Retry now" button next to each open stuck item in the `/unfinished` UI,
+alongside the reset-related UI, calling this RPC with the same loading/error/success
+feedback pattern as the other stuck-item actions on that page. Disabled (with a reason
+shown) when the row is already parked, pointing at the reset action instead.
