@@ -2,32 +2,6 @@
   "version": "1",
   "features": [
     {
-      "id": "GetBacklogItemCost",
-      "type": "backend",
-      "backend": {
-        "service": "BacklogService",
-        "method": "GetBacklogItemCost",
-        "protoFile": "proto/session/v1/backlog.proto",
-        "markerFound": false
-      },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-07-08T12:09:31.171073759-07:00"
-    },
-    {
-      "id": "GetBacklogItemDiff",
-      "type": "backend",
-      "backend": {
-        "service": "BacklogService",
-        "method": "GetBacklogItemDiff",
-        "protoFile": "proto/session/v1/backlog.proto",
-        "markerFound": false
-      },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-07-08T12:09:31.171073759-07:00"
-    },
-    {
       "id": "GetInsightsSummary",
       "type": "backend",
       "backend": {
@@ -39,19 +13,6 @@
       "tested": false,
       "testIds": [],
       "lastModified": "2026-06-17T16:40:58.369884702-07:00"
-    },
-    {
-      "id": "GetSessionBacklogIndex",
-      "type": "backend",
-      "backend": {
-        "service": "BacklogService",
-        "method": "GetSessionBacklogIndex",
-        "protoFile": "proto/session/v1/backlog.proto",
-        "markerFound": false
-      },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-07-08T12:09:31.171073759-07:00"
     },
     {
       "id": "ImportGitHubIssue",
@@ -97,7 +58,7 @@
         "TestListGitHubIssues_DefaultState",
         "TestListGitHubIssues_SearchUsesSearchAPI"
       ],
-      "lastModified": "2026-07-08T12:09:31.171073759-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "ListSessionTokens",
@@ -153,7 +114,7 @@
         "TestSearchGitHubRepos_DefaultLimit",
         "TestSearchGitHubRepos_ReturnsRepos"
       ],
-      "lastModified": "2026-07-08T12:09:31.171073759-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "StartGitHubDeviceAuth",
@@ -397,11 +358,15 @@
         "method": "ApprovePlan",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-06-26T08:55:46.608260153-07:00"
+      "tested": true,
+      "testIds": [
+        "TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp",
+        "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
+        "TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning"
+      ],
+      "lastModified": "2026-07-19T00:00:00Z"
     },
     {
       "id": "backlog:archive-item",
@@ -411,11 +376,11 @@
         "method": "ArchiveBacklogItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:attach-session",
@@ -424,12 +389,28 @@
         "service": "BacklogService",
         "method": "AttachSessionToItem",
         "protoFile": "proto/session/v1/backlog.proto",
-        "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "markerFound": false
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:bulk-reset-stuck-remediation",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "BulkResetStuckRemediation",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_stuck.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet",
+        "TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse"
+      ],
+      "lastModified": "2026-07-19T22:09:56.440056245-07:00"
     },
     {
       "id": "backlog:cancel-triage",
@@ -439,11 +420,11 @@
         "method": "CancelTriage",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_triage.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-26T08:55:46.608260153-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:create-item",
@@ -453,11 +434,28 @@
         "method": "CreateBacklogItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted",
+        "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue"
+      ],
+      "lastModified": "2026-07-17T00:00:00-07:00"
+    },
+    {
+      "id": "backlog:create-pipeline-mode",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "CreatePipelineMode",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_pipeline_mode.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-26T08:55:46.608260153-07:00"
+      "lastModified": "2026-07-16T07:59:16Z"
     },
     {
       "id": "backlog:create-source",
@@ -467,11 +465,11 @@
         "method": "CreateItemSource",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:delete-item",
@@ -481,11 +479,25 @@
         "method": "DeleteBacklogItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-07-02T17:50:32.459009075-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:delete-pipeline-mode",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "DeletePipelineMode",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_pipeline_mode.go"
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-16T07:59:16Z"
     },
     {
       "id": "backlog:delete-source",
@@ -495,11 +507,59 @@
         "method": "DeleteItemSource",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:get-item-cost",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "GetBacklogItemCost",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": false
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:get-item-diff",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "GetBacklogItemDiff",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": false
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:get-item-ship-status",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "GetBacklogItemShipStatus",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_ship_status.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL",
+        "TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerged",
+        "TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged",
+        "TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEverCommitted",
+        "TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil",
+        "TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt",
+        "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage"
+      ],
+      "lastModified": "2026-07-18T00:00:00Z"
     },
     {
       "id": "backlog:get-item",
@@ -509,11 +569,38 @@
         "method": "GetBacklogItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_query.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:get-pipeline-mode",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "GetPipelineMode",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_pipeline_mode.go"
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-16T07:59:16Z"
+    },
+    {
+      "id": "backlog:get-session-index",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "GetSessionBacklogIndex",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": false
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:get-sync-history",
@@ -523,7 +610,7 @@
         "method": "GetSyncHistory",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_query.go"
       },
       "tested": true,
       "testIds": [
@@ -531,7 +618,7 @@
         "TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns",
         "TestTriggerSync_SucceedsAndCreatesItems"
       ],
-      "lastModified": "2026-07-02T00:00:00-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:list-items",
@@ -541,11 +628,25 @@
         "method": "ListBacklogItems",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_query.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-26T08:55:46.608260153-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:list-pipeline-modes",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "ListPipelineModes",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_pipeline_mode.go"
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-16T07:59:16Z"
     },
     {
       "id": "backlog:list-sources",
@@ -555,11 +656,28 @@
         "method": "ListItemSources",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_query.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:list-stuck",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "ListStuckBacklogItems",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_stuck.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist",
+        "TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString"
+      ],
+      "lastModified": "2026-07-14T05:58:45.926116979-07:00"
     },
     {
       "id": "backlog:override-verdict",
@@ -569,11 +687,45 @@
         "method": "OverrideVerdict",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:reset-stuck-remediation",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "ResetStuckRemediation",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_stuck.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen",
+        "TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing"
+      ],
+      "lastModified": "2026-07-19T22:09:56.440056245-07:00"
+    },
+    {
+      "id": "backlog:snooze-stuck",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "SnoozeStuckItem",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_stuck.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called",
+        "TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing"
+      ],
+      "lastModified": "2026-07-14T05:58:45.926116979-07:00"
     },
     {
       "id": "backlog:spawn-session",
@@ -583,11 +735,25 @@
         "method": "SpawnSessionFromItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:submit-manual-review",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "SubmitManualReview",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:suggest-next",
@@ -597,11 +763,11 @@
         "method": "SuggestNextItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_query.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:transition-status",
@@ -611,11 +777,11 @@
         "method": "TransitionBacklogItemStatus",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:trigger-re-review",
@@ -625,11 +791,51 @@
         "method": "TriggerReReview",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_triage.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+    },
+    {
+      "id": "backlog:trigger-remediation-now",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "TriggerRemediationNow",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_stuck.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow",
+        "TestTriggerRemediationNow_should_reject_When_AlreadyParked",
+        "TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction",
+        "TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns"
+      ],
+      "lastModified": "2026-07-19T22:09:56.440056245-07:00"
+    },
+    {
+      "id": "backlog:trigger-ship-pr",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "TriggerShipPR",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_ship.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestTriggerShipPR_HappyPath_RunsOneShotForMostRecentWorkSession",
+        "TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition",
+        "TestTriggerShipPR_AlreadyHasPR_ReturnsFailedPrecondition",
+        "TestTriggerShipPR_NoWorkSession_ReturnsFailedPrecondition",
+        "TestTriggerShipPR_NoOneShotRunnerWired_ReturnsUnimplemented",
+        "TestTriggerShipPR_RunnerError_ReturnsFailedPrecondition"
+      ],
+      "lastModified": "2026-07-18T09:54:00.881911857-07:00"
     },
     {
       "id": "backlog:trigger-sync",
@@ -639,7 +845,7 @@
         "method": "TriggerSync",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_sync.go"
       },
       "tested": true,
       "testIds": [
@@ -650,7 +856,7 @@
         "TestTriggerSync_DecryptsTokenThroughServiceLayer",
         "TestTriggerSync_PropagatesFetchError"
       ],
-      "lastModified": "2026-07-02T00:00:00-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:trigger-triage",
@@ -660,11 +866,11 @@
         "method": "TriggerTriage",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_triage.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "backlog:update-item",
@@ -674,11 +880,28 @@
         "method": "UpdateBacklogItem",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
+      },
+      "tested": true,
+      "testIds": [
+        "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",
+        "TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest"
+      ],
+      "lastModified": "2026-07-17T00:00:00-07:00"
+    },
+    {
+      "id": "backlog:update-pipeline-mode",
+      "type": "backend",
+      "backend": {
+        "service": "BacklogService",
+        "method": "UpdatePipelineMode",
+        "protoFile": "proto/session/v1/backlog.proto",
+        "markerFound": true,
+        "handlerFile": "server/services/backlog_service_pipeline_mode.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-16T07:59:16Z"
     },
     {
       "id": "backlog:update-source",
@@ -688,11 +911,11 @@
         "method": "UpdateItemSource",
         "protoFile": "proto/session/v1/backlog.proto",
         "markerFound": true,
-        "handlerFile": "server/services/backlog_service.go"
+        "handlerFile": "server/services/backlog_service_lifecycle.go"
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+      "lastModified": "2026-07-11T09:32:29.851760768-07:00"
     },
     {
       "id": "browser:cdp-stream",
@@ -1771,7 +1994,7 @@
       },
       "tested": false,
       "testIds": [],
-      "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+      "lastModified": "2026-07-17T00:20:00-07:00"
     },
     {
       "id": "session:stream-terminal",
@@ -2072,8 +2295,17 @@
         "markerFound": true,
         "handlerFile": "server/services/backlog_attachment_upload_handler.go"
       },
-      "tested": false,
-      "testIds": [],
+      "tested": true,
+      "testIds": [
+        "TestBacklogAttachmentUpload_PNG_Success",
+        "TestBacklogAttachmentUpload_JPEG_Success",
+        "TestBacklogAttachmentUpload_SpoofedExtension_Rejected",
+        "TestBacklogAttachmentUpload_SVG_Rejected",
+        "TestBacklogAttachmentUpload_PathTraversalFilename",
+        "TestBacklogAttachmentUpload_OversizedFile",
+        "TestBacklogAttachmentUpload_EmptyFile",
+        "TestBacklogAttachmentUpload_MissingFileField"
+      ],
       "lastModified": "2026-07-08T12:16:05.579967631-07:00"
     },
     {

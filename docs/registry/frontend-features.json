@@ -2,6 +2,69 @@
   "version": "1",
   "features": [
     {
+      "id": "backlog-pipeline-mode-management",
+      "type": "frontend",
+      "frontend": {
+        "component": "PipelineModesPage",
+        "path": "web-app/src/app/settings/pipeline-modes/page.tsx",
+        "markerLine": 2
+      },
+      "tested": false,
+      "testIds": [],
+      "lastModified": "2026-07-16T07:36:06Z"
+    },
+    {
+      "id": "backlog-pipeline-mode-selector",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogItemForm",
+        "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > defaults to 'Default' selected on a new-item mount",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > includes the selected mode slug in the onSubmit payload",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > G-4: only 'Default' is selectable while the mode fetch is pending, and submit is never blocked by it",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > G-3: shows the fetch-failure notice, keeps 'Default' selectable, and stays submittable",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > shows a hint linking to Settings when the fetch succeeds but no pipeline modes exist yet",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > does not show the empty-modes hint once real pipeline modes are available",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > G-2: renders a synthetic disabled 'Unknown mode' option when the item's stored slug is unresolvable, and never falls back to Default",
+        "BacklogItemForm \u2014 pipeline mode selector (Epic 3.2) > G-1: warns (non-blocking) when the selected mode needs {{repo_path}} but the item's repoPath is empty"
+      ],
+      "lastModified": "2026-07-19T00:00:00Z"
+    },
+    {
+      "id": "backlog-stuck-items",
+      "type": "frontend",
+      "frontend": {
+        "component": "StuckItemsSection",
+        "path": "web-app/src/components/backlog-stuck/StuckItemsSection.tsx",
+        "markerLine": 1
+      },
+      "tested": true,
+      "testIds": [
+        "tests/e2e/backlog-stuck-items.spec.ts",
+        "StuckItemsSection_should_showStaleBannerAndRetainList_When_RefreshPollFails",
+        "StuckItemsSection_should_alwaysOfferRecoveryAction_When_InAnyDegradedState",
+        "StuckItemsSection_should_wrapChipsInRoleGroupWithAriaPressed_When_Rendered",
+        "StuckItemsSection_should_useAriaLivePoliteForCount_When_CountChanges",
+        "StuckItemsSection_should_showOtherReasonsBadge_When_SameItemInMultipleGroups",
+        "StuckItem_should_renderCouldntCheckChipNotGreen_When_LastCheckedOlderThan5Min",
+        "StuckItem_should_showResolvedConfirmationThenFade_When_ResolvesWhileExpanded",
+        "StuckItem_should_exposeButtonRoleAndAriaExpanded_When_Toggled",
+        "StuckItem_should_truncateWithTitleTooltip_When_TitleIsLong",
+        "StuckItemDetail_should_showAutoMergeUnknownAndRenderRest_When_SettingFetchFailed",
+        "StuckItemDetail_should_showExplicitMergeCopy_When_ReasonIsPrReadyUnmerged",
+        "StuckNavBadge_should_haveFullPhraseAriaLabelAndHideAtZero_When_Rendered",
+        "StuckNavBadge_should_showLoadingAffordance_When_NoFetchHasSucceededYet",
+        "getStuckReasonLabel_should_returnTextLabelForEveryReason_When_MappedExhaustively",
+        "StuckItem_should_exposeRetryNow_When_OnTriggerRemediationNowProvided",
+        "StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap"
+      ],
+      "lastModified": "2026-07-20T00:00:00Z"
+    },
+    {
       "id": "pane-resize-handle",
       "type": "frontend",
       "frontend": {
@@ -138,9 +201,12 @@
       },
       "tested": true,
       "testIds": [
-        "BacklogItemDetail \u2014 background refresh must not unmount the view"
+        "BacklogItemDetail \u2014 background refresh must not unmount the view",
+        "BacklogItemDetail \u2014 description markdown rendering",
+        "BacklogItemDetail \u2014 Ship PR action",
+        "e2e:plan-gate-blocks-spawn-until-approved-or-skipped"
       ],
-      "lastModified": "2026-07-01T00:00:00Z"
+      "lastModified": "2026-07-19T00:00:00Z"
     },
     {
       "id": "backlog-item-form",
@@ -154,9 +220,15 @@
       "testIds": [
         "BacklogItemForm \u2014 Repository Path help",
         "BacklogItemForm \u2014 checkbox help text",
-        "BacklogItemForm \u2014 cloning busy state"
+        "BacklogItemForm \u2014 cloning busy state",
+        "BacklogItemForm \u2014 auto-create-pr toggle",
+        "BacklogItemForm \u2014 description write/preview",
+        "BacklogItemForm \u2014 image attachment upload",
+        "e2e:backlog-rich-text-preview",
+        "e2e:backlog-rich-text-upload",
+        "e2e:backlog-rich-text-mobile-fallback"
       ],
-      "lastModified": "2026-07-01T00:00:00Z"
+      "lastModified": "2026-07-18T00:00:00Z"
     },
     {
       "id": "backlog-list-page",
@@ -169,9 +241,10 @@
       "tested": true,
       "testIds": [
         "e2e:backlog-tour-first-visit",
-        "e2e:backlog-tour-reopen-button"
+        "e2e:backlog-tour-reopen-button",
+        "e2e:backlog-dev-mode-should-display-a-seeded-backlog-item"
       ],
-      "lastModified": "2026-07-01T00:00:00Z"
+      "lastModified": "2026-07-06T00:00:00Z"
     },
     {
       "id": "backlog-tour",
@@ -298,6 +371,28 @@
       "lastModified": "2026-05-15T00:00:00Z"
     },
     {
+      "id": "local-file-browser",
+      "type": "frontend",
+      "frontend": {
+        "component": "LocalFileBrowser",
+        "path": "web-app/src/components/files/LocalFileBrowser.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "LocalFileBrowser \u2014 navigation > descends into a directory entry on click, including a resolved symlinked directory",
+        "LocalFileBrowser \u2014 filter > narrows entries client-side without an extra fetch",
+        "serveUrl \u2014 special-character filenames > round-trips %s through encode/decode",
+        "LocalFileBrowser \u2014 truncation notice > shows an accurate notice sourced from has_more/total, not a hardcoded count",
+        "local-file-browser > navigates into a symlinked directory",
+        "local-file-browser > filter box narrows entries client-side",
+        "local-file-browser > opens a file with special characters in its name",
+        "local-file-browser > path bar offers autocomplete suggestions while typing",
+        "local-file-browser > open terminal here creates a directory-mode session"
+      ],
+      "lastModified": "2026-07-13T00:00:00Z"
+    },
+    {
       "id": "log-viewer",
       "type": "frontend",
       "frontend": {
@@ -391,6 +486,25 @@
         "web-app/tests/e2e/project-grouping.spec.ts"
       ],
       "lastModified": "2026-04-24T00:00:00Z"
+    },
+    {
+      "id": "review-queue-filters",
+      "type": "frontend",
+      "frontend": {
+        "component": "ReviewQueuePanel",
+        "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "ReviewQueuePanel \u2014 combinable filters > keeps priority and reason filters active simultaneously (combinable, not exclusive)",
+        "ReviewQueuePanel \u2014 combinable filters > filters by program",
+        "ReviewQueuePanel \u2014 combinable filters > filters to items with a GitHub PR when Has PR is selected",
+        "ReviewQueuePanel \u2014 combinable filters > filters by free-text search across session name and branch",
+        "ReviewQueuePanel \u2014 combinable filters > sorts by name ascending when selected",
+        "ReviewQueuePanel \u2014 combinable filters > clear-all resets every filter dimension and search text"
+      ],
+      "lastModified": "2026-07-09T00:00:00Z"
     },
     {
       "id": "review-queue-pr-creation",
@@ -780,6 +894,48 @@
       "tested": false,
       "testIds": [],
       "lastModified": "2026-05-12T00:00:00Z"
+    },
+    {
+      "id": "vcs-widget",
+      "type": "frontend",
+      "frontend": {
+        "component": "VcsWidget",
+        "path": "web-app/src/components/shared/VcsWidget.tsx",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "VcsWidget_should_RenderSectionsInMergeabilityPillFirstOrder_When_FullModeWithPopulatedData",
+        "VcsWidget_should_OmitRefreshButton_When_DataKindHistorical",
+        "VcsWidget_should_ForwardOnBrowseFilesToHeader_When_FullModeWithWorktreePath",
+        "VcsWidget_should_OmitBrowseFilesButton_When_CompactModeEvenWithOnBrowseFiles",
+        "MergeabilityPill_should_RenderShippedLabel_When_StateShipped",
+        "MergeabilityPill_should_RenderReadyToMergeLabel_When_StateReadyToMerge",
+        "MergeabilityPill_should_RenderDraftLabel_When_StateDraft",
+        "MergeabilityPill_should_RenderConflictsLabel_When_StateConflicted",
+        "MergeabilityPill_should_RenderChangesRequestedLabel_When_StateChangesRequested",
+        "MergeabilityPill_should_RenderCiFailingLabelWithHiddenIcon_When_StateCiFailing",
+        "MergeabilityPill_should_RenderCiRunningLabel_When_StateCiPending",
+        "MergeabilityPill_should_RenderClosedNotMergedLabel_When_StateClosedUnshipped",
+        "MergeabilityPill_should_RenderStatusUnavailableLabel_When_StateSnapshotUnavailable",
+        "MergeabilityPill_should_RenderNoPrLabel_When_StateNoPr",
+        "VcsWidgetHeader_should_RenderBranchAheadBehindAndAriaLabeledCopyButton_When_FullModeWithWorktreePath",
+        "VcsWidgetHeader_should_HideActiveSessionsIndicator_When_ActiveSessionCountIsOneOrOmitted",
+        "VcsWidgetHeader_should_RenderDeletedBranchCopy_When_BranchExistsFalse",
+        "VcsWidgetHeader_should_OmitDeletedBranchCopy_When_BranchExistsTrue",
+        "VcsWidgetFileList_should_RenderNativeButtonReachableByTab_When_OnNavigateToFileProvided",
+        "VcsWidgetFileList_should_RenderPlainSpanNotDeadButton_When_OnNavigateToFileOmitted",
+        "VcsWidgetCommitList_should_ExpandFullSummaryOnTap_When_RowClickedAtNarrowWidth",
+        "VcsWidgetCommitList_should_CapAt20WithShowAllButton_When_FullModeHas30Commits",
+        "VcsWidgetGithubRow_should_RenderApprovedAndChangesRequestedWithAriaLabel_When_GithubPopulated",
+        "VcsWidgetGithubRow_should_ReturnNull_When_KindLiveAndGithubNull",
+        "VcsWidgetGithubRow_should_RenderFullCaptureFailureCopy_When_SnapshotCaptureFailedTrueAndGithubNull",
+        "VcsWidgetGithubRow_should_RenderPartialCaptureFailureCopyAlongsideRealData_When_GithubPartiallyPopulated",
+        "VcsWidget_should_RenderPillFileListCommitListAndAsOfTimestamp_When_DurableSnapshotPresent",
+        "VcsWidget_should_RenderNoHistoryCapturedCopy_When_ShippedSnapshotAtUnset",
+        "VcsWidget_should_RenderAggregateStatsAndCommitsWithNoPerFileRows_When_CompactModeExpanded"
+      ],
+      "lastModified": "2026-07-18T00:00:00Z"
     }
   ]
 }
