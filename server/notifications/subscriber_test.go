@@ -228,6 +228,145 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 	}
 }
 
+// TestCoalescing_DifferentBacklogItemsSurviveWithinWindow reproduces the bug reported
+// 2026-07-19/20 ("I keep getting a PR Creation failed notification, it doesn't show up
+// on the notification page"): every backlog-item notification call site
+// (server/services/backlog_notifier.go's EventBusNotifier.Notify and the three
+// notify* helpers in backlog_service_triage.go) used to publish with an EMPTY
+// sessionID, even though the real backlog item ID was available and only went into
+// metadata["item_id"]. Since coalesceKey is "sessionID:notificationType", two
+// DIFFERENT items' same-type notifications landing in the same coalescing window
+// collapsed to the same key and only the last one survived to the persisted store —
+// even though the live toast for the dropped one still fired.
+//
+// The fix threads the real item ID through as sessionID (see EventBusNotifier.Notify),
+// which this test verifies: two distinct "items" (simulated here directly at the
+// subscriber level, which is agnostic to whether the sessionID came from a real
+// session or a backlog item) publishing the same notification type within the
+// coalescing window must both survive to the store, not clobber each other.
+func TestCoalescing_DifferentBacklogItemsSurviveWithinWindow(t *testing.T) {
+	bus := events.NewEventBus(100)
+	defer bus.Close()
+	appender := &mockAppender{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
+
+	const warningType = int32(8) // NOTIFICATION_TYPE_WARNING
+
+	// Two different backlog items, both hitting the same WARNING-type notification
+	// (e.g. "rework cap reached") within the same coalescing window. Prior to the fix,
+	// both call sites published with sessionID="", so these would share the coalesce
+	// key ":8" and only one would survive.
+	bus.Publish(&events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "item-aaaa-1111",
+		NotificationID:       "notif-item-a",
+		NotificationType:     warningType,
+		NotificationPriority: 2,
+		NotificationTitle:    "Auto-rework cap reached",
+		NotificationMessage:  "Item A — hit the rework cap.",
+		NotificationMetadata: map[string]string{"item_id": "item-aaaa-1111"},
+	})
+	bus.Publish(&events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "item-bbbb-2222",
+		NotificationID:       "notif-item-b",
+		NotificationType:     warningType,
+		NotificationPriority: 2,
+		NotificationTitle:    "Auto-rework cap reached",
+		NotificationMessage:  "Item B — hit the rework cap.",
+		NotificationMetadata: map[string]string{"item_id": "item-bbbb-2222"},
+	})
+
+	if err := testutil.WaitForCondition(func() bool {
+		return len(appender.getRecords()) >= 2
+	}, testutil.FastWaitConfig()); err != nil {
+		cancel()
+		_ = testutil.WaitForCondition(func() bool {
+			return len(appender.getRecords()) >= 2
+		}, testutil.FastWaitConfig())
+	} else {
+		cancel()
+	}
+
+	records := appender.getRecords()
+	if len(records) != 2 {
+		t.Fatalf("expected 2 Append calls (one per distinct backlog item), got %d — different items' same-type notifications clobbered each other", len(records))
+	}
+
+	seenIDs := map[string]bool{}
+	for _, r := range records {
+		seenIDs[r.ID] = true
+	}
+	if !seenIDs["notif-item-a"] || !seenIDs["notif-item-b"] {
+		t.Errorf("expected both notif-item-a and notif-item-b to survive, got records: %+v", records)
+	}
+}
+
+// TestEventToRecord_BacklogItemSessionNameStaysEmpty verifies that when a
+// notification's SessionID has been set to a backlog item ID (metadata["item_id"]
+// present, per the coalescing-key fix in EventBusNotifier.Notify) and Context
+// (sessionName) is empty, eventToRecord does NOT fall back SessionName to the raw
+// item ID. That fallback exists for genuine session notifications (so a nameless
+// session still gets a displayable identifier) but would leak a raw item UUID into
+// SessionName for backlog items — which wins the frontend's title fallback chain
+// (sessionName || title || sessionId, see NotificationPanel.tsx) and would clobber
+// the real, descriptive notification title (e.g. "Auto-rework cap reached").
+func TestEventToRecord_BacklogItemSessionNameStaysEmpty(t *testing.T) {
+	event := &events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "item-aaaa-1111",
+		Context:              "", // no friendly session name — this is a backlog item, not a session
+		NotificationID:       "notif-1",
+		NotificationType:     8,
+		NotificationPriority: 2,
+		NotificationTitle:    "Auto-rework cap reached",
+		NotificationMessage:  "Item A — hit the rework cap.",
+		NotificationMetadata: map[string]string{"item_id": "item-aaaa-1111"},
+	}
+
+	record := eventToRecord(event)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.SessionName != "" {
+		t.Errorf("expected SessionName to stay empty for a backlog-item notification, got %q", record.SessionName)
+	}
+	if record.SessionID != "item-aaaa-1111" {
+		t.Errorf("expected SessionID to be the item ID, got %q", record.SessionID)
+	}
+}
+
+// TestEventToRecord_RealSessionFallsBackToSessionID verifies the pre-existing
+// fallback (SessionName = SessionID when Context is empty and there's no
+// metadata["item_id"]) still holds for genuine session notifications.
+func TestEventToRecord_RealSessionFallsBackToSessionID(t *testing.T) {
+	event := &events.Event{
+		Type:                 events.EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            "real-session-uuid",
+		Context:              "",
+		NotificationID:       "notif-2",
+		NotificationType:     1,
+		NotificationPriority: 1,
+		NotificationTitle:    "Test",
+		NotificationMessage:  "Message",
+	}
+
+	record := eventToRecord(event)
+	if record == nil {
+		t.Fatal("expected non-nil record")
+	}
+	if record.SessionName != "real-session-uuid" {
+		t.Errorf("expected SessionName to fall back to SessionID for a real session notification, got %q", record.SessionName)
+	}
+}
+
 // TestCoalescing_NonNotificationEventsIgnored verifies that events of other
 // types are ignored by the subscriber.
 func TestCoalescing_NonNotificationEventsIgnored(t *testing.T) {

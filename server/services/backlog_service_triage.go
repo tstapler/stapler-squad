@@ -122,8 +122,12 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	if s.eventBus == nil {
 		return
 	}
+	// itemID is passed as sessionID (not just metadata) so the notification subscriber's
+	// coalescing key (sessionID:notificationType) differentiates between different backlog
+	// items — see the comment on EventBusNotifier.Notify in backlog_notifier.go for the
+	// full explanation of the bug this avoids.
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Auto-rework cap reached",
@@ -156,8 +160,9 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	if s.eventBus == nil {
 		return
 	}
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Auto-rework stopped — repeated failure",
@@ -180,8 +185,9 @@ func (s *BacklogService) notifyTriagePersistFailure(ctx context.Context, itemID,
 	if !statusAdvanced {
 		body += " The item is still at 'idea' — retry manually or re-trigger triage."
 	}
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		title, body,

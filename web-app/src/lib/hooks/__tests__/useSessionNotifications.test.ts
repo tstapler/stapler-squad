@@ -191,6 +191,24 @@ describe("useSessionNotifications", () => {
         expect.objectContaining({ sessionName: "" })
       );
     });
+
+    it("backlog-item history-only notifications do not wire up onView", () => {
+      const onViewSession = jest.fn();
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false, onViewSession })
+      );
+
+      act(() => {
+        result.current({
+          ...makeEvent(NT.INFO, "backlog-item-uuid"),
+          metadata: { item_id: "backlog-item-uuid" },
+        });
+      });
+
+      expect(mockAddToHistoryOnly).toHaveBeenCalledWith(
+        expect.objectContaining({ onView: undefined })
+      );
+    });
   });
 
   // ── 2. Toast-worthy types ────────────────────────────────────────────────
@@ -245,6 +263,40 @@ describe("useSessionNotifications", () => {
       });
 
       expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("real session events wire up onView to navigate to the session", () => {
+      const onViewSession = jest.fn();
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false, onViewSession })
+      );
+
+      act(() => {
+        result.current(makeEvent(NT.WARNING));
+      });
+
+      const call = mockAddNotification.mock.calls[0][0];
+      expect(typeof call.onView).toBe("function");
+      call.onView();
+      expect(onViewSession).toHaveBeenCalledWith("test-session");
+    });
+
+    it("backlog-item notifications (metadata.item_id present) do not wire up onView — sessionId now holds the item's ID, not a real session, so navigating to /?session=<id> would 404", () => {
+      const onViewSession = jest.fn();
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false, onViewSession })
+      );
+
+      act(() => {
+        result.current({
+          ...makeEvent(NT.WARNING, "backlog-item-uuid"),
+          metadata: { item_id: "backlog-item-uuid" },
+        });
+      });
+
+      expect(mockAddNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ onView: undefined })
+      );
     });
 
     it("INPUT_REQUIRED fires addNotification", () => {
