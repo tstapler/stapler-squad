@@ -139,6 +139,18 @@ type BacklogLifecycleListener struct {
 	prCreatorMu      sync.RWMutex
 	prCreatorFactory func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator
 
+	// branchReconcilerMu guards branchReconciler for concurrent Set/get access.
+	branchReconcilerMu sync.RWMutex
+	// branchReconciler fetches+merges a branch's remote ref into whatever is
+	// currently checked out in a worktree — the push_failed remediation
+	// mechanism (attemptPushRemediation). Same signature as
+	// git.MergeMainIntoWorktree (the production default installed by
+	// newListenerBase), which despite its "main" name just fetches+merges
+	// whatever branch name is passed; here that's the item's OWN branch,
+	// reconciling a non-fast-forward push rejection by combining local and
+	// remote history.
+	branchReconciler func(worktreePath, branchName string) (*git.MergeMainResult, error)
+
 	// notifierMu guards notifier for concurrent Set/get access.
 	notifierMu sync.RWMutex
 	notifier   Notifier
@@ -288,6 +300,24 @@ func (l *BacklogLifecycleListener) getPRCreatorFactory() func(repoPath, worktree
 	return l.prCreatorFactory
 }
 
+// SetBranchReconciler overrides the function used to fetch+merge a branch's
+// remote ref into its worktree for push_failed remediation
+// (attemptPushRemediation). Overridable in tests to avoid needing a real git
+// repo on disk; production code never needs to call this, since
+// newListenerBase installs git.MergeMainIntoWorktree.
+func (l *BacklogLifecycleListener) SetBranchReconciler(f func(worktreePath, branchName string) (*git.MergeMainResult, error)) {
+	l.branchReconcilerMu.Lock()
+	defer l.branchReconcilerMu.Unlock()
+	l.branchReconciler = f
+}
+
+// getBranchReconciler returns the current branch reconciler under a read lock.
+func (l *BacklogLifecycleListener) getBranchReconciler() func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+	l.branchReconcilerMu.RLock()
+	defer l.branchReconcilerMu.RUnlock()
+	return l.branchReconciler
+}
+
 // SetNotifier wires in the notifier used to publish operator-facing notifications
 // (PR creation failures, security blocks, stale work sessions, rework-cap hits).
 // Optional — nil means notifications are disabled.
@@ -355,6 +385,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		shutdownCancel:          cancel,
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
 		prCreatorFactory:        defaultPRCreatorFactory,
+		branchReconciler:        git.MergeMainIntoWorktree,
 	}
 	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
@@ -964,6 +995,17 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// (also guarded by its own recover() below regardless of ordering).
 	l.runStuckDetector("bouncing", &okNames, &panickedNames, func() {
 		l.reconcileBouncingItems(ctx, er)
+	})
+
+	// Retry the push+PR flow for items with an open push_failed row (Phase B
+	// of docs/tasks/backlog-stuck-item-auto-remediation.md). This is the
+	// periodic counterpart to pushAndCreatePR's own event-driven attempt:
+	// nothing else ever re-invokes pushAndCreatePR for an item that has no
+	// active session, so without this detector a push_failed item sits stuck
+	// forever once nothing is left running (the exact shape live-repro'd
+	// 2026-07-20: c2ad7bf3-91bf-4d47-8654-0f2f20869080).
+	l.runStuckDetector("push_failed", &okNames, &panickedNames, func() {
+		l.reconcilePushFailedItems(ctx, er)
 	})
 
 	// Flag idea-status items whose triage session crashed, was killed, or never
@@ -1815,6 +1857,144 @@ func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemI
 		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonAbandonedReview, caller)
 	}
 	return nil
+}
+
+// reconcilePushFailedItems retries the push+PR flow for every open
+// push_failed stuck row still anchored at "review" — see the doc comment on
+// its ReconcileStuck call site for why this periodic sweep is needed at all
+// (pushAndCreatePR itself only ever runs in response to a review-session
+// event, so an item with no active session would otherwise never get a
+// second attempt). push_failed is event-shaped (see selfHealStuck's doc
+// comment) so it is never auto-resolved by the status-anchor self-heal
+// sweep; resolution instead happens through resolveToPRPending once a
+// retried push succeeds. Best-effort: query failures are logged, never
+// returned.
+func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context, er *EntRepository) {
+	open, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcilePushFailedItems FindOpenStuckStates error: %v", err)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonPushFailed {
+			continue
+		}
+		if row.ItemStatus != BacklogStatusReview {
+			continue // no longer applicable to this item's current state
+		}
+		l.retryPushFailedWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
+	}
+}
+
+// retryPushFailedWithBackoffGate dispatches attemptPushRemediation through
+// the shared remediation backoff gate (Storage.RemediationDue,
+// session/backlog_remediation.go) — the "push_failed" reason's remediation
+// action per docs/tasks/backlog-stuck-item-auto-remediation.md Phase B.
+// Mirrors autoReopenWithBackoffGate's shape (bare goroutine, no semaphore —
+// a git fetch+merge+push is seconds, not the minutes a headless LLM respawn
+// can take, so the reviewSem markAbandonedReview/ReconcileStuck's
+// review-gate respawns share is not needed here). Best-effort: gate
+// query/write errors are logged, never returned, and fail OPEN (still
+// attempts the retry) rather than silently stranding the item — same
+// rationale as autoReopenWithBackoffGate.
+func (l *BacklogLifecycleListener) retryPushFailedWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPushFailed)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] retryPushFailedWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-rework paused",
+			fmt.Sprintf("%s — automated push retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] retryPushFailedWithBackoffGate item=%s: push_failed remediation backoff not yet due, skipping retry", itemID)
+		return
+	}
+
+	go func() {
+		l.attemptPushRemediation(l.shutdownCtx, itemID, itemTitle)
+	}()
+}
+
+// attemptPushRemediation is the push_failed remediation action dispatched by
+// retryPushFailedWithBackoffGate once RemediationDue grants an attempt. It
+// fetches the branch's current remote ref and merges it into the worktree
+// (via the injected branchReconciler — git.MergeMainIntoWorktree in
+// production, despite the "main" name it fetches+merges whatever branch
+// name is passed; here that's the item's OWN branch, which reconciles the
+// exact non-fast-forward-rejection shape live-repro'd on 2026-07-20:
+// c2ad7bf3-91bf-4d47-8654-0f2f20869080's stelekit branch was rejected
+// because something else advanced origin's copy of the same branch name).
+// On a clean merge (or if the branch was already up to date — e.g. a
+// previous remediation attempt already fixed it but the push itself failed
+// for an unrelated transient reason), retries the full push+PR flow via
+// pushAndCreatePR, which resolves the push_failed row on success through its
+// existing resolveToPRPending call. A real content conflict is NOT
+// auto-resolved — per the task scope, merge conflicts need a human; the
+// item is left stuck (still governed by the normal backoff schedule, so it
+// eventually parks after MaxRemediationAttempts) with a notification naming
+// the conflicting files.
+func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, itemID, itemTitle string) {
+	item, err := l.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation GetBacklogItem item=%s: %v", itemID, err)
+		return
+	}
+	if item.Status != string(BacklogStatusReview) {
+		log.DebugLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: status is now %s, not review — skipping", itemID, item.Status)
+		return
+	}
+
+	sessions, err := l.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation ListItemSessions item=%s: %v", itemID, err)
+		return
+	}
+	var lastWork *ItemSessionSummary
+	for i := range sessions {
+		// Ascending by CreatedAt (ListItemSessions' query order) — keep
+		// overwriting so this ends up holding the *most recent* work
+		// session, mirroring the identical pattern in ReconcilePRPending's
+		// ship-snapshot path.
+		if sessions[i].Role == SessionRoleWork {
+			s := sessions[i]
+			lastWork = &s
+		}
+	}
+	if lastWork == nil {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: no work session found, cannot retry push", itemID)
+		return
+	}
+
+	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
+	if wtErr != nil || wt.WorktreePath == "" {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: no worktree available (%v), cannot retry push", itemID, wtErr)
+		return
+	}
+
+	result, mergeErr := l.getBranchReconciler()(wt.WorktreePath, wt.BranchName)
+	if mergeErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: fetch/merge of origin/%s failed: %v — will retry on next backoff window", itemID, wt.BranchName, mergeErr)
+		return
+	}
+	if result.Conflicted {
+		log.WarningLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: origin/%s conflicts with the local worktree in %v — cannot auto-resolve", itemID, wt.BranchName, result.ConflictedFiles)
+		l.notify(itemID,
+			"Manual rebase needed",
+			fmt.Sprintf("%s — the remote branch has diverged in a way that conflicts with this item's committed work (%s). Automated retry cannot resolve real content conflicts; resolve manually and push, or use Reset to try again automatically after fixing it.", itemTitle, strings.Join(result.ConflictedFiles, ", ")),
+			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+		return
+	}
+
+	log.InfoLog.Printf("[BacklogLifecycle] attemptPushRemediation item=%s: origin/%s reconciled (upToDate=%v merged=%v), retrying push", itemID, wt.BranchName, result.UpToDate, result.Merged)
+	l.pushAndCreatePR(ctx, item, *lastWork)
 }
 
 // RecordPRCreatedOutOfBand records a PR that was created for workSessionUUID

@@ -864,6 +864,210 @@ func TestPushFailed_should_persistRowSurvivingRestart_When_ItemHasNoPrNumber(t *
 	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
 }
 
+// --- Phase B: automated push_failed remediation ---
+//
+// These tests cover the gap where a push_failed row was write-only —
+// MarkStuck fired once and nothing ever retried, exactly the shape of the
+// live 2026-07-20 repro (backlog item c2ad7bf3-91bf-4d47-8654-0f2f20869080,
+// stelekit branch backlog/stelekit-fix-shift-tab-dedent-desktop, rejected
+// non-fast-forward). reconcilePushFailedItems is the new periodic
+// counterpart to pushAndCreatePR's event-driven attempt.
+
+// TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetryPushSucceeds
+// verifies requirement (c): a non-fast-forward failure that's resolved by a
+// successful merge+retry actually clears the push_failed row and ships the
+// item (transition to pr_pending).
+func TestAttemptPushRemediation_should_resolveStuckRow_When_MergeSucceedsAndRetryPushSucceeds(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// Initial failed push writes the durable push_failed row.
+	listener.pushAndCreatePR(ctx, item, is)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	require.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+
+	// The underlying non-fast-forward is now reconcilable: the branch
+	// reconciler reports a clean merge, and the retried push succeeds.
+	fakeCreator.pushErr = nil
+	fakeCreator.createURL = "https://github.com/tstapler/stelekit/pull/251"
+	fakeCreator.createNumber = 251
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		assert.NotEmpty(t, worktreePath)
+		assert.NotEmpty(t, branchName)
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+
+	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+
+	assert.True(t, fakeCreator.pushCalled, "the retried push must actually be attempted")
+	assert.True(t, fakeCreator.createCalled, "PR creation should proceed once the push succeeds")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "item must move to pr_pending once remediation succeeds")
+
+	openAfter, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, row := range openAfter {
+		assert.NotEqual(t, domain.StuckReasonPushFailed, row.Reason, "push_failed row must be resolved once the retry succeeds")
+	}
+}
+
+// TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchReconcilerReportsConflict
+// verifies a real content conflict is NOT mechanically retried: the push must
+// not be re-attempted, a distinct "Manual rebase needed" notification must
+// fire, and the row must stay open for a human to resolve.
+func TestAttemptPushRemediation_should_notifyManualRebaseNeeded_When_BranchReconcilerReportsConflict(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fakeCreator.pushCalled = false // reset so we can prove the retry never re-attempts a push
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		return &git.MergeMainResult{Conflicted: true, ConflictedFiles: []string{"src/edit.ts"}}, nil
+	})
+
+	listener.attemptPushRemediation(ctx, item.ID, item.Title)
+
+	assert.False(t, fakeCreator.pushCalled, "a real content conflict must not be mechanically retried")
+	assert.Contains(t, notifier.titles(), "Manual rebase needed")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason, "row stays open — a human needs to resolve the real conflict")
+}
+
+// TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
+// verifies requirement (b): repeated rapid failures don't bypass the backoff
+// schedule — mirrors TestRemediationDue_should_capAtFiveAttemptsWithDelayedRetries
+// for the "bouncing" reason.
+func TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	listener.SetNotifier(&fakeNotifier{})
+	listener.pushAndCreatePR(ctx, item, is)
+
+	// The reconciler never actually resolves anything here — only the
+	// gate's own bookkeeping is under test, so every dispatched attempt
+	// must fail to merge and bail without the loop below consuming more
+	// than one attempt.
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		return nil, errors.New("simulated fetch failure")
+	})
+
+	for i := 0; i < 10; i++ {
+		listener.retryPushFailedWithBackoffGate(ctx, item.ID, item.Title)
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
+}
+
+// TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndReconcilerSucceeds
+// verifies requirement (a): a push_failed item gets an automated retry
+// attempt when due, exercised through the actual production entry point
+// wired into ReconcileStuck rather than calling the remediation action
+// directly — proving the periodic sweep alone (no active session, no new
+// review event) is enough to unstick the item, closing the exact gap behind
+// the 2026-07-20 live repro.
+func TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndReconcilerSucceeds(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	listener.SetNotifier(&fakeNotifier{})
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fakeCreator.pushErr = nil
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+
+	listener.reconcilePushFailedItems(ctx, er)
+
+	require.Eventually(t, func() bool {
+		fetched, err := storage.GetBacklogItem(ctx, item.ID)
+		return err == nil && fetched.Status == string(BacklogStatusPRPending)
+	}, 2*time.Second, 10*time.Millisecond, "the periodic sweep must dispatch a retry that eventually ships the item")
+}
+
+// TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview verifies
+// an item whose push_failed row is still open but whose status has since
+// moved off "review" (event-shaped rows are excluded from the status-anchor
+// self-heal sweep, so nothing else would stop this) is never retried.
+func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	listener.SetNotifier(&fakeNotifier{})
+	listener.pushAndCreatePR(ctx, item, is)
+
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	require.NoError(t, err)
+
+	reconcileCalled := false
+	listener.SetBranchReconciler(func(worktreePath, branchName string) (*git.MergeMainResult, error) {
+		reconcileCalled = true
+		return &git.MergeMainResult{Merged: true}, nil
+	})
+
+	listener.reconcilePushFailedItems(ctx, er)
+	assert.False(t, reconcileCalled, "an item that has moved off review must not be retried")
+}
+
 // --- Story 2.1.5: self-heal sweep (adversarial concern C1) ---
 
 // TestSelfHealSweep_should_resolveAnchoredRow_When_ItemStatusInconsistentWithReason

@@ -8,8 +8,24 @@ import { Detector } from "../detector";
  * Recognized commands:
  *   >theme matrix | cyberpunk77 | wh40k | clean | light | dark
  *   >go sessions | review | history
- *   >shell [optional name/command]
+ *   >shell [dir] [-- command]   — open a terminal session, optionally rooted at
+ *     `dir` and/or running `command` as the session program instead of a plain shell.
  */
+
+/** Splits the raw text after `>shell` into an optional directory and an optional `-- command` tail. */
+export function parseShellArgs(rawArgs: string | undefined): { dir?: string; command?: string } {
+  const trimmed = (rawArgs ?? "").trim();
+  if (!trimmed) return {};
+
+  const tokens = trimmed.split(/\s+/);
+  const dashIndex = tokens.indexOf("--");
+  if (dashIndex === -1) return { dir: trimmed };
+
+  const dir = tokens.slice(0, dashIndex).join(" ").trim();
+  const command = tokens.slice(dashIndex + 1).join(" ").trim();
+  return { dir: dir || undefined, command: command || undefined };
+}
+
 export class CommandDetector implements Detector {
   name = "CommandDetector";
   priority = 5;
@@ -40,17 +56,29 @@ export class CommandDetector implements Detector {
     for (const cmd of CommandDetector.COMMANDS) {
       const match = trimmed.match(cmd.pattern);
       if (match) {
-        const resultType = cmd.commandType === "spawn_shell" ? InputType.SpawnShell : InputType.Command;
-        // For >shell, capture the optional argument (name/command) from the capture group
-        const commandArg = cmd.commandType === "spawn_shell" ? (match[1] ?? "") : cmd.commandArg;
+        if (cmd.commandType === "spawn_shell") {
+          const { dir, command } = parseShellArgs(match[1]);
+          const suggestedName = command
+            ? `Run "${command}"${dir ? ` in ${dir}` : ""}`
+            : dir
+            ? `Open terminal in ${dir}`
+            : "Open terminal";
+          return {
+            type: InputType.SpawnShell,
+            confidence: 1.0,
+            parsedValue: trimmed,
+            suggestedName,
+            metadata: { commandType: cmd.commandType, shellDir: dir, shellCommand: command },
+          };
+        }
         return {
-          type: resultType,
+          type: InputType.Command,
           confidence: 1.0,
           parsedValue: trimmed,
           suggestedName: cmd.suggestedName,
           metadata: {
             commandType: cmd.commandType,
-            commandArg,
+            commandArg: cmd.commandArg,
           },
         };
       }

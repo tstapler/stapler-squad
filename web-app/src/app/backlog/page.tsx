@@ -21,13 +21,15 @@ import {
   type BacklogItemInput,
 } from "@/lib/hooks/useBacklogService";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
 import * as styles from "./backlog.css";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type SortColumn = "title" | "status" | "priority" | "updatedAt";
+type SortColumn = "title" | "status" | "priority" | "updatedAt" | "repoPath";
+type GroupBy = "none" | "repoPath";
 
 const ALL_STATUSES: BacklogItemStatus[] = [
   "idea",
@@ -174,6 +176,9 @@ function BacklogPageInner() {
   const [sortCol, setSortCol] = useState<SortColumn>("updatedAt");
   const [sortAsc, setSortAsc] = useState(false);
 
+  // Group by
+  const [groupBy, setGroupBy] = useState<GroupBy>("none");
+
   // Detail pane resize
   const [detailWidth, setDetailWidth] = useState(420);
   const dragRef = useRef({ active: false, startX: 0, startWidth: 0 });
@@ -238,9 +243,15 @@ function BacklogPageInner() {
       cmp = a.priority - b.priority;
     } else if (sortCol === "updatedAt") {
       cmp = (a.updatedAt ?? "").localeCompare(b.updatedAt ?? "");
+    } else if (sortCol === "repoPath") {
+      cmp = compareByRepoPath(a, b);
     }
     return sortAsc ? cmp : -cmp;
   });
+
+  // Grouping is applied after sorting so items within each group keep the
+  // currently selected sort order (mirrors SessionList's sort-then-group).
+  const groups = groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null;
 
   const handleSortClick = (col: SortColumn) => {
     if (sortCol === col) {
@@ -332,6 +343,61 @@ function BacklogPageInner() {
     return sortAsc ? " ↑" : " ↓";
   };
 
+  const renderItemRow = (item: BacklogItem) => {
+    const acDone = item.acCriteria.filter((c) => c.status === "done").length;
+    const isActive = selectedItemId === item.id;
+    return (
+      <tr
+        key={item.id}
+        className={`${styles.tableRow} ${isActive ? styles.tableRowActive : ""}`}
+        tabIndex={0}
+        role="row"
+        aria-selected={isActive}
+        data-testid="backlog-table-row"
+        data-item-id={item.id}
+        onClick={() => handleRowClick(item.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleRowClick(item.id);
+          }
+        }}
+      >
+        <td className={`${styles.tableCell} ${styles.titleCell}`}>
+          {item.title}
+        </td>
+        <td className={styles.tableCell}>
+          <span
+            className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
+            aria-label={`Status: ${getStatusLabel(item.status)}`}
+          >
+            {getStatusLabel(item.status)}
+          </span>
+        </td>
+        <td className={styles.tableCell}>
+          <span
+            className={styles.priorityBadge}
+            data-testid="priority-badge"
+            aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
+          >
+            {PRIORITY_LABELS[item.priority] ?? "P?"}
+          </span>
+        </td>
+        <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
+          {item.acCriteria.length > 0
+            ? `${acDone}/${item.acCriteria.length}`
+            : "—"}
+        </td>
+        <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
+          {formatDateShort(item.updatedAt)}
+        </td>
+        <td className={`${styles.tableCell} ${styles.repoPathCell}`} data-testid="backlog-repo-path-cell">
+          {item.repoPath || "—"}
+        </td>
+      </tr>
+    );
+  };
+
   return (
     <div className={styles.pageWrapper} data-testid="backlog-page">
       {/* Header */}
@@ -389,6 +455,19 @@ function BacklogPageInner() {
         />
         <StatusFilterChips selected={statusFilter} onChange={setStatusFilter} />
         <PriorityFilterChips selected={priorityFilter} onChange={setPriorityFilter} />
+        <label className={styles.groupByLabel}>
+          Group by:{" "}
+          <select
+            className={styles.groupBySelect}
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+            aria-label="Group by"
+            data-testid="backlog-group-by-select"
+          >
+            <option value="none">None</option>
+            <option value="repoPath">Repository</option>
+          </select>
+        </label>
       </div>
 
       {/* Content */}
@@ -445,61 +524,36 @@ function BacklogPageInner() {
                   >
                     Updated{sortIndicator("updatedAt")}
                   </th>
+                  <th
+                    scope="col"
+                    className={styles.tableHeaderCell}
+                    onClick={() => handleSortClick("repoPath")}
+                    style={{ cursor: "pointer" }}
+                    aria-sort={sortCol === "repoPath" ? (sortAsc ? "ascending" : "descending") : "none"}
+                    data-testid="backlog-col-repo-path"
+                  >
+                    Repository{sortIndicator("repoPath")}
+                  </th>
                 </tr>
               </thead>
-              <tbody>
-                {sortedItems.map((item) => {
-                  const acDone = item.acCriteria.filter((c) => c.status === "done").length;
-                  const isActive = selectedItemId === item.id;
-                  return (
-                    <tr
-                      key={item.id}
-                      className={`${styles.tableRow} ${isActive ? styles.tableRowActive : ""}`}
-                      tabIndex={0}
-                      role="row"
-                      aria-selected={isActive}
-                      data-testid="backlog-table-row"
-                      data-item-id={item.id}
-                      onClick={() => handleRowClick(item.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleRowClick(item.id);
-                        }
-                      }}
-                    >
-                      <td className={`${styles.tableCell} ${styles.titleCell}`}>
-                        {item.title}
-                      </td>
-                      <td className={styles.tableCell}>
-                        <span
-                          className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
-                          aria-label={`Status: ${getStatusLabel(item.status)}`}
-                        >
-                          {getStatusLabel(item.status)}
-                        </span>
-                      </td>
-                      <td className={styles.tableCell}>
-                        <span
-                          className={styles.priorityBadge}
-                          data-testid="priority-badge"
-                          aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
-                        >
-                          {PRIORITY_LABELS[item.priority] ?? "P?"}
-                        </span>
-                      </td>
-                      <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
-                        {item.acCriteria.length > 0
-                          ? `${acDone}/${item.acCriteria.length}`
-                          : "—"}
-                      </td>
-                      <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
-                        {formatDateShort(item.updatedAt)}
+              {groups ? (
+                groups.map((group) => (
+                  <tbody key={group.groupKey}>
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className={styles.groupHeaderCell}
+                        data-testid="backlog-group-header"
+                      >
+                        {group.displayName} ({group.items.length})
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
+                    {group.items.map((item) => renderItemRow(item))}
+                  </tbody>
+                ))
+              ) : (
+                <tbody>{sortedItems.map((item) => renderItemRow(item))}</tbody>
+              )}
             </table>
           )}
           {items.length > 0 && !items.some((i) => i.status === "in_progress") && <FooterNudge />}

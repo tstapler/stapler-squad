@@ -37,6 +37,7 @@ import {
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
+import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -44,7 +45,6 @@ interface OmnibarProps {
   onCreateSession: (data: OmnibarSessionData) => Promise<void>;
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
-  onSpawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
@@ -153,7 +153,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = [] }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = [] }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -256,8 +256,22 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     detection?.type === InputType.LocalPath ||
     detection?.type === InputType.PathWithBranch;
 
-  // Use the detected local path (strips branch suffix for PathWithBranch).
-  const completionPrefix = isPathInput ? detection?.localPath ?? input : "";
+  // `>shell <dir>` is still typing its directory argument when no `-- command`
+  // has been typed yet — offer the same directory completions as a normal path input.
+  const shellMetadata = detection?.type === InputType.SpawnShell
+    ? (detection.metadata as { shellDir?: string; shellCommand?: string } | undefined)
+    : undefined;
+  const isShellDirInput = Boolean(shellMetadata && !shellMetadata.shellCommand);
+
+  // Use the detected local path (strips branch suffix for PathWithBranch), or the
+  // in-progress `>shell` directory argument.
+  const completionPrefix = isPathInput
+    ? detection?.localPath ?? input
+    : isShellDirInput
+    ? shellMetadata?.shellDir ?? ""
+    : "";
+
+  const isPathCompletionActive = (isPathInput || isShellDirInput) && completionPrefix.length > 0;
 
   const {
     entries: completionEntries,
@@ -266,7 +280,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     isLoading: isCompletionLoading,
     error: completionError,
   } = usePathCompletions(completionPrefix, {
-    enabled: isPathInput,
+    enabled: isPathCompletionActive,
     directoriesOnly: true,
   });
 
@@ -321,7 +335,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const historyCount = historyMatches.length;
 
   const isDropdownVisible =
-    isPathInput && mergedEntries.length > 0 && !dropdownDismissed;
+    isPathCompletionActive && mergedEntries.length > 0 && !dropdownDismissed;
 
   // Discovery mode derived from modeState
   const isDiscoveryMode = modeState.type === "discovery";
@@ -392,13 +406,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Accept a completion entry: fill the input and continue for further completion.
   const handleCompletionSelect = useCallback(
     (entry: CompletionEntry) => {
-      const newInput = entry.isDirectory ? entry.path + "/" : entry.path;
+      const newPath = entry.isDirectory ? entry.path + "/" : entry.path;
+      const newInput = isShellDirInput ? `>shell ${newPath}` : newPath;
       setInput(newInput);
       setDropdownIndex(-1);
       setDropdownDismissed(false);
       inputRef.current?.focus();
     },
-    [setDropdownIndex, setDropdownDismissed]
+    [isShellDirInput, setDropdownIndex, setDropdownDismissed]
   );
 
   // Detect input type with debouncing
@@ -770,7 +785,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }, liveEntries[0].name);
             if (lcp) {
               const sep = completionBaseDir.endsWith("/") ? "" : "/";
-              setInput(completionBaseDir + sep + lcp);
+              const newPath = completionBaseDir + sep + lcp;
+              setInput(isShellDirInput ? `>shell ${newPath}` : newPath);
               setDropdownDismissed(false);
             }
           }
@@ -831,6 +847,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       mergedEntries,
       liveEntries,
       completionBaseDir,
+      isShellDirInput,
       dropdownIndex,
       handleCompletionSelect,
       onClose,
@@ -949,11 +966,32 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return;
     }
 
-    // Spawn shell command (>shell [optional command]) — fire-and-forget, no session-creation flow.
+    // Spawn shell command (>shell [dir] [-- command]) — creates a real terminal session
+    // via the standard session-creation flow, rooted at `shellDir` (if given) and running
+    // `shellCommand` as the session program (defaults to an interactive shell).
     if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) {
-      const { commandArg } = (detection.metadata ?? {}) as { commandArg?: string };
-      onSpawnShell?.(undefined, "", commandArg);
-      onClose();
+      const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
+        shellDir?: string;
+        shellCommand?: string;
+      };
+      const sessionData: OmnibarSessionData = {
+        title: shellCommand ? shellCommand : shellDir ? `Terminal: ${shellDir}` : "Terminal",
+        path: shellDir ?? "",
+        program: shellCommand ?? "bash",
+        sessionType: shellDir ? "directory" : "one_off",
+        createIfMissing: Boolean(shellDir),
+        autoYes: false,
+      };
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateSession(sessionData);
+        if (shellCommand) addRecentShellCommand(shellCommand);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create session");
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -1120,7 +1158,6 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     saveHistory,
     onCreateSession,
     onClose,
-    onSpawnShell,
     onRunWorkflow,
     formState.firstPrompt,
     router,
@@ -1283,6 +1320,48 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             </div>
           );
         })()}
+        {detection?.type === InputType.SpawnShell && (() => {
+          const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
+            shellDir?: string;
+            shellCommand?: string;
+          };
+          const recentCommands = getRecentShellCommands();
+          return (
+            <>
+              <div role="status" aria-live="polite" data-testid="spawn-shell-chip">
+                <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
+                {shellDir ? <span> in {shellDir}</span> : null}
+              </div>
+              {!shellCommand && !shellDir && recentCommands.length > 0 && (
+                <div data-testid="spawn-shell-recent-commands">
+                  {recentCommands.map((cmd) => (
+                    <button
+                      key={cmd}
+                      type="button"
+                      data-testid="spawn-shell-recent-command"
+                      onClick={() => {
+                        setInput(`>shell -- ${cmd}`);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {cmd}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          );
+        })()}
+        {isShellDirInput && isDropdownVisible && (
+          <PathCompletionDropdown
+            id="shell-dir-completion-listbox"
+            entries={mergedEntries}
+            historyCount={historyCount}
+            selectedIndex={dropdownIndex}
+            onSelect={handleCompletionSelect}
+            isLoading={isCompletionLoading}
+          />
+        )}
 
         {/* Discovery mode: session results + recent repos */}
         {isDiscoveryMode && !isAtDropdownVisible && (
