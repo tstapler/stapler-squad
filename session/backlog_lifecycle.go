@@ -2032,8 +2032,30 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 //	abandoned_review   -> anchor {review}                     resolve when status not in anchor
 //	stale_work         -> anchor {in_progress}                resolve when status not in anchor
 //	bouncing           -> anchor {in_progress, review}         resolve ONLY on done/PASS (never mid-cycle)
+//	autonomous_stuck   -> terminal set {done, archived}        resolve ONLY on reaching the set (inverted anchor)
 //	rework_cap         -> event-shaped, no anchor              excluded from the sweep entirely
 //	push_failed        -> event-shaped, no anchor              excluded from the sweep entirely
+//
+// autonomous_stuck is the one row in this table that anchors the opposite
+// way from the others: those resolve when the item LEAVES its anchor status;
+// autonomous_stuck resolves only once the item REACHES a genuinely terminal
+// status (done or archived), because the row must legitimately survive
+// transient in_progress<->review cycling while a stuck item is respawned and
+// retried (AutoRespawnAutonomousWork) or manually pushed through review. As
+// of PR #180, onAutonomousDriverComplete's SessionRoleWork case no longer
+// force-transitions in_progress->review on a turn-cap stop (it leaves the
+// item in_progress and respawns instead), so there is no false "left
+// in_progress" signal to anchor on mid-cycle the way there was when this
+// exclusion was originally written. This case doubles as the retroactive
+// cleanup path for autonomous_stuck rows left open by items that reached
+// done/archived via a completion path other than a subsequent successful
+// onAutonomousDriverComplete run (e.g. ReconcilePRPending's merge-detected
+// done transition, pushAndCreatePR's skip-review-gate fallback, or
+// auto-archive) — see resolveAutonomousStuck in
+// server/services/autonomous_orchestration_service.go for the faster,
+// event-driven counterpart that covers the common "driver succeeds on a
+// later attempt" case immediately instead of waiting for this sweep's next
+// tick.
 //
 // Same-status clears (e.g. a pr_pending item whose PR stops being ready
 // while it's still pr_pending) are NOT this sweep's job — they are handled
@@ -2058,15 +2080,13 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed, domain.StuckReasonAutonomousStuck:
-			// Event-shaped: resolved only at an explicit call site, not by anchoring
-			// on item status. autonomous_stuck specifically cannot anchor on the
-			// item's status at mark-time: onAutonomousDriverComplete's SessionRoleWork
-			// case transitions in_progress->review even when the driver is stuck (a
-			// separate, flagged behavior — see that function's doc comment), so an
-			// in_progress anchor would immediately false-resolve on the very next
-			// tick once the status-transition below it runs, before an operator ever
-			// sees the row.
+		case domain.StuckReasonAutonomousStuck:
+			// Inverted anchor — see the table above. Resolve only once the item
+			// has genuinely finished, never merely because it left in_progress.
+			resolve = row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived
+		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed:
+			// Event-shaped: resolved only at an explicit call site, not by
+			// anchoring on item status.
 			continue
 		default:
 			continue

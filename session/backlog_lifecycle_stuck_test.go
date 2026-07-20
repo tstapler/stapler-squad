@@ -1706,6 +1706,150 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	assert.Empty(t, open, "the racing write must self-correct within one self-heal tick")
 }
 
+// --- autonomous_stuck terminal-state resolution (docs/bugs: orphaned
+// autonomous_stuck rows never auto-resolve once their item completes) ---
+
+// TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesDone
+// verifies the primary regression: an item marked autonomous_stuck that
+// later legitimately completes via the automated pipeline (reaching done
+// through a path other than a subsequent successful onAutonomousDriverComplete
+// run, e.g. ReconcilePRPending's merge-detected transition) gets its stuck
+// row resolved by the self-heal sweep instead of leaking forever.
+func TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item that finished",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item later legitimately completes via a path that never re-invokes
+	// onAutonomousDriverComplete for this item (e.g. ReconcilePRPending's
+	// merge-detected done transition).
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "autonomous_stuck row must resolve once the item reaches done")
+}
+
+// TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesArchived
+// verifies the second terminal status in the anchor set — this is also the
+// retroactive cleanup path for rows that predate the fix and were archived
+// (via the auto-archive sweep) before ever being resolved.
+func TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesArchived(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item that was archived",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// Simulate one of the 5 live-repro'd orphans: the item finished long ago
+	// (done, then later auto-archived) with no forward-only hook ever having
+	// touched this exact row — this is the retroactive-cleanup path.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "autonomous_stuck row must resolve once the item reaches archived")
+}
+
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgress
+// verifies an item that is genuinely still stuck (never reached done or
+// archived) keeps its row open — the sweep must not resolve on a bare
+// "left in_progress" signal the way the other, non-inverted anchors do.
+func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgress(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item still stuck",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a genuinely stuck item must keep its autonomous_stuck row open")
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
+
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState
+// is the anti-regression test named directly by the bug report: the
+// selfHealStuck doc comment used to exclude autonomous_stuck from the sweep
+// entirely because (pre-PR #180) a turn-cap stop could force an
+// in_progress->review transition even while genuinely stuck, which would
+// have made a naive {in_progress} anchor false-resolve the row before an
+// operator ever saw it. This test proves the new {done, archived} anchor
+// does not reintroduce that failure mode: an item that has merely cycled
+// forward into review (a real, but non-terminal, status) on its way to a
+// later stuck condition must NOT have its row resolved.
+func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item mid-cycle",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item cycles forward into review — a real transition (e.g. a human
+	// pushed the stuck work through manually), but not yet a terminal one.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an item merely cycling through review (not yet done/archived) must not false-resolve")
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
+
 // --- Story 2.1.5e: per-detector panic isolation ---
 
 // TestRunStuckDetector_should_recoverAndLogPanic_When_DetectorPanics verifies
