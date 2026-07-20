@@ -159,3 +159,58 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 	assert.Contains(t, resp.Msg.Diff, "already reviewed content", "must show the branch's real committed diff, not an empty base..base range")
 	assert.Equal(t, int32(1), resp.Msg.Added)
 }
+
+// TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessionMadeNoCommits
+// is the regression test for the second, still-live cause of the same empty-diff
+// symptom PR #179 only partially fixed: an item's branch can carry more than one work
+// session (rework/reopen cycles). The RPC previously derived diffBaseSHA from the
+// MOST RECENT work session's own BaseCommitSHA. When that latest session is a reopen
+// that makes zero new commits (e.g. it just re-verifies already-complete work and
+// exits), its BaseCommitSHA was captured at spawn time — which by definition already
+// equals the current branch tip — so base == head and the diff comes back empty, even
+// though an earlier work session on the same branch committed substantial real,
+// unreviewed work. This mirrors the live repro on item
+// de6d7878-9d6e-4081-acfa-02ff545c87b4 ("Add Queued State To Backlog Items"): session 1
+// did the real implementation, session 2 was a reopen that made no new commits.
+func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessionMadeNoCommits(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+	baseSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	// Session 1: the real implementation, committed to the branch.
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "implemented.txt"), []byte("real implementation content\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "implemented.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "implement feature")
+	branchTipSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+	runGitTestCmd(t, repoPath, "checkout", "main")
+	runGitTestCmd(t, repoPath, "merge", "--no-ff", "--no-edit", "feature")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "reopened item, rework session made no commits",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// Session 1 (earlier, created first): real work, base -> branchTipSHA.
+	session1Path := filepath.Join(t.TempDir(), "session-1-worktree")
+	attachWorkSessionWithRange(t, storage, repo, item.ID, "work-session-1", repoPath, session1Path, "feature", baseSHA, branchTipSHA)
+
+	// Ensure session 2's CreatedAt is strictly later than session 1's.
+	time.Sleep(2 * time.Millisecond)
+
+	// Session 2 (later, a reopen/rework session): made zero new commits. Its
+	// BaseCommitSHA was captured at spawn time, which is already the branch
+	// tip left by session 1 — base == head from session 2's own perspective.
+	session2Path := filepath.Join(t.TempDir(), "session-2-worktree")
+	attachWorkSessionWithRange(t, storage, repo, item.ID, "work-session-2-reopen", repoPath, session2Path, "feature", branchTipSHA, branchTipSHA)
+
+	resp, err := svc.GetBacklogItemDiff(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemDiffRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	assert.Contains(t, resp.Msg.Diff, "real implementation content", "diff must still reflect the earlier session's real committed work, not be empty just because the latest rework session made no commits")
+	assert.Equal(t, int32(1), resp.Msg.Added)
+	assert.Equal(t, int32(0), resp.Msg.Removed)
+}

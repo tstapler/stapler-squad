@@ -313,24 +313,49 @@ func (s *BacklogService) GetBacklogItemDiff(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
 	}
 
-	// Use the most recent work session's base SHA so the diff reflects what the
-	// current iteration of work actually changed.
-	var mostRecentWorkSession *session.ItemSessionSummary
+	// An item's branch can carry more than one work session (rework/reopen
+	// cycles): session 1 does the real implementation, review sends it back,
+	// session 2 picks up the same branch to address feedback, etc. The diff
+	// must reflect everything committed across ALL of those sessions, so:
+	//   - diffBaseSHA comes from the EARLIEST work session's BaseCommitSHA —
+	//     the point where the branch actually diverged, before any rework
+	//     cycle began. Using the most recent session's own BaseCommitSHA is
+	//     wrong whenever that latest session made zero new commits (e.g. a
+	//     reopen that just re-verifies already-complete work and exits): its
+	//     BaseCommitSHA was captured at that session's spawn time, which by
+	//     definition already equals the current branch tip, so base == head
+	//     and the diff comes back empty even though earlier sessions on the
+	//     same branch carry substantial real, already-committed work.
+	//   - headRef still comes from the MOST RECENT work session so it always
+	//     resolves to the branch's actual current tip (see the wt.BranchName
+	//     rationale below).
+	// ListItemSessions returns sessions ordered oldest-first (see
+	// EntRepository.ListItemSessions), but we compare CreatedAt explicitly
+	// rather than depending on that ordering.
+	var earliestWorkSession, mostRecentWorkSession *session.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if is.Role == session.SessionRoleWork {
-			if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
-				mostRecentWorkSession = is
-			}
+		if is.Role != session.SessionRoleWork {
+			continue
+		}
+		if earliestWorkSession == nil || is.CreatedAt.Before(earliestWorkSession.CreatedAt) {
+			earliestWorkSession = is
+		}
+		if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
+			mostRecentWorkSession = is
 		}
 	}
 	diffBaseSHA := "HEAD~1"
 	var headRef string
-	if mostRecentWorkSession != nil {
-		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil {
+	if earliestWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, earliestWorkSession.SessionUUID); wtErr == nil {
 			if wt.BaseCommitSHA != "" {
 				diffBaseSHA = wt.BaseCommitSHA
 			}
+		}
+	}
+	if mostRecentWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil {
 			// Prefer the branch name over the session's LastCommitSha. LastCommitSha
 			// is only ever written once, at session spawn, to the PRE-work base
 			// commit (see AttachSessionToItem / SpawnSessionFromItem step 12b) —
