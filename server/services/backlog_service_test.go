@@ -151,8 +151,10 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs       map[string]bool
-	killedPaneUUIDs []string
+	liveUUIDs         map[string]bool
+	killedPaneUUIDs   []string
+	archivedUUIDs     []string
+	archiveErrForUUID map[string]error
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -167,6 +169,16 @@ func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string)
 
 func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
 	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
+	return nil
+}
+
+func (m *mockSessionStopper) ArchiveSessionByUUID(_ context.Context, uuid string) error {
+	if m.archiveErrForUUID != nil {
+		if err, ok := m.archiveErrForUUID[uuid]; ok {
+			return err
+		}
+	}
+	m.archivedUUIDs = append(m.archivedUUIDs, uuid)
 	return nil
 }
 
@@ -223,7 +235,10 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 	// Path must round-trip: SpawnSessionFromItem writes slash commands and a
 	// context file to inst.Path. An empty Path here makes those writes land in
 	// the test process's working directory instead of a sandbox.
-	inst := &session.Instance{Title: title, Path: path}
+	// UUID must be unique per call — SpawnSessionFromItem's ItemSession row is
+	// keyed on inst.UUID, so archival-tracking tests need distinct values per
+	// spawn to tell rounds apart (see mockSessionStopper.archivedUUIDs).
+	inst := &session.Instance{Title: title, Path: path, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -254,7 +269,7 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, title, _, 
 		})
 		return nil, m.err
 	}
-	inst := &session.Instance{Title: title, Path: worktreePath}
+	inst := &session.Instance{Title: title, Path: worktreePath, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -972,6 +987,49 @@ func TestSpawnSessionFromItem_Reopen_ReusesWorktreeInPlace(t *testing.T) {
 
 	assert.Equal(t, firstPath, secondPath, "reopen must reuse the same worktree path, not mint a new one")
 	assert.FileExists(t, uncommitted, "reopen must not wipe the existing worktree — the file written before reopen must survive")
+}
+
+// TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession is the regression
+// test for the bug where backlog work sessions accumulated forever because rework
+// respawns never archived the prior round's session — see
+// docs/tasks/backlog-feature-improvement.md and the live-data finding of up to 13
+// unarchived work sessions piled up on a single still-open item. A reopen spawn must
+// archive every prior work-role session it supersedes (but must not touch the
+// brand-new session it just created).
+func TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "archive superseded item")
+
+	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 1)
+	firstUUID := creator.calls[0].inst.UUID
+
+	// End the work session so the reopen isn't blocked by the active-session guard.
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+
+	require.Empty(t, stopper.archivedUUIDs, "nothing should be archived before the reopen spawn")
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.Len(t, creator.calls, 2)
+	secondUUID := creator.calls[1].inst.UUID
+
+	assert.Equal(t, []string{firstUUID}, stopper.archivedUUIDs,
+		"reopen must archive exactly the superseded first-round work session")
+	assert.NotContains(t, stopper.archivedUUIDs, secondUUID,
+		"reopen must not archive the brand-new session it just created")
 }
 
 // currentBranch returns the checked-out branch name at path via the real git CLI.

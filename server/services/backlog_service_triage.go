@@ -502,6 +502,13 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// directory the session spawned above just started using.
 	if isReopen {
 		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
+		// Archive the superseded prior-round work session(s) now that the new
+		// session has replaced them — otherwise every rework round piles up a
+		// fresh work session that's never cleaned up until the item eventually
+		// reaches done/archived (see docs/tasks/workflow-history-and-archiving.md;
+		// this is the fix for items that bounce through many rework rounds while
+		// still open).
+		s.archiveItemWorkSessions(ctx, priorSessions)
 	}
 
 	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
