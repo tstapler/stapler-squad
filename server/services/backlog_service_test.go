@@ -1138,6 +1138,52 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	return itemID
 }
 
+// TestSpawnSessionFromItem_RecordsTriggeredByFromAutonomousFlag verifies that the
+// in_progress transition SpawnSessionFromItem fires on a fresh spawn records
+// TriggeredBy="user" for a manual (non-autonomous) spawn and TriggeredBy="system"
+// for an autonomous spawn — SpawnSessionFromItem is the RPC the frontend calls
+// directly for the dominant "click Spawn Session" path, so a hardcoded value here
+// would defeat the point of the status-audit-trail fix.
+func TestSpawnSessionFromItem_RecordsTriggeredByFromAutonomousFlag(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	t.Run("manual spawn records user", func(t *testing.T) {
+		itemID := createReadyItemForSpawn(t, svc, repoPath, "manual spawn triggeredBy")
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+			ItemId: itemID,
+		}))
+		require.NoError(t, err)
+
+		getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+		require.NoError(t, err)
+		require.NotEmpty(t, getResp.Msg.Item.StatusEvents)
+		last := getResp.Msg.Item.StatusEvents[len(getResp.Msg.Item.StatusEvents)-1]
+		require.Equal(t, "in_progress", last.ToStatus)
+		require.Equal(t, "user", last.TriggeredBy)
+	})
+
+	t.Run("autonomous spawn records system", func(t *testing.T) {
+		itemID := createReadyItemForSpawn(t, svc, repoPath, "autonomous spawn triggeredBy")
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+			ItemId:     itemID,
+			Autonomous: true,
+		}))
+		require.NoError(t, err)
+
+		getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+		require.NoError(t, err)
+		require.NotEmpty(t, getResp.Msg.Item.StatusEvents)
+		last := getResp.Msg.Item.StatusEvents[len(getResp.Msg.Item.StatusEvents)-1]
+		require.Equal(t, "in_progress", last.ToStatus)
+		require.Equal(t, "system", last.TriggeredBy)
+	})
+}
+
 // TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap verifies that a fresh spawn
 // is rejected with CodeResourceExhausted once maxConcurrentBacklogWorkItems items
 // are already in_progress, and that the blocked item is left untouched (still

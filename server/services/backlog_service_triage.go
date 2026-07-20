@@ -280,6 +280,13 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
+	// A spawn is user-initiated unless the caller explicitly marks it Autonomous
+	// (the autonomous driver spawning its own follow-up sessions).
+	triggeredBy := session.TriggeredByUser
+	if req.Msg.Autonomous {
+		triggeredBy = session.TriggeredBySystem
+	}
+
 	// 1. Load item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
@@ -312,7 +319,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
 		item.Status == string(session.BacklogStatusReview)) {
 		var forceErr error
-		item, forceErr = s.forceResetItem(ctx, item)
+		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
 			return nil, forceErr
 		}
@@ -513,7 +520,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 
 	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
 	if !isReopen {
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy); transErr != nil {
 			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 		}
 	}
@@ -527,7 +534,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 // forceResetItem stops any in-flight work or review sessions for the item, and — if
 // the item is currently in review — transitions it back to in_progress. Used when
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
-func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData) (*session.BacklogItemData, error) {
+func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
 	earlyPrior, _ := s.storage.ListItemSessions(ctx, item.ID)
 	for _, ps := range earlyPrior {
 		if ps.EndedAt != nil {
@@ -542,7 +549,7 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 		_ = s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now())
 	}
 	if item.Status == string(session.BacklogStatusReview) {
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy)
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
 		}
