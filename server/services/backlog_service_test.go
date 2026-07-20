@@ -1373,7 +1373,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 		SessionRole: session.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -1554,7 +1554,7 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))

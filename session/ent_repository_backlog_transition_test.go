@@ -45,11 +45,11 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// flight, with no knowledge of it.
 	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusReview),
-	})
+	}, TriggeredBySystem)
 	require.NoError(t, err)
 	_, err = repo.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusPRPending),
-	})
+	}, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// The stale reopen attempt finally executes, using the precondition it
@@ -59,7 +59,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 		ExpectedStatus:    string(BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
-	})
+	}, TriggeredBySystem)
 	require.ErrorIs(t, err, ErrPreconditionFailed)
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
@@ -96,7 +96,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 		startBarrier.Wait()
 		_, txErr := repo.TransitionBacklogItemStatus(ctx, item.ID, toStatus, &BacklogItemPrecondition{
 			ExpectedStatus: string(BacklogStatusReview),
-		})
+		}, TriggeredBySystem)
 		results <- txErr
 	}
 

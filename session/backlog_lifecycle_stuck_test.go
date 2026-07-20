@@ -502,7 +502,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemRee
 	// whatever put it there live (a separate, already-fixed bug). No new
 	// review-role session is created: the only one on record is the one
 	// whose verdict already shipped the item above.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
@@ -1542,7 +1542,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	listener.SetNotifier(&fakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	reconcileCalled := false
