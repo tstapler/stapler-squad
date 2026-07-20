@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -28,6 +29,11 @@ const backlogCommandsDir = ".claude/commands/backlog"
 // instance (BacklogService.pipelineEngine) — passing two different engines would
 // reintroduce the "2 independent callers can drift" regression this seam closes.
 func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePath string) error {
+	// Self-heal before writing: if a prior version of this branch ever got any backlog
+	// scaffolding file committed (see backlogExcludePatterns), untrack it now so this spawn
+	// doesn't perpetuate the pollution forward. See selfHealWorktreeScaffolding's doc comment.
+	selfHealWorktreeScaffolding(worktreePath)
+
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 
 	var mkErr error
@@ -58,7 +64,6 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 		}
 	}
 
-	addWorktreeExcludes(worktreePath)
 	return nil
 }
 
@@ -141,6 +146,13 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 // CleanupSlashCommands removes the backlog slash command directory.
 // Logs but does not return an error if the directory is absent.
+//
+// Not wired into any production teardown path — this is intentional, not an oversight.
+// shipViaAgentOrFallback (session/backlog_lifecycle.go) relies on ship.md still being
+// present in the worktree after a work session exits review, so it can re-invoke
+// `/backlog/ship` as a one-shot headless call. Calling this on review exit (or any point
+// before the worktree itself is torn down) would delete ship.md out from under that path.
+// Exported for direct/manual invocation and exercised by tests only.
 func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
@@ -156,6 +168,9 @@ func CleanupSlashCommands(worktreePath string) error {
 // priorSessions must match what was passed to the live CLI prompt (BuildTokenBudgetedPrompt)
 // so the on-disk fallback the agent re-reads after context compaction doesn't lose history.
 func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionSummary, worktreePath string) error {
+	// Self-heal before writing: see WriteSlashCommands' identical call for why.
+	selfHealWorktreeScaffolding(worktreePath)
+
 	prompt := BuildSessionInitialPrompt(item, priorSessions)
 
 	var sb strings.Builder
@@ -179,12 +194,21 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
-	addWorktreeExcludes(worktreePath)
 	return nil
 }
 
 // CleanupBacklogContextFile removes .backlog-context.md from the worktree root.
 // Logs but does not fail if the file is absent.
+//
+// Not called from any production teardown path today, deliberately: worktree teardown
+// (Instance.Kill, Instance.Pause) already removes the entire worktree directory, so a
+// standalone scaffolding-only cleanup is redundant there — and the file is untracked
+// (via addWorktreeExcludes + selfHealWorktreeScaffolding), so it never appears in a git
+// diff/PR regardless of how long it lingers on disk between spawns. It is exported for
+// direct/manual invocation and exercised by tests. Do not wire this into a review-exit
+// or ship-time teardown path without first checking CleanupSlashCommands' doc comment
+// below — the equivalent file for slash commands (ship.md in particular) is deliberately
+// relied on to still exist after a work session ends.
 func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
@@ -250,4 +274,75 @@ func addWorktreeExcludes(worktreePath string) {
 			fmt.Fprintln(f, p)
 		}
 	}
+}
+
+// selfHealWorktreeScaffolding is called at the start of every backlog scaffolding write
+// (WriteSlashCommands, WriteBacklogContextFile). It closes the gap that $GIT_DIR/info/exclude
+// and a tracked .gitignore entry both share: neither stops a file that is ALREADY tracked in
+// the branch's history from continuing to be committed by a later broad `git add`/`git commit
+// -a`. Untracking here means a branch that got one of these files committed once — however it
+// happened — self-heals the next time stapler-squad spawns/reattaches/reopens a session on it,
+// instead of requiring a manual "untrack" commit (this repo's own history has ~20 of those; see
+// backlogExcludePatterns and the PR that added this function for the full incident history).
+func selfHealWorktreeScaffolding(worktreePath string) {
+	removed, err := untrackTrackedScaffolding(worktreePath, backlogExcludePatterns)
+	if err != nil {
+		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+	} else if len(removed) > 0 {
+		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+	}
+	addWorktreeExcludes(worktreePath)
+}
+
+// untrackTrackedScaffolding removes any git index entry matching patterns (git-rm-cached
+// semantics: the working-tree file is left alone, only the index entry is dropped) and
+// returns the list of paths it untracked. Uses go-git directly against the index rather than
+// shelling out to `git rm --cached`, per .claude/rules/prefer-go-git-over-subshells.md.
+//
+// Returns (nil, nil) — not an error — when worktreePath isn't a git repository at all (e.g. a
+// directory-mode session with no git backing), mirroring addWorktreeExcludes' own
+// best-effort, non-fatal handling of that case.
+func untrackTrackedScaffolding(worktreePath string, patterns []string) ([]string, error) {
+	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return nil, nil
+	}
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		return nil, fmt.Errorf("read git index: %w", err)
+	}
+
+	var toRemove []string
+	for _, e := range idx.Entries {
+		for _, p := range patterns {
+			if scaffoldingPatternMatches(e.Name, p) {
+				toRemove = append(toRemove, e.Name)
+				break
+			}
+		}
+	}
+	if len(toRemove) == 0 {
+		return nil, nil
+	}
+
+	for _, name := range toRemove {
+		if _, rmErr := idx.Remove(name); rmErr != nil {
+			return nil, fmt.Errorf("remove %s from index: %w", name, rmErr)
+		}
+	}
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		return nil, fmt.Errorf("write git index: %w", err)
+	}
+	return toRemove, nil
+}
+
+// scaffoldingPatternMatches reports whether entryName (a git index path, always
+// forward-slash-separated regardless of OS) matches exclude pattern p. Patterns ending in "/"
+// match any entry under that directory tree; other patterns match the full path exactly —
+// same semantics as the two forms already present in backlogExcludePatterns.
+func scaffoldingPatternMatches(entryName, p string) bool {
+	if strings.HasSuffix(p, "/") {
+		return strings.HasPrefix(entryName, p)
+	}
+	return entryName == p
 }
