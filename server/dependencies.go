@@ -943,6 +943,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wire the stale_work remediator so an in_progress item whose work session
+	// has gone quiet (agent finished and is idle at an interactive prompt,
+	// rather than crashed — TmuxAlive/PaneProcessDead both report healthy, so
+	// the generic tmux health check never catches this) gets its stale session
+	// closed out and a fresh one respawned instead of sitting stuck forever
+	// (see StaleWorkRemediator's doc comment in session/backlog_lifecycle.go).
+	backlogLifecycleListener.SetStaleWorkRemediator(backlogSvc)
 	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so
 	// it can soft-archive work sessions for items already done/archived — reuses
 	// sessionService's ArchiveSessionByUUID, the same method BacklogService's

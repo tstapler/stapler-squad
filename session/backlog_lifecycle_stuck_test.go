@@ -561,6 +561,253 @@ func TestReconcileStaleWorkSessions_should_resolveStaleWorkRow_When_SessionResum
 	assert.Empty(t, open, "row must resolve immediately once progress resumes, even though status is still in_progress")
 }
 
+// --- stale_work: Phase B automated remediation (docs/tasks/backlog-stuck-
+// item-auto-remediation.md) — reconcileStaleWorkSessions was previously
+// notify-only; a live item (9264efe7-b4c2-455a-9e2a-ab0196a63ecd, rework
+// suffix -r14) sat in_progress for 24h+ with its work session's agent idle
+// at an interactive prompt (TmuxAlive true, PaneProcessDead false — not a
+// zombie the generic health check would ever catch) because nothing ever
+// acted on the detection. ---
+
+// fakeStaleWorkRemediator is a test double implementing StaleWorkRemediator,
+// recording every RemediateStaleWorkSession call on a buffered channel (not a
+// plain counter) because remediateStaleWorkWithBackoffGate dispatches
+// asynchronously — mirrors fakeReviewRespawner's identical rationale.
+type fakeStaleWorkRemediator struct {
+	calls chan string
+	err   error
+}
+
+func newFakeStaleWorkRemediator() *fakeStaleWorkRemediator {
+	return &fakeStaleWorkRemediator{calls: make(chan string, 32)}
+}
+
+func (f *fakeStaleWorkRemediator) RemediateStaleWorkSession(ctx context.Context, itemID string) error {
+	f.calls <- itemID
+	return f.err
+}
+
+// TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJustOpened
+// verifies the tick that first opens (and notifies) a stale_work row does NOT
+// also dispatch remediation — the existing maxWorkSessionStaleness threshold
+// is already the "give it a chance" window; remediation only starts on a
+// subsequent tick that reconfirms the row is still open, matching how
+// autoReopenWithBackoffGate/retryPushFailedWithBackoffGate are always
+// invoked from a call site architecturally separate from their reason's own
+// MarkStuck call.
+func TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJustOpened(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	newStaleWorkTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	remediator := newFakeStaleWorkRemediator()
+	listener.SetStaleWorkRemediator(remediator)
+
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	select {
+	case itemID := <-remediator.calls:
+		t.Fatalf("remediation must not fire on the same tick that first opened the row, got call for item %s", itemID)
+	case <-time.After(100 * time.Millisecond):
+		// expected: no remediation dispatched yet
+	}
+}
+
+// TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOpenAndDue
+// verifies requirement (a): once a stale_work row is already open (a prior
+// tick marked+notified it) and the item is still stale, the NEXT sweep tick
+// dispatches RemediateStaleWorkSession through the backoff gate, and
+// RemediationDue's own attempt-accounting state advances (mirrors
+// TestReconcilePushFailedItems_should_dispatchRetryThroughBackoffGate's
+// production-entry-point style, exercised through reconcileStaleWorkSessions
+// itself rather than calling remediateStaleWorkWithBackoffGate directly).
+func TestReconcileStaleWorkSessions_should_dispatchRemediation_When_RowAlreadyOpenAndDue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newStaleWorkTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	remediator := newFakeStaleWorkRemediator()
+	listener.SetStaleWorkRemediator(remediator)
+
+	// First tick: opens + notifies the row, does not remediate.
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	// Second tick: item is still stale (LastProgressAt untouched) — the row
+	// is already open, so this tick must dispatch remediation.
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	require.Eventually(t, func() bool {
+		select {
+		case itemID := <-remediator.calls:
+			return itemID == item.ID
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "remediation must be dispatched once the row is already open and still due")
+
+	require.Eventually(t, func() bool {
+		rows, findErr := er.FindOpenStuckStates(ctx)
+		return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "RemediationDue's attempt accounting must advance exactly once")
+}
+
+// TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
+// verifies requirement (b): repeated rapid sweep ticks do not bypass the
+// backoff schedule — mirrors
+// TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
+// for the "stale_work" reason.
+func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newStaleWorkTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	remediator := newFakeStaleWorkRemediator()
+	listener.SetStaleWorkRemediator(remediator)
+
+	// Open the row (first-sighting tick: mark + notify only).
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	for i := 0; i < 10; i++ {
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
+}
+
+// TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressIsRecent
+// verifies requirement (c): a work session correctly identified as still
+// active/healthy (LastProgressAt recent, under maxWorkSessionStaleness) is
+// never marked stuck, notified, or handed to the remediator — no kill, no
+// notify, no remediation attempt.
+func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressIsRecent(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Healthy in-progress item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "healthy-work-session-uuid",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	remediator := newFakeStaleWorkRemediator()
+	listener.SetStaleWorkRemediator(remediator)
+
+	// Several ticks, exactly as a real periodic sweep would run.
+	for i := 0; i < 3; i++ {
+		listener.reconcileStaleWorkSessions(ctx, er)
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a healthy session must never be marked stuck")
+	assert.Empty(t, notifier.calls, "a healthy session must never be notified")
+	select {
+	case itemID := <-remediator.calls:
+		t.Fatalf("a healthy session must never be handed to the remediator, got call for item %s", itemID)
+	default:
+		// expected: no remediation attempted
+	}
+}
+
+// TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_ReworkCapIsUnlimited
+// is the bonus regression test: an item with ReworkCapOverride=0 (unlimited
+// rework retries — set on the live incident item, rework suffix -r14) must
+// still be capped by MaxRemediationAttempts and eventually park with the
+// standard "Auto-rework paused" notification, proving stale_work remediation
+// is bounded independently of the per-item rework cap. remediateStaleWork-
+// WithBackoffGate itself never reads ReworkCapOverride — RemediationDue's
+// attempt cap is the only thing that can ever stop it — so this also
+// verifies the field is present for documentation/regression purposes even
+// though this gate-level test doesn't need a real remediation action to
+// prove the point (mirrors
+// TestRemediationDue_should_advanceThroughFullScheduleThenPark's backdating
+// technique for driving all 5 attempts without a 72h+ real sleep).
+func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_ReworkCapIsUnlimited(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	unlimited := 0
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:             "Unlimited-rework-cap stale item",
+		Status:            string(BacklogStatusInProgress),
+		ReworkCapOverride: &unlimited,
+	})
+	require.NoError(t, err)
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-" + uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	parsedID, err := uuid.Parse(workIS.ID)
+	require.NoError(t, err)
+	_, err = er.client.ItemSession.UpdateOneID(parsedID).SetLastProgressAt(time.Now().Add(-3 * time.Hour)).Save(ctx)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	remediator := newFakeStaleWorkRemediator()
+	listener.SetStaleWorkRemediator(remediator)
+
+	// First-sighting tick: mark + notify only.
+	listener.reconcileStaleWorkSessions(ctx, er)
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+		require.Eventually(t, func() bool {
+			rows, findErr := er.FindOpenStuckStates(ctx)
+			return findErr == nil && len(rows) == 1 && rows[0].RemediationAttempts == int32(attempt)
+		}, time.Second, 10*time.Millisecond, "attempt %d must be recorded", attempt)
+		if attempt < 5 {
+			backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+		}
+	}
+
+	assert.Contains(t, notifier.titles(), "Auto-rework paused", "the 5th attempt must fire the parked notification regardless of ReworkCapOverride=0")
+
+	// 6th call, well past backoff: must not consume another attempt — the
+	// unlimited rework cap does not un-park a MaxRemediationAttempts-exhausted row.
+	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonStaleWork, time.Now().Add(-time.Second))
+	listener.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
+
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+}
+
 // --- orphaned_triage: standing detector for tombstoneOrphanTriageSessions'
 // manual-re-trigger-only blind spot (backlog-feature-improvement audit finding #8) ---
 

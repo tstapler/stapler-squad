@@ -834,6 +834,85 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	return nil
 }
 
+// RemediateStaleWorkSession implements session.StaleWorkRemediator, consumed
+// by BacklogLifecycleListener's remediateStaleWorkWithBackoffGate
+// (session/backlog_lifecycle.go). It closes out a work session that has gone
+// stale (no progress reported for over session.maxWorkSessionStaleness) even
+// though the underlying tmux session and pane process are still alive
+// (session.Instance.TmuxAlive/PaneProcessDead) — a genuinely stale session is
+// NOT a zombie the generic tmux health check would ever catch: the agent
+// inside finished its own work and is idle at an interactive prompt waiting
+// on a human, rather than crashed or hung (live repro 2026-07-20, item
+// 9264efe7-b4c2-455a-9e2a-ab0196a63ecd, rework suffix -r14 — 14 prior rework
+// rounds with nothing ever unsticking it, since detection existed but no
+// remediation action did). Trusts the caller's staleness signal plus
+// RemediationDue's own backoff gate rather than adding a second, possibly-
+// conflicting liveness heuristic here — see StaleWorkRemediator's doc
+// comment in session/backlog_lifecycle.go.
+//
+// Ends the stale ItemSession and delegates the actual respawn to
+// AutoRespawnAutonomousWork, which already implements exactly the "in_progress
+// item, no active work session, needs a fresh turn budget" case this
+// produces — including the rework-cap check, so a stale-work loop is bounded
+// by whichever of the rework cap or MaxRemediationAttempts (session/
+// backlog_remediation.go) is tighter, never solely by a rework cap an
+// operator may have set to 0 (unlimited) for a different reason.
+func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+		// Already moved on (a human acted manually, or another reconciler beat
+		// us to it) — nothing to remediate.
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions: %w", sessErr)
+	}
+	var active *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+			active = &sessions[i]
+			break
+		}
+	}
+	if active == nil {
+		// The stale session already ended between when the sweep queued this
+		// remediation and now (a concurrent respawn, or the agent finally
+		// wrapped up on its own) — AutoRespawnAutonomousWork's own
+		// hasActiveWorkSession/rework-cap guards decide whether a fresh
+		// session is still warranted.
+		return s.AutoRespawnAutonomousWork(ctx, itemID)
+	}
+
+	// Kill the stale tmux pane only (Instance.KillSession, NOT Instance.Kill),
+	// keeping the worktree intact so any in-progress but uncommitted work
+	// survives for the next work session to pick up. Best-effort: even if the
+	// kill fails (session already gone, tmux server hiccup), still tombstone
+	// the DB row and respawn below rather than leaving the item stranded on a
+	// pure kill failure.
+	if s.sessionStopper != nil {
+		if killErr := s.sessionStopper.KillTmuxPaneOnly(ctx, active.SessionUUID); killErr != nil {
+			log.WarningLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
+		}
+	}
+
+	now := time.Now()
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
+		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
+	}
+	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
+
+	return s.AutoRespawnAutonomousWork(ctx, itemID)
+}
+
 // AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
 // from pr_pending back to in_progress and spawns a new autonomous work session
 // pre-loaded with the CI/review failure context so the agent can fix and push.

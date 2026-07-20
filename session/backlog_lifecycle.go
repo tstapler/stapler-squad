@@ -51,6 +51,29 @@ type PRFixSpawner interface {
 	AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error
 }
 
+// StaleWorkRemediator can clean up and respawn an in_progress backlog item
+// whose active work session has gone stale (StuckReasonStaleWork — no
+// progress reported for over maxWorkSessionStaleness) but is NOT a zombie:
+// the underlying tmux session and pane process are still alive
+// (Instance.TmuxAlive/PaneProcessDead), so the generic tmux health check
+// never flags it — the agent inside simply finished its own work and is
+// idle at an interactive prompt instead of properly closing out. Before this
+// existed, reconcileStaleWorkSessions was detection-only (MarkStuck +
+// notify), so such an item sat "in_progress" forever once the agent went
+// idle (docs/tasks/backlog-stuck-item-auto-remediation.md Phase B; live
+// repro 2026-07-20, item 9264efe7-b4c2-455a-9e2a-ab0196a63ecd, rework suffix
+// -r14). Implemented outside this package (BacklogService owns the live
+// Instance registry needed to kill the stale tmux pane) and wired via
+// SetStaleWorkRemediator, same pattern as AutoReopenSpawner/PRFixSpawner.
+type StaleWorkRemediator interface {
+	// RemediateStaleWorkSession ends the item's current stale work session
+	// (killing its tmux pane but keeping the worktree so uncommitted work
+	// survives) and spawns a fresh one with a new turn budget. No-op (nil
+	// error) if the item already moved off in_progress or its work session
+	// already ended by the time this runs.
+	RemediateStaleWorkSession(ctx context.Context, itemID string) error
+}
+
 // ReviewRespawner can automatically re-trigger the review gate for a backlog
 // item stuck in review with no active session in flight (the
 // StuckReasonAbandonedReview condition — see markAbandonedReview). Before this
@@ -206,6 +229,10 @@ type BacklogLifecycleListener struct {
 	prFixMu      sync.RWMutex
 	prFixSpawner PRFixSpawner
 
+	// staleWorkRemediatorMu guards staleWorkRemediator for concurrent Set/get access.
+	staleWorkRemediatorMu sync.RWMutex
+	staleWorkRemediator   StaleWorkRemediator
+
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
@@ -343,6 +370,22 @@ func (l *BacklogLifecycleListener) getPRFixSpawner() PRFixSpawner {
 	l.prFixMu.RLock()
 	defer l.prFixMu.RUnlock()
 	return l.prFixSpawner
+}
+
+// SetStaleWorkRemediator wires in the remediator used to clean up and
+// respawn stale (but not zombie) work sessions — the "stale_work" reason's
+// automated remediation action.
+func (l *BacklogLifecycleListener) SetStaleWorkRemediator(r StaleWorkRemediator) {
+	l.staleWorkRemediatorMu.Lock()
+	defer l.staleWorkRemediatorMu.Unlock()
+	l.staleWorkRemediator = r
+}
+
+// getStaleWorkRemediator returns the current stale-work remediator under a read lock.
+func (l *BacklogLifecycleListener) getStaleWorkRemediator() StaleWorkRemediator {
+	l.staleWorkRemediatorMu.RLock()
+	defer l.staleWorkRemediatorMu.RUnlock()
+	return l.staleWorkRemediator
 }
 
 // SetReviewRespawner wires in the spawner used to automatically re-trigger the
@@ -1620,10 +1663,27 @@ const headlessTriageSessionUUIDPrefix = "headless-triage-"
 const maxHeadlessTriageSessionStaleness = 30 * time.Minute
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
-// active work session has gone longer than maxWorkSessionStaleness without progress.
-// Notify-once dedup and "since when" are DB-backed (durable BacklogStuckState
-// row), not an in-memory map. Best-effort: query/notify failures are logged,
-// never returned.
+// active work session has gone longer than maxWorkSessionStaleness without progress,
+// then (docs/tasks/backlog-stuck-item-auto-remediation.md Phase B) drives the
+// "stale_work" reason's automated remediation for every subsequent tick the
+// condition still holds. Notify-once dedup and "since when" are DB-backed
+// (durable BacklogStuckState row), not an in-memory map. Best-effort:
+// query/notify failures are logged, never returned.
+//
+// The very first tick a given item is observed stale only marks+notifies —
+// the open row's NotifiedAt (nil vs already-set) distinguishes "just
+// notified this tick" from "notified on a prior tick" (mirrors
+// reconcileBouncingItems/reconcilePushFailedItems' architectural split
+// between detection, which only ever notifies once per open row, and
+// remediation, which is a repeatable action gated purely by
+// RemediationDue's own backoff). remediateStaleWorkWithBackoffGate is only
+// reachable from the row.NotifiedAt != nil branch below, so the 2-hour
+// staleness threshold that already gated the first MarkStuck call remains
+// the sole "give it a chance" window before any automated action —
+// remediation only starts on the tick AFTER that first notification, the
+// same lag autoReopenWithBackoffGate/retryPushFailedWithBackoffGate get for
+// free from being invoked out-of-band from their reason's own MarkStuck call
+// site.
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
 		Statuses: []string{string(BacklogStatusInProgress)},
@@ -1667,6 +1727,9 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			continue
 		}
 		if !applied {
+			// Status precondition mismatch (item moved off in_progress between
+			// the ListBacklogItems read above and this write) — nothing to mark
+			// or remediate this tick.
 			continue
 		}
 		rows, findErr := er.FindOpenStuckStates(ctx)
@@ -1675,7 +1738,20 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			continue
 		}
 		row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonStaleWork)
-		if !ok || row.NotifiedAt != nil {
+		if !ok {
+			continue
+		}
+		if row.NotifiedAt != nil {
+			// Already notified on a prior tick — not the first sighting.
+			// Notify-once semantics already covered the "give it a chance"
+			// window on the tick that opened this row; from here on,
+			// automated remediation takes over, itself gated by the shared
+			// backoff schedule (RemediationDue), independent of the
+			// per-item rework cap (docs/tasks/backlog-stuck-item-auto-
+			// remediation.md Phase B — a live item with reworkCapOverride=0
+			// (unlimited) had bounced through this exact stale-agent-idle
+			// shape 14 times with nothing ever unsticking it).
+			l.remediateStaleWorkWithBackoffGate(ctx, item.ID, item.Title)
 			continue
 		}
 
@@ -1712,6 +1788,59 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonStaleWork, "reconcileStaleWorkSessions")
 	}
+}
+
+// remediateStaleWorkWithBackoffGate dispatches StaleWorkRemediator.
+// RemediateStaleWorkSession through the shared remediation backoff gate
+// (Storage.RemediationDue, session/backlog_remediation.go) — the
+// "stale_work" reason's remediation action per
+// docs/tasks/backlog-stuck-item-auto-remediation.md Phase B. Mirrors
+// retryPushFailedWithBackoffGate's shape (bare goroutine, no semaphore — see
+// that function's doc comment for why the reviewSem review-gate respawns
+// share is not needed here either: ending a stale ItemSession and
+// respawning a fresh one is fast compared to a live headless LLM call).
+// Best-effort: gate query/write errors are logged, never returned, and fail
+// OPEN (still attempts the remediation) rather than silently stranding the
+// item — same rationale as autoReopenWithBackoffGate/
+// retryPushFailedWithBackoffGate.
+//
+// Deliberately does NOT add a second liveness check before dispatching
+// (e.g. re-querying Instance.TmuxAlive/PaneProcessDead here) — the caller
+// (reconcileStaleWorkSessions) already reconfirmed staleWork() true this
+// tick, and RemediationDue's own backoff (minimum 30 minutes after the
+// first notification) has independently elapsed by the time due=true. A
+// second, independently-computed liveness heuristic here could disagree
+// with that detector and cause flapping; trust the one signal already
+// gating this call.
+func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+	remediator := l.getStaleWorkRemediator()
+	if remediator == nil {
+		return
+	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonStaleWork)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-rework paused",
+			fmt.Sprintf("%s — automated stale-session recovery has been retried %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate item=%s: stale_work remediation backoff not yet due, skipping", itemID)
+		return
+	}
+
+	go func() {
+		if err := remediator.RemediateStaleWorkSession(l.shutdownCtx, itemID); err != nil {
+			log.ErrorLog.Printf("[BacklogLifecycle] remediateStaleWorkWithBackoffGate RemediateStaleWorkSession item=%s: %v", itemID, err)
+		}
+	}()
 }
 
 // reconcileOrphanedTriageItems flags idea-status items whose most recent triage-role

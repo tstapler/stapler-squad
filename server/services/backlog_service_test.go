@@ -1298,6 +1298,91 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
 }
 
+// TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWorkSessionIsStale
+// is the regression test for the stale_work auto-remediation gap: a work
+// session with no EndedAt whose underlying tmux session/pane are genuinely
+// still alive (mockSessionStopper.liveUUIDs marks it live, mirroring
+// Instance.TmuxAlive()==true / PaneProcessDead()==false for an agent that
+// finished and is idle at an interactive prompt) must still be killed,
+// tombstoned, and replaced with a fresh work session — not left stranded
+// forever just because it isn't a zombie. See
+// session.StaleWorkRemediator/BacklogLifecycleListener.
+// remediateStaleWorkWithBackoffGate (session/backlog_lifecycle.go) for the
+// backoff-gated caller this implements.
+func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWorkSessionIsStale(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with stale-but-alive work session")
+
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.NoError(t, remediateErr)
+
+	assert.Contains(t, stopper.killedPaneUUIDs, "stale-work-session-uuid", "the stale tmux pane must be killed even though it was reported live")
+	require.Len(t, creator.calls, 1, "a fresh work session must be spawned")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	var staleEnded, newOpen bool
+	for _, is := range sessions {
+		if is.SessionUUID == "stale-work-session-uuid" {
+			staleEnded = is.EndedAt != nil
+		} else if is.Role == string(session.SessionRoleWork) {
+			newOpen = is.EndedAt == nil
+		}
+	}
+	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
+	assert.True(t, newOpen, "the newly-spawned work session must be open")
+}
+
+// TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress verifies
+// that if the item already moved off in_progress (a human acted manually, or
+// another reconciler beat this call to it) by the time the gated remediation
+// goroutine actually runs, RemediateStaleWorkSession is a no-op — no kill, no
+// spawn.
+func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"stale-work-session-uuid": true}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item that already moved on")
+
+	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "stale-work-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// Left in "ready" (createReadyItemForSpawn's terminal status), not
+	// in_progress — simulates the item having already moved on.
+
+	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
+	require.NoError(t, remediateErr)
+
+	assert.Empty(t, stopper.killedPaneUUIDs, "must not kill anything once the item is no longer in_progress")
+	assert.Empty(t, creator.calls, "must not spawn a new session once the item is no longer in_progress")
+}
+
 // TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn verifies
 // tombstoneOrphanWorkSessions does NOT reap a work session that IsSessionLive
 // confirms is genuinely still running — the fix must not weaken the duplicate-spawn

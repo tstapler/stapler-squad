@@ -222,10 +222,10 @@ func (s *BacklogService) BulkResetStuckRemediation(
 // TriggerRemediationNow invokes directly (bypassing the interface
 // indirection the periodic sweep uses — this RPC handler IS a *BacklogService,
 // so it can call its own remediation methods without going through
-// AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner). Phase A wires
-// only the 3 reasons that already have a working respawn action; every other
-// reason returns connect.CodeUnimplemented — Phase B's job, not this RPC's,
-// to add them here.
+// AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner/
+// StaleWorkRemediator). Wired reasons are the ones with a working respawn
+// action as of this Epic; every other reason returns
+// connect.CodeUnimplemented until a future phase adds it here.
 func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) func(ctx context.Context, itemID string) error {
 	switch reason {
 	case domain.StuckReasonBouncing:
@@ -234,6 +234,8 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 		return s.AutoRespawnReview
 	case domain.StuckReasonAutonomousStuck:
 		return s.AutoRespawnAutonomousWork
+	case domain.StuckReasonStaleWork:
+		return s.RemediateStaleWorkSession
 	default:
 		return nil
 	}
