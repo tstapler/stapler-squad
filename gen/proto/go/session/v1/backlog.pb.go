@@ -2252,11 +2252,23 @@ func (x *GetBacklogItemShipStatusResponse) GetStatus() *BacklogItemShipStatus {
 }
 
 type ListBacklogItemsRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Status          []string               `protobuf:"bytes,1,rep,name=status,proto3" json:"status,omitempty"`
-	Priority        []int32                `protobuf:"varint,2,rep,packed,name=priority,proto3" json:"priority,omitempty"`
-	SortBy          string                 `protobuf:"bytes,3,opt,name=sort_by,json=sortBy,proto3" json:"sort_by,omitempty"`
-	IncludeTerminal bool                   `protobuf:"varint,4,opt,name=include_terminal,json=includeTerminal,proto3" json:"include_terminal,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Status   []string               `protobuf:"bytes,1,rep,name=status,proto3" json:"status,omitempty"`
+	Priority []int32                `protobuf:"varint,2,rep,packed,name=priority,proto3" json:"priority,omitempty"`
+	SortBy   string                 `protobuf:"bytes,3,opt,name=sort_by,json=sortBy,proto3" json:"sort_by,omitempty"`
+	// include_terminal, when true, includes items with status "done" in the
+	// default (no explicit `status` filter) result set. Independent of
+	// include_archived below — this field no longer also controls "archived"
+	// visibility (see include_archived's doc comment for why that split
+	// exists).
+	IncludeTerminal bool `protobuf:"varint,4,opt,name=include_terminal,json=includeTerminal,proto3" json:"include_terminal,omitempty"`
+	// include_archived, when true, includes items with status "archived" in
+	// the default (no explicit `status` filter) result set. Split out from
+	// include_terminal so a client can show "done" items by default while
+	// still hiding "archived" ones unless the user opts in (mirrors the
+	// session list's "Show Archived" toggle). Ignored when `status` is set
+	// explicitly — an explicit status filter always wins.
+	IncludeArchived bool `protobuf:"varint,5,opt,name=include_archived,json=includeArchived,proto3" json:"include_archived,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2315,6 +2327,13 @@ func (x *ListBacklogItemsRequest) GetSortBy() string {
 func (x *ListBacklogItemsRequest) GetIncludeTerminal() bool {
 	if x != nil {
 		return x.IncludeTerminal
+	}
+	return false
+}
+
+func (x *ListBacklogItemsRequest) GetIncludeArchived() bool {
+	if x != nil {
+		return x.IncludeArchived
 	}
 	return false
 }
@@ -6840,12 +6859,13 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x1fGetBacklogItemShipStatusRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\"]\n" +
 	" GetBacklogItemShipStatusResponse\x129\n" +
-	"\x06status\x18\x01 \x01(\v2!.session.v1.BacklogItemShipStatusR\x06status\"\x91\x01\n" +
+	"\x06status\x18\x01 \x01(\v2!.session.v1.BacklogItemShipStatusR\x06status\"\xbc\x01\n" +
 	"\x17ListBacklogItemsRequest\x12\x16\n" +
 	"\x06status\x18\x01 \x03(\tR\x06status\x12\x1a\n" +
 	"\bpriority\x18\x02 \x03(\x05R\bpriority\x12\x17\n" +
 	"\asort_by\x18\x03 \x01(\tR\x06sortBy\x12)\n" +
-	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\"I\n" +
+	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\x12)\n" +
+	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
 	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xa5\x05\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +

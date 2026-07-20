@@ -114,11 +114,13 @@ func (s *BacklogService) ListBacklogItems(
 
 	filter := session.BacklogItemFilter{
 		SortBy:          req.Msg.SortBy,
-		ExcludeTerminal: !req.Msg.IncludeTerminal,
+		ExcludeDone:     !req.Msg.IncludeTerminal,
+		ExcludeArchived: !req.Msg.IncludeArchived,
 	}
 	if len(req.Msg.Status) > 0 {
 		filter.Statuses = req.Msg.Status
-		filter.ExcludeTerminal = false // explicit status filter overrides default exclusion
+		filter.ExcludeDone = false     // explicit status filter overrides default exclusion
+		filter.ExcludeArchived = false // explicit status filter overrides default exclusion
 	}
 	if len(req.Msg.Priority) > 0 {
 		priorities := make([]int, len(req.Msg.Priority))

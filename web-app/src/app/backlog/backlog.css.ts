@@ -139,6 +139,16 @@ export const groupByLabel = style({
   marginLeft: "auto",
 });
 
+export const showArchivedLabel = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
 export const groupBySelect = style({
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   background: vars.color.inputBackground,

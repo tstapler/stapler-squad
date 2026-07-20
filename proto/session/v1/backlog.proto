@@ -316,7 +316,19 @@ message ListBacklogItemsRequest {
   repeated string status = 1;
   repeated int32 priority = 2;
   string sort_by = 3;
+  // include_terminal, when true, includes items with status "done" in the
+  // default (no explicit `status` filter) result set. Independent of
+  // include_archived below — this field no longer also controls "archived"
+  // visibility (see include_archived's doc comment for why that split
+  // exists).
   bool include_terminal = 4;
+  // include_archived, when true, includes items with status "archived" in
+  // the default (no explicit `status` filter) result set. Split out from
+  // include_terminal so a client can show "done" items by default while
+  // still hiding "archived" ones unless the user opts in (mirrors the
+  // session list's "Show Archived" toggle). Ignored when `status` is set
+  // explicitly — an explicit status filter always wins.
+  bool include_archived = 5;
 }
 
 message ListBacklogItemsResponse {

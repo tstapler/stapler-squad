@@ -115,6 +115,15 @@ func defaultPRPendingCheckerFactory(repoPath string) prPendingChecker {
 // concurrently. This caps goroutine fan-out when many sessions exit simultaneously.
 const maxConcurrentReviewGates = 8
 
+// maxDoneAge is how long a backlog item remains in "done" status before the
+// auto_archive_done detector (see archiveStaleDoneItems) transitions it to
+// "archived". A fixed constant rather than a Settings/Defaults config knob
+// (unlike e.g. MaxConcurrentBacklogWorkItems) — this matches the literal
+// requirement ("archive 3 days after done") without adding configuration
+// surface nothing has asked for; promote to a per-deployment setting if a
+// real need for tuning this ever shows up.
+const maxDoneAge = 3 * 24 * time.Hour
+
 // BacklogLifecycleListener drives backlog item state transitions in response to
 // session lifecycle events. It must be registered via Instance.RegisterLifecycleListener.
 //
@@ -953,6 +962,41 @@ func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er
 	return true
 }
 
+// archiveStaleDoneItems is the auto_archive_done detector: it finds backlog
+// items that have been in "done" status for longer than maxDoneAge (measured
+// from the most recent transition into "done" — see FindDoneItemsOlderThan's
+// doc comment for why UpdatedAt is not used) and transitions each to
+// "archived". Registered before archive_terminal_sessions in ReconcileStuck
+// so an item archived by this detector gets its work sessions swept by that
+// detector in the very same tick, rather than waiting a full cycle.
+//
+// Idempotent by construction, not by precondition-failure suppression: an
+// item only appears in FindDoneItemsOlderThan's result while its status is
+// still "done", so a re-run after a successful archive naturally excludes it
+// on the next tick — no double-transition, no error, on repeat runs.
+func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
+	items, err := l.storage.FindDoneItemsOlderThan(ctx, time.Now().Add(-maxDoneAge))
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems FindDoneItemsOlderThan error: %v", err)
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+	archived := 0
+	for _, item := range items {
+		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
+		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition); transErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
+			continue
+		}
+		archived++
+	}
+	if archived > 0 {
+		log.InfoLog.Printf("[BacklogLifecycle] archiveStaleDoneItems: auto-archived %d item(s) done for more than %s", archived, maxDoneAge)
+	}
+}
+
 // reconcileTerminalItemSessions is the archive_terminal_sessions safety-net detector:
 // it finds every backlog item already in done/archived status and archives any of its
 // work-role sessions that are not yet archived. This exists because
@@ -1137,6 +1181,14 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// status no longer matches the item's current status (Task 2.1.5d).
 	l.runStuckDetector("self_heal", &okNames, &panickedNames, func() {
 		l.selfHealStuck(ctx, er)
+	})
+
+	// Auto-archive items that have sat in "done" for longer than maxDoneAge.
+	// Registered immediately before archive_terminal_sessions so a freshly
+	// archived item's work sessions are swept in the same tick — see
+	// archiveStaleDoneItems' doc comment.
+	l.runStuckDetector("auto_archive_done", &okNames, &panickedNames, func() {
+		l.archiveStaleDoneItems(ctx)
 	})
 
 	// Safety-net sweep: archive work sessions for items already in done/archived

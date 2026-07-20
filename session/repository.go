@@ -458,8 +458,17 @@ type BacklogItemFilter struct {
 	Priorities []int
 	// SortBy controls ordering ("priority", "updated_at"). Empty means default ordering.
 	SortBy string
-	// ExcludeTerminal, when true, excludes items with status "done" or "archived".
-	ExcludeTerminal bool
+	// ExcludeDone, when true and Statuses is empty, excludes items with status
+	// "done". Independent of ExcludeArchived — split into two flags (rather
+	// than one combined "ExcludeTerminal") so a caller can show done items by
+	// default while still hiding archived ones. Renamed from ExcludeTerminal,
+	// which used to combine both; verified via grep that ListBacklogItems and
+	// ListBacklogItemSummaries were the only two callers of the old field, so
+	// the rename is safe (no silent behavior change for any other caller).
+	ExcludeDone bool
+	// ExcludeArchived, when true and Statuses is empty, excludes items with
+	// status "archived". Independent of ExcludeDone — see its doc comment.
+	ExcludeArchived bool
 	// Limit caps the number of results returned. 0 means use the default safety cap (1000).
 	Limit int
 	// Offset skips the first N results (for pagination). Only applied when Limit > 0.

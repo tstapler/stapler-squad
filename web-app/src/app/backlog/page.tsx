@@ -171,6 +171,10 @@ function BacklogPageInner() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<BacklogItemStatus[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<number[]>([]);
+  // showArchived: archived items are excluded server-side by default (only
+  // "done" is shown by default); enabling this re-fetches with
+  // includeArchived=true. Mirrors SessionList's "Show Archived" toggle.
+  const [showArchived, setShowArchived] = useState(false);
 
   // Sort
   const [sortCol, setSortCol] = useState<SortColumn>("updatedAt");
@@ -221,12 +225,13 @@ function BacklogPageInner() {
         priorities: priorityFilter.length > 0 ? priorityFilter : undefined,
         search: search.trim() || undefined,
         includeTerminal: true, // show done items by default; user can filter them out
+        includeArchived: showArchived, // archived items are hidden by default — see the "Show Archived" toggle
       });
       setItems(result);
     } finally {
       setLoading(false);
     }
-  }, [listBacklogItems, statusFilter, priorityFilter, search]);
+  }, [listBacklogItems, statusFilter, priorityFilter, search, showArchived]);
 
   useEffect(() => {
     void load();
@@ -455,6 +460,18 @@ function BacklogPageInner() {
         />
         <StatusFilterChips selected={statusFilter} onChange={setStatusFilter} />
         <PriorityFilterChips selected={priorityFilter} onChange={setPriorityFilter} />
+        {/* Archived items are excluded from the default view server-side;
+            enabling this re-fetches with includeArchived=true. */}
+        <label className={styles.showArchivedLabel}>
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            aria-label="Show archived items"
+            data-testid="backlog-show-archived-toggle"
+          />
+          Show Archived
+        </label>
         <label className={styles.groupByLabel}>
           Group by:{" "}
           <select

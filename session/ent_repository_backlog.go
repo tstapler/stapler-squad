@@ -277,17 +277,76 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 	return &result, nil
 }
 
+// excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
+// ask to exclude from a default (no explicit Statuses) query, as a slice for
+// StatusNotIn. The two flags are independent — either, both, or neither may be
+// set — see BacklogItemFilter's doc comments.
+func excludedTerminalStatuses(filter BacklogItemFilter) []string {
+	var excluded []string
+	if filter.ExcludeDone {
+		excluded = append(excluded, string(BacklogStatusDone))
+	}
+	if filter.ExcludeArchived {
+		excluded = append(excluded, string(BacklogStatusArchived))
+	}
+	return excluded
+}
+
+// FindDoneItemsOlderThan returns backlog items currently in "done" status
+// whose most recent transition INTO "done" happened at or before cutoff.
+// Used by the auto-archive sweep (archiveStaleDoneItems in
+// backlog_lifecycle.go) to find items eligible for automatic archival.
+//
+// Deliberately keys off the status-event history rather than UpdatedAt:
+// UpdatedAt changes on any field edit (progress notes, notification flags,
+// etc.), which would reset — and so make unreliable — a clock meant to
+// measure "how long has this been done". TransitionBacklogItemStatus always
+// appends an audit BacklogStatusEvent row on every transition, so this reuses
+// existing infrastructure instead of adding a dedicated done_at column.
+//
+// An item whose status-event history has no toStatus=="done" record is
+// skipped (never considered eligible) rather than defaulting to "always
+// eligible" — this should not happen in practice, since every transition
+// through TransitionBacklogItemStatus writes one, but guards a partially-
+// migrated or directly-seeded row against aging out on an unrelated basis.
+func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(backlogitem.StatusEQ(string(BacklogStatusDone))).
+		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
+			q.Order(ent.Desc(backlogstatusevent.FieldCreatedAt))
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("find done items older than cutoff: %w", err)
+	}
+
+	var result []BacklogItemData
+	for _, item := range items {
+		var lastDoneAt time.Time
+		found := false
+		for _, ev := range item.Edges.StatusEvents {
+			if ev.ToStatus == string(BacklogStatusDone) {
+				lastDoneAt = ev.CreatedAt
+				found = true
+				break // events ordered desc by CreatedAt — first match is most recent
+			}
+		}
+		if !found || lastDoneAt.After(cutoff) {
+			continue
+		}
+		result = append(result, backlogItemToData(item))
+	}
+	return result, nil
+}
+
 // ListBacklogItems returns backlog items with optional filtering.
 func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error) {
 	q := r.client.BacklogItem.Query()
 
 	if len(filter.Statuses) > 0 {
 		q = q.Where(backlogitem.StatusIn(filter.Statuses...))
-	} else if filter.ExcludeTerminal {
-		q = q.Where(backlogitem.StatusNotIn(
-			string(BacklogStatusDone),
-			string(BacklogStatusArchived),
-		))
+	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
+		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
 	if len(filter.Priorities) > 0 {
@@ -333,11 +392,8 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 
 	if len(filter.Statuses) > 0 {
 		q = q.Where(backlogitem.StatusIn(filter.Statuses...))
-	} else if filter.ExcludeTerminal {
-		q = q.Where(backlogitem.StatusNotIn(
-			string(BacklogStatusDone),
-			string(BacklogStatusArchived),
-		))
+	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
+		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))

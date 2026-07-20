@@ -1451,3 +1451,151 @@ func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t 
 	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now))
 	assert.True(t, isBouncing(bounceThreshold, false))
 }
+
+// --- auto_archive_done: sweep that auto-archives backlog items 3+ days
+// after their most recent transition into "done" (see archiveStaleDoneItems
+// and FindDoneItemsOlderThan's doc comments). ---
+
+// newDoneTestItem creates a BacklogItem in "done" status and backdates a
+// synthetic status-event row recording a transition into "done" doneAgo in
+// the past — mirroring newOrphanedTriageTestItem's pattern of writing
+// directly via the raw ent client, since BacklogStatusEvent.created_at is
+// Immutable() (no Update-builder setter; must be set at Create time).
+func newDoneTestItem(t *testing.T, storage *Storage, er *EntRepository, doneAgo time.Duration) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Done test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	parsedID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = er.client.BacklogStatusEvent.Create().
+		SetItemID(parsedID).
+		SetFromStatus(string(BacklogStatusReview)).
+		SetToStatus(string(BacklogStatusDone)).
+		SetTriggeredBy(TriggeredBySystem).
+		SetCreatedAt(time.Now().Add(-doneAgo)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	return item
+}
+
+func TestArchiveStaleDoneItems_should_ArchiveItem_When_DoneMoreThan3DaysAgo(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.archiveStaleDoneItems(ctx)
+
+	got, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusArchived), got.Status, "item done more than 3 days ago must be auto-archived")
+}
+
+func TestArchiveStaleDoneItems_should_NotArchiveItem_When_DoneLessThan3DaysAgo(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newDoneTestItem(t, storage, er, maxDoneAge-time.Hour)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.archiveStaleDoneItems(ctx)
+
+	got, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), got.Status, "item done less than 3 days ago must not be auto-archived yet")
+}
+
+func TestArchiveStaleDoneItems_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.archiveStaleDoneItems(ctx)
+	require.NotPanics(t, func() {
+		listener.archiveStaleDoneItems(ctx)
+	}, "a second sweep tick over an already-archived item must not panic or error")
+
+	got, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusArchived), got.Status, "item must remain archived, not double-transitioned or reverted")
+}
+
+func TestArchiveStaleDoneItems_should_SkipItem_When_NoDoneStatusEventHistory(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Created directly in "done" status with no status-event history at all
+	// (e.g. a directly-seeded row) — must not age out based on an unrelated
+	// timestamp; see FindDoneItemsOlderThan's doc comment.
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with no status-event history",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.archiveStaleDoneItems(ctx)
+
+	got, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), got.Status, "an item with no done-transition event on record must not be auto-archived")
+}
+
+// TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoArchived
+// is the integration-level test connecting Part 1 (auto-archive sweep) and
+// Part 2 (default-view archived filtering): an item auto-archived by the
+// sweep must then be excluded from the same default-filter query the backlog
+// list page uses (ExcludeArchived: true, ExcludeDone: false — show done,
+// hide archived), proving the two halves of this feature connect end to end.
+func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoArchived(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	staleDone := newDoneTestItem(t, storage, er, maxDoneAge+time.Hour)
+	recentDone := newDoneTestItem(t, storage, er, time.Hour)
+
+	// Sanity check: before the sweep runs, both done items are visible under
+	// the default filter (done included, archived excluded — but neither is
+	// archived yet).
+	before, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{ExcludeArchived: true})
+	require.NoError(t, err)
+	beforeIDs := make([]string, len(before))
+	for i, s := range before {
+		beforeIDs[i] = s.ID
+	}
+	assert.Contains(t, beforeIDs, staleDone.ID)
+	assert.Contains(t, beforeIDs, recentDone.ID)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.archiveStaleDoneItems(ctx)
+
+	after, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{ExcludeArchived: true})
+	require.NoError(t, err)
+	afterIDs := make([]string, len(after))
+	for i, s := range after {
+		afterIDs[i] = s.ID
+	}
+	assert.NotContains(t, afterIDs, staleDone.ID, "the auto-archived item must disappear from the default (archived-excluded) backlog view")
+	assert.Contains(t, afterIDs, recentDone.ID, "the still-recent done item must remain visible in the default view")
+}

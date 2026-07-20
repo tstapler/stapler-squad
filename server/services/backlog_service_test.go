@@ -566,6 +566,78 @@ func TestListBacklogItems_DoneStatusIsTerminal(t *testing.T) {
 	assert.Contains(t, allTitles, "done item", "done items must appear when includeTerminal=true")
 }
 
+// TestListBacklogItems_DefaultView_ShowsDoneButHidesArchived is the RPC-level
+// regression test for the leak fixed alongside the auto-archive sweep: the
+// backlog page's default fetch (IncludeTerminal:true, IncludeArchived
+// omitted/false) must show "done" items but exclude "archived" ones — before
+// the ExcludeDone/ExcludeArchived split, IncludeTerminal was the only knob
+// and toggling it on to show done items also silently showed archived items,
+// with no way to hide just the latter. IncludeArchived:true must then reveal
+// the archived item.
+func TestListBacklogItems_DefaultView_ShowsDoneButHidesArchived(t *testing.T) {
+	svc := newBacklogService(t)
+
+	create := func(title string) string {
+		resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+			Title:        title,
+			SkipPlanning: true,
+			AcceptanceCriteria: []*sessionv1.AcCriterion{
+				{Index: 0, Text: "it works", Status: "pending"},
+			},
+		}))
+		require.NoError(t, err)
+		return resp.Msg.Item.Id
+	}
+	transition := func(itemID, to string) {
+		_, err := svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+			ItemId:         itemID,
+			TargetStatus:   to,
+			OverrideReason: "test override",
+		}))
+		require.NoError(t, err, "transition to %s", to)
+	}
+
+	doneID := create("done item for default view")
+	archivedID := create("archived item for default view")
+
+	transition(doneID, "ready")
+	transition(doneID, "in_progress")
+	transition(doneID, "review")
+	transition(doneID, "done")
+
+	transition(archivedID, "ready")
+	transition(archivedID, "in_progress")
+	transition(archivedID, "review")
+	transition(archivedID, "done")
+	transition(archivedID, "archived")
+
+	// The exact request the backlog list page sends by default (Part 2 fix):
+	// include done items, but not archived ones.
+	defaultView, err := svc.ListBacklogItems(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemsRequest{
+		IncludeTerminal: true,
+		IncludeArchived: false,
+	}))
+	require.NoError(t, err)
+	defaultTitles := make([]string, 0, len(defaultView.Msg.Items))
+	for _, it := range defaultView.Msg.Items {
+		defaultTitles = append(defaultTitles, it.Title)
+	}
+	assert.Contains(t, defaultTitles, "done item for default view", "done items must be visible by default")
+	assert.NotContains(t, defaultTitles, "archived item for default view", "archived items must be hidden by default")
+
+	// The "Show Archived" toggle re-fetches with IncludeArchived:true.
+	withArchived, err := svc.ListBacklogItems(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemsRequest{
+		IncludeTerminal: true,
+		IncludeArchived: true,
+	}))
+	require.NoError(t, err)
+	archivedTitles := make([]string, 0, len(withArchived.Msg.Items))
+	for _, it := range withArchived.Msg.Items {
+		archivedTitles = append(archivedTitles, it.Title)
+	}
+	assert.Contains(t, archivedTitles, "archived item for default view", "IncludeArchived:true must reveal archived items")
+}
+
 // ─── backlogItemToProto ───────────────────────────────────────────────────────
 
 // TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMode

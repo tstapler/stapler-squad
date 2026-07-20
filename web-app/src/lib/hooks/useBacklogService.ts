@@ -233,6 +233,13 @@ export interface ListBacklogItemsFilter {
   statuses?: BacklogItemStatus[];
   priorities?: number[];
   includeTerminal?: boolean;
+  /**
+   * When true, includes items with status "archived" in the default
+   * (no explicit `statuses`) result set. Independent of includeTerminal —
+   * defaults to false so archived items stay hidden unless the caller opts
+   * in (see the backlog page's "Show Archived" toggle).
+   */
+  includeArchived?: boolean;
   search?: string;
 }
 
@@ -541,6 +548,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           status: filter?.statuses ?? [],
           priority: filter?.priorities ?? [],
           includeTerminal: filter?.includeTerminal ?? false,
+          includeArchived: filter?.includeArchived ?? false,
           sortBy: "",
         });
         const items = (resp.items ?? []).map(mapBacklogItem);
