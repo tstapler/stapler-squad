@@ -174,6 +174,43 @@ export const retryBtn = style({
   },
 });
 
+// ── Bulk "Reset all parked" affordance (docs/tasks/backlog-stuck-item-auto-remediation.md
+// Phase A minimal UI requirement) — an admin action, so it's styled to stand
+// apart from the read-only filter chips rather than blending in with them.
+
+export const resetParkedBtn = style({
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.sm,
+  cursor: "pointer",
+  border: `1px solid ${vars.color.warning}`,
+  background: "transparent",
+  color: vars.color.warningText,
+  fontWeight: 600,
+  flexShrink: 0,
+  ":hover": {
+    background: vars.color.warningBg,
+  },
+  ":focus-visible": {
+    outline: `2px solid ${vars.color.inputFocusBorder}`,
+    outlineOffset: "1px",
+  },
+  ":disabled": {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
+});
+
+export const resetParkedMessage = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+});
+
+export const resetParkedMessageError = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.errorText,
+});
+
 export const clearFilterBtn = style({
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
   borderRadius: vars.radii.sm,

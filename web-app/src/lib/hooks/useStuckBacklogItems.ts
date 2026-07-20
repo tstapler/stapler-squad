@@ -9,6 +9,9 @@ import {
   BacklogService,
   ListStuckBacklogItemsRequestSchema,
   SnoozeStuckItemRequestSchema,
+  ResetStuckRemediationRequestSchema,
+  BulkResetStuckRemediationRequestSchema,
+  TriggerRemediationNowRequestSchema,
   type StuckBacklogItem,
   type StuckReason,
 } from "@/gen/session/v1/backlog_pb";
@@ -23,6 +26,17 @@ export interface UseStuckBacklogItemsReturn {
   lastFetched: Date | null;
   refetch: () => Promise<void>;
   snooze: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
+  /** Clears remediation_attempts/next_remediation_at/notified_at on a single open row. */
+  resetRemediation: (itemId: string, reason: StuckReason) => Promise<boolean>;
+  /** Resets every open row hitting the attempt cap (parked); returns the count reset. */
+  bulkResetParkedRemediation: () => Promise<number>;
+  /**
+   * Immediately runs the reason's remediation action, bypassing only the
+   * backoff timer — still subject to the 5-attempt cap and the wrapped
+   * action's own circuit breaker. Throws (does not swallow) on failure so
+   * callers can show a specific error, e.g. "already parked — use Reset".
+   */
+  triggerRemediationNow: (itemId: string, reason: StuckReason) => Promise<void>;
 }
 
 /**
@@ -102,5 +116,61 @@ export function useStuckBacklogItems(
     [client, fetchItems]
   );
 
-  return { items, isLoading, error, lastFetched, refetch: fetchItems, snooze };
+  const resetRemediation = useCallback(
+    async (itemId: string, reason: StuckReason): Promise<boolean> => {
+      try {
+        const req = create(ResetStuckRemediationRequestSchema, { itemId, reason });
+        const res = await client.resetStuckRemediation(req);
+        if (res.applied) {
+          await fetchItems();
+        }
+        return res.applied;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("Failed to reset stuck remediation"));
+        return false;
+      }
+    },
+    [client, fetchItems]
+  );
+
+  const bulkResetParkedRemediation = useCallback(async (): Promise<number> => {
+    try {
+      const req = create(BulkResetStuckRemediationRequestSchema, {
+        onlyParked: true,
+        onlyParkedExplicitlySet: true,
+      });
+      const res = await client.bulkResetStuckRemediation(req);
+      if (res.resetCount > 0) {
+        await fetchItems();
+      }
+      return res.resetCount;
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error("Failed to bulk reset stuck remediation"));
+      return 0;
+    }
+  }, [client, fetchItems]);
+
+  const triggerRemediationNow = useCallback(
+    async (itemId: string, reason: StuckReason): Promise<void> => {
+      const req = create(TriggerRemediationNowRequestSchema, { itemId, reason });
+      // Deliberately NOT try/catch-swallowed here (unlike snooze/reset above):
+      // callers need the specific error (e.g. "already parked") to show the
+      // operator why the retry didn't run, not just a generic failure.
+      await client.triggerRemediationNow(req);
+      await fetchItems();
+    },
+    [client, fetchItems]
+  );
+
+  return {
+    items,
+    isLoading,
+    error,
+    lastFetched,
+    refetch: fetchItems,
+    snooze,
+    resetRemediation,
+    bulkResetParkedRemediation,
+    triggerRemediationNow,
+  };
 }

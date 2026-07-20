@@ -34,6 +34,9 @@ function baseHookReturn(overrides: Partial<ReturnType<typeof mockUseStuckBacklog
     lastFetched: new Date(),
     refetch: jest.fn(),
     snooze: jest.fn(),
+    resetRemediation: jest.fn(),
+    bulkResetParkedRemediation: jest.fn().mockResolvedValue(0),
+    triggerRemediationNow: jest.fn(),
     ...overrides,
   };
 }
@@ -215,6 +218,54 @@ describe("StuckItemsSection", () => {
       render(<StuckItemsSection />);
       const titles = screen.getAllByText(/older item|newer item/).map((el) => el.textContent);
       expect(titles).toEqual(["older item", "newer item"]);
+    });
+  });
+
+  describe("StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap", () => {
+    it("hides the reset-parked button when no item has hit the attempt cap", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({ items: [makeItem({ remediationAttempts: 1 })] })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.queryByTestId("stuck-items-reset-parked")).not.toBeInTheDocument();
+    });
+
+    it("shows the reset-parked button with a count when items have parked", () => {
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ remediationAttempts: 5 }), makeItem({ itemId: "second", remediationAttempts: 5 })],
+        })
+      );
+      render(<StuckItemsSection />);
+      expect(screen.getByTestId("stuck-items-reset-parked").textContent).toMatch(/Reset all parked \(2\)/);
+    });
+
+    it("calls bulkResetParkedRemediation and shows the resulting count on click", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockResolvedValue(2);
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ remediationAttempts: 5 })],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
+      expect(bulkResetParkedRemediation).toHaveBeenCalledTimes(1);
+      await screen.findByText(/Reset 2 parked items\./);
+    });
+
+    it("shows an error message when the bulk reset call rejects", async () => {
+      const bulkResetParkedRemediation = jest.fn().mockRejectedValue(new Error("network down"));
+      mockUseStuckBacklogItems.mockReturnValue(
+        baseHookReturn({
+          items: [makeItem({ remediationAttempts: 5 })],
+          bulkResetParkedRemediation,
+        })
+      );
+      render(<StuckItemsSection />);
+      fireEvent.click(screen.getByTestId("stuck-items-reset-parked"));
+      const message = await screen.findByTestId("stuck-items-reset-parked-message");
+      expect(message.textContent).toMatch(/network down/);
     });
   });
 });
