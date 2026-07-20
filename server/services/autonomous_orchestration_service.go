@@ -341,11 +341,46 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							if a.autonomousStuckRespawner != nil {
 								respawner := a.autonomousStuckRespawner
 								itemID := item.ID
-								go func() {
-									if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
-										log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
-									}
-								}()
+								itemTitle := item.Title
+								// Backoff-gated (session/backlog_remediation.go, Phase A of
+								// docs/tasks/backlog-stuck-item-auto-remediation.md): the
+								// MarkStuck(autonomous_stuck) call just above always
+								// refreshes/opens this item's stuck row on every
+								// turn-cap-without-DONE occurrence, so without this gate the
+								// respawn below would fire on every single occurrence too —
+								// exactly the "burns through the rework cap in minutes"
+								// shape the design doc's backoff schedule exists to stop
+								// (count-capped only by the rework cap otherwise, which can
+								// be raised well past what a genuinely-looping item should
+								// get). Checked synchronously (not inside the goroutine) so
+								// the attempt/restart-grace accounting write happens exactly
+								// once per eligible occurrence, before the async dispatch.
+								due, justParked, gateErr := concreteStorage.RemediationDue(ctx, itemID, domain.StuckReasonAutonomousStuck)
+								if gateErr != nil {
+									log.Warn("[AutonomousDriver] RemediationDue(autonomous_stuck) failed", "item", itemID, "err", gateErr)
+									due = true // fail open — see session.autoReopenWithBackoffGate's identical rationale
+								}
+								if justParked {
+									a.bus.Publish(events.NewNotificationEvent(
+										itemID,
+										"Auto-rework paused",
+										fmt.Sprintf("stuck-autonomous-parked-%s", itemID),
+										int32(8), // NotificationType_WARNING
+										int32(3), // NotificationPriority_HIGH
+										"Automated retry paused",
+										fmt.Sprintf("%s — automated turn-budget respawns have been retried %d times over an extended period without finishing. It now needs manual attention; use Reset to try again automatically.", itemTitle, session.MaxRemediationAttempts),
+										nil,
+									))
+								}
+								if due {
+									go func() {
+										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
+											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+										}
+									}()
+								} else {
+									log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
+								}
 							}
 						} else {
 							toStatus = session.BacklogStatusReview
