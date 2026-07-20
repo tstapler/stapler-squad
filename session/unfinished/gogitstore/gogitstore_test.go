@@ -201,6 +201,32 @@ func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
 	if err := gitRunErr(t.Logf, dir, "config", "user.email", "test@test.local"); err != nil {
 		return err
 	}
+	// gc.auto=0 disables git's OWN automatic housekeeping — several plumbing
+	// commands (`commit` among them) check the loose-object count after
+	// they run and, past a threshold (6700 by default, but CI runners have
+	// been observed to ship a much lower effective default — see below),
+	// silently kick off `git gc --auto`. Critically, `gc.autoDetach`
+	// defaults to true, so that auto-gc runs in a DETACHED BACKGROUND
+	// process rather than blocking the triggering command — which means it
+	// can still be mid-repack when THIS function's own explicit `git gc
+	// --aggressive` call (below) starts. Two concurrent repacks each
+	// capture their own snapshot of "which packs currently exist to
+	// consolidate and delete"; whichever finishes second deletes only the
+	// packs IT knew about, leaving the other's freshly-written pack behind
+	// — the repo ends up with >1 pack even though every individual git
+	// invocation exits 0. Root-caused via a 64-iteration reproduction with
+	// gc.auto deliberately lowered (see this task's report): with a low
+	// enough gc.auto, the commit loop below reliably produces 2 packs
+	// BEFORE the explicit gc call even runs, and `git gc -q --aggressive`
+	// has no way to detect or wait for a same-repo background gc it didn't
+	// start. This is a distinct failure mode from gitRunErr's own retry
+	// logic (which only helps when a git command itself exits nonzero) —
+	// here every command exits 0, so nothing above would ever detect or
+	// retry it. Setting gc.auto=0 makes this function's own gc call the
+	// ONLY packing operation ever run against this fixture repo.
+	if err := gitRunErr(t.Logf, dir, "config", "gc.auto", "0"); err != nil {
+		return err
+	}
 
 	for i := 0; i < numCommits; i++ {
 		for f := 0; f < 3; f++ {
@@ -227,7 +253,44 @@ func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
 	// concurrently), which is the proximate trigger for gc failing
 	// partway through in the first place (see gitRunErr's doc comment).
 	// Fewer threads means a slower but less failure-prone repack.
-	return gitRunErr(t.Logf, dir, "-c", "pack.threads=1", "gc", "-q", "--aggressive")
+	if err := gitRunErr(t.Logf, dir, "-c", "pack.threads=1", "gc", "-q", "--aggressive"); err != nil {
+		return err
+	}
+
+	// Belt-and-suspenders postcondition, on top of the gc.auto=0 fix above:
+	// every caller of buildPackedFixture assumes "everything lands in
+	// exactly one packfile" (that is the documented purpose of this whole
+	// function), but most callers never actually verify it — they just
+	// read store.dir.ObjectPacks() (or equivalent) downstream and get a
+	// confusing, unrelated-looking failure if that assumption doesn't
+	// hold (e.g. registry_eviction_test.go's pack-handle-cache test
+	// failing with "opened 2 times, want exactly 1" — a real symptom of
+	// this exact precondition being violated, not a pack-handle-caching
+	// bug). Treating a wrong pack count as a hard error here — instead of
+	// only checking it ad hoc in the two or three tests that happened to
+	// add their own assertion — means ANY caller gets it for free, and
+	// gets it fed into buildPackedFixture's existing whole-fixture-rebuild
+	// retry loop rather than a one-off t.Fatalf deep inside a test body.
+	n, err := countPacks(dir)
+	if err != nil {
+		return fmt.Errorf("buildPackedFixtureOnce: counting packs after gc: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("buildPackedFixtureOnce: gc left %d packs on disk, want exactly 1 (see gc.auto=0 comment above for the known cause)", n)
+	}
+	return nil
+}
+
+// countPacks returns the number of *.pack files directly under dir's
+// objects/pack directory — buildPackedFixtureOnce's own postcondition check,
+// factored out so it doesn't need a full SharedObjectStore/dotgit.DotGit just
+// to count files.
+func countPacks(dir string) (int, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, ".git", "objects", "pack", "*.pack"))
+	if err != nil {
+		return 0, err
+	}
+	return len(matches), nil
 }
 
 // strconvItoaPadded pads i out to a few hundred bytes of repeated digits so

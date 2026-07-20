@@ -684,6 +684,196 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 	assert.Empty(t, open, "orphaned_triage row must resolve once the item leaves idea (re-triggered triage succeeded)")
 }
 
+// --- archive_terminal_sessions: safety-net sweep for backlog work sessions that
+// accumulate forever because the TransitionBacklogItemStatus archival hook only
+// fires on a NEW transition into done/archived — see SessionArchiver's doc comment
+// and reconcileTerminalItemSessions. ---
+
+// fakeSessionArchiver is a test stub implementing SessionArchiver. It records every
+// UUID it was asked to archive, in order, and can be configured to fail for
+// specific UUIDs.
+type fakeSessionArchiver struct {
+	archivedUUIDs []string
+	errForUUID    map[string]error
+}
+
+func (f *fakeSessionArchiver) ArchiveSessionByUUID(_ context.Context, sessionUUID string) error {
+	if f.errForUUID != nil {
+		if err, ok := f.errForUUID[sessionUUID]; ok {
+			return err
+		}
+	}
+	f.archivedUUIDs = append(f.archivedUUIDs, sessionUUID)
+	return nil
+}
+
+func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Simulates an item that reached "done" through a call path that bypasses the
+	// TransitionBacklogItemStatus RPC handler's archival hook (e.g.
+	// SubmitManualReview, which transitions review->done via
+	// storage.TransitionBacklogItemStatus directly) — the sweep is the backstop
+	// for exactly this case.
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-done item missed by the transition hook",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "done-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "done-work-session")
+}
+
+func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyArchived(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "already-archived item missed by the transition hook",
+		Status: string(BacklogStatusArchived),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "archived-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "archived-work-session")
+}
+
+func TestReconcileTerminalItemSessions_should_NotArchiveNonWorkSessions_When_ItemDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a review session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-not-archived-here",
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Empty(t, archiver.archivedUUIDs, "the sweep only archives work-role sessions — review sessions are already hidden/one-shot and excluded by design")
+}
+
+func TestReconcileTerminalItemSessions_should_NotArchiveAnything_When_ItemNotTerminal(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "still in-flight item",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "in-flight-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Empty(t, archiver.archivedUUIDs, "a still in-flight item's work session must not be archived")
+}
+
+func TestReconcileTerminalItemSessions_should_NoOp_When_ArchiverNotWired(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with no archiver wired",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "no-archiver-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	// SetSessionArchiver deliberately not called — must degrade gracefully, not panic.
+	assert.NotPanics(t, func() {
+		listener.reconcileTerminalItemSessions(ctx)
+	})
+}
+
+// TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice proves the
+// sweep is safe to re-run every tick: a second run over already-archived sessions
+// must not error or duplicate archive calls in a way that matters (the real
+// SessionArchiver implementation is itself a CAS no-op for already-archived
+// sessions — this test only proves the sweep's own iteration doesn't choke on
+// repeated runs).
+func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item swept twice",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "swept-twice-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Equal(t, []string{"swept-twice-work-session", "swept-twice-work-session"}, archiver.archivedUUIDs,
+		"the sweep itself calls ArchiveSessionByUUID once per tick per session — idempotency is the archiver's responsibility (CAS), proven separately for SessionService.ArchiveSessionByUUID")
+}
+
 // --- Story 2.1.4: bouncing ---
 
 // TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_WithinWindow

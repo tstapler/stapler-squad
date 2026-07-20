@@ -63,6 +63,22 @@ type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
 }
 
+// SessionArchiver soft-archives a session by UUID so it stops accumulating in the
+// default session list. Implemented by server/services.SessionService (it owns the
+// live in-memory Instance registry archival must go through — see ArchivedAt's
+// doc comment on session.Instance); wired via SetSessionArchiver from
+// server/dependencies.go, same pattern as SetNotifier/SetSessionCreator below.
+// Used by the archive_terminal_sessions detector in ReconcileStuck as a periodic
+// safety net for work sessions belonging to backlog items that reached done/archived
+// without their sessions being archived by the (also newly added) transition hook —
+// e.g. pre-existing terminal items from before this detector existed, or a race/crash
+// mid-transition. Nil-safe: the detector no-ops when unset.
+type SessionArchiver interface {
+	// ArchiveSessionByUUID soft-archives the session, if found and not already
+	// archived. No-op (not an error) if the session is not tracked.
+	ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error
+}
+
 // prPendingChecker is the subset of GitWorktree's PR-status behavior that
 // ReconcilePRPending depends on. Defined here (the consumer) rather than in
 // package git, scoped to exactly what's called.
@@ -154,6 +170,10 @@ type BacklogLifecycleListener struct {
 	// notifierMu guards notifier for concurrent Set/get access.
 	notifierMu sync.RWMutex
 	notifier   Notifier
+
+	// sessionArchiverMu guards sessionArchiver for concurrent Set/get access.
+	sessionArchiverMu sync.RWMutex
+	sessionArchiver   SessionArchiver
 
 	// sessionLivenessCheckerMu guards sessionLivenessChecker for concurrent
 	// Set/get access.
@@ -339,6 +359,23 @@ func (l *BacklogLifecycleListener) notify(itemID, title, message string, notific
 	if n := l.getNotifier(); n != nil {
 		n.Notify(itemID, title, message, notificationType, priority)
 	}
+}
+
+// SetSessionArchiver wires in the archiver used to soft-archive backlog work
+// sessions belonging to done/archived items that the transition hook missed
+// (see the archive_terminal_sessions detector in ReconcileStuck). Optional —
+// nil means the detector no-ops.
+func (l *BacklogLifecycleListener) SetSessionArchiver(a SessionArchiver) {
+	l.sessionArchiverMu.Lock()
+	defer l.sessionArchiverMu.Unlock()
+	l.sessionArchiver = a
+}
+
+// getSessionArchiver returns the current session archiver under a read lock.
+func (l *BacklogLifecycleListener) getSessionArchiver() SessionArchiver {
+	l.sessionArchiverMu.RLock()
+	defer l.sessionArchiverMu.RUnlock()
+	return l.sessionArchiver
 }
 
 // SetSessionLivenessChecker wires the function used by the zombie-session
@@ -916,6 +953,49 @@ func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er
 	return true
 }
 
+// reconcileTerminalItemSessions is the archive_terminal_sessions safety-net detector:
+// it finds every backlog item already in done/archived status and archives any of its
+// work-role sessions that are not yet archived. This exists because
+// TransitionBacklogItemStatus's archival hook only fires on a NEW transition into
+// done/archived — items that were already terminal before that hook was added (or hit a
+// race/crash mid-transition) would otherwise keep their work sessions unarchived forever.
+// Idempotent and cheap to re-run every tick: SessionArchiver.ArchiveSessionByUUID is a
+// CAS no-op for sessions that are already archived or no longer tracked.
+func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Context) {
+	archiver := l.getSessionArchiver()
+	if archiver == nil {
+		return
+	}
+	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
+		Statuses: []string{string(BacklogStatusDone), string(BacklogStatusArchived)},
+	})
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
+		return
+	}
+	processed := 0
+	for _, item := range items {
+		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListItemSessions item=%s: %v", item.ID, sessErr)
+			continue
+		}
+		for _, is := range sessions {
+			if is.SessionUUID == "" || is.Role != SessionRoleWork {
+				continue
+			}
+			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to archive session=%s item=%s: %v", is.SessionUUID, item.ID, archErr)
+				continue
+			}
+			processed++
+		}
+	}
+	if processed > 0 {
+		log.InfoLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions: processed %d work session(s) across %d terminal item(s)", processed, len(items))
+	}
+}
+
 // runStuckDetector invokes fn with its own recover(), so a panic in one
 // detector cannot skip the others or merge detection (Story 2.1.5, pre-mortem
 // P3). The existing whole-tick recover() in server/dependencies.go stays as
@@ -1057,6 +1137,14 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// status no longer matches the item's current status (Task 2.1.5d).
 	l.runStuckDetector("self_heal", &okNames, &panickedNames, func() {
 		l.selfHealStuck(ctx, er)
+	})
+
+	// Safety-net sweep: archive work sessions for items already in done/archived
+	// status that TransitionBacklogItemStatus's archival hook missed (pre-existing
+	// terminal items from before that hook existed, or a race/crash mid-transition).
+	// See SessionArchiver's doc comment. No-op when unwired.
+	l.runStuckDetector("archive_terminal_sessions", &okNames, &panickedNames, func() {
+		l.reconcileTerminalItemSessions(ctx)
 	})
 
 	// Poll pr_pending items: auto-transition to done when the PR is merged,
