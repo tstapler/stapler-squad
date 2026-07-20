@@ -283,6 +283,22 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
+	// in flight at a time. Without this, two concurrent calls (e.g. AutoReopenAfterFailedReview
+	// / AutoRespawnAutonomousWork / AutoReopenForPRFix all funnel here, and any of them can
+	// race a manual retrigger or a periodic reconciliation sweep) can both pass the
+	// hasActiveWorkSession guard below (step 8b) before either has written its new
+	// ItemSession row, producing two concurrent work sessions for one item — see
+	// spawnInFlight's doc comment on the BacklogService struct for the live incident this
+	// closes. Released via defer so every return path (including early gate failures below)
+	// frees the item for the next attempt.
+	if _, alreadyInFlight := s.spawnInFlight.LoadOrStore(item.ID, struct{}{}); alreadyInFlight {
+		log.InfoLog.Printf("[SpawnSessionFromItem] spawn already in flight for item=%s; rejecting concurrent attempt", item.ID)
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("a session spawn is already in progress for this item; wait for it to finish"))
+	}
+	defer s.spawnInFlight.Delete(item.ID)
+
 	// 2. If force=true, clear any in-flight sessions and reset status so the normal
 	// path below can proceed. Handles both in_progress (stop work session) and review
 	// (stop review session + transition back to in_progress so restart begins from

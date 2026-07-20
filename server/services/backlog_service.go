@@ -87,6 +87,34 @@ type BacklogService struct {
 	// a partially-written .claude/backlog-context.md.
 	worktreeMu sync.Mutex
 
+	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
+	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
+	// Delete atomic check-and-set idiom as review_queue_manager.go's
+	// autoCreatePRInFlight field. SpawnSessionFromItem's read (ListItemSessions)
+	// -> check (hasActiveWorkSession) -> write (CreateItemSession) sequence is
+	// not otherwise atomic: two concurrent SpawnSessionFromItem calls for the
+	// SAME item (e.g. the autonomous-driver respawn path racing a periodic
+	// reconciliation sweep or a manual retrigger) can both read "no active work
+	// session" before either has inserted its new ItemSession row, and both
+	// proceed to spawn — confirmed live on 2026-07-19 (item d3227302 had two
+	// literal overlapping "work" role ItemSessions). The isReopen path is the
+	// most exposed: it skips SpawnSessionFromItem's own
+	// TransitionBacklogItemStatus call entirely (only fresh, non-reopen spawns
+	// transition ready->in_progress), so it has none of the optimistic-
+	// concurrency protection (ExpectedUpdatedAt precondition) that already
+	// protects AutoReopenAfterFailedReview / AutoReopenForPRFix's review/
+	// pr_pending->in_progress transitions from double-firing.
+	//
+	// A sync.Map of per-item *sync.Mutex was considered and rejected: it would
+	// leak one mutex per distinct item ID for the life of the process, whereas
+	// this set is self-cleaning (LoadOrStore on entry, Delete via defer on
+	// exit) and never grows past the number of spawns genuinely in flight at
+	// once. This is a single-process server (see CLAUDE.md's architecture
+	// overview) so an in-process guard is sufficient; a DB-level uniqueness
+	// constraint was not needed. See SpawnSessionFromItem for the guarded
+	// section.
+	spawnInFlight sync.Map
+
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context

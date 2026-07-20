@@ -1198,6 +1198,73 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	assert.Empty(t, creator.calls)
 }
 
+// TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated is the
+// regression test for a live-observed race (2026-07-19, item d3227302): two
+// literal overlapping work-role ItemSessions were created for the same backlog
+// item because SpawnSessionFromItem's read (ListItemSessions) -> check
+// (hasActiveWorkSession) -> write (CreateItemSession) sequence held no lock, so
+// two concurrent callers (e.g. the autonomous-driver respawn path racing a
+// periodic reconciliation sweep, or a rapid double-click) could both observe
+// "no active work session" before either had written its row. Run with -race:
+// BacklogService.spawnInFlight's LoadOrStore/Delete guard must serialize the
+// whole function body per item ID so only one of N concurrent
+// SpawnSessionFromItem calls for the SAME item succeeds — the rest must fail
+// fast with CodeAlreadyExists instead of each creating their own work session.
+func TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "concurrent spawn race")
+
+	const concurrency = 8
+	var (
+		wg       sync.WaitGroup
+		resultMu sync.Mutex
+		errs     []error
+	)
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines together to maximize the race window
+			_, spawnErr := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+			resultMu.Lock()
+			errs = append(errs, spawnErr)
+			resultMu.Unlock()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var successes, conflicts int
+	for _, spawnErr := range errs {
+		if spawnErr == nil {
+			successes++
+			continue
+		}
+		require.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(spawnErr), "unexpected error: %v", spawnErr)
+		conflicts++
+	}
+	assert.Equal(t, 1, successes, "exactly one concurrent spawn attempt must succeed")
+	assert.Equal(t, concurrency-1, conflicts, "every other concurrent attempt must fail fast with CodeAlreadyExists")
+	assert.Len(t, creator.calls, 1, "only one real session must have been spawned")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	openWork := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork && is.EndedAt == nil {
+			openWork++
+		}
+	}
+	assert.Equal(t, 1, openWork, "exactly one open work-role ItemSession must exist for the item — no duplicates")
+}
+
 // TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane is the regression test for
 // a real complaint: each rework round gets its own "-rN" title (buildRevisionTitle),
 // but nothing ever closed a finished round's tmux pane — it sat around indefinitely as
