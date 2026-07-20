@@ -19,6 +19,11 @@ func makeAcknowledgedInstance(title string) *Instance {
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 	inst.LastAcknowledged = time.Now().Add(-5 * time.Minute) // acked AFTER output
+	// Keep the lock-free atomic shadows in sync with the plain fields set directly above —
+	// IsAcknowledgedAfterOutput() reads only the atomic shadows (lastMeaningfulOutputNs,
+	// lastAcknowledgedNs), not the plain time.Time fields, so tests that bypass the normal
+	// write paths (UpdateTimestamps/MarkAcknowledged) must sync explicitly.
+	inst.SyncAtomicTimestamps()
 	return inst
 }
 
@@ -569,6 +574,7 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 
 	// Simulate new output arriving AFTER the acknowledgment.
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second) // newer than LastAcknowledged
+	inst.SyncAtomicTimestamps()                                  // re-sync atomic shadow after direct field write
 
 	// IsAcknowledgedAfterOutput should now return false — new output supersedes ack.
 	if inst.IsAcknowledgedAfterOutput() {
