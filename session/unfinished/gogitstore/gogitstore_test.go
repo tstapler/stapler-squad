@@ -1,6 +1,7 @@
 package gogitstore
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -168,7 +169,19 @@ func buildPackedFixture(t *testing.T, dir string, numCommits int) {
 	for attempt := 1; attempt <= buildPackedFixtureAttempts; attempt++ {
 		if attempt > 1 {
 			t.Logf("buildPackedFixture: rebuilding fixture from scratch (attempt %d/%d) after: %v", attempt, buildPackedFixtureAttempts, lastErr)
-			if err := os.RemoveAll(dir); err != nil {
+			// Bounded-retry the removal itself rather than treating a single
+			// failure as fatal — see removeAllWithRetry's doc comment for why
+			// a lone os.RemoveAll here is exactly the kind of thing that can
+			// transiently fail under the same class of CI resource pressure
+			// this whole rebuild loop exists to recover from (CI run
+			// 2026-07-20, PR #200: "unlinkat .../objects/pack: directory not
+			// empty" — something wrote a new file into dir AFTER RemoveAll's
+			// internal directory listing but before it finished, most likely
+			// a detached git auto-maintenance process from an earlier
+			// command in this same failed attempt; see gc.auto/maintenance.auto
+			// comment in buildPackedFixtureOnce below for the suspected
+			// trigger, now closed off).
+			if err := removeAllWithRetry(dir); err != nil {
 				t.Fatalf("buildPackedFixture: removing %s before rebuild: %v", dir, err)
 			}
 		}
@@ -179,6 +192,132 @@ func buildPackedFixture(t *testing.T, dir string, numCommits int) {
 		return
 	}
 	t.Fatalf("buildPackedFixture: failed after %d full rebuild attempts: %v", buildPackedFixtureAttempts, lastErr)
+}
+
+// removeAllWithRetry bounded-retries os.RemoveAll(dir) so a transient
+// ENOTEMPTY (something writes a new entry into dir between RemoveAll's
+// internal directory listing and its final rmdir) doesn't hard-fail the
+// caller outright. This mirrors gitRunErr's own bounded-retry-with-backoff
+// shape (see its doc comment) applied to a plain filesystem op instead of a
+// git subprocess — the underlying cause is the same category of transient,
+// external interference this whole file already retries around, just
+// surfacing through a different syscall. Unlike gitRunErr, this does NOT
+// fall back to "start over in a fresh directory" (the alternative the task
+// that introduced this function considered): dir here IS the fresh location
+// the caller is about to rebuild into, so there is nowhere further to fall
+// back to short of changing every buildPackedFixture caller's directory
+// contract — bounded retry-in-place is the minimal fix that doesn't touch
+// that contract.
+func removeAllWithRetry(dir string) error {
+	if err := retryOpWithBackoff(func() error { return os.RemoveAll(dir) }); err != nil {
+		return fmt.Errorf("removeAllWithRetry(%s): %w", dir, err)
+	}
+	return nil
+}
+
+// retryOpWithBackoff bounded-retries op with gitRetryBackoff's schedule,
+// returning op's last error if every attempt fails. Factored out of
+// removeAllWithRetry so its retry/backoff/give-up behavior can be tested
+// directly against a deterministic fake op instead of racing a real
+// os.RemoveAll against a real concurrent filesystem writer — that approach
+// was tried first and is not reliably reproducible on demand: os.RemoveAll's
+// directory walk is fast enough that it can win a race against a
+// continuously-writing goroutine essentially every time, which made an
+// earlier version of the "gives up" test flaky rather than a meaningful
+// check of the bounded-retry logic itself.
+const retryOpMaxAttempts = 5
+
+func retryOpWithBackoff(op func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= retryOpMaxAttempts; attempt++ {
+		err := op()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == retryOpMaxAttempts {
+			break
+		}
+		time.Sleep(gitRetryBackoff(attempt))
+	}
+	return lastErr
+}
+
+// TestRetryOpWithBackoff_SucceedsAfterTransientFailures is the regression
+// test for the "unlinkat .../objects/pack: directory not empty" failure
+// seen in CI on PR #200 (2026-07-20): buildPackedFixture's rebuild-from-
+// scratch path used a single un-retried os.RemoveAll and treated ANY error
+// as fatal, so one transient failure (something else briefly holding a
+// stray write into the directory) took down the whole test with a
+// confusing filesystem error instead of the intended "just rebuild the
+// fixture" recovery. Drives retryOpWithBackoff directly with a fake op
+// (rather than racing a real os.RemoveAll against a real background
+// writer) so the number of transient failures before success is exact and
+// deterministic — a real filesystem race can't reliably be made to fail a
+// controlled number of times on demand, which is exactly what made an
+// earlier, real-race version of this test flaky (os.RemoveAll's directory
+// walk is fast enough to win the race almost every time regardless of a
+// concurrently-writing goroutine).
+func TestRetryOpWithBackoff_SucceedsAfterTransientFailures(t *testing.T) {
+	const failuresBeforeSuccess = 2
+	var calls int
+	err := retryOpWithBackoff(func() error {
+		calls++
+		if calls <= failuresBeforeSuccess {
+			return fmt.Errorf("transient failure #%d", calls)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryOpWithBackoff returned error after eventually succeeding: %v", err)
+	}
+	if calls != failuresBeforeSuccess+1 {
+		t.Fatalf("op called %d times, want exactly %d (stop retrying as soon as it succeeds)", calls, failuresBeforeSuccess+1)
+	}
+}
+
+// TestRetryOpWithBackoff_GivesUpBounded proves retryOpWithBackoff does NOT
+// retry forever: an op that always fails must be called exactly
+// retryOpMaxAttempts times and the final error must be returned, not
+// swallowed or retried indefinitely — so buildPackedFixture's own
+// t.Fatalf still fires for a genuinely stuck case instead of the test run
+// hanging.
+func TestRetryOpWithBackoff_GivesUpBounded(t *testing.T) {
+	var calls int
+	wantErr := errors.New("permanent failure")
+	err := retryOpWithBackoff(func() error {
+		calls++
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryOpWithBackoff returned %v, want %v", err, wantErr)
+	}
+	if calls != retryOpMaxAttempts {
+		t.Fatalf("op called %d times, want exactly retryOpMaxAttempts=%d", calls, retryOpMaxAttempts)
+	}
+}
+
+// TestRemoveAllWithRetry_RemovesRealDirectory is a light end-to-end smoke
+// test proving removeAllWithRetry actually wires retryOpWithBackoff up to a
+// real os.RemoveAll(dir) call and removes a real directory tree in the
+// non-contended case — retryOpWithBackoff's own tests above cover the
+// retry/backoff/give-up behavior in isolation via a fake op.
+func TestRemoveAllWithRetry_RemovesRealDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "objects", "pack")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "some.pack"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := removeAllWithRetry(dir); err != nil {
+		t.Fatalf("removeAllWithRetry: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("dir %s still exists after removeAllWithRetry succeeded (stat err=%v)", dir, err)
+	}
 }
 
 // buildPackedFixtureOnce is buildPackedFixture's single-attempt body. It
@@ -225,6 +364,23 @@ func buildPackedFixtureOnce(t *testing.T, dir string, numCommits int) error {
 	// retry it. Setting gc.auto=0 makes this function's own gc call the
 	// ONLY packing operation ever run against this fixture repo.
 	if err := gitRunErr(t.Logf, dir, "config", "gc.auto", "0"); err != nil {
+		return err
+	}
+	// gc.auto=0 (above) only closes off `git gc --auto`'s own trigger path.
+	// Git >= 2.31 has a SEPARATE, independently-configured auto-trigger:
+	// maintenance.auto (default true) makes "commands that add repository
+	// data" — commit very much included, not just gc-family plumbing — run
+	// `git maintenance run --auto` after they finish (git-maintenance(1)).
+	// Without an explicit `git maintenance register`, only the `gc` task is
+	// enabled by default, and that task's own --auto check does fall back to
+	// gc.auto/gc.autoPackLimit — but this is intentional belt-and-suspenders,
+	// not a guess: a 2026-07-20 CI run (PR #200, unrelated diff) hit `git
+	// commit` itself failing with "bad tree object HEAD" mid-fixture-build,
+	// after PR #190 had already set gc.auto=0 — i.e. a NEW auto-trigger
+	// surface, not the one #190 closed. Disabling maintenance.auto here too
+	// removes that entire mechanism as a source of a same-repo concurrent
+	// writer, regardless of which specific task it would have run.
+	if err := gitRunErr(t.Logf, dir, "config", "maintenance.auto", "false"); err != nil {
 		return err
 	}
 
