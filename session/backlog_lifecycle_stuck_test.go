@@ -463,6 +463,56 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a still-alive review session must not be acted on")
 }
 
+// TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping
+// is the regression test for the exact live 2026-07-20 incident on backlog
+// item 0fd4a940 ("Backlog Rich text", PR #176): its most recent review-role
+// session's PASS verdict had already been correctly applied once — the item
+// shipped all the way to "done" — but nothing marks a verdict as "consumed",
+// so FindReviewItemsWithUnprocessedVerdict keeps matching on "most recent
+// review-role session is dead and has a verdict" forever. When the item
+// later re-entered "review" for an unrelated reason (a separate bug —
+// AutoReopenAfterFailedReview's rollback, fixed independently in this same
+// change — force-reopened the already-"done" item) with no new review-role
+// session yet created, this sweep treated the already-shipped verdict as
+// fresh and reprocessed it, kicking off the reopen cascade
+// (done -> in_progress -> review, spawning a redundant second review). This
+// test only needs the resulting shape — a "done" item forced back into
+// "review" with no new review session — regardless of what put it there.
+func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemReenteredReviewAfterAlreadyShipping(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Same recipe as the sibling "applyPassVerdict" test above: a dead review
+	// session with a PASS verdict, plus a work session so the PASS branch has
+	// something to ship (falls back to a direct "done" transition — no real
+	// git worktree in this test).
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictPass, true, true)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+	shipped, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), shipped.Status, "sanity: the verdict must ship the item once")
+
+	// The item is forced back into "review" from "done" — standing in for
+	// whatever put it there live (a separate, already-fixed bug). No new
+	// review-role session is created: the only one on record is the one
+	// whose verdict already shipped the item above.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+	require.NoError(t, err)
+
+	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), final.Status,
+		"a verdict from a prior, already-concluded review cycle must not be reprocessed")
+}
+
 // TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBackInFlightWhileStillReview
 // is the C2 regression test for abandoned_review: when the review gate comes
 // back in flight (a new active session appears) while the item is still

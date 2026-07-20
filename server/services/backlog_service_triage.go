@@ -741,8 +741,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition); err != nil {
-		return fmt.Errorf("transition to in_progress: %w", err)
+	inProgress, transitionErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition)
+	if transitionErr != nil {
+		return fmt.Errorf("transition to in_progress: %w", transitionErr)
 	}
 
 	// The item just left review for in_progress — resolve any open rework_cap
@@ -763,7 +764,25 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// Roll back: item should stay in review rather than stranded in in_progress
 		// with no active session. ReconcileStuckItems is an eventual fallback, but
 		// an explicit rollback provides faster recovery.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, nil); rollbackErr != nil {
+		//
+		// The rollback precondition is tied to the in_progress row *this call*
+		// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
+		// unconditionally. An unconditional rollback (precondition: nil) would
+		// blindly overwrite whatever status the item is in by the time the
+		// rollback runs — including a "done" reached in the meantime by a
+		// completely different, legitimate path (the live work session shipping
+		// on its own). That is exactly what happened live on 2026-07-20 to
+		// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
+		// item had already shipped, and the unconditional rollback silently
+		// dragged an already-done item back to "review" with no audit note,
+		// kicking off a stale-verdict reprocessing cascade. Scoping the
+		// precondition here means the rollback only fires if nothing else has
+		// touched the item since this function's own in_progress write landed.
+		rollbackPrecondition := &session.BacklogItemPrecondition{
+			ExpectedStatus:    string(session.BacklogStatusInProgress),
+			ExpectedUpdatedAt: &inProgress.UpdatedAt,
+		}
+		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)

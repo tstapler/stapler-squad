@@ -639,7 +639,22 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	return nil
 }
 
-// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
+// TransitionBacklogItemStatus changes the status of a backlog item with
+// optional precondition.
+//
+// The precondition is enforced as a genuine compare-and-swap: it is folded
+// into the UPDATE statement's WHERE clause (status = ? AND updated_at = ?)
+// rather than checked against a separately-fetched row beforehand. The
+// previous implementation did Get() → check-in-Go → UpdateOneID().Save(),
+// which is a read-then-write race — nothing stopped a second, concurrent
+// caller's write from landing in the gap between this call's read and its
+// write, so a precondition that was true at read time could be false (and
+// silently ignored) by write time. That TOCTOU window is exactly what let a
+// stale AutoReopenAfterFailedReview call (reading the item while it was
+// still "review", then queued/delayed behind other work) reopen an item that
+// had, in the meantime, already legitimately shipped to "done" — see
+// docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md for the
+// live 2026-07-20 repro (item 0fd4a940, PR #176) this closes.
 func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
@@ -654,31 +669,60 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
 	if precondition != nil {
-		if precondition.ExpectedStatus != "" && current.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, current.Status)
+		if precondition.ExpectedStatus != "" {
+			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
 		}
-		if precondition.ExpectedUpdatedAt != nil && !current.UpdatedAt.Equal(*precondition.ExpectedUpdatedAt) {
-			return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+		if precondition.ExpectedUpdatedAt != nil {
+			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
 		}
 	}
 
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		SetStatus(string(toStatus)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to transition backlog item %s status: %w", id, err)
 	}
+	if affected == 0 {
+		// The row either no longer exists or the precondition no longer holds —
+		// re-fetch to report which. A concurrent writer may have won the race in
+		// the instant between our Get above and this UPDATE, so the check must be
+		// against fresh data, not `current`.
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+		}
+		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
 
-	// Append an immutable audit record for this transition.
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after transition: %w", id, err)
+	}
+
+	// Append an immutable audit record for this transition. When the
+	// precondition asserted an expected status, that value is what the row
+	// atomically held the instant this write landed (guaranteed by the WHERE
+	// clause above) — more reliable than `current.Status` from the earlier,
+	// non-atomic Get. Unconditional transitions (no precondition) fall back to
+	// the earlier read, same as before this fix; best-effort either way.
+	fromStatus := current.Status
+	if precondition != nil && precondition.ExpectedStatus != "" {
+		fromStatus = precondition.ExpectedStatus
+	}
 	evCreate := r.client.BacklogStatusEvent.Create().
 		SetItemID(parsedID).
-		SetFromStatus(current.Status).
+		SetFromStatus(fromStatus).
 		SetToStatus(string(toStatus)).
 		SetTriggeredBy(TriggeredBySystem)
 	if precondition != nil && precondition.Note != "" {

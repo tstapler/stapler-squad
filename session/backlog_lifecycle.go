@@ -1428,6 +1428,29 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 			continue // still plausibly wrapping up on its own — leave it alone
 		}
 
+		// latest is only a genuinely *unprocessed* verdict if it belongs to the
+		// item's current stay in "review" — i.e. it was created at or after the
+		// most recent transition into "review". FindReviewItemsWithUnprocessedVerdict
+		// has no notion of "already consumed"; it matches on "most recent
+		// review-role session has a dead-and-verdicted state", full stop. A
+		// review session whose verdict was already correctly applied once (via
+		// the normal real-time handleReviewSessionExited path) stays matchable
+		// by that query forever, because nothing marks the verdict as consumed
+		// — so if the item later re-enters "review" for any other reason (a new
+		// review cycle not yet represented by a new review-role session, or,
+		// live 2026-07-20 on item 0fd4a940 (PR #176), a bug elsewhere that
+		// force-reopened an already-"done" item), this sweep would treat that
+		// stale, already-shipped verdict as fresh and reprocess it — reshipping
+		// or reopening an item nothing here should be touching. Comparing
+		// against the current review-entry timestamp catches exactly that: a
+		// session created before the item's current review stay began cannot
+		// be what that stay's outcome will be judged on.
+		if reviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, item.ID.String(), BacklogStatusReview); evErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts GetMostRecentStatusEventAt item=%s: %v", item.ID, evErr)
+		} else if found && latest.CreatedAt.Before(reviewAt) {
+			continue // verdict belongs to a prior, already-concluded review cycle
+		}
+
 		if latest.EndedAt == nil {
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil {
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
