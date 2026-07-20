@@ -115,6 +115,21 @@ export const checkboxHint = style({
   marginLeft: vars.space["6"],
 });
 
+export const pipelineModeEmptyHint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const pipelineModeEmptyHintLink = style({
+  color: vars.color.primary,
+  textDecoration: "none",
+  selectors: {
+    "&:hover": {
+      textDecoration: "underline",
+    },
+  },
+});
+
 export const acSection = style({
   display: "flex",
   flexDirection: "column",

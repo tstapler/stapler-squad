@@ -25,6 +25,8 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 fswatch -o web-app/src | xargs -n1 -I{} make install-service
 ```
 
+**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `.claude/rules/tmux-keep-server-on-restart.md`.
+
 ### Profiling
 
 ```bash
@@ -233,3 +235,4 @@ make e2e-lighthouse
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
 | Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
 | Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |
+| Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/rules/tmux-keep-server-on-restart.md` |

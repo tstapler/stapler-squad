@@ -48,8 +48,11 @@ Steps:
 2. Once `/github:pr-ship` reports all gates green, request the automated review:
    Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.
 
-Note: if the repository has no GitHub remote, use `gh pr create --fill` to create the PR manually,
-then run `/backlog/review`.
+Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which
+just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format
+and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),
+`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).
+Then run `/backlog/review`.
 
 === status.md ===
 Call the get_backlog_item MCP tool with item_id=char-fixture-2.

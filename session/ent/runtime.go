@@ -241,6 +241,10 @@ func init() {
 	backlogstuckstateDescLastCheckedAt := backlogstuckstateFields[4].Descriptor()
 	// backlogstuckstate.DefaultLastCheckedAt holds the default value on creation for the last_checked_at field.
 	backlogstuckstate.DefaultLastCheckedAt = backlogstuckstateDescLastCheckedAt.Default.(func() time.Time)
+	// backlogstuckstateDescRemediationAttempts is the schema descriptor for remediation_attempts field.
+	backlogstuckstateDescRemediationAttempts := backlogstuckstateFields[9].Descriptor()
+	// backlogstuckstate.DefaultRemediationAttempts holds the default value on creation for the remediation_attempts field.
+	backlogstuckstate.DefaultRemediationAttempts = backlogstuckstateDescRemediationAttempts.Default.(int32)
 	// backlogstuckstateDescID is the schema descriptor for id field.
 	backlogstuckstateDescID := backlogstuckstateFields[0].Descriptor()
 	// backlogstuckstate.DefaultID holds the default value on creation for the id field.

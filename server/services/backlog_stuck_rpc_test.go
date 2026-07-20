@@ -177,3 +177,216 @@ func TestSnoozeStuckItem_should_rejectInvalidArguments_When_ReasonOrItemMissing(
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
+
+// TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen
+// verifies the RPC handler resets remediation_attempts/next_remediation_at on
+// the matching open row and the reset is visible via ListStuckBacklogItems.
+func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "bouncing item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing x3")
+	applied, err := storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	resp, err := svc.ResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.ResetStuckRemediationRequest{
+		ItemId: item.ID,
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Applied)
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 1)
+	assert.Equal(t, int32(0), list.Msg.Items[0].RemediationAttempts)
+	assert.Nil(t, list.Msg.Items[0].NextRemediationAt)
+}
+
+// TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing
+// mirrors SnoozeStuckItem's input validation test.
+func TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	_, err := svc.ResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.ResetStuckRemediationRequest{
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	_, err = svc.ResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.ResetStuckRemediationRequest{
+		ItemId: uuid.NewString(),
+		Reason: sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet
+// verifies the RPC layer's only_parked default (true) when the caller omits
+// only_parked_explicitly_set — a parked row is reset, a mid-backoff
+// (not-yet-parked) row is left alone.
+func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	parked, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "parked", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, parked.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, parked.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	midBackoff, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "mid-backoff", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, midBackoff.ID, domain.StuckReasonAbandonedReview, time.Now(), "abandoned")
+	next := time.Now().Add(2 * time.Hour)
+	_, err = storage.RecordRemediationAttempt(ctx, midBackoff.ID, domain.StuckReasonAbandonedReview, 2, &next)
+	require.NoError(t, err)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ResetCount)
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 2)
+	for _, item := range list.Msg.Items {
+		if item.ItemId == parked.ID {
+			assert.Equal(t, int32(0), item.RemediationAttempts)
+		} else {
+			assert.Equal(t, int32(2), item.RemediationAttempts)
+		}
+	}
+}
+
+// TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse
+// verifies only_parked_explicitly_set=true with only_parked=false performs a
+// full reset regardless of attempt count.
+func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	midBackoff, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "mid-backoff", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, midBackoff.ID, domain.StuckReasonAbandonedReview, time.Now(), "abandoned")
+	next := time.Now().Add(2 * time.Hour)
+	_, err = storage.RecordRemediationAttempt(ctx, midBackoff.ID, domain.StuckReasonAbandonedReview, 2, &next)
+	require.NoError(t, err)
+
+	resp, err := svc.BulkResetStuckRemediation(ctx, connect.NewRequest(&sessionv1.BulkResetStuckRemediationRequest{
+		OnlyParked:              false,
+		OnlyParkedExplicitlySet: true,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ResetCount)
+}
+
+// TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow verifies the
+// operator "Retry now" RPC fails clearly when there is nothing to remediate.
+func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "not stuck", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+
+	_, err = svc.TriggerRemediationNow(ctx, connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
+		ItemId: item.ID,
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestTriggerRemediationNow_should_reject_When_AlreadyParked verifies a
+// parked row (remediation_attempts at cap) is not silently un-parked by a
+// manual trigger — the operator must call ResetStuckRemediation first.
+func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "parked", Status: string(session.BacklogStatusInProgress)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
+	require.NoError(t, err)
+
+	_, err = svc.TriggerRemediationNow(ctx, connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
+		ItemId: item.ID,
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 1)
+	assert.Equal(t, session.MaxRemediationAttempts, list.Msg.Items[0].RemediationAttempts, "a rejected manual trigger must not change the stored attempt count")
+}
+
+// TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction verifies
+// a Phase B reason (no wired remediation action yet) is rejected with
+// Unimplemented rather than silently doing nothing.
+func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "push failed", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPushFailed, time.Now(), "push rejected")
+
+	_, err = svc.TriggerRemediationNow(ctx, connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
+		ItemId: item.ID,
+		Reason: sessionv1.StuckReason_STUCK_REASON_PUSH_FAILED,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns
+// verifies the happy path: the wrapped action runs (here, AutoReopenAfterFailedReview
+// no-ops early because the item already has an active work session — a
+// legitimate, error-free outcome) and the attempt is recorded exactly like a
+// normal dispatcher-triggered one.
+func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := t.Context()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-session-uuid",
+		SessionRole: string(session.SessionRoleWork),
+	})
+	require.NoError(t, err)
+	seedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
+
+	resp, err := svc.TriggerRemediationNow(ctx, connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
+		ItemId: item.ID,
+		Reason: sessionv1.StuckReason_STUCK_REASON_BOUNCING,
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Triggered)
+
+	list, err := svc.ListStuckBacklogItems(ctx, connect.NewRequest(&sessionv1.ListStuckBacklogItemsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Items, 1)
+	assert.Equal(t, int32(1), list.Msg.Items[0].RemediationAttempts)
+}

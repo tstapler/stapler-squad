@@ -166,6 +166,67 @@ func (_u *BacklogStuckStateUpdate) ClearContext() *BacklogStuckStateUpdate {
 	return _u
 }
 
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (_u *BacklogStuckStateUpdate) SetRemediationAttempts(v int32) *BacklogStuckStateUpdate {
+	_u.mutation.ResetRemediationAttempts()
+	_u.mutation.SetRemediationAttempts(v)
+	return _u
+}
+
+// SetNillableRemediationAttempts sets the "remediation_attempts" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdate) SetNillableRemediationAttempts(v *int32) *BacklogStuckStateUpdate {
+	if v != nil {
+		_u.SetRemediationAttempts(*v)
+	}
+	return _u
+}
+
+// AddRemediationAttempts adds value to the "remediation_attempts" field.
+func (_u *BacklogStuckStateUpdate) AddRemediationAttempts(v int32) *BacklogStuckStateUpdate {
+	_u.mutation.AddRemediationAttempts(v)
+	return _u
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (_u *BacklogStuckStateUpdate) SetNextRemediationAt(v time.Time) *BacklogStuckStateUpdate {
+	_u.mutation.SetNextRemediationAt(v)
+	return _u
+}
+
+// SetNillableNextRemediationAt sets the "next_remediation_at" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdate) SetNillableNextRemediationAt(v *time.Time) *BacklogStuckStateUpdate {
+	if v != nil {
+		_u.SetNextRemediationAt(*v)
+	}
+	return _u
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (_u *BacklogStuckStateUpdate) ClearNextRemediationAt() *BacklogStuckStateUpdate {
+	_u.mutation.ClearNextRemediationAt()
+	return _u
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (_u *BacklogStuckStateUpdate) SetGraceBootTime(v time.Time) *BacklogStuckStateUpdate {
+	_u.mutation.SetGraceBootTime(v)
+	return _u
+}
+
+// SetNillableGraceBootTime sets the "grace_boot_time" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdate) SetNillableGraceBootTime(v *time.Time) *BacklogStuckStateUpdate {
+	if v != nil {
+		_u.SetGraceBootTime(*v)
+	}
+	return _u
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (_u *BacklogStuckStateUpdate) ClearGraceBootTime() *BacklogStuckStateUpdate {
+	_u.mutation.ClearGraceBootTime()
+	return _u
+}
+
 // SetItem sets the "item" edge to the BacklogItem entity.
 func (_u *BacklogStuckStateUpdate) SetItem(v *BacklogItem) *BacklogStuckStateUpdate {
 	return _u.SetItemID(v.ID)
@@ -261,6 +322,24 @@ func (_u *BacklogStuckStateUpdate) sqlSave(ctx context.Context) (_node int, err 
 	}
 	if _u.mutation.ContextCleared() {
 		_spec.ClearField(backlogstuckstate.FieldContext, field.TypeString)
+	}
+	if value, ok := _u.mutation.RemediationAttempts(); ok {
+		_spec.SetField(backlogstuckstate.FieldRemediationAttempts, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedRemediationAttempts(); ok {
+		_spec.AddField(backlogstuckstate.FieldRemediationAttempts, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.NextRemediationAt(); ok {
+		_spec.SetField(backlogstuckstate.FieldNextRemediationAt, field.TypeTime, value)
+	}
+	if _u.mutation.NextRemediationAtCleared() {
+		_spec.ClearField(backlogstuckstate.FieldNextRemediationAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GraceBootTime(); ok {
+		_spec.SetField(backlogstuckstate.FieldGraceBootTime, field.TypeTime, value)
+	}
+	if _u.mutation.GraceBootTimeCleared() {
+		_spec.ClearField(backlogstuckstate.FieldGraceBootTime, field.TypeTime)
 	}
 	if _u.mutation.ItemCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -447,6 +526,67 @@ func (_u *BacklogStuckStateUpdateOne) ClearContext() *BacklogStuckStateUpdateOne
 	return _u
 }
 
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (_u *BacklogStuckStateUpdateOne) SetRemediationAttempts(v int32) *BacklogStuckStateUpdateOne {
+	_u.mutation.ResetRemediationAttempts()
+	_u.mutation.SetRemediationAttempts(v)
+	return _u
+}
+
+// SetNillableRemediationAttempts sets the "remediation_attempts" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdateOne) SetNillableRemediationAttempts(v *int32) *BacklogStuckStateUpdateOne {
+	if v != nil {
+		_u.SetRemediationAttempts(*v)
+	}
+	return _u
+}
+
+// AddRemediationAttempts adds value to the "remediation_attempts" field.
+func (_u *BacklogStuckStateUpdateOne) AddRemediationAttempts(v int32) *BacklogStuckStateUpdateOne {
+	_u.mutation.AddRemediationAttempts(v)
+	return _u
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (_u *BacklogStuckStateUpdateOne) SetNextRemediationAt(v time.Time) *BacklogStuckStateUpdateOne {
+	_u.mutation.SetNextRemediationAt(v)
+	return _u
+}
+
+// SetNillableNextRemediationAt sets the "next_remediation_at" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdateOne) SetNillableNextRemediationAt(v *time.Time) *BacklogStuckStateUpdateOne {
+	if v != nil {
+		_u.SetNextRemediationAt(*v)
+	}
+	return _u
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (_u *BacklogStuckStateUpdateOne) ClearNextRemediationAt() *BacklogStuckStateUpdateOne {
+	_u.mutation.ClearNextRemediationAt()
+	return _u
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (_u *BacklogStuckStateUpdateOne) SetGraceBootTime(v time.Time) *BacklogStuckStateUpdateOne {
+	_u.mutation.SetGraceBootTime(v)
+	return _u
+}
+
+// SetNillableGraceBootTime sets the "grace_boot_time" field if the given value is not nil.
+func (_u *BacklogStuckStateUpdateOne) SetNillableGraceBootTime(v *time.Time) *BacklogStuckStateUpdateOne {
+	if v != nil {
+		_u.SetGraceBootTime(*v)
+	}
+	return _u
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (_u *BacklogStuckStateUpdateOne) ClearGraceBootTime() *BacklogStuckStateUpdateOne {
+	_u.mutation.ClearGraceBootTime()
+	return _u
+}
+
 // SetItem sets the "item" edge to the BacklogItem entity.
 func (_u *BacklogStuckStateUpdateOne) SetItem(v *BacklogItem) *BacklogStuckStateUpdateOne {
 	return _u.SetItemID(v.ID)
@@ -572,6 +712,24 @@ func (_u *BacklogStuckStateUpdateOne) sqlSave(ctx context.Context) (_node *Backl
 	}
 	if _u.mutation.ContextCleared() {
 		_spec.ClearField(backlogstuckstate.FieldContext, field.TypeString)
+	}
+	if value, ok := _u.mutation.RemediationAttempts(); ok {
+		_spec.SetField(backlogstuckstate.FieldRemediationAttempts, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedRemediationAttempts(); ok {
+		_spec.AddField(backlogstuckstate.FieldRemediationAttempts, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.NextRemediationAt(); ok {
+		_spec.SetField(backlogstuckstate.FieldNextRemediationAt, field.TypeTime, value)
+	}
+	if _u.mutation.NextRemediationAtCleared() {
+		_spec.ClearField(backlogstuckstate.FieldNextRemediationAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GraceBootTime(); ok {
+		_spec.SetField(backlogstuckstate.FieldGraceBootTime, field.TypeTime, value)
+	}
+	if _u.mutation.GraceBootTimeCleared() {
+		_spec.ClearField(backlogstuckstate.FieldGraceBootTime, field.TypeTime)
 	}
 	if _u.mutation.ItemCleared() {
 		edge := &sqlgraph.EdgeSpec{

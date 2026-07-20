@@ -121,6 +121,48 @@ func (_c *BacklogStuckStateCreate) SetNillableContext(v *string) *BacklogStuckSt
 	return _c
 }
 
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (_c *BacklogStuckStateCreate) SetRemediationAttempts(v int32) *BacklogStuckStateCreate {
+	_c.mutation.SetRemediationAttempts(v)
+	return _c
+}
+
+// SetNillableRemediationAttempts sets the "remediation_attempts" field if the given value is not nil.
+func (_c *BacklogStuckStateCreate) SetNillableRemediationAttempts(v *int32) *BacklogStuckStateCreate {
+	if v != nil {
+		_c.SetRemediationAttempts(*v)
+	}
+	return _c
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (_c *BacklogStuckStateCreate) SetNextRemediationAt(v time.Time) *BacklogStuckStateCreate {
+	_c.mutation.SetNextRemediationAt(v)
+	return _c
+}
+
+// SetNillableNextRemediationAt sets the "next_remediation_at" field if the given value is not nil.
+func (_c *BacklogStuckStateCreate) SetNillableNextRemediationAt(v *time.Time) *BacklogStuckStateCreate {
+	if v != nil {
+		_c.SetNextRemediationAt(*v)
+	}
+	return _c
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (_c *BacklogStuckStateCreate) SetGraceBootTime(v time.Time) *BacklogStuckStateCreate {
+	_c.mutation.SetGraceBootTime(v)
+	return _c
+}
+
+// SetNillableGraceBootTime sets the "grace_boot_time" field if the given value is not nil.
+func (_c *BacklogStuckStateCreate) SetNillableGraceBootTime(v *time.Time) *BacklogStuckStateCreate {
+	if v != nil {
+		_c.SetGraceBootTime(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *BacklogStuckStateCreate) SetID(v uuid.UUID) *BacklogStuckStateCreate {
 	_c.mutation.SetID(v)
@@ -183,6 +225,10 @@ func (_c *BacklogStuckStateCreate) defaults() {
 		v := backlogstuckstate.DefaultLastCheckedAt()
 		_c.mutation.SetLastCheckedAt(v)
 	}
+	if _, ok := _c.mutation.RemediationAttempts(); !ok {
+		v := backlogstuckstate.DefaultRemediationAttempts
+		_c.mutation.SetRemediationAttempts(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := backlogstuckstate.DefaultID()
 		_c.mutation.SetID(v)
@@ -202,6 +248,9 @@ func (_c *BacklogStuckStateCreate) check() error {
 	}
 	if _, ok := _c.mutation.LastCheckedAt(); !ok {
 		return &ValidationError{Name: "last_checked_at", err: errors.New(`ent: missing required field "BacklogStuckState.last_checked_at"`)}
+	}
+	if _, ok := _c.mutation.RemediationAttempts(); !ok {
+		return &ValidationError{Name: "remediation_attempts", err: errors.New(`ent: missing required field "BacklogStuckState.remediation_attempts"`)}
 	}
 	if len(_c.mutation.ItemIDs()) == 0 {
 		return &ValidationError{Name: "item", err: errors.New(`ent: missing required edge "BacklogStuckState.item"`)}
@@ -269,6 +318,18 @@ func (_c *BacklogStuckStateCreate) createSpec() (*BacklogStuckState, *sqlgraph.C
 	if value, ok := _c.mutation.Context(); ok {
 		_spec.SetField(backlogstuckstate.FieldContext, field.TypeString, value)
 		_node.Context = value
+	}
+	if value, ok := _c.mutation.RemediationAttempts(); ok {
+		_spec.SetField(backlogstuckstate.FieldRemediationAttempts, field.TypeInt32, value)
+		_node.RemediationAttempts = value
+	}
+	if value, ok := _c.mutation.NextRemediationAt(); ok {
+		_spec.SetField(backlogstuckstate.FieldNextRemediationAt, field.TypeTime, value)
+		_node.NextRemediationAt = &value
+	}
+	if value, ok := _c.mutation.GraceBootTime(); ok {
+		_spec.SetField(backlogstuckstate.FieldGraceBootTime, field.TypeTime, value)
+		_node.GraceBootTime = &value
 	}
 	if nodes := _c.mutation.ItemIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -459,6 +520,60 @@ func (u *BacklogStuckStateUpsert) ClearContext() *BacklogStuckStateUpsert {
 	return u
 }
 
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsert) SetRemediationAttempts(v int32) *BacklogStuckStateUpsert {
+	u.Set(backlogstuckstate.FieldRemediationAttempts, v)
+	return u
+}
+
+// UpdateRemediationAttempts sets the "remediation_attempts" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsert) UpdateRemediationAttempts() *BacklogStuckStateUpsert {
+	u.SetExcluded(backlogstuckstate.FieldRemediationAttempts)
+	return u
+}
+
+// AddRemediationAttempts adds v to the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsert) AddRemediationAttempts(v int32) *BacklogStuckStateUpsert {
+	u.Add(backlogstuckstate.FieldRemediationAttempts, v)
+	return u
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsert) SetNextRemediationAt(v time.Time) *BacklogStuckStateUpsert {
+	u.Set(backlogstuckstate.FieldNextRemediationAt, v)
+	return u
+}
+
+// UpdateNextRemediationAt sets the "next_remediation_at" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsert) UpdateNextRemediationAt() *BacklogStuckStateUpsert {
+	u.SetExcluded(backlogstuckstate.FieldNextRemediationAt)
+	return u
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsert) ClearNextRemediationAt() *BacklogStuckStateUpsert {
+	u.SetNull(backlogstuckstate.FieldNextRemediationAt)
+	return u
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsert) SetGraceBootTime(v time.Time) *BacklogStuckStateUpsert {
+	u.Set(backlogstuckstate.FieldGraceBootTime, v)
+	return u
+}
+
+// UpdateGraceBootTime sets the "grace_boot_time" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsert) UpdateGraceBootTime() *BacklogStuckStateUpsert {
+	u.SetExcluded(backlogstuckstate.FieldGraceBootTime)
+	return u
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsert) ClearGraceBootTime() *BacklogStuckStateUpsert {
+	u.SetNull(backlogstuckstate.FieldGraceBootTime)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
 // Using this option is equivalent to using:
 //
@@ -644,6 +759,69 @@ func (u *BacklogStuckStateUpsertOne) UpdateContext() *BacklogStuckStateUpsertOne
 func (u *BacklogStuckStateUpsertOne) ClearContext() *BacklogStuckStateUpsertOne {
 	return u.Update(func(s *BacklogStuckStateUpsert) {
 		s.ClearContext()
+	})
+}
+
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsertOne) SetRemediationAttempts(v int32) *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetRemediationAttempts(v)
+	})
+}
+
+// AddRemediationAttempts adds v to the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsertOne) AddRemediationAttempts(v int32) *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.AddRemediationAttempts(v)
+	})
+}
+
+// UpdateRemediationAttempts sets the "remediation_attempts" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertOne) UpdateRemediationAttempts() *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateRemediationAttempts()
+	})
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsertOne) SetNextRemediationAt(v time.Time) *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetNextRemediationAt(v)
+	})
+}
+
+// UpdateNextRemediationAt sets the "next_remediation_at" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertOne) UpdateNextRemediationAt() *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateNextRemediationAt()
+	})
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsertOne) ClearNextRemediationAt() *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.ClearNextRemediationAt()
+	})
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsertOne) SetGraceBootTime(v time.Time) *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetGraceBootTime(v)
+	})
+}
+
+// UpdateGraceBootTime sets the "grace_boot_time" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertOne) UpdateGraceBootTime() *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateGraceBootTime()
+	})
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsertOne) ClearGraceBootTime() *BacklogStuckStateUpsertOne {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.ClearGraceBootTime()
 	})
 }
 
@@ -999,6 +1177,69 @@ func (u *BacklogStuckStateUpsertBulk) UpdateContext() *BacklogStuckStateUpsertBu
 func (u *BacklogStuckStateUpsertBulk) ClearContext() *BacklogStuckStateUpsertBulk {
 	return u.Update(func(s *BacklogStuckStateUpsert) {
 		s.ClearContext()
+	})
+}
+
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsertBulk) SetRemediationAttempts(v int32) *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetRemediationAttempts(v)
+	})
+}
+
+// AddRemediationAttempts adds v to the "remediation_attempts" field.
+func (u *BacklogStuckStateUpsertBulk) AddRemediationAttempts(v int32) *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.AddRemediationAttempts(v)
+	})
+}
+
+// UpdateRemediationAttempts sets the "remediation_attempts" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertBulk) UpdateRemediationAttempts() *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateRemediationAttempts()
+	})
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsertBulk) SetNextRemediationAt(v time.Time) *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetNextRemediationAt(v)
+	})
+}
+
+// UpdateNextRemediationAt sets the "next_remediation_at" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertBulk) UpdateNextRemediationAt() *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateNextRemediationAt()
+	})
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (u *BacklogStuckStateUpsertBulk) ClearNextRemediationAt() *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.ClearNextRemediationAt()
+	})
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsertBulk) SetGraceBootTime(v time.Time) *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.SetGraceBootTime(v)
+	})
+}
+
+// UpdateGraceBootTime sets the "grace_boot_time" field to the value that was provided on create.
+func (u *BacklogStuckStateUpsertBulk) UpdateGraceBootTime() *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.UpdateGraceBootTime()
+	})
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (u *BacklogStuckStateUpsertBulk) ClearGraceBootTime() *BacklogStuckStateUpsertBulk {
+	return u.Update(func(s *BacklogStuckStateUpsert) {
+		s.ClearGraceBootTime()
 	})
 }
 

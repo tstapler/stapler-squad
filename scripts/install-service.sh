@@ -177,7 +177,7 @@ StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=$bin_path --remote-access$extra_flags
+ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
 RestartSec=5s

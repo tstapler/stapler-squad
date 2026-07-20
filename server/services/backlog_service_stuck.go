@@ -9,10 +9,12 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -78,17 +80,22 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 // representation. allow_auto_merge is intentionally left unset here — Phase 4
 // (Story 4.1.4) owns fetching and populating the per-repo, TTL-cached value.
 func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
-	return &sessionv1.StuckBacklogItem{
-		ItemId:          row.ItemID,
-		Title:           row.ItemTitle,
-		Status:          string(row.ItemStatus),
-		Reason:          toProtoStuckReason(row.Reason),
-		FirstDetectedAt: timestamppb.New(row.FirstDetectedAt),
-		LastCheckedAt:   timestamppb.New(row.LastCheckedAt),
-		PrNumber:        int32(row.PrNumber),
-		PrUrl:           row.PrURL,
-		Context:         row.Context,
+	item := &sessionv1.StuckBacklogItem{
+		ItemId:              row.ItemID,
+		Title:               row.ItemTitle,
+		Status:              string(row.ItemStatus),
+		Reason:              toProtoStuckReason(row.Reason),
+		FirstDetectedAt:     timestamppb.New(row.FirstDetectedAt),
+		LastCheckedAt:       timestamppb.New(row.LastCheckedAt),
+		PrNumber:            int32(row.PrNumber),
+		PrUrl:               row.PrURL,
+		Context:             row.Context,
+		RemediationAttempts: row.RemediationAttempts,
 	}
+	if row.NextRemediationAt != nil {
+		item.NextRemediationAt = timestamppb.New(*row.NextRemediationAt)
+	}
+	return item
 }
 
 // ListStuckBacklogItems returns open (unresolved, un-snoozed) stuck backlog
@@ -143,4 +150,145 @@ func (s *BacklogService) SnoozeStuckItem(
 	}
 
 	return connect.NewResponse(&sessionv1.SnoozeStuckItemResponse{Applied: applied}), nil
+}
+
+// ResetStuckRemediation clears the automated-remediation counters on a
+// single open stuck row (docs/tasks/backlog-stuck-item-auto-remediation.md
+// Phase A) — the per-item admin escape hatch for an attempt budget spuriously
+// consumed by e.g. an OOM-restart storm. Never itself invokes a remediation
+// action; it only un-parks the row for the NEXT automated (or
+// TriggerRemediationNow-triggered) attempt.
+// +api: backlog:reset-stuck-remediation
+func (s *BacklogService) ResetStuckRemediation(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResetStuckRemediationRequest],
+) (*connect.Response[sessionv1.ResetStuckRemediationResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	reason := fromProtoStuckReason(req.Msg.Reason)
+	if !reason.IsValid() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
+	}
+
+	applied, err := s.storage.ResetStuckRemediation(ctx, req.Msg.ItemId, reason)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset stuck remediation: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.ResetStuckRemediationResponse{Applied: applied}), nil
+}
+
+// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+// open stuck row matching the optional reason filter — see
+// only_parked_explicitly_set's doc comment in the proto for why only_parked
+// defaults to true (the safer, more targeted reset) rather than proto3's
+// natural false zero value.
+// +api: backlog:bulk-reset-stuck-remediation
+func (s *BacklogService) BulkResetStuckRemediation(
+	ctx context.Context,
+	req *connect.Request[sessionv1.BulkResetStuckRemediationRequest],
+) (*connect.Response[sessionv1.BulkResetStuckRemediationResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	var reasonFilter *domain.StuckReason
+	if req.Msg.Reason != sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED {
+		reason := fromProtoStuckReason(req.Msg.Reason)
+		if !reason.IsValid() {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid reason"))
+		}
+		reasonFilter = &reason
+	}
+
+	onlyParked := true
+	if req.Msg.OnlyParkedExplicitlySet {
+		onlyParked = req.Msg.OnlyParked
+	}
+
+	n, err := s.storage.BulkResetStuckRemediation(ctx, reasonFilter, onlyParked)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to bulk reset stuck remediation: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.BulkResetStuckRemediationResponse{ResetCount: int32(n)}), nil
+}
+
+// remediationActionByReason maps a stuck reason to the BacklogService method
+// TriggerRemediationNow invokes directly (bypassing the interface
+// indirection the periodic sweep uses — this RPC handler IS a *BacklogService,
+// so it can call its own remediation methods without going through
+// AutoReopenSpawner/ReviewRespawner/AutonomousStuckRespawner). Phase A wires
+// only the 3 reasons that already have a working respawn action; every other
+// reason returns connect.CodeUnimplemented — Phase B's job, not this RPC's,
+// to add them here.
+func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) func(ctx context.Context, itemID string) error {
+	switch reason {
+	case domain.StuckReasonBouncing:
+		return s.AutoReopenAfterFailedReview
+	case domain.StuckReasonAbandonedReview:
+		return s.AutoRespawnReview
+	case domain.StuckReasonAutonomousStuck:
+		return s.AutoRespawnAutonomousWork
+	default:
+		return nil
+	}
+}
+
+// TriggerRemediationNow immediately runs the reason-specific remediation
+// action for a single open stuck row (docs/tasks/backlog-stuck-item-auto-remediation.md
+// addendum) — the operator "Retry now" escape hatch. Bypasses only the
+// next_remediation_at backoff timer: RecordManualRemediationAttempt still
+// rejects a parked row (ErrRemediationParked) rather than un-parking it, and
+// this attempt still increments remediation_attempts exactly like a normal
+// dispatcher-triggered one, so it counts toward the same 5-attempt cap. The
+// wrapped action's own circuit breaker (IsRepeatedFailure/
+// IsRepeatedNoVerdictFailure inside AutoReopenAfterFailedReview, for example)
+// still applies — this RPC does not bypass it.
+// +api: backlog:trigger-remediation-now
+func (s *BacklogService) TriggerRemediationNow(
+	ctx context.Context,
+	req *connect.Request[sessionv1.TriggerRemediationNowRequest],
+) (*connect.Response[sessionv1.TriggerRemediationNowResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.ItemId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id is required"))
+	}
+	reason := fromProtoStuckReason(req.Msg.Reason)
+	if !reason.IsValid() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid or unspecified reason"))
+	}
+
+	action := s.remediationActionByReason(reason)
+	if action == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no automated remediation action is available for reason %q yet", reason))
+	}
+
+	justParked, err := s.storage.RecordManualRemediationAttempt(ctx, req.Msg.ItemId, reason)
+	if err != nil {
+		switch {
+		case errors.Is(err, session.ErrRemediationParked):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("remediation attempts are exhausted for this item/reason — call ResetStuckRemediation first: %w", err))
+		case errors.Is(err, session.ErrNoOpenStuckState):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("no open stuck state for this item/reason: %w", err))
+		default:
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to record manual remediation attempt: %w", err))
+		}
+	}
+
+	if actionErr := action(ctx, req.Msg.ItemId); actionErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("remediation action failed: %w", actionErr))
+	}
+
+	if justParked {
+		log.InfoLog.Printf("[BacklogService] TriggerRemediationNow item=%s reason=%s: this was the final attempt before parking", req.Msg.ItemId, reason)
+	}
+
+	return connect.NewResponse(&sessionv1.TriggerRemediationNowResponse{Triggered: true}), nil
 }

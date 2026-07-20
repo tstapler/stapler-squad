@@ -17,7 +17,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -433,6 +433,29 @@ describe("BacklogItemForm — pipeline mode selector (Epic 3.2)", () => {
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pipelineMode: "" }))
     );
+  });
+
+  it("shows a hint linking to Settings when the fetch succeeds but no pipeline modes exist yet", async () => {
+    mockListPipelineModes(() => Promise.resolve([]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    const hint = await screen.findByTestId("backlog-pipeline-mode-empty-hint");
+    expect(hint).toHaveTextContent("No custom pipeline modes exist yet.");
+
+    const link = within(hint).getByRole("link", { name: "Create one in Settings →" });
+    expect(link).toHaveAttribute("href", "/settings/pipeline-modes");
+  });
+
+  it("does not show the empty-modes hint once real pipeline modes are available", async () => {
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, FULL_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("backlog-pipeline-mode-quick");
+    expect(screen.queryByTestId("backlog-pipeline-mode-empty-hint")).not.toBeInTheDocument();
   });
 
   it("G-2: renders a synthetic disabled 'Unknown mode' option when the item's stored slug is unresolvable, and never falls back to Default", async () => {

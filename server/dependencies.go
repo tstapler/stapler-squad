@@ -943,6 +943,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wire the autonomous-stuck respawner so a work session that hits its turn
+	// cap without a DONE signal gets a fresh turn budget directly instead of
+	// being forced into a doomed review cycle (see AutonomousStuckRespawner's
+	// doc comment in autonomous_orchestration_service.go).
+	sessionService.SetAutonomousStuckRespawner(backlogSvc)
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
 	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not

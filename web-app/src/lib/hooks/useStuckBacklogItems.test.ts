@@ -10,11 +10,17 @@ import { StuckReason } from "@/gen/session/v1/backlog_pb";
 
 const mockListStuckBacklogItems = jest.fn();
 const mockSnoozeStuckItem = jest.fn();
+const mockResetStuckRemediation = jest.fn();
+const mockBulkResetStuckRemediation = jest.fn();
+const mockTriggerRemediationNow = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     listStuckBacklogItems: mockListStuckBacklogItems,
     snoozeStuckItem: mockSnoozeStuckItem,
+    resetStuckRemediation: mockResetStuckRemediation,
+    bulkResetStuckRemediation: mockBulkResetStuckRemediation,
+    triggerRemediationNow: mockTriggerRemediationNow,
   }),
 }));
 
@@ -114,5 +120,63 @@ describe("useStuckBacklogItems", () => {
     });
 
     expect(mockListStuckBacklogItems).not.toHaveBeenCalled();
+  });
+
+  it("resetRemediation() calls ResetStuckRemediation and refetches on applied=true", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [makeItem("a")] });
+    mockResetStuckRemediation.mockResolvedValue({ applied: true });
+
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    mockListStuckBacklogItems.mockClear();
+    mockListStuckBacklogItems.mockResolvedValueOnce({ items: [] });
+
+    let applied = false;
+    await act(async () => {
+      applied = await result.current.resetRemediation("a", StuckReason.BOUNCING);
+    });
+
+    expect(applied).toBe(true);
+    expect(mockResetStuckRemediation).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "a", reason: StuckReason.BOUNCING })
+    );
+    expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("bulkResetParkedRemediation() calls BulkResetStuckRemediation with only_parked=true and returns the reset count", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [] });
+    mockBulkResetStuckRemediation.mockResolvedValue({ resetCount: 3 });
+
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.lastFetched).not.toBeNull());
+    mockListStuckBacklogItems.mockClear();
+
+    let count = 0;
+    await act(async () => {
+      count = await result.current.bulkResetParkedRemediation();
+    });
+
+    expect(count).toBe(3);
+    expect(mockBulkResetStuckRemediation).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyParked: true, onlyParkedExplicitlySet: true })
+    );
+    expect(mockListStuckBacklogItems).toHaveBeenCalledTimes(1);
+  });
+
+  it("triggerRemediationNow() calls TriggerRemediationNow, refetches, and rethrows on failure", async () => {
+    mockListStuckBacklogItems.mockResolvedValue({ items: [] });
+    mockTriggerRemediationNow.mockRejectedValue(new Error("already parked"));
+
+    const { result } = renderHook(() => useStuckBacklogItems(60_000));
+    await waitFor(() => expect(result.current.lastFetched).not.toBeNull());
+
+    await expect(
+      act(async () => {
+        await result.current.triggerRemediationNow("a", StuckReason.BOUNCING);
+      })
+    ).rejects.toThrow("already parked");
+    expect(mockTriggerRemediationNow).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "a", reason: StuckReason.BOUNCING })
+    );
   });
 });

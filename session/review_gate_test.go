@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -46,7 +47,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	runner.Run(context.Background(), item, is, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 		onPassCalled.Store(true)
@@ -93,7 +94,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -113,6 +114,71 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	}
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID, "the review ItemSession must be linked to the real Instance UUID returned by SpawnReviewSession")
+}
+
+// TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPipelineMode
+// is the regression guard for the "custom PipelineMode's ReviewPromptTemplate has
+// zero effect on the review most items actually receive" gap (docs/tasks/
+// backlog-feature-improvement.md, 2026-07-19 update, bucket [3]): it proves that
+// when a ReviewGateRunner is constructed with a non-nil PipelineEngine and the
+// item's PipelineMode resolves to a custom mode, the prompt handed to
+// SpawnReviewSession is that mode's rendered ReviewPromptTemplate — not the
+// hardcoded BuildReviewPrompt content.
+func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPipelineMode(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{
+				Slug:                 "quick",
+				Name:                 "Quick Fix",
+				ReviewPromptTemplate: "CUSTOM REVIEW MARKER for {{item_id}}",
+			}}, nil
+		},
+	}
+	engine, err := NewPipelineEngine(repo)
+	require.NoError(t, err)
+
+	itemData := BacklogItemData{
+		Title:              "Custom Pipeline Mode Review Test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           newNonEmptyDiffGitRepo(t),
+		PipelineMode:       "quick",
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	item := &BacklogItemData{
+		ID:           createdItemData.ID,
+		RepoPath:     createdItemData.RepoPath,
+		PipelineMode: "quick",
+	}
+
+	spawner := &mockReviewGateSpawner{instance: &Instance{UUID: uuid.New().String()}}
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, engine)
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
+	prompt := spawner.getLastPrompt()
+	assert.Contains(t, prompt, "CUSTOM REVIEW MARKER for "+item.ID,
+		"a custom PipelineMode's ReviewPromptTemplate must drive the real review gate's prompt")
+	assert.NotContains(t, prompt, "Call submit_review_verdict ONCE",
+		"the hardcoded BuildReviewPrompt content must not leak through once a custom mode resolves")
 }
 
 // TestReviewGateRunner_SpawnerError_LogsAndReturns verifies that a SpawnReviewSession
@@ -146,7 +212,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
 		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
@@ -191,7 +257,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return nil }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
 		runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
@@ -248,7 +314,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
@@ -306,7 +372,7 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
@@ -458,7 +524,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	notifier := &fakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -542,7 +608,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	notifier := &fakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -634,7 +700,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	notifier := &fakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -720,7 +786,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	notifier := &fakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
@@ -815,7 +881,7 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 	notifier := &fakeNotifier{}
 	getNotifier := func() Notifier { return notifier }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator)
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 	var buf bytes.Buffer
 	redirectInfoLog(t, &buf)

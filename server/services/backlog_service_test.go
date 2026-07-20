@@ -151,7 +151,8 @@ type mockSessionCreator struct {
 
 // mockSessionStopper implements SessionStopper for tests.
 type mockSessionStopper struct {
-	liveUUIDs map[string]bool
+	liveUUIDs       map[string]bool
+	killedPaneUUIDs []string
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -161,6 +162,11 @@ func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 func (m *mockSessionStopper) StopSessionByUUID(_ context.Context, _ string) error { return nil }
 
 func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockSessionStopper) KillTmuxPaneOnly(_ context.Context, uuid string) error {
+	m.killedPaneUUIDs = append(m.killedPaneUUIDs, uuid)
 	return nil
 }
 
@@ -1192,6 +1198,110 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	assert.Empty(t, creator.calls)
 }
 
+// TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated is the
+// regression test for a live-observed race (2026-07-19, item d3227302): two
+// literal overlapping work-role ItemSessions were created for the same backlog
+// item because SpawnSessionFromItem's read (ListItemSessions) -> check
+// (hasActiveWorkSession) -> write (CreateItemSession) sequence held no lock, so
+// two concurrent callers (e.g. the autonomous-driver respawn path racing a
+// periodic reconciliation sweep, or a rapid double-click) could both observe
+// "no active work session" before either had written its row. Run with -race:
+// BacklogService.spawnInFlight's LoadOrStore/Delete guard must serialize the
+// whole function body per item ID so only one of N concurrent
+// SpawnSessionFromItem calls for the SAME item succeeds — the rest must fail
+// fast with CodeAlreadyExists instead of each creating their own work session.
+func TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "concurrent spawn race")
+
+	const concurrency = 8
+	var (
+		wg       sync.WaitGroup
+		resultMu sync.Mutex
+		errs     []error
+	)
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines together to maximize the race window
+			_, spawnErr := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+			resultMu.Lock()
+			errs = append(errs, spawnErr)
+			resultMu.Unlock()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var successes, conflicts int
+	for _, spawnErr := range errs {
+		if spawnErr == nil {
+			successes++
+			continue
+		}
+		require.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(spawnErr), "unexpected error: %v", spawnErr)
+		conflicts++
+	}
+	assert.Equal(t, 1, successes, "exactly one concurrent spawn attempt must succeed")
+	assert.Equal(t, concurrency-1, conflicts, "every other concurrent attempt must fail fast with CodeAlreadyExists")
+	assert.Len(t, creator.calls, 1, "only one real session must have been spawned")
+
+	sessions, err := storage.ListItemSessions(t.Context(), itemID)
+	require.NoError(t, err)
+	openWork := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork && is.EndedAt == nil {
+			openWork++
+		}
+	}
+	assert.Equal(t, 1, openWork, "exactly one open work-role ItemSession must exist for the item — no duplicates")
+}
+
+// TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane is the regression test for
+// a real complaint: each rework round gets its own "-rN" title (buildRevisionTitle),
+// but nothing ever closed a finished round's tmux pane — it sat around indefinitely as
+// an idle "[exited]" pane, accumulating with every rework cycle. A fresh reopen spawn
+// must close the previous round's pane via KillTmuxPaneOnly (not StopSessionByUUID,
+// which would also delete the worktree the new round is about to reuse).
+func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a finished rework round")
+
+	// Simulate a normally-completed prior work session (round 1): EndedAt set, the way
+	// handleReviewSessionExited leaves it once a review verdict is processed.
+	endedAt := time.Now().Add(-time.Hour)
+	priorSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "round-1-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Len(t, creator.calls, 1, "round 2 must spawn since round 1 already ended")
+	assert.Contains(t, stopper.killedPaneUUIDs, "round-1-uuid", "round 1's tmux pane must be closed once round 2 spawns")
+}
+
 // ─── AttachSessionToItem ──────────────────────────────────────────────────────
 
 // TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions is a
@@ -1471,6 +1581,9 @@ func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
+		// SkipTriage prevents CreateBacklogItem's auto-triage goroutine from racing
+		// this test's own explicit idea->ready transition below.
+		SkipTriage:   true,
 		SkipPlanning: true,
 	}))
 	require.NoError(t, err)
@@ -1522,6 +1635,9 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
+		// SkipTriage prevents CreateBacklogItem's auto-triage goroutine from racing
+		// this test's own explicit idea->ready transition below.
+		SkipTriage:   true,
 		SkipPlanning: true,
 	}))
 	require.NoError(t, err)

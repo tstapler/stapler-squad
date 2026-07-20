@@ -46,12 +46,26 @@ interface ResolvedGhost {
  * on /unfinished, directly below the existing filter-chip row and above
  * GitHubPRsSection (design/ux.md Surface 2).
  */
+/** Mirrors StuckItem.tsx's MAX_REMEDIATION_ATTEMPTS — see that constant's doc comment. */
+const MAX_REMEDIATION_ATTEMPTS = 5;
+
 export function StuckItemsSection() {
-  const { items, isLoading, error, lastFetched, refetch, snooze } = useStuckBacklogItems();
+  const {
+    items,
+    isLoading,
+    error,
+    lastFetched,
+    refetch,
+    snooze,
+    bulkResetParkedRemediation,
+    triggerRemediationNow,
+  } = useStuckBacklogItems();
   const { updateBacklogItem, transitionStatus, spawnSessionFromItem } = useBacklogService();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
+  const [bulkResetState, setBulkResetState] = useState<"idle" | "pending" | "error">("idle");
+  const [bulkResetMessage, setBulkResetMessage] = useState<string | null>(null);
 
   const prevItemsRef = useRef<StuckBacklogItem[]>([]);
   const ghostTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -192,6 +206,23 @@ export function StuckItemsSection() {
   const totalCount = items.length;
   const activeFilterLabel = filter === "all" ? null : getStuckReasonLabel(filter);
   const filteredCount = visibleItems.length;
+  const parkedCount = useMemo(
+    () => items.filter((i) => i.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS).length,
+    [items]
+  );
+
+  const handleBulkResetParked = useCallback(async () => {
+    setBulkResetState("pending");
+    setBulkResetMessage(null);
+    try {
+      const n = await bulkResetParkedRemediation();
+      setBulkResetState("idle");
+      setBulkResetMessage(n > 0 ? `Reset ${n} parked item${n !== 1 ? "s" : ""}.` : "No parked items to reset.");
+    } catch (err) {
+      setBulkResetState("error");
+      setBulkResetMessage(err instanceof Error ? err.message : "Bulk reset failed");
+    }
+  }, [bulkResetParkedRemediation]);
 
   const chips: { value: FilterValue; label: string; count: number }[] = [
     { value: "all", label: "All", count: totalCount },
@@ -269,6 +300,7 @@ export function StuckItemsSection() {
                       resolvedMessage={ghost?.message}
                       onSnooze={snooze}
                       onReworkCapOverride={handleReworkCapOverride}
+                      onTriggerRemediationNow={triggerRemediationNow}
                     />
                   );
                 })}
@@ -287,7 +319,28 @@ export function StuckItemsSection() {
         <span className={styles.countRegion} aria-live="polite" data-testid="stuck-items-count">
           {totalCount} stuck
         </span>
+        {parkedCount > 0 && (
+          <button
+            type="button"
+            className={styles.resetParkedBtn}
+            onClick={handleBulkResetParked}
+            disabled={bulkResetState === "pending"}
+            title="Clear the automated-retry counters on every item that has exhausted its 5 automated attempts, so they get a fresh shot"
+            data-testid="stuck-items-reset-parked"
+          >
+            {bulkResetState === "pending" ? "Resetting…" : `Reset all parked (${parkedCount})`}
+          </button>
+        )}
       </div>
+      {bulkResetMessage && (
+        <div
+          className={bulkResetState === "error" ? styles.resetParkedMessageError : styles.resetParkedMessage}
+          aria-live="polite"
+          data-testid="stuck-items-reset-parked-message"
+        >
+          {bulkResetMessage}
+        </div>
+      )}
 
       {showStaleBanner && lastFetched && (
         <div className={styles.errorBanner} data-testid="stuck-items-stale-banner">

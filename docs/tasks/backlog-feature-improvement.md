@@ -733,3 +733,163 @@ path, and Test Quality + Security passes actually complete (unreached again this
    correctness fixes, batchable into one pass.
 5. Notification volume/dedup (46 unread, some ×10) not yet scoped — flag for a future
    pass if it starts masking real signals; not urgent enough to route this session.
+
+## Update — 2026-07-19: full skill re-run — the autonomous-driver bounce loop (live, CRITICAL)
+
+Full re-run (live item state + `quality:architecture-review`, `ux:review`, `code:review`
+scoped to the reconciliation loop; `code:is-it-ready` skipped this pass as redundant with
+the other three — see note at the end). Headline: bucket [3]'s core seam (`PipelineMode`/
+`PipelineEngine`) shipped and is genuinely wired for triage/build prompts since the last
+audit, but bucket [1] has a new, actively-running CRITICAL bug that's the worst live
+symptom this project has had — a self-reinforcing bounce loop burning autonomous-driver
+runs with zero chance of ever converging.
+
+### Live State (as of this audit)
+
+`ListStuckBacklogItems` returned 18 open rows across 11 unique items. 6 items are
+`STUCK_REASON_BOUNCING` at **30–78 bounces in the last 24h with no PASS verdict** — one
+(`d3227302`, tmux submodule) at 78, another (`c2ad7bf3`, dedent shortcut) at 58 and also
+carrying `ABANDONED_REVIEW` and `PUSH_FAILED` simultaneously. All 6 bouncing items are also
+independently flagged `AUTONOMOUS_STUCK` ("autonomous driver stopped after 20 turns without
+a DONE signal"). Separately, 4 of the 18 rows belong to items whose current status is
+already `done`/`pr_pending` — stale rows that will never clear (see bucket [1] below).
+
+### [1] Reconciliation Bugs — new findings
+
+**CRITICAL — the autonomous-driver bounce loop has no working circuit breaker.** Root
+cause chain, all independently verified (architecture + code-review agents agree):
+
+1. `onAutonomousDriverComplete`'s `SessionRoleWork` case
+   (`server/services/autonomous_orchestration_service.go:302-304`) unconditionally sets
+   `toStatus = BacklogStatusReview` **even when `outcome.Done == false`** (i.e. the driver
+   hit its 20-turn cap with no DONE signal). An admittedly-incomplete diff gets sent to
+   review every time. `selfHealStuck`'s own comment
+   (`session/backlog_lifecycle.go:1541-1546`) already calls this out as "a separate,
+   flagged behavior" — it was known, not newly introduced, but nothing downstream
+   compensates for it.
+2. That doomed review predictably fails or exits with **no `ReviewVerdict` row at all**
+   (crash/turn-cap on the review side too) — `handleReviewSessionExited`
+   (`session/backlog_lifecycle.go:554-573`) treats a no-verdict exit as a failure and calls
+   `AutoReopenAfterFailedReview` again, respawning another doomed autonomous work session.
+3. Both shipped circuit breakers are blind to this specific shape of failure:
+   `IsRepeatedFailure` (`session/stuck_decisions.go:79-88`, from `6e74535c`) compares
+   `recent[0].Summary == recent[1].Summary` across **two `ReviewVerdict` rows** — but step 2
+   never writes one, so there's nothing to compare and the breaker can never trip for this
+   path. `AutoReopenAfterFailedReview`'s circuit-breaker check (`19f7dd60`) is downstream of
+   the same gap.
+4. The only remaining backstop, `reworkCap` (default 3,
+   `backlog_service_triage.go:662-671`), should have stopped this at 3 cycles — the observed
+   30-78 bounces means either per-item `ReworkCapOverride` is set to unlimited (0) on these
+   items, or something is respawning work sessions without incrementing the counted
+   `SessionRoleWork` session count. Not yet root-caused which; needs a live trace on one
+   bouncing item (`d3227302` is the worst, 78x) before the fix lands.
+5. `reconcileBouncingItems` (`session/backlog_lifecycle.go:1441-1498`) is detection-only —
+   it `MarkStuck`s + notifies once, then does nothing to actually halt the loop it just
+   flagged. Flagging ≠ breaking.
+
+Fix direction (for the `sdd:fix-bug` run): (a) don't force `in_progress → review` on a
+turn-cap stop — leave the item `in_progress` (or route to a dedicated
+`autonomous_stuck`-anchored state) so review isn't wasted on known-incomplete work; (b)
+extend the circuit-breaker logic to count consecutive no-verdict review exits as identical
+failures, not just matching `ReviewVerdict.Summary` text; (c) find and fix whatever is
+letting these items exceed `reworkCap` (check `ReworkCapOverride` on the 6 live items
+first — cheapest diagnostic).
+
+**Sibling of the earlier-known "notify-only, not resolved" defect class:**
+`domain.StuckReasonAutonomousStuck` is written via `MarkStuck`
+(`autonomous_orchestration_service.go:271`) but is explicitly excluded from
+`selfHealStuck`'s per-reason sweep as "event-shaped" (`backlog_lifecycle.go:1538`) — and
+unlike `push_failed` (correctly resolved automatically via `resolveToPRPending`,
+`backlog_lifecycle.go:1729-1738`), there is **no automated `ResolveStuck(...,
+StuckReasonAutonomousStuck)` call site anywhere**. The only clear path is the blanket
+`AllStuckReasons` sweep in `resolveStuckOnManualTransition`
+(`server/services/backlog_service_lifecycle.go:31-54`), which fires only on a **manual**
+`TransitionBacklogItemStatus` RPC call, and even then only for `to == done/archived`
+(the `to == in_progress` case only clears `rework_cap`/`abandoned_review`, not
+`autonomous_stuck`). Net effect, confirmed live: an `autonomous_stuck` row on an item that
+later completes via the automated pipeline (no human ever clicks a manual transition) stays
+open forever — 4 of the 18 current rows are exactly this, on items already `done`/
+`pr_pending`. Low severity (cosmetic noise on `/unfinished`, not a correctness bug) but
+cheap to fix: add an automated resolve call at the point `SessionRoleWork`/`SessionRoleReview`
+successfully advances the item, mirroring `resolveToPRPending`'s pattern.
+
+**Minor:** `AttachSessionToItem`'s status-transition failure
+(`server/services/backlog_service_sync.go:121-123`) is logged but swallowed — the RPC
+still returns success with the session attached while the item may remain in its prior
+status, silently diverging item status from session state.
+
+### [3] Non-Configurable Pipeline Steps — update: seam is real but has a real hole, and is unreachable in the UI
+
+**Backend: `PipelineEngine` does not cover the automatic review gate.** Confirmed wired
+(genuinely load-bearing, not vestigial) for: initial session prompt, headless triage
+prompt, `.claude/commands/backlog/*.md` slash-command generation
+(`session/backlog_commands.go:48`), and the manual `TriggerReReview` RPC — all route through
+`s.pipelineEngine` with a nil-safe fallback to the old hardcoded `Build*` functions
+(`server/services/backlog_service_triage.go:34-64`). **But** the automatic review gate —
+the path that runs for every normal work→review transition, i.e. most items —
+(`session/backlog_lifecycle.go:705` → `session/review_gate.go:250`) builds its prompt via
+`BuildReviewPrompt` directly, bypassing `PipelineEngine` entirely. This is a documented,
+acknowledged gap in-code (`review_gate.go:259-268`), not an oversight, but it means a
+custom `PipelineMode`'s `ReviewPromptTemplate` has zero effect on the review most items
+actually receive — a real trap for a user who sets a custom review prompt expecting it to
+apply everywhere.
+
+**Frontend: the pipeline-mode selector is currently non-functional and the mode editor is
+undiscoverable.** In the item edit panel, "Pipeline mode" renders as a single greyed button
+labeled "Default" with no dropdown and no alternatives — clicking it does nothing. The
+actual mode-authoring page exists (`web-app/src/app/settings/pipeline-modes/PipelineModeForm.tsx`,
+reachable only at `/settings/pipeline-modes`) but says "No pipeline modes defined yet," and
+critically **is not linked from anywhere in the UI** — not in any of Settings' four tabs,
+not in the sidebar. So today: zero modes exist, and even once one is authored there's no
+picker to attach it to an item. This is worse than "not yet built" — the backend seam and a
+management UI both shipped, but the last-mile connection (a `PipelineMode` picker wired into
+`BacklogItemForm.tsx`, plus a Settings nav link) that was called out as the #3 recommended
+next action on 2026-07-18 has not actually landed yet.
+
+### UX findings (new this pass)
+
+- **Runaway duplicate toast**: the `d3227302` (tmux submodule) item's failed-push retry loop
+  re-fires a "PR creation failed" toast every few seconds with no dedup — noise masking a
+  real, actionable failure (non-fast-forward push rejected, no auto-rebase-and-retry).
+- **"View Changes" modal is misleading once work is committed** — for a Review-status item
+  that already has a full Gate Verdict against real diff content, the modal shows "No
+  changes to display" because it only diffs the live worktree, not the PR/commit — wrong
+  exactly when a reviewer most wants to see what shipped.
+- **`Settings → Config Files` hangs on "Loading…" with no error or timeout surfaced** —
+  same silent-failure-state pattern already flagged for `SessionMonitor`/
+  `ReviewChangesModal` on 2026-07-18, now found in a third component.
+- Gate Verdict `PARTIAL` still forces a 3-click human decision (Reopen / Override / Skip) —
+  unchanged from prior passes; a policy like "auto-reopen when failing ACs outnumber
+  passing ones" remains a plausible config-driven removal, not urgent.
+
+### is-it-ready verdict: FIX-THEN-SHIP, driven by the bounce loop specifically
+
+Everything else in the pipeline is trending the right direction (triage/build prompts are
+genuinely configurable now, PR-creation and stuck-visibility gaps from earlier passes stayed
+fixed) — this verdict is carried entirely by the live, actively-running bounce loop in
+bucket [1]. `code:is-it-ready`'s full parallel swarm was not run this pass (redundant with
+the architecture/UX/code-review agents already covering plan-compliance, architecture, UX,
+and correctness; test/security dimensions still unreached, same gap as 2026-07-18 — add
+when a pass has budget for the full swarm).
+
+### Recommended Next Actions (routing per skill Phase 5)
+
+1. **`sdd:fix-bug` — the autonomous-driver bounce loop (bucket 1, CRITICAL, above).**
+   Highest priority by far: actively running right now, burning full 20-turn autonomous
+   sessions in a loop with mathematically zero chance of convergence on 6 live items.
+   Start by tracing why `d3227302` exceeded `reworkCap` (check `ReworkCapOverride` first),
+   then fix the forced `in_progress→review` transition and extend the circuit breaker to
+   cover no-verdict review exits.
+2. **`sdd:quick` — pipeline-mode selector + Settings nav link.** Same recommendation as
+   2026-07-18's #3, re-flagged because it's still not done: wire `BacklogItemForm.tsx`'s
+   picker to actually list/select real `PipelineMode`s, and add a Settings nav entry to
+   `/settings/pipeline-modes` so the editor is reachable.
+3. **`sdd:quick` — automatic-review-gate `PipelineEngine` coverage.** Route
+   `session/review_gate.go:250`'s prompt build through `s.pipelineEngine` the same way
+   triage/build already do, closing the "custom review prompt silently does nothing"
+   trap. Natural follow-on to #2 — do together if scoped as one PR.
+4. **`sdd:fix-bug` — `autonomous_stuck` orphaned rows.** Low severity (cosmetic), cheap
+   fix: add an automated `ResolveStuck` call mirroring `resolveToPRPending`'s pattern.
+5. **`sdd:quick` — batch the 3 UX findings above** (duplicate toast dedup, View Changes
+   modal diffing the PR/commit instead of only the live worktree, Config Files loading
+   state) — small, independent, batchable.

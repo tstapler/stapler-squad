@@ -1,0 +1,15 @@
+{
+  "id": "backlog:bulk-reset-stuck-remediation",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "BulkResetStuckRemediation",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_stuck.go",
+  "tested": true,
+  "testIds": [
+    "TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplicitlySet",
+    "TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExplicitlyFalse"
+  ],
+  "lastModified": "2026-07-19T22:09:56.440056245-07:00"
+}

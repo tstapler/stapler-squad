@@ -74,6 +74,16 @@ type PipelineEngine interface {
 	TriagePromptFor(item *BacklogItemData, artifactAbsPath string) string
 	// ReviewPromptFor builds the headless-review prompt for item.
 	ReviewPromptFor(item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string
+	// InteractiveReviewPromptFor builds the tool-call-style review prompt used
+	// by the automatic review gate's real, hidden session.Instance (see
+	// ReviewGateRunner.Run) — the review path most items actually go through.
+	// Unlike ReviewPromptFor (JSON-output style, for headless callers with no
+	// tool access), this asks the reviewer to call submit_review_verdict.
+	// PipelineModeDefault renders BuildReviewPrompt; a resolved custom mode
+	// renders the same ReviewPromptTemplate field ReviewPromptFor uses — mode
+	// authors must include verdict-tool-call instructions in that template if
+	// they want it to drive the real review gate too.
+	InteractiveReviewPromptFor(item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string
 	// InitialPromptFor builds the interactive/autonomous session's initial
 	// prompt (inst.Prompt).
 	InitialPromptFor(item *BacklogItemData, priorSessions []ItemSessionSummary) string
@@ -399,6 +409,34 @@ func (e *CachingPipelineEngine) ReviewPromptFor(item *BacklogItemData, acSnapsho
 	if !ok {
 		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
 		return BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
+	}
+
+	ph := itemPlaceholders(item)
+	ph["criteria_count"] = strconv.Itoa(len(acSnapshot))
+	return renderTemplate(rm.ReviewPromptTemplate, ph)
+}
+
+// InteractiveReviewPromptFor implements PipelineEngine.
+//
+// Shares ReviewPromptTemplate with ReviewPromptFor rather than introducing a
+// second template field: the PipelineMode schema's review_prompt_template
+// comment ("Prompt template used for review under this pipeline mode") is
+// already style-agnostic, and splitting headless-JSON vs. tool-call variants
+// into two DB fields/UI inputs for one logical "review prompt" concept would
+// be speculative until a real mode author needs genuinely different content
+// for the two paths. Custom-mode authors who want their template to drive
+// the real review gate (this method) must include submit_review_verdict
+// call instructions themselves — see the interface doc comment.
+func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *BacklogItemData, acSnapshot []AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+	mode := PipelineMode(item.PipelineMode)
+	if mode == PipelineModeDefault {
+		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+	}
+
+	rm, ok := e.cache.Get(string(mode))
+	if !ok {
+		log.WarningLog.Printf("[PipelineEngine] unresolved pipeline_mode=%q item=%s — falling back to default", mode, item.ID)
+		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
 
 	ph := itemPlaceholders(item)

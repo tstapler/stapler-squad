@@ -356,7 +356,7 @@ func newListenerBase(storage *Storage, pipelineEngine PipelineEngine) *BacklogLi
 		prPendingCheckerFactory: defaultPRPendingCheckerFactory,
 		prCreatorFactory:        defaultPRCreatorFactory,
 	}
-	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator)
+	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
 }
 
@@ -562,13 +562,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
 			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
 		)
-		if reopener := l.getAutoReopener(); reopener != nil {
-			go func() {
-				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited AutoReopenAfterFailedReview (no verdict) item=%s: %v", item.ID, err)
-				}
-			}()
-		}
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title)
 		return
 	}
 
@@ -585,13 +579,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 
 	switch overall {
 	case ReviewVerdictFail, ReviewVerdictPartial, ReviewVerdictUnverifiable:
-		if reopener := l.getAutoReopener(); reopener != nil {
-			go func() {
-				if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
-					log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited AutoReopenAfterFailedReview item=%s: %v", item.ID, err)
-				}
-			}()
-		}
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title)
 	case ReviewVerdictPass:
 		// Push the branch, create a PR, and move to pr_pending. Falls back to a
 		// direct done transition when there's no worktree — see pushAndCreatePR.
@@ -601,6 +589,51 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 		}
 		l.pushAndCreatePR(ctx, item, *workEntry)
 	}
+}
+
+// autoReopenWithBackoffGate dispatches AutoReopenAfterFailedReview through the
+// shared remediation backoff gate (Storage.RemediationDue,
+// session/backlog_remediation.go) — the "bouncing" reason's remediation
+// action per docs/tasks/backlog-stuck-item-auto-remediation.md Phase A.
+// Called on every failed/verdict-less review exit, same trigger points as
+// before this gate existed; the gate itself is what makes repeated calls in
+// rapid succession (the exact 2026-07-19 incident shape) stop consuming a
+// fresh attempt every few minutes once a "bouncing" BacklogStuckState row is
+// open. When no such row exists yet (this reason hasn't been detected as
+// stuck), RemediationDue reports due=true unconditionally — the first few
+// reopen attempts, before reconcileBouncingItems' bounceThreshold trips,
+// behave exactly as they did before this gate existed. Best-effort: gate
+// query/write errors are logged, never returned, and fail OPEN (still
+// attempts the reopen) rather than silently stranding the item.
+func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+	reopener := l.getAutoReopener()
+	if reopener == nil {
+		return
+	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonBouncing)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see doc comment above
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-rework paused",
+			fmt.Sprintf("%s — automated rework has been retried %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate item=%s: bouncing remediation backoff not yet due, skipping auto-reopen", itemID)
+		return
+	}
+
+	go func() {
+		if err := reopener.AutoReopenAfterFailedReview(ctx, itemID); err != nil {
+			log.ErrorLog.Printf("[BacklogLifecycle] autoReopenWithBackoffGate AutoReopenAfterFailedReview item=%s: %v", itemID, err)
+		}
+	}()
 }
 
 // TriggerReviewForSession immediately spawns a review gate for the work session
@@ -1148,7 +1181,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		return
 	}
 	row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
-	if !ok || row.NotifiedAt != nil {
+	if !ok {
 		return
 	}
 	if !found {
@@ -1158,36 +1191,65 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		return
 	}
 
-	log.WarningLog.Printf("[BacklogLifecycle] item %s stuck in review with nothing in flight (%s)", itemID, contextDesc)
-	l.notify(itemID,
-		"Review item needs attention",
-		fmt.Sprintf("%s — stuck in review with no active session (%s). It may need manual re-review or rework.", itemTitle, contextDesc),
-		8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
-		2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
-	)
-	if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
-		// Do NOT proceed to dispatch a respawn below: row.NotifiedAt is still nil
-		// on this failure, so the row.NotifiedAt != nil guard above will let the
-		// NEXT tick back in too. Falling through here would mean a sustained
-		// MarkStuckNotified failure re-dispatches a respawn (not just a
-		// notification) every ~60s tick, breaking the "exactly once per
-		// stuck-row lifetime" guarantee this function documents. Notification
-		// itself already fired above regardless — only the respawn is skipped.
-		return
+	// Notify-once dedup: the operator notification itself still fires exactly
+	// once per stuck-row lifetime (row.NotifiedAt), independent of the
+	// backoff-gated respawn below — otherwise every subsequent automated retry
+	// (per the exponential schedule) would also re-notify, which would be
+	// spam, not signal.
+	if row.NotifiedAt == nil {
+		log.WarningLog.Printf("[BacklogLifecycle] item %s stuck in review with nothing in flight (%s)", itemID, contextDesc)
+		l.notify(itemID,
+			"Review item needs attention",
+			fmt.Sprintf("%s — stuck in review with no active session (%s). It may need manual re-review or rework.", itemTitle, contextDesc),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+		)
+		if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonAbandonedReview); notifyErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			// Do NOT proceed to dispatch a respawn below on this tick: a sustained
+			// MarkStuckNotified failure would otherwise re-notify (not just
+			// respawn) every ~60s tick, breaking the "exactly once per
+			// stuck-row lifetime" notification guarantee. The backoff gate below
+			// gets its own chance on the NEXT tick regardless.
+			return
+		}
 	}
 
 	// Close the loop: a notification alone leaves the item stuck until a human
 	// notices — the exact gap that let 4 real backlog items go stale, some for
-	// multiple days (docs/tasks/backlog-feature-improvement.md). Dispatched
-	// async, bounded by reviewSem (same limiter the sibling review-gate-respawn
-	// path in ReconcileStuck uses): a headless re-review call can take minutes,
-	// and this runs inside a synchronous detector sweep that must not block.
+	// multiple days (docs/tasks/backlog-feature-improvement.md). Backoff-gated
+	// (session/backlog_remediation.go, Phase A of
+	// docs/tasks/backlog-stuck-item-auto-remediation.md): fires on this first
+	// grace-elapsed tick AND, unlike the notification above, again on each
+	// later tick once the exponential schedule allows — up to
+	// MaxRemediationAttempts before parking. Dispatched async, bounded by
+	// reviewSem (same limiter the sibling review-gate-respawn path in
+	// ReconcileStuck uses): a headless re-review call can take minutes, and
+	// this runs inside a synchronous detector sweep that must not block.
 	respawner := l.getReviewRespawner()
 	if respawner == nil {
 		log.DebugLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: no ReviewRespawner configured, notification only", itemID)
 		return
 	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonAbandonedReview)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] markAbandonedReview RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-rework paused",
+			fmt.Sprintf("%s — automated re-review has been retried %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] markAbandonedReview item=%s: abandoned_review remediation backoff not yet due, skipping respawn", itemID)
+		return
+	}
+
 	go func(id string) {
 		select {
 		case l.reviewSem <- struct{}{}:
@@ -1555,6 +1617,32 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 	}
 }
 
+// buildFallbackPRBody composes a PR body from the backlog item's own data —
+// used when no headless pool is configured, GetGitDiff fails, or
+// headless.DraftPRDescription errors out. Previously this fallback was a bare
+// "Automated PR for backlog item: X\n\nItem ID: Y" one-liner (see PRs #147/#148
+// on this repo), which explains nothing about why the change was made and gives
+// a reviewer no verification checklist. Description ties the PR back to the
+// item's own problem statement (the "why"); the item's acceptance criteria
+// double as a test plan checklist since they are the only verification steps
+// this code path has available without an LLM call.
+func buildFallbackPRBody(item *BacklogItemData) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## Summary\n%s\n\n(Backlog item: %s)\n", sanitizeField(item.Description, 1000), item.ID)
+
+	if criteria, _ := ParseAcCriteria(item.AcceptanceCriteria); len(criteria) > 0 {
+		sb.WriteString("\n## Test plan\n")
+		for _, c := range criteria {
+			box := "[ ]"
+			if c.Status == domain.AcStatusDone {
+				box = "[x]"
+			}
+			fmt.Fprintf(&sb, "- %s %s\n", box, sanitizeField(c.Text, 300))
+		}
+	}
+	return sb.String()
+}
+
 // pushAndCreatePR commits any dirty state, pushes the branch, creates a GitHub PR,
 // stores the PR URL and number on the item, then transitions to pr_pending.
 // Falls back to a direct done transition only when there was genuinely nothing to
@@ -1577,20 +1665,22 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 	// issue (auth, network, branch protection) and let the next review pass retry.
 	stayInReviewAndNotify := func(reason string, err error) {
 		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s: %s: %v — leaving in review, code is committed but not shipped", item.ID, reason, err)
-		l.notify(item.ID,
-			"PR creation failed",
-			fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
-			7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
-			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-		)
 
-		// Durable push_failed row (Story 2.1.6) — the ephemeral ERROR toast above
-		// is exactly what this feature exists to supersede for restart-surviving
-		// visibility. Event-shaped like rework_cap: written at the failure site,
-		// immediate (threshold 0), additive to the notification above (a durable
-		// write failure here must never suppress the toast that already fired).
+		notifyToast := func() {
+			l.notify(item.ID,
+				"PR creation failed",
+				fmt.Sprintf("%s — %s: %v. Code is committed locally but not pushed; retry or investigate manually.", item.Title, reason, err),
+				7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+				3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+			)
+		}
+
+		// Durable push_failed row (Story 2.1.6). Also doubles as the ephemeral
+		// toast's dedup key below — without a durable repo to gate on, fall back
+		// to the old always-notify behavior rather than silently dropping the toast.
 		er, ok := l.storage.repo.(*EntRepository)
 		if !ok {
+			notifyToast()
 			return
 		}
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
@@ -1602,9 +1692,24 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		if !applied {
 			return
 		}
-		if _, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed); notifyErr != nil {
+
+		// Notify-once dedup (same pattern as markAbandonedReview and the other
+		// stuck reasons): MarkStuckNotified only flips notified_at nil -> now
+		// once per open stuck-state row, so repeated calls for the same
+		// still-open failure (e.g. a non-fast-forward push retried every
+		// reconciliation tick) skip the ephemeral ERROR toast after the first —
+		// this is what was previously firing a fresh "PR creation failed" toast
+		// every few seconds with no dedup. The toast fires again only once the
+		// row is resolved (push/PR succeeds) and later reopens on a new failure.
+		notifiedNow, notifyErr := er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonPushFailed)
+		if notifyErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR MarkStuckNotified(push_failed) item=%s: %v", item.ID, notifyErr)
+			return
 		}
+		if !notifiedNow {
+			return
+		}
+		notifyToast()
 	}
 
 	wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -1637,13 +1742,13 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s reusing existing PR #%d", item.ID, prNumber)
 	} else {
 		prTitle := item.Title
-		prBody := fmt.Sprintf("Automated PR for backlog item: %s\n\nItem ID: %s", item.Title, item.ID)
+		prBody := buildFallbackPRBody(item)
 		if pool := l.getHeadlessPool(); pool != nil {
 			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using boilerplate body", item.ID, diffErr)
-			} else if drafted, draftErr := headless.DraftPRDescription(ctx, pool, diff, wt.BranchName); draftErr != nil {
-				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using boilerplate body", item.ID, draftErr)
+				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using fallback body", item.ID, diffErr)
+			} else if drafted, draftErr := headless.DraftPRDescription(ctx, pool, item.Title, item.Description, diff, wt.BranchName); draftErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR DraftPRDescription item=%s: %v; using fallback body", item.ID, draftErr)
 			} else if drafted != "" {
 				prBody = drafted
 			}

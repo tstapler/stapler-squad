@@ -69,7 +69,7 @@ func TestDraftPRDescription_ReturnsText_WhenFakeRunnerResponds(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	result, err := DraftPRDescription(context.Background(), pool, "diff content", "feat/my-feature")
+	result, err := DraftPRDescription(context.Background(), pool, "Fix flaky test", "The test flaked under CI load.", "diff content", "feat/my-feature")
 	require.NoError(t, err)
 	assert.Equal(t, prText, result)
 }
@@ -81,7 +81,7 @@ func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 	runner := NewFakeRunner(resp)
 	pool := NewPoolWithRunner(PoolConfig{}, runner)
 
-	_, err := DraftPRDescription(context.Background(), pool, bigDiff, "branch")
+	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", bigDiff, "branch")
 	require.NoError(t, err)
 
 	// Inspect what was passed to the runner.
@@ -89,10 +89,23 @@ func TestDraftPRDescription_TruncatesDiff_WhenOver40000Bytes(t *testing.T) {
 	require.NotNil(t, args)
 	// The user prompt is the last arg; it should contain a truncated diff.
 	userPrompt := args[len(args)-1]
-	// The prompt contains "Branch: branch\n\nDiff:\n" prefix (~20 chars) + diff.
-	// Total should be <= maxDiffSizePR + prefix length.
-	assert.LessOrEqual(t, len(userPrompt), maxDiffSizePR+100,
+	// The prompt contains the "Backlog item / Problem statement / Branch / Diff"
+	// prefix (~60 chars) + diff. Total should be <= maxDiffSizePR + prefix length.
+	assert.LessOrEqual(t, len(userPrompt), maxDiffSizePR+150,
 		"user prompt should not be much larger than maxDiffSizePR; got %d bytes", len(userPrompt))
+}
+
+// TestDraftPRDescription_Error_WhenDiffEmpty verifies the empty-diff guard —
+// found live (PR #174 on this repo) that sending an empty diff to the LLM
+// produced a conversational non-answer instead of a usable PR body, so
+// DraftPRDescription now short-circuits before calling the LLM at all.
+func TestDraftPRDescription_Error_WhenDiffEmpty(t *testing.T) {
+	runner := NewFakeRunner()
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	_, err := DraftPRDescription(context.Background(), pool, "Title", "Description", "   ", "branch")
+	assert.Error(t, err)
+	assert.Equal(t, 0, runner.CallCount(), "LLM should never be called for an empty diff")
 }
 
 // TestSuggestCommitMessage_ReturnsText_WhenFakeRunnerResponds verifies commit message return.

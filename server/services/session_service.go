@@ -503,6 +503,24 @@ func (s *SessionService) IsSessionLive(sessionUUID string) bool {
 	return s.FindLiveInstance(sessionUUID) != nil
 }
 
+// KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
+// It closes the tmux pane only (Instance.KillSession), leaving the worktree
+// intact — unlike StopSessionByUUID (Instance.Kill/Destroy), which also runs
+// CleanupWorktree and would delete a worktree still in use by the next rework
+// round. Best-effort: errors are logged, not returned, since this runs as
+// cleanup alongside a new spawn that should proceed regardless.
+func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone
+	}
+	if err := inst.KillSession(); err != nil {
+		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
+		return err
+	}
+	return nil
+}
+
 // KillTmuxSessionByTitle satisfies the BacklogService.SessionStopper interface.
 // It kills the tmux session whose name is derived from title using the same sanitization
 // as initTmuxSession (whitespace stripped, "." and ":" replaced with "_", "staplersquad_"
@@ -731,6 +749,13 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	s.autonomousSvc.SetReviewGateTrigger(t)
+}
+
+// SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
+// service so a turn-cap-stopped work session gets a fresh turn budget instead of
+// being forced into review.
+func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	s.autonomousSvc.SetAutonomousStuckRespawner(r)
 }
 
 // TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
