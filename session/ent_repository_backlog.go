@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
@@ -808,6 +809,125 @@ func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, rea
 		return false, fmt.Errorf("snooze stuck %s/%s: %w", itemID, reason, err)
 	}
 	return n > 0, nil
+}
+
+// RecordRemediationAttempt records that an automated (or operator-triggered,
+// see TriggerRemediationNow) remediation attempt was just made for an open
+// (item_id, reason) row: sets remediation_attempts to attempts and
+// next_remediation_at to nextAt (nil once attempts has hit the cap — see
+// nextRemediationAt in backlog_remediation.go). Callers compute attempts/nextAt
+// themselves (via the shared backoff gate) rather than this method
+// incrementing in place, so a single code path (evaluateRemediation) owns the
+// backoff-schedule arithmetic. Scoped to WHERE resolved_at IS NULL, matching
+// every other stuck-state write in this file — a row that resolved between
+// the gate's read and this write is left alone rather than resurrected.
+func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	update := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetRemediationAttempts(attempts)
+	if nextAt != nil {
+		update = update.SetNextRemediationAt(*nextAt)
+	} else {
+		update = update.ClearNextRemediationAt()
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record remediation attempt %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// RecordRemediationRestartGrace records that itemID/reason's open row just
+// consumed its one-per-boot restart-grace pass (see evaluateRemediation):
+// sets grace_boot_time to bootTime WITHOUT touching remediation_attempts or
+// next_remediation_at — a grace pass lets the wrapped remediation action run
+// without spending any of the row's 5-attempt budget.
+func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetGraceBootTime(bootTime).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record remediation restart grace %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// ResetStuckRemediation clears the automated-remediation counters on a single
+// open (item_id, reason) row: remediation_attempts back to 0,
+// next_remediation_at and notified_at cleared. Clearing notified_at (in
+// addition to the remediation counters) lets a fresh notify+respawn cycle
+// fire on the very next detector tick instead of waiting on stale dedup
+// state — the same reasoning as MarkStuck's reopen-in-place path. A no-op
+// (false, nil), not an error, when no open row matches (item_id, reason).
+func (r *EntRepository) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetRemediationAttempts(0).
+		ClearNextRemediationAt().
+		ClearNotifiedAt().
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reset stuck remediation %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// BulkResetStuckRemediation applies ResetStuckRemediation's reset (attempts
+// -> 0, next_remediation_at/notified_at cleared) to every open BacklogStuckState
+// row, optionally filtered to a single reason (reason == nil means "every
+// reason") and, when onlyParked is true (the default from the RPC layer),
+// restricted to rows that actually hit the attempt cap
+// (remediation_attempts >= MaxRemediationAttempts) — the "something upstream
+// broke a batch of these, give them all a fresh shot" admin action. Returns
+// the number of rows reset.
+func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *domain.StuckReason, onlyParked bool) (int, error) {
+	predicates := []predicate.BacklogStuckState{backlogstuckstate.ResolvedAtIsNil()}
+	if reason != nil {
+		predicates = append(predicates, backlogstuckstate.Reason(string(*reason)))
+	}
+	if onlyParked {
+		predicates = append(predicates, backlogstuckstate.RemediationAttemptsGTE(MaxRemediationAttempts))
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(predicates...).
+		SetRemediationAttempts(0).
+		ClearNextRemediationAt().
+		ClearNotifiedAt().
+		Save(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bulk reset stuck remediation: %w", err)
+	}
+	return n, nil
 }
 
 // --- Progress note history ---

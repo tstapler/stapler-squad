@@ -611,17 +611,20 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // boundary — callers never need to re-check ResolvedAt/SnoozedUntil
 // nullability themselves (parse-don't-validate at the repository boundary).
 type OpenStuckStateData struct {
-	ID              string
-	ItemID          string
-	Reason          domain.StuckReason
-	FirstDetectedAt time.Time
-	LastCheckedAt   time.Time
-	NotifiedAt      *time.Time
-	Context         string
-	ItemTitle       string
-	ItemStatus      BacklogStatus
-	PrNumber        int
-	PrURL           string
+	ID                  string
+	ItemID              string
+	Reason              domain.StuckReason
+	FirstDetectedAt     time.Time
+	LastCheckedAt       time.Time
+	NotifiedAt          *time.Time
+	Context             string
+	ItemTitle           string
+	ItemStatus          BacklogStatus
+	PrNumber            int
+	PrURL               string
+	RemediationAttempts int32
+	NextRemediationAt   *time.Time
+	GraceBootTime       *time.Time
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -648,13 +651,16 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	result := make([]OpenStuckStateData, 0, len(rows))
 	for _, row := range rows {
 		data := OpenStuckStateData{
-			ID:              row.ID.String(),
-			ItemID:          row.ItemID.String(),
-			Reason:          domain.StuckReason(row.Reason),
-			FirstDetectedAt: row.FirstDetectedAt,
-			LastCheckedAt:   row.LastCheckedAt,
-			NotifiedAt:      row.NotifiedAt,
-			Context:         row.Context,
+			ID:                  row.ID.String(),
+			ItemID:              row.ItemID.String(),
+			Reason:              domain.StuckReason(row.Reason),
+			FirstDetectedAt:     row.FirstDetectedAt,
+			LastCheckedAt:       row.LastCheckedAt,
+			NotifiedAt:          row.NotifiedAt,
+			Context:             row.Context,
+			RemediationAttempts: row.RemediationAttempts,
+			NextRemediationAt:   row.NextRemediationAt,
+			GraceBootTime:       row.GraceBootTime,
 		}
 		if item := row.Edges.Item; item != nil {
 			data.ItemTitle = item.Title
