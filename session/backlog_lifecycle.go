@@ -454,7 +454,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// non-work roles (e.g. triage) have nothing further to do here.
 	switch is.Role {
 	case SessionRoleReview:
-		l.handleReviewSessionExited(ctx, is)
+		// forcePush=false: this is the normal, real-time exit-event path — defer to
+		// a still-live work session's own /backlog/ship instead of pushing
+		// mechanically. See handleReviewSessionExited's doc comment.
+		l.handleReviewSessionExited(ctx, is, false)
 		return
 	case SessionRoleWork:
 		// fall through to the in_progress→review/done logic below.
@@ -521,7 +524,20 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // any — was submitted via the submit_review_verdict MCP tool while the review
 // session was running (see server/mcp/tools_backlog.go) and is read back here
 // from storage rather than computed inline.
-func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS ItemSessionSummary) {
+//
+// forcePush controls the PASS branch's behavior when the work session that
+// earned the verdict is still alive (EndedAt nil): false (the normal,
+// real-time exit-event path — see onSessionExited below) defers to that live
+// session, which is expected to discover the PASS verdict on its own next
+// poll and ship the PR itself via /backlog/ship (see taskProtocolBlock rules
+// 8-9). true (used only by reconcileUnprocessedReviewVerdicts, the
+// crash-recovery sweep for a review session that died before this function
+// ever ran for it normally) pushes and creates the PR mechanically regardless
+// — that sweep cannot tell a genuinely-live, still-polling work session apart
+// from a zombie that will never poll again, and its whole reason to exist is
+// to make forward progress on a verdict nothing else is going to act on. See
+// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive.
+func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS ItemSessionSummary, forcePush bool) {
 	item, err := l.storage.GetBacklogItem(ctx, reviewIS.BacklogItemID)
 	if err != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited GetBacklogItem item=%s: %v", reviewIS.BacklogItemID, err)
@@ -581,12 +597,33 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 	case ReviewVerdictFail, ReviewVerdictPartial, ReviewVerdictUnverifiable:
 		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title)
 	case ReviewVerdictPass:
-		// Push the branch, create a PR, and move to pr_pending. Falls back to a
-		// direct done transition when there's no worktree — see pushAndCreatePR.
 		if workEntry == nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict but no work session found — cannot push", item.ID)
 			return
 		}
+		if workEntry.EndedAt == nil && !forcePush {
+			// The work session that produced this PASS is still alive — it stays
+			// running and polls get_backlog_item/backlog status after request_review
+			// (see taskProtocolBlock rules 8-9, session/backlog_context.go). Per those
+			// rules it will discover this PASS verdict on its next poll and run
+			// /backlog/ship itself, which drives /github:pr-ship end to end (local CI,
+			// code review, remote CI, and — unlike the mechanical push below — actual
+			// merge-conflict resolution and reaction to failing checks). Leave the item
+			// in review and let the live agent drive shipping; do not race it with the
+			// mechanical push path. Mirrors AutoReopenAfterFailedReview's identical
+			// hasActiveWorkSession guard on the FAIL/PARTIAL side of this same loop.
+			log.InfoLog.Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict with a live work session (%s) — leaving PR creation to the agent via /backlog/ship instead of the mechanical push path", item.ID, workEntry.SessionUUID)
+			return
+		}
+		// Reached when either the work session that earned this PASS already exited
+		// (crashed, was killed, or hit a turn cap — nothing will ever run
+		// /backlog/ship for this item on its own) or forcePush is set
+		// (reconcileUnprocessedReviewVerdicts' crash-recovery sweep, which cannot
+		// distinguish a genuinely-live work session from a zombie). Push the branch,
+		// create a PR, and move to pr_pending directly. Falls back to a direct done
+		// transition when there's no worktree — see pushAndCreatePR. This is now a
+		// narrow fallback, not the default path — see PR description for context on
+		// why the mechanical path was demoted.
 		l.pushAndCreatePR(ctx, item, *workEntry)
 	}
 }
@@ -1133,12 +1170,18 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 
 		log.WarningLog.Printf("[BacklogLifecycle] item %s: review session %s has an unprocessed %s verdict — applying it now",
 			item.ID, latest.SessionUUID, latest.Edges.ReviewVerdict.OverallOutcome)
+		// forcePush=true: this is the crash-recovery sweep for a review session that
+		// died before its exit event ever reached handleReviewSessionExited normally
+		// — it cannot tell a genuinely-live work session apart from a zombie that will
+		// never poll again, so it must make forward progress regardless. See
+		// handleReviewSessionExited's doc comment and
+		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive.
 		l.handleReviewSessionExited(ctx, ItemSessionSummary{
 			ID:            latest.ID.String(),
 			BacklogItemID: item.ID.String(),
 			SessionUUID:   latest.SessionUUID,
 			Role:          string(SessionRoleReview),
-		})
+		}, true)
 	}
 }
 

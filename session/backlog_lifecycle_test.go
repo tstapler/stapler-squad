@@ -1574,7 +1574,7 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 // worktree pushAndCreatePR can push) and a review ItemSession linking
 // reviewSessionUUID to the item. If verdict is non-nil, it is saved onto the
 // review ItemSession via SaveReviewVerdict before returning.
-func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict *ReviewVerdictData) (item *BacklogItemData, reviewIS ItemSessionSummary, workSessionName string) {
+func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict *ReviewVerdictData) (item *BacklogItemData, reviewIS ItemSessionSummary, workSessionName string, workIS ItemSessionSummary) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -1589,12 +1589,13 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict
 
 	workSessionUUID := uuid.New().String()
 	workSessionName = "handle-review-exited-work"
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	createdWorkIS, err := storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: SessionRoleWork,
 	})
 	require.NoError(t, err)
+	workIS = createdWorkIS
 
 	inst := newTestInstance(workSessionName)
 	inst.UUID = workSessionUUID
@@ -1620,24 +1621,30 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict
 		SessionUUID:   reviewSessionUUID,
 		Role:          SessionRoleReview,
 	}
-	return createdItem, reviewIS, workSessionName
+	return createdItem, reviewIS, workSessionName, workIS
 }
 
-// TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR verifies that a PASS
-// verdict drives pushAndCreatePR using the correct (most recent) work
-// ItemSessionSummary — proven here by asserting the PR-creator factory is
-// invoked with that work session's sessionName, and that the item ends up in
-// pr_pending.
-func TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR(t *testing.T) {
+// TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR
+// verifies the pushAndCreatePR backstop: when the work session that earned the
+// PASS verdict has already exited (EndedAt set — it crashed, was killed, or hit
+// a turn cap before it could poll for the verdict and ship the PR itself via
+// /backlog/ship), handleReviewSessionExited falls back to the mechanical push
+// path using the correct (most recent) work ItemSessionSummary — proven here by
+// asserting the PR-creator factory is invoked with that work session's
+// sessionName, and that the item ends up in pr_pending. See the sibling test
+// below for the now-primary case (a still-live work session), where this
+// backstop must NOT fire.
+func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	item, reviewIS, workSessionName := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	item, reviewIS, workSessionName, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
 
 	listener := NewBacklogLifecycleListener(storage)
 	var capturedSessionName string
@@ -1647,14 +1654,50 @@ func TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR(t *testing.T) {
 		return fakeCreator
 	})
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
-	assert.True(t, fakeCreator.pushCalled, "PASS verdict must drive a push via pushAndCreatePR")
+	assert.True(t, fakeCreator.pushCalled, "PASS verdict with no live work session must fall back to pushAndCreatePR")
 	assert.Equal(t, workSessionName, capturedSessionName, "pushAndCreatePR must be invoked with the work session's own worktree, not some other session's")
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+}
+
+// TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR
+// verifies the new primary path: when the work session that earned the PASS
+// verdict is still alive (EndedAt nil — it stays running and polls
+// get_backlog_item/backlog status per taskProtocolBlock rules 8-9), the
+// mechanical pushAndCreatePR path must NOT fire. The live agent is expected to
+// discover the PASS verdict on its next poll and run /backlog/ship itself,
+// which drives /github:pr-ship — see session/backlog_context.go and
+// server/mcp/tools_backlog.go for the instruction text a live session reads.
+// The item must stay in "review" (not pr_pending) so the agent-driven path has
+// something to act on.
+func TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	assert.False(t, fakeCreator.pushCalled, "PASS verdict with a live work session must leave PR creation to the agent, not push mechanically")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review so the live agent's /backlog/ship has something to act on")
 }
 
 // TestHandleReviewSessionExited_Fail_InvokesAutoReopener verifies that a FAIL
@@ -1665,7 +1708,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",
@@ -1679,7 +1722,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 		return fakeCreator
 	})
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -1699,7 +1742,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	defer cleanup()
 	ctx := context.Background()
 
-	_, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
+	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
 	reopener := newFakeAutoReopenSpawner()
@@ -1707,7 +1750,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	notifier := &fakeNotifier{}
 	listener.SetNotifier(notifier)
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
 	case <-reopener.called:
@@ -1726,7 +1769,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	_, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",

@@ -309,6 +309,54 @@ func TestGetBacklogItem_ReturnsItemWithEnvelope(t *testing.T) {
 	require.Contains(t, text, "report_progress", "should list available tools")
 }
 
+// TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap
+// verifies the role:work guidance a live work session reads on every
+// get_backlog_item/backlog status poll tells it to run /backlog/ship both
+// immediately on a PASS verdict and as a bounded escape hatch after
+// session.MaxSameSessionReviewAttempts cycles without one — closing the gap
+// where this text previously said "PASS → status becomes done, you're
+// finished" and "Keep looping until PASS" with no mention of /backlog/ship at
+// all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20). This is the
+// dynamic counterpart to session.taskProtocolBlock and review.md — the text a
+// running session actually re-reads on every poll, not just at session start.
+func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Ship me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.getBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	require.Contains(t, text, "Your Role: Work")
+	require.Contains(t, text, "/backlog/ship")
+	require.Contains(t, text, fmt.Sprintf("%d cycles", session.MaxSameSessionReviewAttempts))
+	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
+}
+
 // TestGetBacklogItem_ReturnsNotFoundError verifies that getBacklogItem
 // returns an error when item doesn't exist.
 func TestGetBacklogItem_ReturnsNotFoundError(t *testing.T) {

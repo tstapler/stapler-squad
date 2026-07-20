@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,45 @@ func TestWriteSlashCommands_DoneFileContainsItemUUID(t *testing.T) {
 	done2Path := filepath.Join(worktree, backlogCommandsDir, "done-2.md")
 	if _, err := os.Stat(done2Path); !os.IsNotExist(err) {
 		t.Errorf("done-2.md should not exist for a 2-criteria item")
+	}
+}
+
+// TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap verifies
+// review.md tells the agent to run /backlog/ship both immediately on a PASS
+// verdict and as a bounded escape hatch after MaxSameSessionReviewAttempts
+// review cycles without one — closing the gap where review.md previously said
+// "PASS → you're done" and "Keep looping until PASS" with no mention of
+// /backlog/ship at all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	worktree := t.TempDir()
+	itemID := "550e8400-e29b-41d4-a716-446655440001"
+	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
+	item := makeTestBacklogItemWithID(itemID, "Feature", ac)
+
+	if err := WriteSlashCommands(nil, item, worktree); err != nil {
+		t.Fatalf("WriteSlashCommands returned error: %v", err)
+	}
+
+	reviewPath := filepath.Join(worktree, backlogCommandsDir, "review.md")
+	data, err := os.ReadFile(reviewPath)
+	if err != nil {
+		t.Fatalf("failed to read review.md: %v", err)
+	}
+	content := string(data)
+
+	mustContain := []string{
+		"/backlog/ship",
+		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(content, want) {
+			t.Errorf("expected review.md to contain %q\nContent:\n%s", want, content)
+		}
+	}
+
+	mustNotContain := "you're done"
+	if strings.Contains(content, mustNotContain) {
+		t.Errorf("did not expect review.md to say a PASS verdict ends the task without shipping\nContent:\n%s", content)
 	}
 }
 
