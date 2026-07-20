@@ -13,6 +13,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NewShellDialog } from "../NewShellDialog";
+import { addRecentShellCommand } from "@/lib/omnibar/recentShellCommands";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -48,6 +49,10 @@ jest.mock("@/components/ui/RepoPathInput", () => ({
 // ---------------------------------------------------------------------------
 
 describe("NewShellDialog", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   describe("renders_all_form_fields", () => {
     it("NewShellDialog_should_renderNameCommandWorkingDirFields_When_mounted", () => {
       render(
@@ -155,6 +160,77 @@ describe("NewShellDialog", () => {
       fireEvent.click(overlay, { target: overlay });
 
       expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("recent_command_suggestions", () => {
+    it("NewShellDialog_should_showRecentCommandChips_When_historyExists", () => {
+      addRecentShellCommand("npm run dev");
+      addRecentShellCommand("go test ./...");
+
+      render(
+        <NewShellDialog
+          onSubmit={jest.fn().mockResolvedValue(undefined)}
+          onCancel={jest.fn()}
+        />
+      );
+
+      expect(screen.getByText("npm run dev")).toBeInTheDocument();
+      expect(screen.getByText("go test ./...")).toBeInTheDocument();
+    });
+
+    it("NewShellDialog_should_fillCommandField_When_suggestionClicked", () => {
+      addRecentShellCommand("npm run dev");
+
+      render(
+        <NewShellDialog
+          onSubmit={jest.fn().mockResolvedValue(undefined)}
+          onCancel={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getByText("npm run dev"));
+
+      expect(screen.getByLabelText(/command/i)).toHaveValue("npm run dev");
+    });
+
+    it("NewShellDialog_should_hideSuggestions_When_commandFieldNonEmpty", () => {
+      addRecentShellCommand("npm run dev");
+
+      render(
+        <NewShellDialog
+          onSubmit={jest.fn().mockResolvedValue(undefined)}
+          onCancel={jest.fn()}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText(/command/i), {
+        target: { value: "bash" },
+      });
+
+      expect(screen.queryByText("npm run dev")).not.toBeInTheDocument();
+    });
+
+    it("NewShellDialog_should_persistCommandToHistory_When_submitted", async () => {
+      const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+      render(
+        <NewShellDialog
+          onSubmit={onSubmit}
+          onCancel={jest.fn()}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText(/command/i), {
+        target: { value: "npm run dev" },
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /spawn shell/i }));
+      });
+
+      const { getRecentShellCommands } = jest.requireActual("@/lib/omnibar/recentShellCommands");
+      expect(getRecentShellCommands()).toEqual(["npm run dev"]);
     });
   });
 

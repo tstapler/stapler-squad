@@ -39,6 +39,19 @@ const (
 	defaultProgram = "proxy-claude"
 )
 
+// isWithinStateDir reports whether workDir is baseDir itself or a descendant of it.
+// A cwd inside stapler-squad's own state directory (e.g. a session worktree under
+// ~/.stapler-squad/workspaces/.../worktrees/...) hashes to a workspace distinct from
+// the one normally used from the project/home directory.
+func isWithinStateDir(workDir, baseDir string) bool {
+	if workDir == "" || baseDir == "" {
+		return false
+	}
+	workDir = filepath.Clean(workDir)
+	baseDir = filepath.Clean(baseDir)
+	return workDir == baseDir || strings.HasPrefix(workDir, baseDir+string(filepath.Separator))
+}
+
 // IsTestMode detects if the application is running in test/benchmark mode
 func IsTestMode() bool {
 
@@ -98,8 +111,9 @@ func IsIsolatedInstance() bool {
 //  1. Test directory override via STAPLER_SQUAD_TEST_DIR (for --test-mode flag)
 //  2. Explicit instance ID via STAPLER_SQUAD_INSTANCE environment variable
 //  3. Test mode auto-detection (automatic isolation for tests/benchmarks)
-//  4. Workspace-based isolation (default for production, per-directory state)
-//  5. Global shared state (fallback, backward compatibility)
+//  4. Preferred workspace from preference file (explicit switch via SwitchDatabase RPC)
+//  5. Per-directory workspace isolation, opt-in via STAPLER_SQUAD_WORKSPACE_MODE=true
+//  6. Global shared state (default)
 func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
@@ -151,7 +165,16 @@ func GetConfigDirForDir(dir string) (string, error) {
 		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
 	}
 
-	// Priority 3.5: Preferred workspace from preference file
+	return resolveDefaultConfigDir(dir, baseDir)
+}
+
+// resolveDefaultConfigDir implements Priority 4-6 of GetConfigDirForDir: preferred
+// workspace file, opt-in per-directory workspace isolation, then shared state.
+// Split out from GetConfigDirForDir so it can be tested directly — Priority 3
+// (test mode auto-detection) is always true inside a `go test` binary, which
+// would otherwise make this logic unreachable in tests.
+func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
+	// Priority 4: Preferred workspace from preference file
 	// Written by SwitchDatabase RPC; cleared automatically on removal.
 	// Skipped in test mode (above) so tests always get isolated state.
 	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
@@ -164,15 +187,29 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 4: Workspace-based isolation (production default)
-	// Can be disabled with STAPLER_SQUAD_WORKSPACE_MODE=false
-	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") != "false" {
+	// Priority 5: Per-directory workspace isolation — opt-in only.
+	// A single shared workspace is the default; per-cwd auto-isolation must be
+	// explicitly enabled with STAPLER_SQUAD_WORKSPACE_MODE=true. Switching between
+	// workspaces is meant to be an explicit user action (see SwitchDatabase RPC /
+	// the workspace switcher UI), not an automatic side effect of the cwd a process
+	// happens to be started from — the latter is what caused sessions to silently
+	// "disappear" when the binary was started from inside a worktree.
+	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") == "true" {
 		workDir := dir
 		var err error
 		if workDir == "" {
 			workDir, err = os.Getwd()
 		}
 		if err == nil && workDir != "" {
+			if isWithinStateDir(workDir, baseDir) {
+				// Running with a cwd inside stapler-squad's own state directory (e.g. a
+				// session worktree) hashes to a workspace distinct from the one the user
+				// normally works from, silently landing on an empty database that looks
+				// like all sessions vanished. Almost always means the binary was started
+				// manually from within a worktree instead of via the installed service.
+				log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+					"cwd", workDir, "state_dir", baseDir)
+			}
 			// Hash the workspace path for a stable, filesystem-safe identifier
 			hash := sha256.Sum256([]byte(workDir))
 			workspaceID := fmt.Sprintf("%x", hash[:8])
@@ -184,7 +221,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 5: Global shared state (fallback, backward compatibility)
+	// Priority 6: Global shared state (default)
 	return baseDir, nil
 }
 
