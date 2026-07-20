@@ -600,8 +600,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// for backlog item descriptions, served back via /api/local/serve/.
 	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
 		log.Error("[Server] cannot resolve backlog attachment dir", "err", err)
+	} else if backlogAttachmentHandler, err := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir); err != nil {
+		log.Error("[Server] cannot create backlog attachment upload handler", "dir", backlogAttachmentDir, "err", err)
 	} else {
-		backlogAttachmentHandler := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir)
 		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
 		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
 	}

@@ -47,19 +47,6 @@ function mockListPipelineModes(listPipelineModes: () => Promise<PipelineMode[]>)
   } as unknown as ReturnType<typeof useBacklogService>);
 }
 
-// The jest styleMock for `.css.ts` files wraps every export (including plain
-// `style()` string exports) in a callable proxy function, which triggers a
-// benign "Invalid value for prop className" React warning now that this form
-// renders RadioGroup. Pre-existing jest/vanilla-extract mock limitation — see
-// RadioGroup.test.tsx, which silences it the same way.
-beforeAll(() => {
-  jest.spyOn(console, "error").mockImplementation(() => {});
-});
-
-afterAll(() => {
-  jest.restoreAllMocks();
-});
-
 function makeMode(overrides: Partial<PipelineMode> & Pick<PipelineMode, "slug" | "name">): PipelineMode {
   return {
     id: `id-${overrides.slug}`,
@@ -241,8 +228,9 @@ describe("BacklogItemForm — cloning busy state", () => {
 });
 
 describe("BacklogItemForm — description write/preview", () => {
-  it("renders markdown in the preview tab and shows raw text in the write tab", () => {
+  it("renders markdown in the preview tab and shows raw text in the write tab", async () => {
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     fireEvent.change(screen.getByTestId("backlog-description-input"), {
       target: { value: "**bold text**" },
@@ -255,8 +243,9 @@ describe("BacklogItemForm — description write/preview", () => {
     expect(screen.getByTestId("backlog-description-input")).toHaveValue("**bold text**");
   });
 
-  it("renders a link with correct href in preview", () => {
+  it("renders a link with correct href in preview", async () => {
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     fireEvent.change(screen.getByTestId("backlog-description-input"), {
       target: { value: "see [logo](https://example.com/logo.png)" },
@@ -267,8 +256,9 @@ describe("BacklogItemForm — description write/preview", () => {
     expect(link).toHaveAttribute("href", "https://example.com/logo.png");
   });
 
-  it("never executes injected script tags in preview", () => {
+  it("never executes injected script tags in preview", async () => {
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     fireEvent.change(screen.getByTestId("backlog-description-input"), {
       target: { value: "<script>window.__pwned = true;</script>" },
@@ -294,6 +284,7 @@ describe("BacklogItemForm — image attachment upload", () => {
     });
 
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     const file = new File(["fake-bytes"], "screenshot.png", { type: "image/png" });
     fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
@@ -311,9 +302,10 @@ describe("BacklogItemForm — image attachment upload", () => {
     );
   });
 
-  it("rejects a non-image file client-side without calling fetch", () => {
+  it("rejects a non-image file client-side without calling fetch", async () => {
     global.fetch = jest.fn();
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
     fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
@@ -326,9 +318,10 @@ describe("BacklogItemForm — image attachment upload", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it("rejects an oversized image client-side without calling fetch", () => {
+  it("rejects an oversized image client-side without calling fetch", async () => {
     global.fetch = jest.fn();
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     const bigFile = new File([new Uint8Array(11 * 1024 * 1024)], "big.png", { type: "image/png" });
     fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
@@ -344,6 +337,7 @@ describe("BacklogItemForm — image attachment upload", () => {
   it("shows a server-side rejection message on a 415 response", async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 415 });
     render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
 
     const file = new File(["fake-bytes"], "photo.png", { type: "image/png" });
     fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
@@ -356,9 +350,93 @@ describe("BacklogItemForm — image attachment upload", () => {
       )
     );
   });
+
+  it("shows a network-error message when fetch rejects", async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error("boom"));
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    const file = new File(["fake-bytes"], "photo.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-attach-image-error")).toHaveTextContent(
+        "Network error — upload failed."
+      )
+    );
+  });
+
+  it("shows a generic failure message on a non-413/415 error response", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    const file = new File(["fake-bytes"], "photo.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-attach-image-error")).toHaveTextContent(
+        "Upload failed."
+      )
+    );
+  });
+
+  it("uploads a pasted image and inserts a markdown image reference", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        path: "/home/user/.stapler-squad/backlog-attachments/2-pasted.png",
+        filename: "2-pasted.png",
+      }),
+    });
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-pipeline-mode-default");
+
+    const file = new File(["fake-bytes"], "pasted.png", { type: "image/png" });
+    const clipboardData = {
+      items: [
+        {
+          type: "image/png",
+          getAsFile: () => file,
+        },
+      ],
+    };
+
+    fireEvent.paste(screen.getByTestId("backlog-description-input"), { clipboardData });
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("backlog-description-input") as HTMLTextAreaElement).value
+      ).toContain("![2-pasted.png]")
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/upload-backlog-attachment"),
+      expect.objectContaining({ method: "POST" })
+    );
+  });
 });
 
 describe("BacklogItemForm — pipeline mode selector (Epic 3.2)", () => {
+  // The jest styleMock for `.css.ts` files wraps every export (including plain
+  // `style()` string exports) in a callable proxy function, which triggers a
+  // benign "Invalid value for prop className" React warning when RadioGroup
+  // renders. Scoped to just this describe block — the one that actually
+  // exercises RadioGroup — so console.error output is not silenced for the
+  // other describe blocks in this file. Pre-existing jest/vanilla-extract mock
+  // limitation — see RadioGroup.test.tsx, which silences it the same way.
+  beforeEach(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("defaults to 'Default' selected on a new-item mount", async () => {
     mockListPipelineModes(() => Promise.resolve([QUICK_MODE, FULL_MODE]));
 

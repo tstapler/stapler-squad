@@ -42,12 +42,14 @@ type BacklogAttachmentUploadHandler struct {
 }
 
 // NewBacklogAttachmentUploadHandler creates a handler that saves into dir,
-// creating it if necessary.
-func NewBacklogAttachmentUploadHandler(dir string) *BacklogAttachmentUploadHandler {
+// creating it if necessary. Returns an error if dir cannot be created so the
+// caller can fail registration instead of installing a handler backed by a
+// possibly-missing directory.
+func NewBacklogAttachmentUploadHandler(dir string) (*BacklogAttachmentUploadHandler, error) {
 	if err := os.MkdirAll(dir, backlogAttachmentDirMode); err != nil {
-		log.Error("[BacklogAttachmentUpload] cannot create dir", "dir", dir, "err", err)
+		return nil, fmt.Errorf("cannot create backlog attachment dir %q: %w", dir, err)
 	}
-	return &BacklogAttachmentUploadHandler{dir: dir}
+	return &BacklogAttachmentUploadHandler{dir: dir}, nil
 }
 
 type backlogAttachmentUploadResponse struct {
