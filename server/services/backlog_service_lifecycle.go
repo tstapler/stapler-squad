@@ -479,10 +479,15 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 
-	// Best-effort: clean up git worktrees for work sessions on terminal transitions.
+	// Best-effort: clean up git worktrees and archive work sessions on terminal
+	// transitions, so they stop accumulating in the default session list once
+	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
+	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
+	// sessions which it originally excluded).
 	if to == session.BacklogStatusDone || to == session.BacklogStatusArchived {
 		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 			s.cleanupItemWorktrees(ctx, sessions)
+			s.archiveItemWorkSessions(ctx, sessions)
 		}
 	}
 

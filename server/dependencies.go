@@ -943,6 +943,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so
+	// it can soft-archive work sessions for items already done/archived — reuses
+	// sessionService's ArchiveSessionByUUID, the same method BacklogService's
+	// SessionStopper uses for the transition-hook/rework-respawn archival paths.
+	backlogLifecycleListener.SetSessionArchiver(sessionService)
 	// Wire the autonomous-stuck respawner so a work session that hits its turn
 	// cap without a DONE signal gets a fresh turn budget directly instead of
 	// being forced into a doomed review cycle (see AutonomousStuckRespawner's
