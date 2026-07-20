@@ -948,6 +948,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// sessionService's ArchiveSessionByUUID, the same method BacklogService's
 	// SessionStopper uses for the transition-hook/rework-respawn archival paths.
 	backlogLifecycleListener.SetSessionArchiver(sessionService)
+	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
+	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
+	// already exited ships via a headless one-shot /backlog/ship run (CI
+	// reaction, merge-conflict resolution) instead of going straight to the
+	// mechanical pushAndCreatePR backstop. sessionService already satisfies
+	// OneShotShipRunner via RunOneShotForSession — same method
+	// services.PRRunner requires for TriggerShipPR's manual "Ship PR" button
+	// just above.
+	backlogLifecycleListener.SetOneShotShipRunner(sessionService)
 	// Wire the autonomous-stuck respawner so a work session that hits its turn
 	// cap without a DONE signal gets a fresh turn budget directly instead of
 	// being forced into a doomed review cycle (see AutonomousStuckRespawner's

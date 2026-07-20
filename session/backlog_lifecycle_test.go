@@ -1173,6 +1173,28 @@ func (f *fakePRCreator) CreatePR(title, body string) (string, int, error) {
 }
 func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
 
+// fakeOneShotShipRunnerCall records a single RunOneShotForSession invocation's
+// arguments, so tests can assert shipViaAgentOrFallback called it with the
+// right session UUID and prompt.
+type fakeOneShotShipRunnerCall struct {
+	SessionID string
+	Prompt    string
+}
+
+// fakeOneShotShipRunner is a test double implementing OneShotShipRunner,
+// letting tests inject a canned PR URL or error without a live headless pool
+// or session.Instance registry.
+type fakeOneShotShipRunner struct {
+	calls []fakeOneShotShipRunnerCall
+	prURL string
+	err   error
+}
+
+func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error) {
+	f.calls = append(f.calls, fakeOneShotShipRunnerCall{SessionID: sessionID, Prompt: prompt})
+	return f.prURL, f.err
+}
+
 // fakeNotifierCall records a single Notify invocation's title and message body, so
 // tests can assert on interpolated message content (e.g. that a verdict/outcome
 // actually reached the message), not just which notification fired.
@@ -1625,15 +1647,19 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict
 }
 
 // TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR
-// verifies the pushAndCreatePR backstop: when the work session that earned the
-// PASS verdict has already exited (EndedAt set — it crashed, was killed, or hit
-// a turn cap before it could poll for the verdict and ship the PR itself via
-// /backlog/ship), handleReviewSessionExited falls back to the mechanical push
-// path using the correct (most recent) work ItemSessionSummary — proven here by
-// asserting the PR-creator factory is invoked with that work session's
-// sessionName, and that the item ends up in pr_pending. See the sibling test
-// below for the now-primary case (a still-live work session), where this
-// backstop must NOT fire.
+// verifies the pushAndCreatePR backstop when no OneShotShipRunner is wired
+// (the shape of every constructor except production's SetOneShotShipRunner
+// call): when the work session that earned the PASS verdict has already
+// exited (EndedAt set — it crashed, was killed, or hit a turn cap before it
+// could poll for the verdict and ship the PR itself via /backlog/ship),
+// handleReviewSessionExited -> shipViaAgentOrFallback falls back to the
+// mechanical push path directly, using the correct (most recent) work
+// ItemSessionSummary — proven here by asserting the PR-creator factory is
+// invoked with that work session's sessionName, and that the item ends up in
+// pr_pending. See TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush
+// below for the now-primary case (an OneShotShipRunner wired and succeeding),
+// and the sibling test after this one for a still-live work session, where
+// this backstop must NOT fire at all.
 func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1662,6 +1688,220 @@ func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+}
+
+// TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush
+// verifies the primary new path this fix adds: when an OneShotShipRunner is
+// wired and it successfully produces a PR URL, handleReviewSessionExited's
+// PASS branch (ended work session) ships via the agent-driven one-shot
+// /backlog/ship prompt instead of the mechanical pushAndCreatePR path, and
+// the item transitions to pr_pending with the PR fields recorded.
+func TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/1", createNumber: 1}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{prURL: "https://github.com/tstapler/stapler-squad/pull/42"}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "one-shot ship must be attempted exactly once")
+	assert.Equal(t, workIS.SessionUUID, runner.calls[0].SessionID, "one-shot ship must run against the work session's own worktree")
+	assert.Equal(t, agentShipPrompt, runner.calls[0].Prompt)
+	assert.False(t, fakeCreator.pushCalled, "successful one-shot ship must skip the mechanical push path entirely")
+	assert.False(t, fakeCreator.createCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/42", fetched.PrURL)
+	assert.Equal(t, 42, fetched.PrNumber)
+}
+
+// TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush
+// verifies the documented "try the agent first, fall back to the mechanical
+// path if that fails outright" policy: when the wired OneShotShipRunner
+// returns an error (e.g. the session's Instance is no longer tracked live),
+// shipViaAgentOrFallback still reaches pushAndCreatePR so the PR gets created
+// one way or another rather than leaving the item stranded.
+func TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: instance no longer tracked live")}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "one-shot ship must still be attempted before falling back")
+	assert.True(t, fakeCreator.pushCalled, "a failed one-shot attempt must fall back to the mechanical push path")
+	assert.True(t, fakeCreator.createCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "the mechanical fallback must still successfully ship the PR")
+}
+
+// TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPush
+// covers the case where RunOneShotForSession returns (nil error, empty URL) —
+// the one-shot call ran but the agent's output never included a parseable PR
+// link (see extractPRURL). This must be treated the same as an outright error,
+// not silently accepted as "nothing to do".
+func TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{prURL: ""}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	assert.True(t, fakeCreator.pushCalled, "an empty PR URL from a successful one-shot call must still fall back to the mechanical path")
+}
+
+// TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone verifies
+// this fix does not regress pushAndCreatePR's pre-existing fallbackToDone
+// behavior: when there is no worktree recorded for the work session at all
+// (not even a storage row — the true "genuinely nothing to ship" case),
+// shipViaAgentOrFallback's one-shot attempt fails fast and falls through to
+// pushAndCreatePR, which still reaches the exact same done transition it
+// always has. See TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive
+// for the forcePush crash-recovery variant of this same scenario.
+func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "No worktree recorded test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+	// Deliberately no storage.SaveInstances call — no Instance/worktree exists
+	// for this session at all, matching newStuckReviewTestItem's fixture shape.
+
+	reviewSessionUUID := uuid.New().String()
+	reviewISData, err := storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: reviewSessionUUID,
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, err)
+	reviewIS := ItemSessionSummary{
+		ID:            reviewISData.ID,
+		BacklogItemID: item.ID,
+		SessionUUID:   reviewSessionUUID,
+		Role:          SessionRoleReview,
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: no worktree")}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "genuinely nothing to ship must still resolve via pushAndCreatePR's pre-existing fallbackToDone, unchanged by this fix")
+}
+
+// TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilentlyDrop
+// covers the "true last-resort" case this fix must not regress into a silent
+// drop: a worktree row still exists in storage, but the agent-driven one-shot
+// attempt fails (e.g. the session's Instance is no longer live) AND the
+// mechanical fallback also fails (e.g. the worktree directory itself was
+// cleaned up from disk — simulated here via a PushBranch error, the same
+// failure shape pushAndCreatePR's own push-failure tests use). The PASS
+// verdict must not be silently discarded: the item stays in review (never
+// done) and an operator notification fires via the existing
+// StuckReasonPushFailed / stayInReviewAndNotify machinery.
+func TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilentlyDrop(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("fatal: '/worktrees/handle-review-exited-work' does not exist")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: instance no longer tracked live")}
+	listener.SetOneShotShipRunner(runner)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "the agent-driven path must be attempted first")
+	assert.True(t, fakeCreator.pushCalled, "the mechanical backstop must be attempted after the one-shot attempt fails")
+	assert.False(t, fakeCreator.createCalled, "CreatePR must not be attempted after a push failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "PASS verdict must not be silently dropped — item stays in review, not done, when nothing could actually be shipped")
+	assert.Contains(t, notifier.titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing")
 }
 
 // TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR

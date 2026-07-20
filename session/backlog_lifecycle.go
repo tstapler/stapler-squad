@@ -63,6 +63,60 @@ type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
 }
 
+// OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
+// returning the PR URL the prompt produced (or "" if none was found in its
+// output). Defined here — the consumer — per this repo's anti-interface-
+// pollution convention (.claude/rules/interface-pollution-checklist.md);
+// *services.SessionService satisfies it via RunOneShotForSession, wired in
+// production via SetOneShotShipRunner from server/dependencies.go. Mirrors
+// services.PRRunner (server/services/backlog_service_ship.go), which the same
+// method also satisfies for the manual "Ship PR" self-service action —
+// intentionally not shared/exported from that package, since importing it
+// here would pull server/services (which imports this package) into an
+// import cycle.
+//
+// Used by shipViaAgentOrFallback to close the gap flagged in PR #189's
+// "deliberately out of scope" section: when the work session that earned a
+// PASS verdict has already exited, the only PR-creation mechanism available
+// was pushAndCreatePR's mechanical `git push` + `gh pr create` — no CI
+// reaction, no merge-conflict resolution. RunOneShotForSession lets us run
+// the same agent-driven ship flow a still-live session would have run itself
+// (see /backlog/ship's ship.md, which drives /github:pr-ship) as a headless
+// one-shot against the ended session's worktree — it only needs the
+// session's Instance/worktree to still be resolvable, not a live tmux
+// process (see RunOneShot's use of findInstance + GetEffectiveRootDir).
+type OneShotShipRunner interface {
+	RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error)
+}
+
+// agentShipPrompt is the one-shot prompt used by shipViaAgentOrFallback.
+// Deliberately NOT the same literal as services.shipPRPrompt
+// (server/services/backlog_service_ship.go) — that prompt is a plain-English
+// "create a PR" ask with no conflict-resolution or CI-reaction instructions,
+// fine for its own use case (a human clicking "Ship PR" on a review-status
+// item that hasn't necessarily finished /backlog/review's protocol). Here we
+// are resuming exactly the step a still-live work session would have taken
+// next per taskProtocolBlock rules 8-9 (PASS -> run /backlog/ship), so we
+// invoke that same slash command directly: WriteSlashCommands
+// (session/backlog_commands.go) already wrote ship.md into this worktree at
+// session-spawn time, and nothing cleans it up before the item leaves
+// "review" (CleanupSlashCommands is not wired to fire on review exit — see
+// its call sites), so it is still present. ship.md's own instructions run
+// /github:pr-ship (local CI, code review, remote CI, and actual
+// merge-conflict resolution — the whole reason this path was added) and
+// already special-case "review already returned PASS" by skipping the
+// redundant re-review step, exactly matching the state we call this in.
+const agentShipPrompt = "/backlog/ship"
+
+// oneShotShipTimeoutSeconds bounds shipViaAgentOrFallback's one-shot call.
+// Set to the RunOneShot handler's own hard ceiling (server/services/
+// session_service.go clamps TimeoutSeconds to max 1800s) rather than
+// TriggerShipPR's shorter 900s: /github:pr-ship does more work than
+// services.shipPRPrompt's plain PR-creation ask (it also waits on CI and
+// resolves merge conflicts), so it needs more headroom, and this path runs
+// unattended — there's no human waiting on an RPC response to bound it.
+const oneShotShipTimeoutSeconds = 1800
+
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
 // default session list. Implemented by server/services.SessionService (it owns the
 // live in-memory Instance registry archival must go through — see ArchivedAt's
@@ -146,6 +200,16 @@ type BacklogLifecycleListener struct {
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
+
+	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
+	oneShotShipRunnerMu sync.RWMutex
+	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
+	// against an ended work session's worktree. nil (the default, and the
+	// case for every constructor except production wiring via
+	// SetOneShotShipRunner) makes shipViaAgentOrFallback skip straight to the
+	// mechanical pushAndCreatePR path — preserves pre-existing behavior for
+	// any test/caller that hasn't wired it.
+	oneShotShipRunner OneShotShipRunner
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
@@ -285,6 +349,24 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	l.reviewRespawnMu.RLock()
 	defer l.reviewRespawnMu.RUnlock()
 	return l.reviewRespawner
+}
+
+// SetOneShotShipRunner wires in the runner used by shipViaAgentOrFallback to
+// attempt an agent-driven PR ship (see agentShipPrompt) before falling back
+// to the mechanical pushAndCreatePR path. Optional — nil means every PASS
+// verdict with an ended work session goes straight to the mechanical path,
+// matching this fix's pre-existing behavior.
+func (l *BacklogLifecycleListener) SetOneShotShipRunner(r OneShotShipRunner) {
+	l.oneShotShipRunnerMu.Lock()
+	defer l.oneShotShipRunnerMu.Unlock()
+	l.oneShotShipRunner = r
+}
+
+// getOneShotShipRunner returns the current one-shot ship runner under a read lock.
+func (l *BacklogLifecycleListener) getOneShotShipRunner() OneShotShipRunner {
+	l.oneShotShipRunnerMu.RLock()
+	defer l.oneShotShipRunnerMu.RUnlock()
+	return l.oneShotShipRunner
 }
 
 // SetPRPendingCheckerFactory overrides the factory used to construct the
@@ -600,11 +682,15 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // poll and ship the PR itself via /backlog/ship (see taskProtocolBlock rules
 // 8-9). true (used only by reconcileUnprocessedReviewVerdicts, the
 // crash-recovery sweep for a review session that died before this function
-// ever ran for it normally) pushes and creates the PR mechanically regardless
-// — that sweep cannot tell a genuinely-live, still-polling work session apart
-// from a zombie that will never poll again, and its whole reason to exist is
-// to make forward progress on a verdict nothing else is going to act on. See
-// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive.
+// ever ran for it normally) routes to shipViaAgentOrFallback regardless of
+// work-session liveness — that sweep cannot tell a genuinely-live,
+// still-polling work session apart from a zombie that will never poll again,
+// and its whole reason to exist is to make forward progress on a verdict
+// nothing else is going to act on. See
+// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive
+// — that test's fixture has no worktree recorded at all, so it exercises
+// shipViaAgentOrFallback -> pushAndCreatePR's pre-existing, unchanged
+// fallbackToDone("no worktree") branch; this fix does not touch that branch.
 func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS ItemSessionSummary, forcePush bool) {
 	item, err := l.storage.GetBacklogItem(ctx, reviewIS.BacklogItemID)
 	if err != nil {
@@ -687,12 +773,10 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 		// (crashed, was killed, or hit a turn cap — nothing will ever run
 		// /backlog/ship for this item on its own) or forcePush is set
 		// (reconcileUnprocessedReviewVerdicts' crash-recovery sweep, which cannot
-		// distinguish a genuinely-live work session from a zombie). Push the branch,
-		// create a PR, and move to pr_pending directly. Falls back to a direct done
-		// transition when there's no worktree — see pushAndCreatePR. This is now a
-		// narrow fallback, not the default path — see PR description for context on
-		// why the mechanical path was demoted.
-		l.pushAndCreatePR(ctx, item, *workEntry)
+		// distinguish a genuinely-live work session from a zombie). Ship the PR —
+		// see shipViaAgentOrFallback's doc comment for the agent-driven-first,
+		// mechanical-push-as-backstop policy.
+		l.shipViaAgentOrFallback(ctx, item, *workEntry)
 	}
 }
 
@@ -1816,11 +1900,107 @@ func buildFallbackPRBody(item *BacklogItemData) string {
 	return sb.String()
 }
 
+// shipViaAgentOrFallback is handleReviewSessionExited's PASS-verdict entry
+// point for shipping a PR when the work session that earned the verdict is
+// no longer live to run /backlog/ship itself (or forcePush is set — see
+// handleReviewSessionExited's doc comment). It tries the agent-driven path
+// first — running agentShipPrompt (/backlog/ship, which drives
+// /github:pr-ship: local CI, code review, remote CI, and actual
+// merge-conflict resolution) as a headless one-shot via the wired
+// OneShotShipRunner — and only falls back to the mechanical pushAndCreatePR
+// (bare `git push` + `gh pr create`, no CI reaction, no conflict resolution)
+// when that isn't available or didn't work. This mirrors the design already
+// used for AutoCreatePR/TriggerShipPR-style flows: prefer the agent, keep
+// the mechanical path as a backstop rather than deleting it outright, since
+// pushAndCreatePR is still the right tool for attemptPushRemediation (a
+// purely mechanical retry after a purely mechanical fetch+merge — no LLM
+// judgment involved there) and remains a working fallback of last resort
+// here when the agent-driven attempt itself fails to produce a PR (e.g. the
+// session's Instance is no longer tracked live, or the one-shot call itself
+// errors/times out).
+//
+// Deliberately does NOT special-case "no worktree at all" before trying the
+// one-shot: if OneShotShipRunner is wired but there is genuinely nothing to
+// point it at, RunOneShotForSession fails fast (its own findInstance lookup
+// misses) and this falls through to pushAndCreatePR, which performs the
+// exact same worktree-presence check it always has and reaches the exact
+// same two pre-existing outcomes depending on what's actually missing:
+//   - No worktree recorded in storage at all: pushAndCreatePR's
+//     fallbackToDone("no worktree") transitions straight to done, unchanged
+//     from before this fix (see
+//     TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive).
+//   - A worktree is recorded but the directory itself is gone from disk
+//     (e.g. cleanupItemWorktreesExcept already ran): the mechanical git
+//     commands fail with a filesystem error, which pushAndCreatePR's
+//     existing stayInReviewAndNotify path already turns into a durable
+//     StuckReasonPushFailed row and an operator notification — the item
+//     stays in review rather than silently becoming done, and the PASS
+//     verdict is not dropped. No new StuckReason was added for this case:
+//     from an operator's perspective it is the same actionable signal
+//     ("PASS verdict, no PR, needs a manual look") pushAndCreatePR's push/PR
+//     failures already surface, and both remediation paths are identical
+//     (investigate manually, or retry).
+func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+	runner := l.getOneShotShipRunner()
+	if runner == nil {
+		log.InfoLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback item=%s: no OneShotShipRunner wired, using mechanical push directly", item.ID)
+		l.pushAndCreatePR(ctx, item, is)
+		return
+	}
+
+	prURL, err := runner.RunOneShotForSession(ctx, is.SessionUUID, agentShipPrompt, oneShotShipTimeoutSeconds)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback item=%s session=%s: agent-driven ship failed (%v), falling back to mechanical push", item.ID, is.SessionUUID, err)
+		l.pushAndCreatePR(ctx, item, is)
+		return
+	}
+	if prURL == "" {
+		log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback item=%s session=%s: agent-driven ship ran but produced no PR URL, falling back to mechanical push", item.ID, is.SessionUUID)
+		l.pushAndCreatePR(ctx, item, is)
+		return
+	}
+
+	log.InfoLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback item=%s session=%s: agent shipped PR via one-shot /backlog/ship: %s", item.ID, is.SessionUUID, prURL)
+
+	// Persist the PR fields and transition explicitly rather than relying
+	// solely on the RunOneShot -> RecordPRCreatedOutOfBand side effect the
+	// production *services.SessionService implementation performs as part of
+	// RunOneShotForSession — that side effect only fires because
+	// SessionService happens to hold a pointer back to this same listener
+	// (server/dependencies.go's sessionService.SetBacklogLifecycleListener).
+	// A test fake — or any future OneShotShipRunner implementation — has no
+	// such obligation, so this path must be self-sufficient.
+	// resolveToPRPending's transition is guarded by an ExpectedStatus
+	// precondition, so if the side effect already made this transition, the
+	// call below simply no-ops with a (deliberately ignored) precondition
+	// error rather than double-applying anything.
+	prNumber := 0
+	if ref, parseErr := ParseGitHubURL(prURL); parseErr == nil {
+		prNumber = ref.PRNumber
+	}
+	if prNumber > 0 {
+		prURLCopy, prNumCopy := prURL, prNumber
+		if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+			PrURL:    &prURLCopy,
+			PrNumber: &prNumCopy,
+		}, nil); updateErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback store PR fields item=%s: %v", item.ID, updateErr)
+		}
+	}
+	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
+		log.DebugLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback pr_pending transition item=%s (may already be applied via RunOneShot's own RecordPRCreatedOutOfBand side effect): %v", item.ID, transErr)
+	}
+}
+
 // pushAndCreatePR commits any dirty state, pushes the branch, creates a GitHub PR,
 // stores the PR URL and number on the item, then transitions to pr_pending.
 // Falls back to a direct done transition only when there was genuinely nothing to
 // ship (no worktree). If code was committed but push/PR-creation fails, the item
 // stays in review and a notification is published — see stayInReviewAndNotify.
+// Used both as shipViaAgentOrFallback's mechanical backstop (agent-driven ship
+// unavailable or failed) and directly by attemptPushRemediation (a push retry
+// after a purely mechanical fetch+merge — no LLM judgment needed there, so it
+// skips shipViaAgentOrFallback and calls this directly).
 func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
 	fallbackToDone := func(reason string) {
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s falling back to done: %s", item.ID, reason)
