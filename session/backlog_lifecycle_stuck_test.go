@@ -1655,22 +1655,14 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *tes
 	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusDone, "cap hit")
 	require.NoError(t, err)
 	require.True(t, applied)
-	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusDone, "push failed")
-	require.NoError(t, err)
-	require.True(t, applied)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.selfHealStuck(ctx, er)
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 2, "event-shaped rows must never be touched by the status sweep")
-	reasons := map[domain.StuckReason]bool{}
-	for _, row := range open {
-		reasons[row.Reason] = true
-	}
-	assert.True(t, reasons[domain.StuckReasonReworkCap])
-	assert.True(t, reasons[domain.StuckReasonPushFailed])
+	require.Len(t, open, 1, "rework_cap must never be touched by the status sweep — it has no anchor at all, not even a terminal one")
+	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
 }
 
 // TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone verifies
@@ -1848,6 +1840,151 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	require.NoError(t, err)
 	require.Len(t, open, 1, "an item merely cycling through review (not yet done/archived) must not false-resolve")
 	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
+
+// --- push_failed terminal-state resolution (docs/bugs: orphaned push_failed
+// rows never auto-resolve once their item completes — sibling of the
+// autonomous_stuck fix above, same root cause and same fix shape). ---
+
+// TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesDone verifies
+// the primary regression: an item marked push_failed that later legitimately
+// completes via a path that never routes back through resolveToPRPending
+// (e.g. ReconcilePRPending's merge-detected done transition firing because a
+// human merged the PR directly on GitHub) gets its stuck row resolved by the
+// self-heal sweep instead of leaking forever — live-repro'd on item
+// c2ad7bf3-91bf-4d47-8654-0f2f20869080.
+func TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item that finished",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item later legitimately completes via a path that never re-invokes
+	// resolveToPRPending for this item (e.g. a human merged the PR directly
+	// on GitHub, and ReconcilePRPending's merge-detected transition takes the
+	// item straight to done).
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "push_failed row must resolve once the item reaches done")
+}
+
+// TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesArchived
+// verifies the second terminal status in the anchor set — this is also the
+// retroactive cleanup path for rows that predate the fix and were archived
+// before ever being resolved.
+func TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesArchived(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item that was archived",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// Simulate the live-repro'd orphan shape: the item finished long ago
+	// (done, then later auto-archived) with no forward-only hook ever having
+	// touched this exact row.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	require.NoError(t, err)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "push_failed row must resolve once the item reaches archived")
+}
+
+// TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview
+// verifies an item that is genuinely still stuck (never reached done or
+// archived, e.g. retries are still in flight or the backoff gate has parked
+// it) keeps its row open — the sweep must not resolve on a bare "left
+// review" signal, since push_failed retries never change the item's status
+// until a retry actually succeeds.
+func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item still stuck",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a genuinely stuck item must keep its push_failed row open")
+	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+}
+
+// TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProgressBeforeLaterStuckState
+// proves the new {done, archived} anchor does not reintroduce a false-resolve
+// on a same-status-anchored reason: an item that has merely cycled backward
+// into in_progress (e.g. a human sent it back for rework) on its way to a
+// later stuck condition must NOT have its row resolved just because it left
+// "review" — the anchor is inverted-terminal, not "left review".
+func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProgressBeforeLaterStuckState(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item mid-cycle",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item cycles backward into in_progress — a real transition (e.g. a
+	// human sent it back for rework), but not yet a terminal one.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an item merely cycling through in_progress (not yet done/archived) must not false-resolve")
+	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
 }
 
 // --- Story 2.1.5e: per-detector panic isolation ---

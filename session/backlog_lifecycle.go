@@ -2043,16 +2043,18 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 //	stale_work         -> anchor {in_progress}                resolve when status not in anchor
 //	bouncing           -> anchor {in_progress, review}         resolve ONLY on done/PASS (never mid-cycle)
 //	autonomous_stuck   -> terminal set {done, archived}        resolve ONLY on reaching the set (inverted anchor)
+//	push_failed        -> terminal set {done, archived}        resolve ONLY on reaching the set (inverted anchor)
 //	rework_cap         -> event-shaped, no anchor              excluded from the sweep entirely
-//	push_failed        -> event-shaped, no anchor              excluded from the sweep entirely
 //
-// autonomous_stuck is the one row in this table that anchors the opposite
-// way from the others: those resolve when the item LEAVES its anchor status;
-// autonomous_stuck resolves only once the item REACHES a genuinely terminal
-// status (done or archived), because the row must legitimately survive
-// transient in_progress<->review cycling while a stuck item is respawned and
-// retried (AutoRespawnAutonomousWork) or manually pushed through review. As
-// of PR #180, onAutonomousDriverComplete's SessionRoleWork case no longer
+// autonomous_stuck and push_failed are the two rows in this table that anchor
+// the opposite way from the others: those resolve when the item LEAVES its
+// anchor status; these resolve only once the item REACHES a genuinely
+// terminal status (done or archived).
+//
+// autonomous_stuck's row must legitimately survive transient
+// in_progress<->review cycling while a stuck item is respawned and retried
+// (AutoRespawnAutonomousWork) or manually pushed through review. As of PR
+// #180, onAutonomousDriverComplete's SessionRoleWork case no longer
 // force-transitions in_progress->review on a turn-cap stop (it leaves the
 // item in_progress and respawns instead), so there is no false "left
 // in_progress" signal to anchor on mid-cycle the way there was when this
@@ -2066,6 +2068,30 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 // event-driven counterpart that covers the common "driver succeeds on a
 // later attempt" case immediately instead of waiting for this sweep's next
 // tick.
+//
+// push_failed's row must likewise survive being retried in place while the
+// item stays at "review" (reconcilePushFailedItems/attemptPushRemediation
+// retry the push+PR flow without ever changing item status until a retry
+// succeeds), so it cannot anchor on "leaves review" — a naive same-status
+// anchor tells us nothing about whether the underlying push actually
+// succeeded. Unlike autonomous_stuck, push_failed never had an "in_progress"
+// false-resolve risk to guard against in the first place (its anchor status
+// is "review", not "in_progress", and the sweep only fires on done/archived,
+// never merely on leaving review) — it was excluded purely because it is
+// event-shaped, not because a terminal anchor was unsafe. Reaching
+// done/archived is always authoritative: either resolveToPRPending's own
+// call already resolved the row (the common path, via a successful
+// pushAndCreatePR retry), or the item reached done/archived through some
+// other legitimate path that supersedes the stale row — e.g.
+// pushAndCreatePR's own fallbackToDone("no worktree") declaring "nothing
+// left to ship" is already treated as authoritative elsewhere in this same
+// function, or (the live-repro'd case, item c2ad7bf3-91bf-4d47-8654-0f2f20869080)
+// ReconcilePRPending's merge-detected done transition firing because a human
+// merged the PR directly on GitHub, bypassing resolveToPRPending's explicit
+// resolve entirely even though the code genuinely shipped. This case doubles
+// as the retroactive cleanup path for push_failed rows left open by items
+// that reached done/archived without ever routing back through
+// resolveToPRPending.
 //
 // Same-status clears (e.g. a pr_pending item whose PR stops being ready
 // while it's still pr_pending) are NOT this sweep's job — they are handled
@@ -2090,11 +2116,12 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonAutonomousStuck:
+		case domain.StuckReasonAutonomousStuck, domain.StuckReasonPushFailed:
 			// Inverted anchor — see the table above. Resolve only once the item
-			// has genuinely finished, never merely because it left in_progress.
+			// has genuinely finished, never merely because it left in_progress
+			// (autonomous_stuck) or review (push_failed).
 			resolve = row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed:
+		case domain.StuckReasonReworkCap:
 			// Event-shaped: resolved only at an explicit call site, not by
 			// anchoring on item status.
 			continue
@@ -2527,11 +2554,12 @@ func (l *BacklogLifecycleListener) reconcileDriftedPRItems(ctx context.Context, 
 // its ReconcileStuck call site for why this periodic sweep is needed at all
 // (pushAndCreatePR itself only ever runs in response to a review-session
 // event, so an item with no active session would otherwise never get a
-// second attempt). push_failed is event-shaped (see selfHealStuck's doc
-// comment) so it is never auto-resolved by the status-anchor self-heal
-// sweep; resolution instead happens through resolveToPRPending once a
-// retried push succeeds. Best-effort: query failures are logged, never
-// returned.
+// second attempt). While the item remains at "review", resolution happens
+// through resolveToPRPending once a retried push succeeds — selfHealStuck's
+// terminal-anchor case only backstops the item reaching done/archived some
+// other way (see its doc comment), so this loop's own row-status filter
+// below still only needs to consider "review" as an active retry target.
+// Best-effort: query failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
