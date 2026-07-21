@@ -3,12 +3,17 @@ package services
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -171,6 +176,69 @@ func TestQuickCommitPush_UnknownWorktree(t *testing.T) {
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	require.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestQuickCommitPush_SkipsIgnoredTrackedFiles verifies the staging guard
+// QuickCommitPush now applies before committing: a scaffolding file already
+// tracked in the branch's history (git.ScaffoldingExcludePatterns) must never
+// be restaged/recommitted, even by a plain `git add .`.
+//
+// This exercises the exact call QuickCommitPush makes
+// (git.NewGitWorktreeFromStorage(...).StageAllExceptScaffolding()) directly
+// against a real repo, rather than driving the full RPC: QuickCommitPush looks
+// the worktree up via s.scanner.GetResultByKey, and Scanner's result cache is
+// populated by its unexported background scan pipeline (real git-worktree
+// discovery, workers, fsnotify) with no exported test seam reachable from this
+// package. Standing that up would mean duplicating a large slice of
+// session/unfinished's own test infra for a guard that's already covered here
+// at the level QuickCommitPush actually delegates to — a deliberate scope
+// decision rather than an oversight.
+func TestQuickCommitPush_SkipsIgnoredTrackedFiles(t *testing.T) {
+	repoDir := t.TempDir()
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = repoDir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
+	}
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Test"), 0o644))
+	runGit("add", ".")
+	runGit("commit", "-m", "initial commit")
+	runGit("branch", "-M", "main")
+
+	// Simulate a stale branch that already committed the scaffolding file.
+	contextPath := filepath.Join(repoDir, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+	runGit("add", ".backlog-context.md")
+	runGit("commit", "-m", "stale: commit scaffolding file")
+
+	// A real change alongside it, as a live session would produce.
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Updated"), 0o644))
+
+	wt := git.NewGitWorktreeFromStorage(repoDir, repoDir, "", "main", "")
+	require.NoError(t, wt.StageAllExceptScaffolding())
+
+	staged, err := wt.HasStagedChanges()
+	require.NoError(t, err)
+	assert.True(t, staged, "the real README.md change (and the resulting untrack) must still be staged")
+
+	// The scaffolding file must no longer be tracked in the index — its only
+	// legitimate appearance in the staged diff at this point is as a removal
+	// (git-rm-cached semantics), never as re-added content.
+	lsFilesCmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "ls-files")
+	lsOut, err := lsFilesCmd.CombinedOutput()
+	require.NoError(t, err)
+	assert.NotContains(t, string(lsOut), ".backlog-context.md", "scaffolding file must be untracked, not recommitted")
+
+	statusCmd := safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "diff", "--cached", "--name-only")
+	out, err := statusCmd.CombinedOutput()
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "README.md")
 }
 
 // --------------------------------------------------------------------------
