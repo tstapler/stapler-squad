@@ -3,9 +3,25 @@ package git
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5"
 )
+
+// untrackMu serializes UntrackScaffolding's index read-modify-write per worktree
+// path. go-git's Storer.Index()/SetIndex() don't participate in git's own
+// index.lock protocol, so two concurrent UntrackScaffolding calls on the same
+// worktree (e.g. CommitChanges and QuickCommitPush racing on the same path) could
+// otherwise read-modify-write the index non-atomically and drop each other's
+// changes. This only serializes callers of UntrackScaffolding against each
+// other — it doesn't (and can't, from here) coordinate with a concurrent git CLI
+// subprocess touching the same index outside this package.
+var untrackMu sync.Map // map[string]*sync.Mutex, key = worktreePath
+
+func lockForWorktree(worktreePath string) *sync.Mutex {
+	mu, _ := untrackMu.LoadOrStore(worktreePath, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
 
 // ScaffoldingExcludePatterns are the git exclude patterns for files stapler-squad
 // writes into worktrees (backlog automation scaffolding, build output) that must
@@ -31,6 +47,10 @@ var ScaffoldingExcludePatterns = []string{
 // all (e.g. a directory-mode session with no git backing), matching the
 // best-effort, non-fatal handling the rest of this package uses for that case.
 func UntrackScaffolding(worktreePath string, patterns []string) ([]string, error) {
+	mu := lockForWorktree(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
 	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
 		return nil, nil

@@ -57,23 +57,8 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	}
 
 	if isDirty {
-		if err := g.StageAllExceptScaffolding(); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		hasStaged, err := g.HasStagedChanges()
-		if err != nil {
-			log.Error("failed to check staged changes", "err", err)
-			return fmt.Errorf("failed to check staged changes: %w", err)
-		}
-
-		if hasStaged {
-			// Create commit
-			if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-				log.Error("failed to commit changes", "err", err)
-				return fmt.Errorf("failed to commit changes: %w", err)
-			}
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
@@ -125,28 +110,8 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	}
 
 	if isDirty {
-		if err := g.StageAllExceptScaffolding(); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		hasStaged, err := g.HasStagedChanges()
-		if err != nil {
-			log.Error("failed to check staged changes", "err", err)
-			return fmt.Errorf("failed to check staged changes: %w", err)
-		}
-
-		if !hasStaged {
-			// The only staged change(s) were scaffolding files that
-			// StageAllExceptScaffolding just untracked — nothing left to commit.
-			g.InvalidateDirtyCache()
-			return nil
-		}
-
-		// Create commit (local only)
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.Error("failed to commit changes", "err", err)
-			return fmt.Errorf("failed to commit changes: %w", err)
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
@@ -154,14 +119,43 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
+// stageAndCommit stages all changes (minus scaffolding), then commits — unless
+// the only staged change was a scaffolding file that staging just untracked, in
+// which case it skips the commit gracefully instead of failing on git's
+// "nothing to commit". Shared by CommitChanges and PushChanges, whose stage/
+// commit sequence is otherwise identical.
+func (g *GitWorktree) stageAndCommit(commitMessage string) error {
+	if err := g.StageAllExceptScaffolding(); err != nil {
+		log.Error("failed to stage changes", "err", err)
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	hasStaged, err := g.HasStagedChanges()
+	if err != nil {
+		log.Error("failed to check staged changes", "err", err)
+		return fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	if !hasStaged {
+		return nil
+	}
+
+	if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+		log.Error("failed to commit changes", "err", err)
+		return fmt.Errorf("failed to commit changes: %w", err)
+	}
+	return nil
+}
+
 // StageAllExceptScaffolding stages all worktree changes (`git add .`) and then
 // untracks any staged path matching ScaffoldingExcludePatterns, so backlog
 // automation scaffolding files (.backlog-context.md, .claude/commands/backlog/*)
-// can never be committed even if they were already tracked in this branch's
+// don't get (re)committed even if they were already tracked in this branch's
 // history — gitignore/info-exclude rules only stop a NEW path from being
 // staged, not one that's already in the index (see UntrackScaffolding's doc
-// comment). Fails open on the untrack step: a failure there is logged and
-// otherwise ignored rather than blocking a real commit.
+// comment). Deliberately fails open on the untrack step (logs and continues
+// rather than blocking a real commit) — the CI backstop workflow
+// (.github/workflows/backlog-scaffolding-guard.yml) is the second, independent
+// layer for the rare case where the untrack step itself errors.
 func (g *GitWorktree) StageAllExceptScaffolding() error {
 	if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
 		return fmt.Errorf("failed to stage changes: %w", err)

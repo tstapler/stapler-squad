@@ -71,15 +71,17 @@ func TestCommitChanges_SkipsCommitGracefully_WhenOnlyScaffoldingStaged(t *testin
 }
 
 // TestStageAllExceptScaffolding_LeavesUnrelatedTrackedFilesAlone verifies the
-// staging guard only untracks scaffolding paths and stages everything else
-// normally.
+// staging guard stages a normal new file as usual, while a scaffolding file
+// added alongside it never ends up staged.
 func TestStageAllExceptScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
 	repoDir := setupTestRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "new-file.txt"), []byte("hello"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".backlog-context.md"), []byte("scaffolding"), 0o644))
 
 	wt := NewGitWorktreeFromStorage(repoDir, repoDir, "test-stage", "main", "")
 	require.NoError(t, wt.StageAllExceptScaffolding())
 
 	staged := runGit(t, repoDir, "diff", "--cached", "--name-only")
 	assert.Contains(t, staged, "new-file.txt")
+	assert.NotContains(t, staged, ".backlog-context.md")
 }
