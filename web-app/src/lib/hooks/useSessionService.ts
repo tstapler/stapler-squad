@@ -87,7 +87,7 @@ interface UseSessionServiceReturn {
   systemMemoryPct: number;
 
   // Methods
-  listSessions: (options?: { category?: string; status?: SessionStatus }) => Promise<void>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
   getSession: (id: string) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
@@ -207,7 +207,7 @@ export function useSessionService(
 
   // List sessions with retry logic
   const listSessions = useCallback(
-    async (listOptions?: { category?: string; status?: SessionStatus }) => {
+    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => {
       if (!clientRef.current) return;
 
       dispatch(setLoading(true));
@@ -217,6 +217,7 @@ export function useSessionService(
         const response = await clientRef.current.listSessions({
           category: listOptions?.category,
           status: listOptions?.status,
+          includeArchived: listOptions?.includeArchived,
         });
 
         dispatch(setSessions(response.sessions));

@@ -54,6 +54,26 @@ type SessionStopper interface {
 	// sessions that exited but whose DB records were not closed (e.g. after a
 	// server restart that killed the underlying process).
 	IsSessionLive(sessionUUID string) bool
+	// KillTmuxPaneOnly closes the tmux pane for sessionUUID without touching its
+	// worktree — unlike StopSessionByUUID/Instance.Kill, which also runs
+	// CleanupWorktree. Rework rounds share one worktree/branch across their "-rN"
+	// revisions (see buildRevisionTitle), so tearing down a finished round's
+	// worktree would destroy the next round's checkout. No-op if the session
+	// isn't tracked live (already gone).
+	KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error
+	// ArchiveSessionByUUID soft-archives a session so it stops accumulating in
+	// the default session list once its backlog item is done/superseded. No-op
+	// (not an error) if the session isn't tracked live or is already archived.
+	ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error
+	// TimeSinceLastMeaningfulOutput returns how long it has been since the live
+	// Instance for sessionUUID last produced meaningful terminal output, backed
+	// by the same Instance.GetTimeSinceLastMeaningfulOutput signal
+	// review_queue_determiner.go's staleness detector uses — so "is this
+	// session stale" has exactly one definition across the codebase instead of
+	// each call site re-deriving its own. ok is false if the session isn't
+	// currently tracked live (same "not live" cases as IsSessionLive); dur is
+	// meaningless when ok is false.
+	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
 }
 
 // itemSourceBackend is a narrow interface for item source persistence; satisfied by *session.Storage.
@@ -79,6 +99,34 @@ type BacklogService struct {
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
 	worktreeMu sync.Mutex
+
+	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
+	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
+	// Delete atomic check-and-set idiom as review_queue_manager.go's
+	// autoCreatePRInFlight field. SpawnSessionFromItem's read (ListItemSessions)
+	// -> check (hasActiveWorkSession) -> write (CreateItemSession) sequence is
+	// not otherwise atomic: two concurrent SpawnSessionFromItem calls for the
+	// SAME item (e.g. the autonomous-driver respawn path racing a periodic
+	// reconciliation sweep or a manual retrigger) can both read "no active work
+	// session" before either has inserted its new ItemSession row, and both
+	// proceed to spawn — confirmed live on 2026-07-19 (item d3227302 had two
+	// literal overlapping "work" role ItemSessions). The isReopen path is the
+	// most exposed: it skips SpawnSessionFromItem's own
+	// TransitionBacklogItemStatus call entirely (only fresh, non-reopen spawns
+	// transition ready->in_progress), so it has none of the optimistic-
+	// concurrency protection (ExpectedUpdatedAt precondition) that already
+	// protects AutoReopenAfterFailedReview / AutoReopenForPRFix's review/
+	// pr_pending->in_progress transitions from double-firing.
+	//
+	// A sync.Map of per-item *sync.Mutex was considered and rejected: it would
+	// leak one mutex per distinct item ID for the life of the process, whereas
+	// this set is self-cleaning (LoadOrStore on entry, Delete via defer on
+	// exit) and never grows past the number of spawns genuinely in flight at
+	// once. This is a single-process server (see CLAUDE.md's architecture
+	// overview) so an in-process guard is sufficient; a DB-level uniqueness
+	// constraint was not needed. See SpawnSessionFromItem for the guarded
+	// section.
+	spawnInFlight sync.Map
 
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
@@ -521,6 +569,10 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
+	if item.ReworkCapOverride != nil {
+		override := int32(*item.ReworkCapOverride)
+		p.ReworkCapOverride = &override
+	}
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
@@ -561,9 +613,26 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 				ToStatus:    ev.ToStatus,
 				TriggeredBy: ev.TriggeredBy,
 				CreatedAt:   timestamppb.New(ev.CreatedAt),
+				Note:        ev.Note,
 			}
 		}
 		p.StatusEvents = protoEvents
+	}
+
+	// Populate progress notes (the implementer's report_progress audit trail)
+	// when they were eagerly loaded.
+	if len(item.ProgressNotes) > 0 {
+		protoNotes := make([]*sessionv1.BacklogProgressNote, len(item.ProgressNotes))
+		for i, n := range item.ProgressNotes {
+			protoNotes[i] = &sessionv1.BacklogProgressNote{
+				Id:             n.ID,
+				CriterionIndex: int32(n.CriterionIndex),
+				Note:           n.Note,
+				Status:         n.Status,
+				CreatedAt:      timestamppb.New(n.CreatedAt),
+			}
+		}
+		p.ProgressNotes = protoNotes
 	}
 
 	return p
@@ -613,6 +682,21 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 // Call commitAndPushItemWorktrees first to ensure changes are durable.
 // Errors are logged but do not fail the caller — cleanup is best-effort.
 func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) {
+	s.cleanupItemWorktreesExcept(ctx, sessions, "")
+}
+
+// cleanupItemWorktreesExcept is cleanupItemWorktrees with one path exempted from
+// removal. Reopen/rework spawns reuse the same "backlog/<item>" branch and worktree
+// directory across revisions (see SpawnSessionFromItem step 10's comment) rather than
+// creating a fresh one, so a prior work session's worktree row can point at the exact
+// path the brand-new session just started using. Cleaning that up unconditionally —
+// as every caller used to — deleted the directory out from under the session that
+// just reused it, leaving a still-in_progress/review item with no worktree at all
+// (diffs and re-review's codebase-read verification both came up empty). exceptPath
+// lets the reopen call site keep that one path alive while still clearing out any
+// genuinely stale worktree from an earlier, differently-named revision (e.g. the
+// item's title changed between rework rounds).
+func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) {
 	for _, is := range sessions {
 		if is.SessionUUID == "" {
 			continue
@@ -624,9 +708,33 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 		if err != nil || wt.WorktreePath == "" {
 			continue
 		}
+		if exceptPath != "" && wt.WorktreePath == exceptPath {
+			continue
+		}
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+		}
+	}
+}
+
+// archiveItemWorkSessions soft-archives every work-role session in sessions so it
+// stops accumulating in the default session list. Callers are: (1) terminal status
+// transitions (done/archived), where every work session for the item is superseded,
+// and (2) rework respawns, where only the sessions loaded *before* the new spawn
+// (i.e. every prior round) are passed in — the brand-new session is never included.
+// Nil-safe (sessionStopper may be unwired, e.g. in tests) and best-effort: archival
+// failures are logged, not returned, matching cleanupItemWorktreesExcept's contract.
+func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions []session.ItemSessionSummary) {
+	if s.sessionStopper == nil {
+		return
+	}
+	for _, is := range sessions {
+		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+			continue
+		}
+		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }

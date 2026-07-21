@@ -109,7 +109,12 @@ interface ReviewQueuePanelProps {
  * />
  * ```
  */
-const DEFAULT_PR_PROMPT = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made.";
+// Mirrors autoCreatePRPrompt (server/review_queue_manager.go) and shipPRPrompt
+// (server/services/backlog_service_ship.go) — kept in sync manually; see
+// autoCreatePRPrompt's doc comment for why the format is spelled out
+// explicitly rather than left to the agent's judgment.
+const DEFAULT_PR_PROMPT =
+  "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes.";
 
 type SortField = "default" | "priority" | "age" | "diffSize" | "name";
 

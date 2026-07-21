@@ -138,7 +138,14 @@ func eventToRecord(event *events.Event) *NotificationRecord {
 	}
 
 	sessionName := event.Context // Context stores session name for notification events
-	if sessionName == "" {
+	// Fall back to the raw SessionID only for genuine session notifications. Backlog-item
+	// notifications (identified by metadata["item_id"]) now thread the item's ID through
+	// as SessionID for coalescing purposes (see EventBusNotifier.Notify) but have no
+	// human-friendly session name — falling back here would surface the raw item UUID as
+	// SessionName, which wins the frontend's title fallback chain
+	// (sessionName || title || sessionId, see NotificationPanel.tsx / NotificationsPage.tsx)
+	// and would clobber the real, descriptive notification title.
+	if sessionName == "" && event.NotificationMetadata["item_id"] == "" {
 		sessionName = event.SessionID
 	}
 

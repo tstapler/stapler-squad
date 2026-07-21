@@ -3,6 +3,7 @@ package unfinished
 import (
 	"bytes"
 	"cmp"
+	"container/list"
 	"errors"
 	"fmt"
 	"io"
@@ -50,6 +51,127 @@ var maxUntrackedFileSize = int64(512 * 1024) // 512 KB
 // errStopWalk is returned by walkUntrackedRec to signal early termination when
 // the maxUntrackedFiles cap has been reached.
 var errStopWalk = errors.New("stop untracked walk")
+
+// blobCacheTotalTargetFraction is the share of the CURRENT repoCache budget
+// (effectiveCacheBudgetBytes, which already shrinks under memory pressure)
+// reserved for ALL blobCaches combined, split evenly across however many
+// repos are actually cached right now (see effectiveBlobCacheMaxBytes). This
+// rides on the existing pressure-aware budget instead of being a second,
+// disconnected budget: as effectiveCacheBudgetBytes shrinks under pressure,
+// the blob-cache total shrinks with it automatically.
+// Declared as var (not const) so tests can tune it without needing to spin
+// up blobCacheTotalTargetFraction-many fake repos.
+var blobCacheTotalTargetFraction int64 = 8 // 1/8th of the repoCache budget
+
+// blobCacheMaxBytesFloor/Ceiling bound a single repo's per-put cap regardless
+// of how many repos are currently cached — the floor keeps a lone quiet repo
+// from being starved to uselessness when many repos are hot (n large), the
+// ceiling keeps a single repo from hogging an outsized share when few repos
+// are hot (n small). Ceiling is deliberately a small fraction of
+// approxBytesPerCachedRepo, for the same reason the old flat cap was: this
+// cache lives inside one cachedRepo, whose total cost that constant already
+// budgets for.
+const (
+	blobCacheMaxBytesFloor   = 2 * 1024 * 1024              // 2MB: room for a handful of typical changed files
+	blobCacheMaxBytesCeiling = approxBytesPerCachedRepo / 4 // 24MB
+)
+
+// effectiveBlobCacheMaxBytes returns the current per-repo blobCache cap,
+// scaled so that (repos currently cached) * (this cap) stays within
+// roughly effectiveCacheBudgetBytes()/blobCacheTotalTargetFraction — more
+// budget per repo when few repos are hot, less when many are, clamped to
+// [blobCacheMaxBytesFloor, blobCacheMaxBytesCeiling]. Reuses repoCacheSize
+// (already maintained atomically for repoCache's own eviction trigger)
+// rather than a fresh Range scan.
+func (g *GoGitVCSReader) effectiveBlobCacheMaxBytes() int {
+	n := atomic.LoadInt64(&g.repoCacheSize)
+	if n < 1 {
+		n = 1
+	}
+	perRepo := effectiveCacheBudgetBytes() / blobCacheTotalTargetFraction / n
+	switch {
+	case perRepo > blobCacheMaxBytesCeiling:
+		return blobCacheMaxBytesCeiling
+	case perRepo < blobCacheMaxBytesFloor:
+		return blobCacheMaxBytesFloor
+	default:
+		return int(perRepo)
+	}
+}
+
+// blobCacheLRU is a byte-size-bounded LRU cache of blob content keyed by
+// plumbing.Hash. It exists because blobCache (see cachedRepo) now persists
+// across HEAD moves instead of being wiped every commit, so it needs its own
+// bound rather than relying on commit frequency to cap it. Recently-touched
+// blobs are the ones most likely to be re-requested on the next poll cycle
+// (the scanner re-diffs the same worktree every 30s), so LRU eviction — not
+// LIFO — is the right policy: it keeps what was just used and drops what
+// hasn't been touched in a while.
+//
+// Not safe for concurrent use on its own — every call site in this file
+// holds entry.mu for the duration of its use, so it needs no internal lock.
+type blobCacheLRU struct {
+	order *list.List // front = most recently used
+	elems map[plumbing.Hash]*list.Element
+	size  int
+}
+
+type blobCacheNode struct {
+	hash plumbing.Hash
+	data []byte
+}
+
+// forEach visits every cached entry in most-recently-used order, stopping
+// early if fn returns false. Test-only helper (mirrors sync.Map.Range's
+// shape, which is what this cache replaced).
+func (c *blobCacheLRU) forEach(fn func(hash plumbing.Hash, data []byte) bool) {
+	if c.order == nil {
+		return
+	}
+	for el := c.order.Front(); el != nil; el = el.Next() {
+		node := el.Value.(blobCacheNode)
+		if !fn(node.hash, node.data) {
+			return
+		}
+	}
+}
+
+func (c *blobCacheLRU) get(hash plumbing.Hash) ([]byte, bool) {
+	el, ok := c.elems[hash]
+	if !ok {
+		return nil, false
+	}
+	c.order.MoveToFront(el)
+	return el.Value.(blobCacheNode).data, true
+}
+
+// put inserts data under hash, evicting least-recently-used entries until
+// the cache is at or under maxBytes. maxBytes is passed in per-call (see
+// effectiveBlobCacheMaxBytes) rather than read from a fixed field, since the
+// right cap depends on how many other repos are currently cached.
+func (c *blobCacheLRU) put(hash plumbing.Hash, data []byte, maxBytes int) {
+	if c.order == nil {
+		c.order = list.New()
+		c.elems = make(map[plumbing.Hash]*list.Element)
+	}
+	if el, ok := c.elems[hash]; ok {
+		c.order.MoveToFront(el)
+		return
+	}
+	c.elems[hash] = c.order.PushFront(blobCacheNode{hash, data})
+	c.size += len(data)
+	for c.size > maxBytes {
+		back := c.order.Back()
+		if back == nil {
+			c.size = 0
+			break
+		}
+		evicted := back.Value.(blobCacheNode)
+		c.order.Remove(back)
+		delete(c.elems, evicted.hash)
+		c.size -= len(evicted.data)
+	}
+}
 
 type diffStatEntry struct {
 	result DiffStat
@@ -186,15 +308,17 @@ type cachedRepo struct {
 	headTreeHash  plumbing.Hash
 	headTreeCache map[string]plumbing.Hash
 
-	// blobCache holds HEAD blob content keyed by its (content-addressed, thus
-	// immutable) hash. An individual entry never goes stale while HEAD stays
-	// put, so no per-entry invalidation is needed — but the entire map is
-	// cleared in resolveHeadTreeHashes whenever HEAD moves, bounding it to
-	// "distinct changed-file blobs seen since the last HEAD move" rather than
-	// the full process lifetime. It is further bounded by repoCache's own
-	// TTL/LRU eviction (repoCacheTTL/repoCacheMaxEntries), which drops the
-	// whole cachedRepo — and thus this map — once a repo goes cold.
-	blobCache sync.Map // map[plumbing.Hash][]byte
+	// blobCache holds blob content keyed by its (content-addressed, thus
+	// immutable) hash. A hit is always correct regardless of where HEAD points
+	// — the same blob hash decodes to the same bytes forever — so entries are
+	// NOT cleared when HEAD moves (unlike headTreeCache/untrackedMatcher
+	// above, which cache HEAD-relative *mappings* and do need that
+	// invalidation). Since it now persists for the cachedRepo's whole
+	// lifetime rather than being wiped every commit, it is capped via LRU
+	// eviction (blobCacheLRU) instead of relying on HEAD-move churn to bound
+	// it — see GoGitVCSReader.effectiveBlobCacheMaxBytes for how the cap is
+	// sized. Guarded by mu, same as the fields above.
+	blobCache blobCacheLRU
 
 	// untrackedMatcherBuilt/untrackedMatcher cache the compiled gitignore
 	// matcher used by the untracked-file walk in diffShortstatUncached.
@@ -383,6 +507,67 @@ type GoGitVCSReader struct {
 	// via gogitstoreRegistry() so GoGitVCSReader{} stays zero-value safe.
 	gogitstoreReg     *gogitstore.Registry
 	gogitstoreRegOnce sync.Once
+
+	// blobCacheHits/blobCacheMisses/blobCacheMissNanos back BlobCacheStats:
+	// a hit/miss count and cumulative decompress+read time spent on misses,
+	// letting callers judge whether blobCache is earning its keep (see
+	// BlobCacheStats' doc comment). Deliberately plain atomics rather than a
+	// metrics-library integration — this package has no existing metrics/
+	// OTel-meter plumbing to hook into (telemetry/ only wires up tracing),
+	// and a dashboard can be layered on top of these later if wanted.
+	blobCacheHits      int64
+	blobCacheMisses    int64
+	blobCacheMissNanos int64
+}
+
+// BlobCacheStats reports blobCache effectiveness across every repo this
+// reader has touched: hit/miss counts and an estimated amount of wall-clock
+// packfile decompression time avoided by cache hits (hits * the average
+// observed miss duration). A low hit rate relative to misses suggests
+// effectiveBlobCacheMaxBytes is sized too small for this workload (or that
+// HEAD/blobs are churning too fast for caching to help at all); a high hit
+// rate with a large EstimatedTimeSaved means the cache is earning its keep.
+type BlobCacheStats struct {
+	Hits               int64
+	Misses             int64
+	EstimatedTimeSaved time.Duration
+}
+
+func (g *GoGitVCSReader) BlobCacheStats() BlobCacheStats {
+	hits := atomic.LoadInt64(&g.blobCacheHits)
+	misses := atomic.LoadInt64(&g.blobCacheMisses)
+	var avgMiss time.Duration
+	if misses > 0 {
+		avgMiss = time.Duration(atomic.LoadInt64(&g.blobCacheMissNanos) / misses)
+	}
+	return BlobCacheStats{
+		Hits:               hits,
+		Misses:             misses,
+		EstimatedTimeSaved: avgMiss * time.Duration(hits),
+	}
+}
+
+// currentReader holds the process's live GoGitVCSReader for debug
+// introspection (see BlobCacheStatsSnapshot). There is normally exactly one
+// per process — the scanner's own reader, constructed once in
+// server/dependencies.go — registered here by NewScannerWithReader. This
+// lets profiling.StartProfiling's debug HTTP server (which starts before
+// the scanner exists — see main.go) reach it later without threading a
+// reference through that early setup: the registered pointer is only
+// dereferenced when a debug request actually arrives.
+var currentReader atomic.Pointer[GoGitVCSReader]
+
+// BlobCacheStatsSnapshot returns BlobCacheStats for the process's registered
+// reader (see currentReader), or a zero value if none has been registered
+// yet — e.g. queried before the scanner starts, or in tests that construct
+// a *GoGitVCSReader directly without going through NewScanner/
+// NewScannerWithReader.
+func BlobCacheStatsSnapshot() BlobCacheStats {
+	r := currentReader.Load()
+	if r == nil {
+		return BlobCacheStats{}
+	}
+	return r.BlobCacheStats()
 }
 
 // perRepoObjectCacheSize replaces go-git's PlainOpenWithOptions default of
@@ -601,9 +786,10 @@ func resolveHeadTreeHashes(entry *cachedRepo, repo *git.Repository) (map[string]
 		headHashes[name] = te.Hash
 	}
 	if entry.headTreeHash != headHash {
-		// HEAD moved (or this is the first population): everything cached
-		// against the OLD HEAD is now stale.
-		entry.blobCache = sync.Map{}        // F1: clear stale HEAD blobs.
+		// HEAD moved (or this is the first population): the name->hash
+		// mapping above is stale, but blobCache is keyed by content hash, not
+		// by name/HEAD, so it stays valid and is intentionally left alone
+		// (see the blobCache field comment — PerfFix-1).
 		entry.untrackedMatcherBuilt = false // F6: force a gitignore matcher rebuild too.
 	}
 	entry.headTreeHash = headHash
@@ -1172,10 +1358,12 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			// is always correct — no invalidation needed, ever. This skips
 			// re-decompressing the same HEAD blob from the packfile on every poll
 			// for a file that stays modified across several consecutive polls.
-			if cached, ok := entry.blobCache.Load(t.headHash); ok {
-				blobMap[t.headHash] = cached.([]byte)
+			if cached, ok := entry.blobCache.get(t.headHash); ok {
+				blobMap[t.headHash] = cached
+				atomic.AddInt64(&g.blobCacheHits, 1)
 				continue
 			}
+			missStart := time.Now()
 			blob, berr := entry.repo.BlobObject(t.headHash)
 			if berr != nil {
 				continue
@@ -1194,7 +1382,9 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			_ = r.Close()
 			data := bytes.Clone(buf.Bytes())
 			blobMap[t.headHash] = data
-			entry.blobCache.Store(t.headHash, data)
+			atomic.AddInt64(&g.blobCacheMisses, 1)
+			atomic.AddInt64(&g.blobCacheMissNanos, int64(time.Since(missStart)))
+			entry.blobCache.put(t.headHash, data, g.effectiveBlobCacheMaxBytes())
 		}
 	}()
 

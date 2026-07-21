@@ -30,7 +30,12 @@ type OneShotPRCreator interface {
 // human sees pre-filled in the manual "Create PR" modal. Kept in sync manually;
 // TestMaybeAutoCreatePR_* tests only exercise the Go side, so a drift between
 // the two literals would not be caught by CI today.
-const autoCreatePRPrompt = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made."
+//
+// Spells out Summary/What Changed/Test plan structure explicitly rather than
+// leaving format to the agent's judgment — the vague predecessor ("descriptive
+// title and a summary") produced bare one-line PR bodies with no test plan and
+// no link back to why the change was made (see PRs #147/#148 on this repo).
+const autoCreatePRPrompt = "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes."
 
 // Timeouts for the AutoCreatePR trigger (server/review_queue_manager.go's
 // maybeAutoCreatePR). autoCreatePRRunTimeout is passed explicitly as

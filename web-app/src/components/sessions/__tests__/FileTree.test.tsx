@@ -14,7 +14,13 @@
 
 import React from "react";
 import { render, fireEvent, act, waitFor } from "@testing-library/react";
-import { FileTree, buildTreeData } from "../FileTree";
+import {
+  FileTree,
+  buildTreeData,
+  sortTreeData,
+  filterChangedTreeData,
+  buildChangedAncestorPrefixes,
+} from "../FileTree";
 import type { TreeNode } from "../FileTree";
 
 // ---------------------------------------------------------------------------
@@ -630,5 +636,206 @@ describe("FileTree – keyboard navigation", () => {
     fireKey("j", { ctrlKey: true });
 
     expect(api.focus).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sortTreeData
+// ---------------------------------------------------------------------------
+
+describe("sortTreeData", () => {
+  it("always puts directories before files regardless of sort mode", () => {
+    const nodes = [makeFileNode("b.go", false), makeFileNode("adir", true, [])];
+    const result = sortTreeData(nodes, "name");
+    expect(result[0].id).toBe("adir");
+    expect(result[1].id).toBe("b.go");
+  });
+
+  it("sorts by name case-insensitively", () => {
+    const nodes = [makeFileNode("banana.go", false), makeFileNode("Apple.go", false)];
+    const result = sortTreeData(nodes, "name");
+    expect(result.map((n) => n.id)).toEqual(["Apple.go", "banana.go"]);
+  });
+
+  it("sorts by type (extension) then name, dirs unaffected by extension grouping", () => {
+    const nodes = [
+      makeFileNode("b.ts", false),
+      makeFileNode("a.go", false),
+      makeFileNode("c.go", false),
+    ];
+    const result = sortTreeData(nodes, "type");
+    // .go sorts before .ts; within .go, a before c.
+    expect(result.map((n) => n.id)).toEqual(["a.go", "c.go", "b.ts"]);
+  });
+
+  it("sorts nested children recursively", () => {
+    const child2 = makeFileNode("src/b.go", false);
+    const child1 = makeFileNode("src/a.go", false);
+    const dir = makeFileNode("src", true, [child2, child1]);
+    const result = sortTreeData([dir], "name");
+    expect(result[0].children!.map((c) => c.id)).toEqual(["src/a.go", "src/b.go"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildChangedAncestorPrefixes / filterChangedTreeData
+// ---------------------------------------------------------------------------
+
+describe("buildChangedAncestorPrefixes", () => {
+  it("collects every ancestor path segment of changed files", () => {
+    const gitStatusMap = new Map([["src/components/Button.tsx", "M"]]);
+    const prefixes = buildChangedAncestorPrefixes(gitStatusMap);
+    expect(prefixes.has("src")).toBe(true);
+    expect(prefixes.has("src/components")).toBe(true);
+    expect(prefixes.has("src/components/Button.tsx")).toBe(false);
+  });
+
+  it("returns an empty set when there are no changed files", () => {
+    expect(buildChangedAncestorPrefixes(new Map()).size).toBe(0);
+  });
+});
+
+describe("filterChangedTreeData", () => {
+  it("keeps only changed files and their ancestor directories", () => {
+    const changed = makeFileNode("src/a.go", false);
+    const unchanged = makeFileNode("src/b.go", false);
+    const srcDir = makeFileNode("src", true, [changed, unchanged]);
+    const otherDir = makeFileNode("other", true, [makeFileNode("other/c.go", false)]);
+
+    const gitStatusMap = new Map([["src/a.go", "M"]]);
+    const prefixes = buildChangedAncestorPrefixes(gitStatusMap);
+
+    const result = filterChangedTreeData([srcDir, otherDir], gitStatusMap, prefixes);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("src");
+    expect(result[0].children).toHaveLength(1);
+    expect(result[0].children![0].id).toBe("src/a.go");
+  });
+
+  it("keeps an ancestor directory visible even when it hasn't been loaded/expanded", () => {
+    // Unloaded dir has children: undefined (not yet fetched) — buildTreeData would
+    // normally turn this into [] for toggling, but filterChangedTreeData must not
+    // require the dir to be expanded to know it contains a changed descendant.
+    const srcDir = makeFileNode("src", true, undefined);
+    const gitStatusMap = new Map([["src/deep/file.go", "M"]]);
+    const prefixes = buildChangedAncestorPrefixes(gitStatusMap);
+
+    const result = filterChangedTreeData([srcDir], gitStatusMap, prefixes);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("src");
+  });
+
+  it("returns an empty array when nothing has changed", () => {
+    const dir = makeFileNode("src", true, [makeFileNode("src/a.go", false)]);
+    expect(filterChangedTreeData([dir], new Map(), new Set())).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NodeRenderer — line-stats badge and ARIA attributes
+// ---------------------------------------------------------------------------
+
+describe("FileTree – NodeRenderer badges and ARIA", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedChildren = undefined;
+  });
+
+  async function setupWithRootNodes(entries: { path: string; isDir: boolean }[]) {
+    mockFetchDirectoryFiles.mockResolvedValue(makeFileResponse(entries));
+    render(<FileTree {...defaultProps} />);
+    await waitFor(() => expect(capturedChildren).toBeDefined());
+  }
+
+  it("renders a +N/-M badge for a file with line stats", async () => {
+    mockFetchDirectoryFiles.mockResolvedValue(makeFileResponse([{ path: "main.go", isDir: false }]));
+    render(
+      <FileTree {...defaultProps} lineStatsMap={new Map([["main.go", { add: 3, del: 1 }]])} />
+    );
+    await waitFor(() => expect(capturedChildren).toBeDefined());
+
+    const fileData = makeFileNode("main.go", false);
+    const mockNode = makeMockNode(fileData);
+
+    const { getByTitle } = render(
+      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+    );
+
+    expect(getByTitle("+3 -1")).toBeTruthy();
+  });
+
+  it("omits the badge for a file with zero add/del (no entry in lineStatsMap)", async () => {
+    await setupWithRootNodes([{ path: "main.go", isDir: false }]);
+    const fileData = makeFileNode("main.go", false);
+    const mockNode = makeMockNode(fileData);
+
+    const { queryByTitle } = render(
+      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+    );
+
+    expect(queryByTitle(/^\+\d+ -\d+$/)).toBeNull();
+  });
+
+  it("sets role=treeitem, aria-level, and aria-selected on a row", async () => {
+    await setupWithRootNodes([{ path: "main.go", isDir: false }]);
+    const fileData = makeFileNode("main.go", false);
+    const mockNode = makeMockNode(fileData, { level: 2 });
+
+    const { container } = render(
+      <>{capturedChildren!({ node: mockNode, style: {} })}</>
+    );
+    const row = container.querySelector('[role="treeitem"]')!;
+    expect(row).not.toBeNull();
+    expect(row.getAttribute("aria-level")).toBe("3");
+    expect(row.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("sets aria-expanded on a directory row but not on a file row", async () => {
+    await setupWithRootNodes([{ path: "src", isDir: true }]);
+    const dirData = makeFileNode("src", true, []);
+    const dirNode = makeMockNode(dirData, { isOpen: true });
+
+    const { container: dirContainer } = render(
+      <>{capturedChildren!({ node: dirNode, style: {} })}</>
+    );
+    expect(dirContainer.querySelector('[role="treeitem"]')!.getAttribute("aria-expanded")).toBe("true");
+
+    const fileData = makeFileNode("main.go", false);
+    const fileNode = makeMockNode(fileData);
+    const { container: fileContainer } = render(
+      <>{capturedChildren!({ node: fileNode, style: {} })}</>
+    );
+    expect(fileContainer.querySelector('[role="treeitem"]')!.hasAttribute("aria-expanded")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-session isolation — sort/filter state must not leak between instances
+// ---------------------------------------------------------------------------
+
+describe("FileTree – multi-session isolation", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("renders two FileTree instances with independent sortBy/filterChangedOnly props", async () => {
+    mockFetchDirectoryFiles.mockImplementation((sessionId: string) =>
+      Promise.resolve(
+        makeFileResponse([{ path: sessionId === "session-a" ? "a.go" : "b.go", isDir: false }])
+      )
+    );
+
+    const { unmount: unmountA } = render(
+      <FileTree {...defaultProps} sessionId="session-a" sortBy="name" filterChangedOnly={false} />
+    );
+    render(<FileTree {...defaultProps} sessionId="session-b" sortBy="type" filterChangedOnly={true} />);
+
+    await waitFor(() => {
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-a", ".", false, expect.any(String));
+      expect(mockFetchDirectoryFiles).toHaveBeenCalledWith("session-b", ".", false, expect.any(String));
+    });
+
+    unmountA();
   });
 });

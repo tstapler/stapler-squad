@@ -553,13 +553,55 @@ func TestListBacklogItemSummaries(t *testing.T) {
 		require.Len(t, summaries, 2)
 	})
 
-	t.Run("ExcludeTerminal omits done item", func(t *testing.T) {
+	t.Run("ExcludeDone omits done item", func(t *testing.T) {
 		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			ExcludeTerminal: true,
+			ExcludeDone: true,
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 1)
 		require.Equal(t, activeItem.ID, summaries[0].ID)
+	})
+
+	t.Run("ExcludeDone alone does not omit an archived item", func(t *testing.T) {
+		archivedItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:    "Archived Item",
+			Priority: 3,
+			Status:   string(BacklogStatusArchived),
+		})
+		require.NoError(t, err)
+
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			ExcludeDone: true,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(summaries))
+		for i, s := range summaries {
+			ids[i] = s.ID
+		}
+		require.Contains(t, ids, activeItem.ID)
+		require.Contains(t, ids, archivedItem.ID, "ExcludeDone must not also exclude archived items — the two flags are independent")
+		require.NotContains(t, ids, doneItem.ID)
+	})
+
+	t.Run("ExcludeArchived omits archived item but keeps done item", func(t *testing.T) {
+		archivedItem2, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:    "Archived Item 2",
+			Priority: 3,
+			Status:   string(BacklogStatusArchived),
+		})
+		require.NoError(t, err)
+
+		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+			ExcludeArchived: true,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(summaries))
+		for i, s := range summaries {
+			ids[i] = s.ID
+		}
+		require.Contains(t, ids, activeItem.ID)
+		require.Contains(t, ids, doneItem.ID, "ExcludeArchived must not also exclude done items — default backlog view shows done by default")
+		require.NotContains(t, ids, archivedItem2.ID)
 	})
 
 	t.Run("active item has lightweight scalar fields and ItemSessions loaded", func(t *testing.T) {
@@ -689,4 +731,11 @@ func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
 	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Equal(t, AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
+
+	// 5. GetBacklogItem must also eagerly load ProgressNotes (mirrors StatusEvents'
+	// eager-load) so the audit trail is available wherever an item is fetched, not
+	// just via the dedicated ListProgressNotesForItem call.
+	require.Len(t, fetchedItem.ProgressNotes, 2, "GetBacklogItem must eagerly load the progress note history")
+	require.Equal(t, "started investigating", fetchedItem.ProgressNotes[0].Note)
+	require.Equal(t, "compiled successfully", fetchedItem.ProgressNotes[1].Note)
 }

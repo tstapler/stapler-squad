@@ -27,7 +27,7 @@ func expectedToolCount(t *testing.T) int {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, nil)
-	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil)
+	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil)
 	return len(s.ListTools())
 }
 
@@ -53,7 +53,12 @@ func TestMCPHandshakeSubprocess(t *testing.T) {
 	}
 
 	testDir := t.TempDir()
-	configJSON := `{"listen_address": "127.0.0.1:1"}`
+	// feature_flags.backlog must be true so the subprocess's real backlogEnabled
+	// gate (main.go's `cfg.GetFeatureFlag("backlog")`) matches expectedToolCount's
+	// oracle above, where NewCore is called with a nil backlogEnabled (always-on).
+	// Config.GetFeatureFlag defaults unset keys to false, so omitting this key
+	// silently drops the 8 backlog/goal tools from the subprocess's tool list.
+	configJSON := `{"listen_address": "127.0.0.1:1", "feature_flags": {"backlog": true}}`
 	if err := os.WriteFile(filepath.Join(testDir, "config.json"), []byte(configJSON), 0o644); err != nil {
 		t.Fatalf("write isolated config: %v", err)
 	}

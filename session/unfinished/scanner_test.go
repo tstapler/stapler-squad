@@ -321,3 +321,34 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 		t.Fatal("expected EventUnfinishedWorkRemoved to be published")
 	}
 }
+
+// TestNewScannerWithReader_RegistersGoGitVCSReaderForDebugSnapshot asserts
+// that constructing a Scanner with a real *GoGitVCSReader registers it as
+// currentReader, so the process-wide /debug/blob-cache endpoint (see
+// profiling.StartProfiling) can reach its BlobCacheStats without the
+// profiling server needing a reference at startup (it starts before the
+// scanner exists — see main.go).
+func TestNewScannerWithReader_RegistersGoGitVCSReaderForDebugSnapshot(t *testing.T) {
+	reader := &GoGitVCSReader{}
+	bus := pkgevents.NewEventBus(10)
+	NewScannerWithReader(bus, nil, reader)
+
+	// Bump this specific reader's counters directly (white-box) and confirm
+	// the package-level snapshot reflects THIS reader, not some other one a
+	// prior test may have registered.
+	reader.blobCacheHits = 3
+	reader.blobCacheMisses = 1
+	reader.blobCacheMissNanos = int64(10 * time.Millisecond)
+
+	stats := BlobCacheStatsSnapshot()
+	assert.Equal(t, int64(3), stats.Hits)
+	assert.Equal(t, int64(1), stats.Misses)
+	assert.Equal(t, 10*time.Millisecond, stats.EstimatedTimeSaved/3)
+
+	// A fake VCSReader (not *GoGitVCSReader) must NOT overwrite the
+	// registration — the debug endpoint should keep pointing at a real
+	// reader instead of silently going stale/zero.
+	NewScannerWithReader(bus, nil, &staleTestReader{})
+	stats = BlobCacheStatsSnapshot()
+	assert.Equal(t, int64(3), stats.Hits, "registering a fake reader must not clear the real one's snapshot")
+}

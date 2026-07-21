@@ -28,6 +28,16 @@ interface StuckItemProps {
   resolvedMessage?: string;
   /** Imperative snooze action from useStuckBacklogItems — omitted disables the snooze control entirely. */
   onSnooze?: (itemId: string, reason: StuckReason, until: Date) => Promise<boolean>;
+  /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
+  onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
+  /**
+   * Operator "Retry now" escape hatch (TriggerRemediationNow RPC) — omitted
+   * disables the retry control entirely. Rejects (throws) when the row is
+   * already parked or has no wired remediation action; the caller (this
+   * component) surfaces that as inline error text rather than the parent
+   * needing to know the specific failure shape.
+   */
+  onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -49,6 +59,14 @@ const SNOOZE_DURATION_LABELS: Record<SnoozeDuration, string> = {
   "1d": "1 day",
   "3d": "3 days",
 };
+
+/**
+ * Mirrors session.MaxRemediationAttempts (session/backlog_remediation.go) —
+ * the backoff schedule has 5 entries (30m/2h/8h/24h/72h), so a row with
+ * remediation_attempts >= 5 is "parked". Not sourced from the proto response
+ * itself since the cap is a backend policy constant, not per-item data.
+ */
+const MAX_REMEDIATION_ATTEMPTS = 5;
 
 /**
  * Detects a `(hover: none), (pointer: coarse)` pointer — the media query the
@@ -90,6 +108,8 @@ export function StuckItem({
   justResolved = false,
   resolvedMessage,
   onSnooze,
+  onReworkCapOverride,
+  onTriggerRemediationNow,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -99,6 +119,9 @@ export function StuckItem({
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeDuration, setSnoozeDuration] = useState<SnoozeDuration>("1d");
   const [snoozeState, setSnoozeState] = useState<"idle" | "pending" | "error">("idle");
+
+  const [retryState, setRetryState] = useState<"idle" | "pending" | "error">("idle");
+  const [retryErrorMessage, setRetryErrorMessage] = useState<string | null>(null);
 
   // AC 29: when this card collapses (Escape, re-click, or a parent-driven
   // toggle), keyboard focus returns to the card's own toggle control — it
@@ -175,6 +198,28 @@ export function StuckItem({
     }
   }, []);
 
+  const isParked = item.remediationAttempts >= MAX_REMEDIATION_ATTEMPTS;
+
+  const handleRetryNow = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!onTriggerRemediationNow) return;
+      setRetryState("pending");
+      setRetryErrorMessage(null);
+      try {
+        await onTriggerRemediationNow(item.itemId, item.reason);
+        // Success: the hook refetches; this item's remediation_attempts will
+        // reflect the new attempt on the next render. No local "success"
+        // state needed beyond clearing pending.
+        setRetryState("idle");
+      } catch (err) {
+        setRetryState("error");
+        setRetryErrorMessage(err instanceof Error ? err.message : "Retry failed");
+      }
+    },
+    [onTriggerRemediationNow, item.itemId, item.reason]
+  );
+
   const unknown = isPrStatusUnknown(item);
   const chipLabel = unknown ? PR_STATUS_UNKNOWN_LABEL : getStuckReasonLabel(item.reason);
   const chipIcon = unknown ? PR_STATUS_UNKNOWN_ICON : getStuckReasonIcon(item.reason);
@@ -216,6 +261,27 @@ export function StuckItem({
           <span className={styles.duration} data-testid="stuck-item-duration">
             stuck {formatStuckDuration(item.firstDetectedAt)}
           </span>
+          {onTriggerRemediationNow && (
+            <button
+              type="button"
+              className={`${styles.retryBtn} ${hoverUnavailable ? styles.retryBtnAlwaysOn : ""}`}
+              onClick={handleRetryNow}
+              disabled={isParked || retryState === "pending"}
+              aria-label={
+                isParked
+                  ? "Retry now (disabled — remediation attempts exhausted; use Reset to try again)"
+                  : "Retry remediation now"
+              }
+              title={
+                isParked
+                  ? "Automated retries have been exhausted for this item — use Reset to try again"
+                  : "Immediately retry the automated fix, skipping the wait"
+              }
+              data-testid="stuck-item-retry-now"
+            >
+              {retryState === "pending" ? "Retrying…" : "Retry now"}
+            </button>
+          )}
           {onSnooze && (
             <button
               type="button"
@@ -248,6 +314,11 @@ export function StuckItem({
             </span>
           )}
         </div>
+        {retryState === "error" && retryErrorMessage && (
+          <div className={styles.retryError} data-testid="stuck-item-retry-error">
+            Retry failed: {retryErrorMessage}
+          </div>
+        )}
       </div>
 
       {snoozeOpen && onSnooze && (
@@ -310,7 +381,9 @@ export function StuckItem({
         </div>
       )}
 
-      {isExpanded && !justResolved && <StuckItemDetail item={item} />}
+      {isExpanded && !justResolved && (
+        <StuckItemDetail item={item} onReworkCapOverride={onReworkCapOverride} />
+      )}
     </div>
   );
 }

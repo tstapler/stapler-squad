@@ -338,6 +338,63 @@ func TestWorktreeSetup_BranchNameSet(t *testing.T) {
 	})
 }
 
+// TestWorktreeSetup_ReusesHealthyWorktreeInPlace is a regression test for the reopen
+// worktree-recreation bug: a second Setup() call for the same branch/path (mirroring a
+// backlog rework/reopen) must reuse the existing checkout rather than tearing it down,
+// so uncommitted state written after the first Setup() survives.
+func TestWorktreeSetup_ReusesHealthyWorktreeInPlace(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	const branch = "backlog/reuse-test-item"
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "reuse-test-item", branch)
+	require.NoError(t, err)
+	require.NoError(t, wt1.Setup())
+	path := wt1.GetWorktreePath()
+	defer func() { _ = wt1.Cleanup() }()
+
+	marker := filepath.Join(path, "not-yet-committed.txt")
+	require.NoError(t, os.WriteFile(marker, []byte("uncommitted work\n"), 0644))
+
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "reuse-test-item", branch)
+	require.NoError(t, err)
+	require.NoError(t, wt2.Setup())
+
+	assert.Equal(t, path, wt2.GetWorktreePath(), "reopen must reuse the same worktree path")
+	assert.FileExists(t, marker, "reusing in place must not wipe the existing worktree's uncommitted content")
+}
+
+// TestWorktreeSetup_RecreatesLockedInterruptedWorktree is a regression test for a bug
+// introduced by the reuse-in-place fix itself: a worktree left registered but locked
+// with git's "initializing" marker — the state `worktree add` leaves behind when
+// interrupted mid-checkout (e.g. killed by runGitCommand's timeout under load) — must
+// NOT be reused as-is (that would silently hand back a half-populated checkout). Setup()
+// must detect the lock, clean up, and rebuild a healthy worktree instead.
+func TestWorktreeSetup_RecreatesLockedInterruptedWorktree(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	const branch = "backlog/interrupted-item"
+
+	wt1, _, err := NewGitWorktreeWithBranch(repoDir, "interrupted-item", branch)
+	require.NoError(t, err)
+	require.NoError(t, wt1.Setup())
+	path := wt1.GetWorktreePath()
+
+	// Simulate an interrupted `worktree add`: lock the worktree as git itself would
+	// mid-checkout, then delete a real tracked file to simulate a half-populated
+	// directory left behind by the kill.
+	_, err = wt1.runGitCommand(repoDir, "worktree", "lock", "--reason", "initializing", path)
+	require.NoError(t, err)
+	trackedFile := filepath.Join(path, "README.md")
+	require.NoError(t, os.Remove(trackedFile))
+
+	wt2, _, err := NewGitWorktreeWithBranch(repoDir, "interrupted-item", branch)
+	require.NoError(t, err)
+	require.NoError(t, wt2.Setup())
+	defer func() { _ = wt2.Cleanup() }()
+
+	assert.FileExists(t, filepath.Join(wt2.GetWorktreePath(), "README.md"),
+		"a locked/interrupted worktree must be rebuilt, not reused half-populated")
+}
+
 // TestDiff_Content_MatchesSHA verifies that the diff content returned by Diff() contains
 // diff markers and is non-empty when there are changes.
 func TestDiff_Content_MatchesSHA(t *testing.T) {

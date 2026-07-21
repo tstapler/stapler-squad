@@ -56,6 +56,17 @@ func (BacklogStuckState) Fields() []ent.Field {
 		field.String("context").
 			Optional().
 			Comment("Human-readable 'why' string, e.g. 'last verdict: FAIL' or 'PR #148 green & mergeable 3d'."),
+		field.Int32("remediation_attempts").
+			Default(0).
+			Comment("Count of automated remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick). Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) with next_remediation_at NULL is how a 'parked' row is represented — no separate boolean."),
+		field.Time("next_remediation_at").
+			Optional().
+			Nillable().
+			Comment("When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Set back to NULL once remediation_attempts reaches the cap (parked)."),
+		field.Time("grace_boot_time").
+			Optional().
+			Nillable().
+			Comment("The server boot time (session.serverStartTime) of the most recent restart-grace pass consumed by this row, if any. A restart-grace pass lets a remediation action run without consuming remediation_attempts/advancing next_remediation_at when the detected failure coincides with a service restart (in-flight AutonomousDriver goroutines are lost on restart, not a real remediation failure) — at most one free pass per boot, tracked by comparing this field to the current boot time."),
 	}
 }
 

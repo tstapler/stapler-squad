@@ -2,8 +2,11 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsClaude(t *testing.T) {
@@ -228,6 +231,152 @@ func TestBuildLaunchCommand_CLIFlagsAreShellQuoted(t *testing.T) {
 	// Each token must be present in its quoted form.
 	if !strings.Contains(got, shellQuote("--foo")) {
 		t.Errorf("--foo not found quoted in: %s", got)
+	}
+}
+
+// promptFileRefRegex extracts the temp file path from a promptArg-generated
+// `"$(cat '<path>')"` command-substitution fragment.
+var promptFileRefRegex = regexp.MustCompile(`\$\(cat '([^']+)'\)`)
+
+// withShortPromptFileCleanupDelay swaps promptFileCleanupDelay for a short
+// duration for the lifetime of a test, so the background cleanup goroutine
+// started by promptArg doesn't have to sleep the real 30s default while tests
+// run. Restores the original value on cleanup.
+func withShortPromptFileCleanupDelay(t *testing.T) {
+	t.Helper()
+	orig := promptFileCleanupDelay
+	promptFileCleanupDelay = 10 * time.Millisecond
+	t.Cleanup(func() { promptFileCleanupDelay = orig })
+}
+
+func TestBuildClaudeCommand_LargePromptUsesTempFileNotInline(t *testing.T) {
+	// Regression test for the review-gate spawn bug: BacklogLifecycle kept
+	// re-spawning the identical review session every ~8 minutes and tmux
+	// rejected every single attempt with "command too long" because the large
+	// review prompt (big description + many verbose acceptance criteria) was
+	// embedded directly in the tmux new-session command string. Empirically,
+	// tmux's own command-length limit sits between 16000 and 16500 bytes for
+	// the *entire* new-session command -- so a large prompt embedded inline
+	// blows that budget outright, no matter how it's quoted.
+	withShortPromptFileCleanupDelay(t)
+
+	// Build a prompt shaped like the real trigger: a description plus many
+	// acceptance criteria each carrying a verbose implementation note, well
+	// past both maxInlinePromptBytes and the ~16KB tmux limit.
+	var sb strings.Builder
+	sb.WriteString("--- BACKLOG ITEM DATA ---\nRich File Browser\n")
+	for n := 0; n < 40; n++ {
+		sb.WriteString(strings.Repeat("x", 500))
+		sb.WriteString("\n")
+	}
+	prompt := sb.String()
+	if len(prompt) <= maxInlinePromptBytes {
+		t.Fatalf("test setup bug: prompt (%d bytes) must exceed maxInlinePromptBytes (%d)", len(prompt), maxInlinePromptBytes)
+	}
+	if len(prompt) < 16*1024 {
+		t.Fatalf("test setup bug: prompt (%d bytes) should exceed the ~16KB tmux command-length limit this regression test guards against", len(prompt))
+	}
+
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	got := inst.buildLaunchCommand("")
+
+	// The whole point of the fix: the assembled command handed to tmux must
+	// stay well clear of tmux's ~16KB new-session command-length limit,
+	// regardless of how large the prompt is.
+	const safeCommandBudget = 8000
+	if len(got) > safeCommandBudget {
+		t.Errorf("assembled command is %d bytes, want under %d (tmux's own limit sits ~16000-16500 bytes) -- large prompt was not routed through a temp file: %s", len(got), safeCommandBudget, got)
+	}
+	if strings.Contains(got, prompt) {
+		t.Errorf("large prompt was embedded inline instead of via a temp file: %s", got)
+	}
+
+	m := promptFileRefRegex.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("expected a $(cat '<path>') command substitution in command, got: %s", got)
+	}
+	path := m[1]
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	// Prove the shell will receive the full, unmodified prompt at exec time.
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read temp prompt file %q: %v", path, err)
+	}
+	if string(written) != prompt {
+		t.Errorf("temp prompt file content does not match original prompt exactly (got %d bytes, want %d bytes)", len(written), len(prompt))
+	}
+}
+
+func TestBuildClaudeCommand_LargePromptTempFileIsCleanedUpAfterDelay(t *testing.T) {
+	withShortPromptFileCleanupDelay(t)
+
+	prompt := strings.Repeat("y", maxInlinePromptBytes+1)
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	got := inst.buildLaunchCommand("")
+
+	m := promptFileRefRegex.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("expected a $(cat '<path>') command substitution in command, got: %s", got)
+	}
+	path := m[1]
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return // cleaned up as expected
+		}
+		if time.Now().After(deadline) {
+			_ = os.Remove(path)
+			t.Fatalf("temp prompt file %q was not cleaned up within the expected delay", path)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNewline(t *testing.T) {
+	// Documents an accepted, deliberate caveat of the temp-file/command-
+	// substitution path (see promptArg's doc comment): POSIX command
+	// substitution strips ALL trailing newlines from its output, so a prompt
+	// ending in "\n" is delivered to claude with that trailing newline gone.
+	// This asserts the caveat is exactly what's documented -- content
+	// otherwise fully intact, only trailing newlines affected -- so a future
+	// change that silently starts corrupting more than trailing whitespace
+	// (the actual bug class this whole fix targets) fails this test.
+	withShortPromptFileCleanupDelay(t)
+
+	prompt := strings.Repeat("w", maxInlinePromptBytes+1) + "\n\n"
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
+	got := inst.buildLaunchCommand("")
+
+	m := promptFileRefRegex.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("expected a $(cat '<path>') command substitution in command, got: %s", got)
+	}
+	path := m[1]
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	// The file on disk must be byte-identical to the original prompt --
+	// promptArg itself performs no trimming. Any stripping happens later,
+	// only when a shell evaluates $(cat ...), which this test does not do.
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read temp prompt file %q: %v", path, err)
+	}
+	if string(written) != prompt {
+		t.Errorf("promptArg must write the prompt to disk unmodified (trimming, if any, happens only in the $(cat ...) shell evaluation, not here); got %d bytes, want %d bytes", len(written), len(prompt))
+	}
+}
+
+func TestBuildClaudeCommand_PromptJustUnderThresholdStaysInline(t *testing.T) {
+	// Boundary check: a prompt one byte under the threshold must keep the
+	// existing (pre-fix) inline shell-quoted form.
+	prompt := strings.Repeat("z", maxInlinePromptBytes-1)
+	inst := &Instance{Program: "claude", Prompt: prompt}
+	got := inst.buildLaunchCommand("")
+	want := "claude -- " + shellQuote(prompt)
+	if got != want {
+		t.Errorf("prompt under threshold should be inlined verbatim; got a %d-byte command, want a %d-byte command", len(got), len(want))
 	}
 }
 

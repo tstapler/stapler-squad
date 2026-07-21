@@ -41,14 +41,20 @@ fi
 
 # Include -name so the private key label in keychain matches "StaplerSquadDev"
 # (required for set-key-partition-list -l filter to work correctly)
+# A non-empty password is required: OpenSSL 3.x's PKCS12 MAC on an empty
+# password isn't verifiable by macOS's `security import` ("MAC verification
+# failed during PKCS12 import (wrong password?)"). The password is a
+# throwaway used only to move the key through the .p12 file below.
+P12_PASSWORD="$("$OPENSSL" rand -base64 24)"
 "$OPENSSL" pkcs12 -export -out /tmp/StaplerSquadDev.p12 \
     -inkey /tmp/staplerdev.key -in /tmp/staplerdev.crt \
-    -passout pass:"" -name "StaplerSquadDev"
+    -passout pass:"$P12_PASSWORD" -name "StaplerSquadDev"
 
 # 4. Import into login keychain (-T grants codesign access at import time)
 security import /tmp/StaplerSquadDev.p12 \
     -k ~/Library/Keychains/login.keychain-db \
-    -P "" -T /usr/bin/codesign
+    -P "$P12_PASSWORD" -T /usr/bin/codesign
+unset P12_PASSWORD
 
 # 5. Set trust: user domain only (no -d flag; -d = admin domain, requires sudo)
 # User-domain trust is sufficient for codesign on behalf of the current user.

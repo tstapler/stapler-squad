@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -117,21 +118,40 @@ func (i *Instance) previewBlocked() bool {
 }
 
 // Preview returns the current visible terminal content.
-// Prefers the in-memory PTY buffer from ClaudeController; falls back to capture-pane.
+// Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
+// instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
 func (i *Instance) Preview() (string, error) {
 	if i.previewBlocked() {
 		return "", nil
 	}
 
-	// Prefer the in-memory PTY buffer from ClaudeController (no subprocess).
+	// tmux performs real terminal emulation (cursor movement, redraws, screen
+	// clears), so capture-pane returns the actual current screen rather than an
+	// approximation reconstructed from a raw byte stream. CapturePaneContent has
+	// a 1s TTL cache (see TmuxProcessManager), so preferring it here does not add
+	// a subprocess spawn on every poll tick.
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if content, err := tb.CapturePaneContent(); err == nil {
+			return content, nil
+		}
+	}
+
+	// Native backend (capture-pane not yet implemented there) or tmux capture
+	// failed: fall back to the in-memory PTY buffer.
+	// GetRecentOutput(0) would return the ENTIRE 10MB session-lifetime buffer
+	// (PTYAccess.GetRecentOutput treats n<=0 as "give me everything"), not the
+	// current screen — a dialog answered minutes ago would still scan as
+	// "visible" to callers like isStartupDialog/shouldApprovePrompt for as
+	// long as it takes 10MB of subsequent output to evict it. Bound the read
+	// to the same tail window the working status-detection path already uses.
 	if ctrl := i.GetController(); ctrl != nil {
-		raw := ctrl.GetRecentOutput(0)
+		raw := ctrl.GetRecentOutput(detection.StatusDetectionTailBytes)
 		return string(raw), nil
 	}
 
-	// Fallback for external/attached sessions: use capture-pane subprocess.
-	// Skip the TmuxAlive() pre-check (which spawns a subprocess); let CapturePaneContent
-	// handle the "session doesn't exist" case via its own error path.
+	// No controller at all (e.g. external/attached sessions): try capture-pane
+	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
+	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
 	content, err := i.pm().CapturePaneContent()
 	if err != nil {
 		return "", nil

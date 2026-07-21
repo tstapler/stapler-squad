@@ -889,10 +889,27 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	cmd := t.buildTmuxCommand(newSessionArgs...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
-	// since detached sessions don't need PTY attachment during creation
+	// since detached sessions don't need PTY attachment during creation.
+	//
+	// stderr goes to a scratch FILE, not a pipe/buffer: `tmux new-session -d`
+	// forks a detached server that inherits these fds, so a buffer-based
+	// capture (CombinedOutput, bytes.Buffer) blocks forever waiting for EOF
+	// that the still-running server never sends. A file has no such wait.
+	var stderrOutput string
+	stderrFile, tmpErr := os.CreateTemp("", "tmux-new-session-stderr-*")
+	if tmpErr == nil {
+		cmd.Stderr = stderrFile
+		defer os.Remove(stderrFile.Name())
+		defer stderrFile.Close()
+	}
 	err := runGatedErr(context.Background(), t.serverSocket, func() error {
 		return t.cmdExec.Run(cmd)
 	})
+	if stderrFile != nil {
+		if data, readErr := os.ReadFile(stderrFile.Name()); readErr == nil {
+			stderrOutput = strings.TrimSpace(string(data))
+		}
+	}
 	if err != nil {
 		// Cleanup any partially created session if any exists.
 		if t.DoesSessionExist() {
@@ -908,6 +925,9 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		// If we have a cleanup function pointer, set it to nil since startup failed
 		if setupCleanup && cleanup != nil {
 			*cleanup = func() error { return nil }
+		}
+		if stderrOutput != "" {
+			return fmt.Errorf("error starting tmux session: %s (%w)", stderrOutput, err)
 		}
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}

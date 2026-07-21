@@ -1,3 +1,6 @@
+/* eslint-disable no-restricted-syntax -- this file defines the literal hex values behind
+ * vars.color.* for every theme (see theme-contract.css.ts); consuming .css.ts files must
+ * use vars.color.* tokens instead of hex literals per .claude/rules/css-architecture.md. */
 import { createTheme } from "@vanilla-extract/css";
 import { vars } from "./theme-contract.css";
 
@@ -52,6 +55,12 @@ const terminalTokens = {
   terminalHoverBg: "#3e3e42",
 };
 
+// Header always uses a dark backdrop regardless of theme — mirrors terminalTokens above.
+const headerTokens = {
+  headerTextPrimary: "#ededed",
+  headerTextSecondary: "#b4b4b4",
+};
+
 export const lightTheme = createTheme(vars, {
   color: {
     textPrimary: "#0a0a0a",
@@ -103,6 +112,7 @@ export const lightTheme = createTheme(vars, {
     placeholderColor: "#9ca3af",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#b91c1c", logWarn: "#d97706", logInfo: "#1d4ed8",
     logDebug: "#6b7280", logTrace: "#4b5563",
@@ -200,6 +210,7 @@ export const darkTheme = createTheme(vars, {
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#2563eb",
     logDebug: "#6b7280", logTrace: "#4b5563",
@@ -300,6 +311,7 @@ export const matrixTheme = createTheme(vars, {
     placeholderColor: "#004d18",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#cc0033", logWarn: "#cc8800", logInfo: "#00aaff",
     logDebug: "#00802b", logTrace: "#006622",
@@ -408,6 +420,7 @@ export const cyberpunk77Theme = createTheme(vars, {
     placeholderColor: "#4a4603",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#ff2d78", logWarn: "#ffd700", logInfo: "#00d4ff",
     logDebug: "#9d4edd", logTrace: "#7b2d8b",
@@ -516,6 +529,7 @@ export const wh40kTheme = createTheme(vars, {
     placeholderColor: "#786858",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#8b1a1a", logWarn: "#c0a020", logInfo: "#1a4a8b",
     logDebug: "#6b6040", logTrace: "#4a4030",
@@ -624,6 +638,7 @@ export const cleanTheme = createTheme(vars, {
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#4f46e5",
     logDebug: "#6b7280", logTrace: "#4b5563",

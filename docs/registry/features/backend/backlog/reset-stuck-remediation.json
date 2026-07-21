@@ -1,0 +1,15 @@
+{
+  "id": "backlog:reset-stuck-remediation",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "ResetStuckRemediation",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_stuck.go",
+  "tested": true,
+  "testIds": [
+    "TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOpen",
+    "TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing"
+  ],
+  "lastModified": "2026-07-19T22:09:56.440056245-07:00"
+}

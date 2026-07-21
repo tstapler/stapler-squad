@@ -96,6 +96,21 @@ func Context(v string) predicate.BacklogStuckState {
 	return predicate.BacklogStuckState(sql.FieldEQ(FieldContext, v))
 }
 
+// RemediationAttempts applies equality check predicate on the "remediation_attempts" field. It's identical to RemediationAttemptsEQ.
+func RemediationAttempts(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldRemediationAttempts, v))
+}
+
+// NextRemediationAt applies equality check predicate on the "next_remediation_at" field. It's identical to NextRemediationAtEQ.
+func NextRemediationAt(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldNextRemediationAt, v))
+}
+
+// GraceBootTime applies equality check predicate on the "grace_boot_time" field. It's identical to GraceBootTimeEQ.
+func GraceBootTime(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldGraceBootTime, v))
+}
+
 // ItemIDEQ applies the EQ predicate on the "item_id" field.
 func ItemIDEQ(v uuid.UUID) predicate.BacklogStuckState {
 	return predicate.BacklogStuckState(sql.FieldEQ(FieldItemID, v))
@@ -484,6 +499,146 @@ func ContextEqualFold(v string) predicate.BacklogStuckState {
 // ContextContainsFold applies the ContainsFold predicate on the "context" field.
 func ContextContainsFold(v string) predicate.BacklogStuckState {
 	return predicate.BacklogStuckState(sql.FieldContainsFold(FieldContext, v))
+}
+
+// RemediationAttemptsEQ applies the EQ predicate on the "remediation_attempts" field.
+func RemediationAttemptsEQ(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldRemediationAttempts, v))
+}
+
+// RemediationAttemptsNEQ applies the NEQ predicate on the "remediation_attempts" field.
+func RemediationAttemptsNEQ(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNEQ(FieldRemediationAttempts, v))
+}
+
+// RemediationAttemptsIn applies the In predicate on the "remediation_attempts" field.
+func RemediationAttemptsIn(vs ...int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldIn(FieldRemediationAttempts, vs...))
+}
+
+// RemediationAttemptsNotIn applies the NotIn predicate on the "remediation_attempts" field.
+func RemediationAttemptsNotIn(vs ...int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNotIn(FieldRemediationAttempts, vs...))
+}
+
+// RemediationAttemptsGT applies the GT predicate on the "remediation_attempts" field.
+func RemediationAttemptsGT(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGT(FieldRemediationAttempts, v))
+}
+
+// RemediationAttemptsGTE applies the GTE predicate on the "remediation_attempts" field.
+func RemediationAttemptsGTE(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGTE(FieldRemediationAttempts, v))
+}
+
+// RemediationAttemptsLT applies the LT predicate on the "remediation_attempts" field.
+func RemediationAttemptsLT(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLT(FieldRemediationAttempts, v))
+}
+
+// RemediationAttemptsLTE applies the LTE predicate on the "remediation_attempts" field.
+func RemediationAttemptsLTE(v int32) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLTE(FieldRemediationAttempts, v))
+}
+
+// NextRemediationAtEQ applies the EQ predicate on the "next_remediation_at" field.
+func NextRemediationAtEQ(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtNEQ applies the NEQ predicate on the "next_remediation_at" field.
+func NextRemediationAtNEQ(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNEQ(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtIn applies the In predicate on the "next_remediation_at" field.
+func NextRemediationAtIn(vs ...time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldIn(FieldNextRemediationAt, vs...))
+}
+
+// NextRemediationAtNotIn applies the NotIn predicate on the "next_remediation_at" field.
+func NextRemediationAtNotIn(vs ...time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNotIn(FieldNextRemediationAt, vs...))
+}
+
+// NextRemediationAtGT applies the GT predicate on the "next_remediation_at" field.
+func NextRemediationAtGT(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGT(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtGTE applies the GTE predicate on the "next_remediation_at" field.
+func NextRemediationAtGTE(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGTE(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtLT applies the LT predicate on the "next_remediation_at" field.
+func NextRemediationAtLT(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLT(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtLTE applies the LTE predicate on the "next_remediation_at" field.
+func NextRemediationAtLTE(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLTE(FieldNextRemediationAt, v))
+}
+
+// NextRemediationAtIsNil applies the IsNil predicate on the "next_remediation_at" field.
+func NextRemediationAtIsNil() predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldIsNull(FieldNextRemediationAt))
+}
+
+// NextRemediationAtNotNil applies the NotNil predicate on the "next_remediation_at" field.
+func NextRemediationAtNotNil() predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNotNull(FieldNextRemediationAt))
+}
+
+// GraceBootTimeEQ applies the EQ predicate on the "grace_boot_time" field.
+func GraceBootTimeEQ(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldEQ(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeNEQ applies the NEQ predicate on the "grace_boot_time" field.
+func GraceBootTimeNEQ(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNEQ(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeIn applies the In predicate on the "grace_boot_time" field.
+func GraceBootTimeIn(vs ...time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldIn(FieldGraceBootTime, vs...))
+}
+
+// GraceBootTimeNotIn applies the NotIn predicate on the "grace_boot_time" field.
+func GraceBootTimeNotIn(vs ...time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNotIn(FieldGraceBootTime, vs...))
+}
+
+// GraceBootTimeGT applies the GT predicate on the "grace_boot_time" field.
+func GraceBootTimeGT(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGT(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeGTE applies the GTE predicate on the "grace_boot_time" field.
+func GraceBootTimeGTE(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldGTE(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeLT applies the LT predicate on the "grace_boot_time" field.
+func GraceBootTimeLT(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLT(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeLTE applies the LTE predicate on the "grace_boot_time" field.
+func GraceBootTimeLTE(v time.Time) predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldLTE(FieldGraceBootTime, v))
+}
+
+// GraceBootTimeIsNil applies the IsNil predicate on the "grace_boot_time" field.
+func GraceBootTimeIsNil() predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldIsNull(FieldGraceBootTime))
+}
+
+// GraceBootTimeNotNil applies the NotNil predicate on the "grace_boot_time" field.
+func GraceBootTimeNotNil() predicate.BacklogStuckState {
+	return predicate.BacklogStuckState(sql.FieldNotNull(FieldGraceBootTime))
 }
 
 // HasItem applies the HasEdge predicate on the "item" edge.

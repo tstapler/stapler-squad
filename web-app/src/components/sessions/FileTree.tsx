@@ -7,12 +7,14 @@ import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
 import { getFileIcon } from "@/lib/utils/fileIcons";
 import { truncateMiddle } from "@/lib/utils/truncateMiddle";
+import type { LineStats } from "@/lib/utils/gitStatus";
 import {
   container, loading as loadingClass, error as errorClass, retryButton, empty,
   node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
   symlinkBadge, statusBadge, spinner, inlineError,
   searchContainer, searchInput, toolbar, toolbarButton, toolbarLabel,
   treeWrapper, mark, searchEmpty, searchTruncated as searchTruncatedClass,
+  searchOverlay, lineStats as lineStatsClass, lineStatsAdd, lineStatsDel,
 } from "./FileTree.css";
 import { vars } from "@/styles/theme.css";
 
@@ -49,6 +51,12 @@ interface FileTreeProps {
   onFileSelect: (path: string) => void;
   /** Map of relative path → git status letter. */
   gitStatusMap?: Map<string, string>;
+  /** Map of relative path → added/removed line counts. */
+  lineStatsMap?: Map<string, LineStats>;
+  /** Sort order for tree rows — name or file type/extension (dirs always first). */
+  sortBy?: SortMode;
+  /** When true, show only changed files and their ancestor directories. */
+  filterChangedOnly?: boolean;
   /** Selected file path (for visual highlight). */
   selectedPath?: string | null;
   /** Whether to include gitignored files. */
@@ -98,6 +106,74 @@ export function buildTreeData(
       children: buildTreeData(loaded, dirContents),
     };
   });
+}
+
+// ---- Sort ----
+
+export type SortMode = "name" | "type";
+
+function sortKey(node: TreeNode, sortBy: SortMode): string {
+  if (sortBy === "name" || node.isDir) return "";
+  const dot = node.name.lastIndexOf(".");
+  return dot > 0 ? node.name.slice(dot + 1).toLowerCase() : "";
+}
+
+/**
+ * Sort tree data (dirs always first) by name, or by file extension then name
+ * when sortBy is "type". Exported for unit testing.
+ */
+export function sortTreeData(nodes: TreeNode[], sortBy: SortMode): TreeNode[] {
+  const sorted = [...nodes].sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    const keyDiff = sortKey(a, sortBy).localeCompare(sortKey(b, sortBy));
+    if (keyDiff !== 0) return keyDiff;
+    return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+  return sorted.map((n) => (n.children ? { ...n, children: sortTreeData(n.children, sortBy) } : n));
+}
+
+// ---- Filter: changed files only ----
+
+/**
+ * Every ancestor directory path of every changed file, so a "changed only"
+ * filter can keep ancestor directories visible even when they haven't been
+ * expanded/loaded yet (gitStatusMap covers the whole repo, not just loaded
+ * subtrees).
+ */
+export function buildChangedAncestorPrefixes(gitStatusMap: Map<string, string>): Set<string> {
+  const prefixes = new Set<string>();
+  for (const path of gitStatusMap.keys()) {
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      prefixes.add(parts.slice(0, i).join("/"));
+    }
+  }
+  return prefixes;
+}
+
+/**
+ * Filter tree data down to changed files and their ancestor directories.
+ * Operates only on already-loaded/searched nodes — never triggers a fetch.
+ * Exported for unit testing.
+ */
+export function filterChangedTreeData(
+  nodes: TreeNode[],
+  gitStatusMap: Map<string, string>,
+  changedAncestorPrefixes: Set<string>
+): TreeNode[] {
+  const result: TreeNode[] = [];
+  for (const node of nodes) {
+    if (node.isDir) {
+      if (!changedAncestorPrefixes.has(node.id)) continue;
+      const children = node.children
+        ? filterChangedTreeData(node.children, gitStatusMap, changedAncestorPrefixes)
+        : node.children;
+      result.push({ ...node, children });
+    } else if (gitStatusMap.has(node.id)) {
+      result.push(node);
+    }
+  }
+  return result;
 }
 
 /**
@@ -196,6 +272,7 @@ interface NodeRendererProps {
   style: React.CSSProperties;
   dragHandle?: (el: HTMLDivElement | null) => void;
   gitStatusMap: Map<string, string>;
+  lineStatsMap: Map<string, LineStats>;
   dirStatusMap: Map<string, string>;
   loadingPaths: Set<string>;
   errorPaths: Map<string, string>;
@@ -222,6 +299,7 @@ function NodeRenderer({
   node,
   style,
   gitStatusMap,
+  lineStatsMap,
   dirStatusMap,
   loadingPaths,
   errorPaths,
@@ -241,6 +319,7 @@ function NodeRenderer({
     ? dirStatusMap.get(data.id)
     : gitStatusMap.get(data.id) || data.gitStatus;
   const statusColor = statusLetter ? GIT_STATUS_COLORS[statusLetter] : undefined;
+  const lineStats = data.isDir ? undefined : lineStatsMap.get(data.id);
 
   const icon = data.isSymlink
     ? "⇢"
@@ -255,6 +334,10 @@ function NodeRenderer({
       style={style}
       title={data.id}
       className={`${nodeClass} ${isSelected ? selected : ""} ${node.isFocused ? keyboardFocused : ""} ${data.isIgnored ? ignored : ""}`}
+      role="treeitem"
+      aria-level={node.level + 1}
+      aria-selected={isSelected}
+      aria-expanded={data.isDir ? node.isOpen : undefined}
       onClick={() => {
         // Directories toggle open/close (fires onToggle → handleToggle → loadDirectory).
         // Files/symlinks activate (fires onActivate → onFileSelect).
@@ -292,6 +375,12 @@ function NodeRenderer({
             {statusLetter}
           </span>
         )}
+        {lineStats && (
+          <span className={lineStatsClass} title={`+${lineStats.add} -${lineStats.del}`}>
+            {lineStats.add > 0 && <span className={lineStatsAdd}>+{lineStats.add}</span>}
+            {lineStats.del > 0 && <span className={lineStatsDel}>-{lineStats.del}</span>}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -306,15 +395,19 @@ export interface FileTreeHandle {
 
 // ---- Main component ----
 
-// Stable empty map to avoid creating a new Map reference on every render when
-// gitStatusMap is not provided, which would break useMemo dependency checks.
+// Stable empty map/set to avoid creating new references on every render when
+// the corresponding prop is not provided, which would break useMemo dependency checks.
 const EMPTY_GIT_STATUS_MAP = new Map<string, string>();
+const EMPTY_LINE_STATS_MAP = new Map<string, LineStats>();
 
 export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree({
   sessionId,
   baseUrl,
   onFileSelect,
   gitStatusMap = EMPTY_GIT_STATUS_MAP,
+  lineStatsMap = EMPTY_LINE_STATS_MAP,
+  sortBy = "name",
+  filterChangedOnly = false,
   selectedPath,
   includeIgnored = false,
   searchTerm = "",
@@ -505,9 +598,24 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     () => buildTreeData(dirContents.get(".") ?? [], dirContents),
     [dirContents]
   );
-  const displayedData = useMemo(
+  const browsedData = useMemo(
     () => searchResults ?? treeData,
     [searchResults, treeData]
+  );
+  const changedAncestorPrefixes = useMemo(
+    () => buildChangedAncestorPrefixes(gitStatusMap),
+    [gitStatusMap]
+  );
+  const filteredData = useMemo(
+    () =>
+      filterChangedOnly
+        ? filterChangedTreeData(browsedData, gitStatusMap, changedAncestorPrefixes)
+        : browsedData,
+    [browsedData, filterChangedOnly, gitStatusMap, changedAncestorPrefixes]
+  );
+  const displayedData = useMemo(
+    () => sortTreeData(filteredData, sortBy),
+    [filteredData, sortBy]
   );
   const dirStatusMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -742,12 +850,22 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     );
   }
 
+  // Filter-to-changed empty state — distinct from "directory is empty" above.
+  if (filterChangedOnly && displayedData.length === 0) {
+    return (
+      <div className={container}>
+        <div className={empty}>No changed files.</div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={container}
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleTreeKeyDown}
+      role="tree"
       title="Navigate with j/k/h/l  •  Enter to open  •  gg/G for top/bottom"
       aria-label="File tree. Use j/k to navigate, l/Enter to open, h to go up."
     >
@@ -758,11 +876,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       )}
       <div style={{ position: "relative", flex: 1 }}>
         {searchLoading && (
-          <div style={{
-            position: "absolute", inset: 0, display: "flex",
-            alignItems: "center", justifyContent: "center",
-            background: "rgba(0,0,0,0.4)", zIndex: 1,
-          }}>
+          <div className={searchOverlay}>
             <span className={spinner} />
           </div>
         )}
@@ -799,6 +913,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
               style={style}
               dragHandle={dragHandle}
               gitStatusMap={gitStatusMap}
+              lineStatsMap={lineStatsMap}
               dirStatusMap={dirStatusMap}
               loadingPaths={loadingPaths}
               errorPaths={errorPaths}

@@ -114,11 +114,13 @@ func (s *BacklogService) ListBacklogItems(
 
 	filter := session.BacklogItemFilter{
 		SortBy:          req.Msg.SortBy,
-		ExcludeTerminal: !req.Msg.IncludeTerminal,
+		ExcludeDone:     !req.Msg.IncludeTerminal,
+		ExcludeArchived: !req.Msg.IncludeArchived,
 	}
 	if len(req.Msg.Status) > 0 {
 		filter.Statuses = req.Msg.Status
-		filter.ExcludeTerminal = false // explicit status filter overrides default exclusion
+		filter.ExcludeDone = false     // explicit status filter overrides default exclusion
+		filter.ExcludeArchived = false // explicit status filter overrides default exclusion
 	}
 	if len(req.Msg.Priority) > 0 {
 		priorities := make([]int, len(req.Msg.Priority))
@@ -313,25 +315,67 @@ func (s *BacklogService) GetBacklogItemDiff(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
 	}
 
-	// Use the most recent work session's base SHA so the diff reflects what the
-	// current iteration of work actually changed.
-	var mostRecentWorkSession *session.ItemSessionSummary
+	// An item's branch can carry more than one work session (rework/reopen
+	// cycles): session 1 does the real implementation, review sends it back,
+	// session 2 picks up the same branch to address feedback, etc. The diff
+	// must reflect everything committed across ALL of those sessions, so:
+	//   - diffBaseSHA comes from the EARLIEST work session's BaseCommitSHA —
+	//     the point where the branch actually diverged, before any rework
+	//     cycle began. Using the most recent session's own BaseCommitSHA is
+	//     wrong whenever that latest session made zero new commits (e.g. a
+	//     reopen that just re-verifies already-complete work and exits): its
+	//     BaseCommitSHA was captured at that session's spawn time, which by
+	//     definition already equals the current branch tip, so base == head
+	//     and the diff comes back empty even though earlier sessions on the
+	//     same branch carry substantial real, already-committed work.
+	//   - headRef still comes from the MOST RECENT work session so it always
+	//     resolves to the branch's actual current tip (see the wt.BranchName
+	//     rationale below).
+	// ListItemSessions returns sessions ordered oldest-first (see
+	// EntRepository.ListItemSessions), but we compare CreatedAt explicitly
+	// rather than depending on that ordering.
+	var earliestWorkSession, mostRecentWorkSession *session.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if is.Role == session.SessionRoleWork {
-			if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
-				mostRecentWorkSession = is
-			}
+		if is.Role != session.SessionRoleWork {
+			continue
+		}
+		if earliestWorkSession == nil || is.CreatedAt.Before(earliestWorkSession.CreatedAt) {
+			earliestWorkSession = is
+		}
+		if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
+			mostRecentWorkSession = is
 		}
 	}
 	diffBaseSHA := "HEAD~1"
 	var headRef string
-	if mostRecentWorkSession != nil {
-		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.BaseCommitSHA != "" {
-			diffBaseSHA = wt.BaseCommitSHA
+	if earliestWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, earliestWorkSession.SessionUUID); wtErr == nil {
+			if wt.BaseCommitSHA != "" {
+				diffBaseSHA = wt.BaseCommitSHA
+			}
 		}
-		if mostRecentWorkSession.LastCommitSha != "" {
-			headRef = mostRecentWorkSession.LastCommitSha
+	}
+	if mostRecentWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil {
+			// Prefer the branch name over the session's LastCommitSha. LastCommitSha
+			// is only ever written once, at session spawn, to the PRE-work base
+			// commit (see AttachSessionToItem / SpawnSessionFromItem step 12b) —
+			// nothing updates it as the agent makes further commits during the
+			// session, so in practice it is usually identical to diffBaseSHA itself,
+			// producing a spurious empty base..head diff ("No changes to display")
+			// for items that genuinely have real, already-reviewed work on their
+			// branch (e.g. a Review-status item with a full Gate Verdict on record).
+			// wt.BranchName always resolves to the branch's actual current tip —
+			// worktrees share one object store, so this works whether or not the
+			// session's own worktree directory still exists — the same fallback
+			// review_gate.go's spawnReviewGate already relies on via
+			// GetGitDiffRef(item.RepoPath, wt.BaseCommitSHA, wt.BranchName).
+			if wt.BranchName != "" {
+				headRef = wt.BranchName
+			} else if mostRecentWorkSession.LastCommitSha != "" {
+				headRef = mostRecentWorkSession.LastCommitSha
+			}
 		}
 	}
 

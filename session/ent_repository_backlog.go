@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
@@ -109,6 +110,7 @@ func backlogStatusEventToData(e *ent.BacklogStatusEvent) BacklogStatusEventData 
 // progressNoteToData maps an *ent.BacklogProgressNote to a ProgressNoteData DTO.
 func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
 	return ProgressNoteData{
+		ID:             n.ID.String(),
 		CriterionIndex: n.CriterionIndex,
 		Note:           n.Note,
 		Status:         n.Status,
@@ -159,6 +161,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
+		ReworkCapOverride:            item.ReworkCapOverride,
 		CreatedAt:                    item.CreatedAt,
 		UpdatedAt:                    item.UpdatedAt,
 	}
@@ -171,6 +174,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.StatusEvents = make([]BacklogStatusEventData, len(item.Edges.StatusEvents))
 		for i, ev := range item.Edges.StatusEvents {
 			data.StatusEvents[i] = backlogStatusEventToData(ev)
+		}
+	}
+	// Propagate eagerly-loaded progress notes when present (see StatusEvents above).
+	if item.Edges.ProgressNotes != nil {
+		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
+		for i, n := range item.Edges.ProgressNotes {
+			data.ProgressNotes[i] = progressNoteToData(n)
 		}
 	}
 	return data
@@ -222,7 +232,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
-		SetNillableArchivedAt(data.ArchivedAt)
+		SetNillableArchivedAt(data.ArchivedAt).
+		SetNillableReworkCapOverride(data.ReworkCapOverride)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -252,6 +263,9 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
 			q.Order(ent.Asc(backlogstatusevent.FieldCreatedAt))
 		}).
+		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
+			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
+		}).
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -263,17 +277,76 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 	return &result, nil
 }
 
+// excludedTerminalStatuses returns the statuses filter.ExcludeDone/ExcludeArchived
+// ask to exclude from a default (no explicit Statuses) query, as a slice for
+// StatusNotIn. The two flags are independent — either, both, or neither may be
+// set — see BacklogItemFilter's doc comments.
+func excludedTerminalStatuses(filter BacklogItemFilter) []string {
+	var excluded []string
+	if filter.ExcludeDone {
+		excluded = append(excluded, string(BacklogStatusDone))
+	}
+	if filter.ExcludeArchived {
+		excluded = append(excluded, string(BacklogStatusArchived))
+	}
+	return excluded
+}
+
+// FindDoneItemsOlderThan returns backlog items currently in "done" status
+// whose most recent transition INTO "done" happened at or before cutoff.
+// Used by the auto-archive sweep (archiveStaleDoneItems in
+// backlog_lifecycle.go) to find items eligible for automatic archival.
+//
+// Deliberately keys off the status-event history rather than UpdatedAt:
+// UpdatedAt changes on any field edit (progress notes, notification flags,
+// etc.), which would reset — and so make unreliable — a clock meant to
+// measure "how long has this been done". TransitionBacklogItemStatus always
+// appends an audit BacklogStatusEvent row on every transition, so this reuses
+// existing infrastructure instead of adding a dedicated done_at column.
+//
+// An item whose status-event history has no toStatus=="done" record is
+// skipped (never considered eligible) rather than defaulting to "always
+// eligible" — this should not happen in practice, since every transition
+// through TransitionBacklogItemStatus writes one, but guards a partially-
+// migrated or directly-seeded row against aging out on an unrelated basis.
+func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(backlogitem.StatusEQ(string(BacklogStatusDone))).
+		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
+			q.Order(ent.Desc(backlogstatusevent.FieldCreatedAt))
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("find done items older than cutoff: %w", err)
+	}
+
+	var result []BacklogItemData
+	for _, item := range items {
+		var lastDoneAt time.Time
+		found := false
+		for _, ev := range item.Edges.StatusEvents {
+			if ev.ToStatus == string(BacklogStatusDone) {
+				lastDoneAt = ev.CreatedAt
+				found = true
+				break // events ordered desc by CreatedAt — first match is most recent
+			}
+		}
+		if !found || lastDoneAt.After(cutoff) {
+			continue
+		}
+		result = append(result, backlogItemToData(item))
+	}
+	return result, nil
+}
+
 // ListBacklogItems returns backlog items with optional filtering.
 func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error) {
 	q := r.client.BacklogItem.Query()
 
 	if len(filter.Statuses) > 0 {
 		q = q.Where(backlogitem.StatusIn(filter.Statuses...))
-	} else if filter.ExcludeTerminal {
-		q = q.Where(backlogitem.StatusNotIn(
-			string(BacklogStatusDone),
-			string(BacklogStatusArchived),
-		))
+	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
+		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 
 	if len(filter.Priorities) > 0 {
@@ -319,11 +392,8 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 
 	if len(filter.Statuses) > 0 {
 		q = q.Where(backlogitem.StatusIn(filter.Statuses...))
-	} else if filter.ExcludeTerminal {
-		q = q.Where(backlogitem.StatusNotIn(
-			string(BacklogStatusDone),
-			string(BacklogStatusArchived),
-		))
+	} else if excluded := excludedTerminalStatuses(filter); len(excluded) > 0 {
+		q = q.Where(backlogitem.StatusNotIn(excluded...))
 	}
 	if len(filter.Priorities) > 0 {
 		q = q.Where(backlogitem.PriorityIn(filter.Priorities...))
@@ -493,6 +563,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ShippedSnapshotCaptureFailed != nil {
 		u.SetShippedSnapshotCaptureFailed(*update.ShippedSnapshotCaptureFailed)
 	}
+	if update.ReworkCapOverride != nil {
+		u.SetReworkCapOverride(*update.ReworkCapOverride)
+	}
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -566,7 +639,22 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	return nil
 }
 
-// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
+// TransitionBacklogItemStatus changes the status of a backlog item with
+// optional precondition.
+//
+// The precondition is enforced as a genuine compare-and-swap: it is folded
+// into the UPDATE statement's WHERE clause (status = ? AND updated_at = ?)
+// rather than checked against a separately-fetched row beforehand. The
+// previous implementation did Get() → check-in-Go → UpdateOneID().Save(),
+// which is a read-then-write race — nothing stopped a second, concurrent
+// caller's write from landing in the gap between this call's read and its
+// write, so a precondition that was true at read time could be false (and
+// silently ignored) by write time. That TOCTOU window is exactly what let a
+// stale AutoReopenAfterFailedReview call (reading the item while it was
+// still "review", then queued/delayed behind other work) reopen an item that
+// had, in the meantime, already legitimately shipped to "done" — see
+// docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md for the
+// live 2026-07-20 repro (item 0fd4a940, PR #176) this closes.
 func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
@@ -581,31 +669,60 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
 	if precondition != nil {
-		if precondition.ExpectedStatus != "" && current.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, current.Status)
+		if precondition.ExpectedStatus != "" {
+			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
 		}
-		if precondition.ExpectedUpdatedAt != nil && !current.UpdatedAt.Equal(*precondition.ExpectedUpdatedAt) {
-			return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+		if precondition.ExpectedUpdatedAt != nil {
+			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
 		}
 	}
 
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	affected, err := update.
 		SetStatus(string(toStatus)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("failed to transition backlog item %s status: %w", id, err)
 	}
+	if affected == 0 {
+		// The row either no longer exists or the precondition no longer holds —
+		// re-fetch to report which. A concurrent writer may have won the race in
+		// the instant between our Get above and this UPDATE, so the check must be
+		// against fresh data, not `current`.
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+		}
+		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
 
-	// Append an immutable audit record for this transition.
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after transition: %w", id, err)
+	}
+
+	// Append an immutable audit record for this transition. When the
+	// precondition asserted an expected status, that value is what the row
+	// atomically held the instant this write landed (guaranteed by the WHERE
+	// clause above) — more reliable than `current.Status` from the earlier,
+	// non-atomic Get. Unconditional transitions (no precondition) fall back to
+	// the earlier read, same as before this fix; best-effort either way.
+	fromStatus := current.Status
+	if precondition != nil && precondition.ExpectedStatus != "" {
+		fromStatus = precondition.ExpectedStatus
+	}
 	evCreate := r.client.BacklogStatusEvent.Create().
 		SetItemID(parsedID).
-		SetFromStatus(current.Status).
+		SetFromStatus(fromStatus).
 		SetToStatus(string(toStatus)).
 		SetTriggeredBy(TriggeredBySystem)
 	if precondition != nil && precondition.Note != "" {
@@ -792,6 +909,125 @@ func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, rea
 		return false, fmt.Errorf("snooze stuck %s/%s: %w", itemID, reason, err)
 	}
 	return n > 0, nil
+}
+
+// RecordRemediationAttempt records that an automated (or operator-triggered,
+// see TriggerRemediationNow) remediation attempt was just made for an open
+// (item_id, reason) row: sets remediation_attempts to attempts and
+// next_remediation_at to nextAt (nil once attempts has hit the cap — see
+// nextRemediationAt in backlog_remediation.go). Callers compute attempts/nextAt
+// themselves (via the shared backoff gate) rather than this method
+// incrementing in place, so a single code path (evaluateRemediation) owns the
+// backoff-schedule arithmetic. Scoped to WHERE resolved_at IS NULL, matching
+// every other stuck-state write in this file — a row that resolved between
+// the gate's read and this write is left alone rather than resurrected.
+func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	update := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetRemediationAttempts(attempts)
+	if nextAt != nil {
+		update = update.SetNextRemediationAt(*nextAt)
+	} else {
+		update = update.ClearNextRemediationAt()
+	}
+
+	n, err := update.Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record remediation attempt %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// RecordRemediationRestartGrace records that itemID/reason's open row just
+// consumed its one-per-boot restart-grace pass (see evaluateRemediation):
+// sets grace_boot_time to bootTime WITHOUT touching remediation_attempts or
+// next_remediation_at — a grace pass lets the wrapped remediation action run
+// without spending any of the row's 5-attempt budget.
+func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetGraceBootTime(bootTime).
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("record remediation restart grace %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// ResetStuckRemediation clears the automated-remediation counters on a single
+// open (item_id, reason) row: remediation_attempts back to 0,
+// next_remediation_at and notified_at cleared. Clearing notified_at (in
+// addition to the remediation counters) lets a fresh notify+respawn cycle
+// fire on the very next detector tick instead of waiting on stale dedup
+// state — the same reasoning as MarkStuck's reopen-in-place path. A no-op
+// (false, nil), not an error, when no open row matches (item_id, reason).
+func (r *EntRepository) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	parsedID, err := uuid.Parse(itemID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(
+			backlogstuckstate.ItemID(parsedID),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.ResolvedAtIsNil(),
+		).
+		SetRemediationAttempts(0).
+		ClearNextRemediationAt().
+		ClearNotifiedAt().
+		Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reset stuck remediation %s/%s: %w", itemID, reason, err)
+	}
+	return n > 0, nil
+}
+
+// BulkResetStuckRemediation applies ResetStuckRemediation's reset (attempts
+// -> 0, next_remediation_at/notified_at cleared) to every open BacklogStuckState
+// row, optionally filtered to a single reason (reason == nil means "every
+// reason") and, when onlyParked is true (the default from the RPC layer),
+// restricted to rows that actually hit the attempt cap
+// (remediation_attempts >= MaxRemediationAttempts) — the "something upstream
+// broke a batch of these, give them all a fresh shot" admin action. Returns
+// the number of rows reset.
+func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *domain.StuckReason, onlyParked bool) (int, error) {
+	predicates := []predicate.BacklogStuckState{backlogstuckstate.ResolvedAtIsNil()}
+	if reason != nil {
+		predicates = append(predicates, backlogstuckstate.Reason(string(*reason)))
+	}
+	if onlyParked {
+		predicates = append(predicates, backlogstuckstate.RemediationAttemptsGTE(MaxRemediationAttempts))
+	}
+
+	n, err := r.client.BacklogStuckState.Update().
+		Where(predicates...).
+		SetRemediationAttempts(0).
+		ClearNextRemediationAt().
+		ClearNotifiedAt().
+		Save(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bulk reset stuck remediation: %w", err)
+	}
+	return n, nil
 }
 
 // --- Progress note history ---

@@ -57,7 +57,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build ent-gen web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
 
 # Default target
 help: ## Show this help message
@@ -211,8 +211,10 @@ web-dev: build-all ## Build web UI and server, then restart (detects file change
 		echo "📊 Profiling enabled at http://localhost:$(PROFILE_PORT)/debug/pprof/"; \
 	fi
 
-install: ensure-tools ## Install stapler-squad locally
+install: ensure-tools install-hooks ## Install stapler-squad locally
 	go install .
+
+install-hooks: ## Build and install ssq-hooks + ssq-hook-handler to ~/.local/bin (called by install and install-service)
 	mkdir -p ~/.local/bin
 	go build -o ~/.local/bin/ssq-hooks ./cmd/ssq-hooks/
 	@# Stable path for the notification hook handler so the server can register
@@ -280,7 +282,7 @@ backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new
 		echo "==> Saved current binary to ./stapler-squad.prev"; \
 	fi
 
-install-service: backup-binary build ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+install-service: backup-binary build install-hooks ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif
@@ -636,9 +638,7 @@ lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors
 	@violations=$$(find web-app/src -name '*.css.ts' \
 	  ! -name 'theme.css.ts' \
 	  ! -name 'theme-contract.css.ts' \
-	  ! -name 'Header.css.ts' \
 	  ! -name 'ThemePicker.css.ts' \
-	  ! -name 'ApprovalAnalyticsPanel.css.ts' \
 	  ! -path '*/debug/escape-codes/page.css.ts' \
 	  | while read f; do \
 	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \

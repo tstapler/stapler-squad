@@ -3014,6 +3014,8 @@ type BacklogItemMutation struct {
 	shipped_snapshot_at             *time.Time
 	shipped_file_stats              *string
 	shipped_snapshot_capture_failed *bool
+	rework_cap_override             *int
+	addrework_cap_override          *int
 	created_at                      *time.Time
 	updated_at                      *time.Time
 	clearedFields                   map[string]struct{}
@@ -4432,6 +4434,76 @@ func (m *BacklogItemMutation) ResetShippedSnapshotCaptureFailed() {
 	delete(m.clearedFields, backlogitem.FieldShippedSnapshotCaptureFailed)
 }
 
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (m *BacklogItemMutation) SetReworkCapOverride(i int) {
+	m.rework_cap_override = &i
+	m.addrework_cap_override = nil
+}
+
+// ReworkCapOverride returns the value of the "rework_cap_override" field in the mutation.
+func (m *BacklogItemMutation) ReworkCapOverride() (r int, exists bool) {
+	v := m.rework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReworkCapOverride returns the old "rework_cap_override" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldReworkCapOverride(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReworkCapOverride is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReworkCapOverride requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReworkCapOverride: %w", err)
+	}
+	return oldValue.ReworkCapOverride, nil
+}
+
+// AddReworkCapOverride adds i to the "rework_cap_override" field.
+func (m *BacklogItemMutation) AddReworkCapOverride(i int) {
+	if m.addrework_cap_override != nil {
+		*m.addrework_cap_override += i
+	} else {
+		m.addrework_cap_override = &i
+	}
+}
+
+// AddedReworkCapOverride returns the value that was added to the "rework_cap_override" field in this mutation.
+func (m *BacklogItemMutation) AddedReworkCapOverride() (r int, exists bool) {
+	v := m.addrework_cap_override
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (m *BacklogItemMutation) ClearReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	m.clearedFields[backlogitem.FieldReworkCapOverride] = struct{}{}
+}
+
+// ReworkCapOverrideCleared returns if the "rework_cap_override" field was cleared in this mutation.
+func (m *BacklogItemMutation) ReworkCapOverrideCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldReworkCapOverride]
+	return ok
+}
+
+// ResetReworkCapOverride resets all changes to the "rework_cap_override" field.
+func (m *BacklogItemMutation) ResetReworkCapOverride() {
+	m.rework_cap_override = nil
+	m.addrework_cap_override = nil
+	delete(m.clearedFields, backlogitem.FieldReworkCapOverride)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *BacklogItemMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -4847,7 +4919,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 29)
+	fields := make([]string, 0, 30)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -4929,6 +5001,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.shipped_snapshot_capture_failed != nil {
 		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
 	}
+	if m.rework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	if m.created_at != nil {
 		fields = append(fields, backlogitem.FieldCreatedAt)
 	}
@@ -4997,6 +5072,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedFileStats()
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		return m.ShippedSnapshotCaptureFailed()
+	case backlogitem.FieldReworkCapOverride:
+		return m.ReworkCapOverride()
 	case backlogitem.FieldCreatedAt:
 		return m.CreatedAt()
 	case backlogitem.FieldUpdatedAt:
@@ -5064,6 +5141,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedFileStats(ctx)
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		return m.OldShippedSnapshotCaptureFailed(ctx)
+	case backlogitem.FieldReworkCapOverride:
+		return m.OldReworkCapOverride(ctx)
 	case backlogitem.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case backlogitem.FieldUpdatedAt:
@@ -5266,6 +5345,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetShippedSnapshotCaptureFailed(v)
 		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReworkCapOverride(v)
+		return nil
 	case backlogitem.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -5300,6 +5386,9 @@ func (m *BacklogItemMutation) AddedFields() []string {
 	if m.addshipped_changes_req_count != nil {
 		fields = append(fields, backlogitem.FieldShippedChangesReqCount)
 	}
+	if m.addrework_cap_override != nil {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
+	}
 	return fields
 }
 
@@ -5316,6 +5405,8 @@ func (m *BacklogItemMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedShippedApprovedCount()
 	case backlogitem.FieldShippedChangesReqCount:
 		return m.AddedShippedChangesReqCount()
+	case backlogitem.FieldReworkCapOverride:
+		return m.AddedReworkCapOverride()
 	}
 	return nil, false
 }
@@ -5352,6 +5443,13 @@ func (m *BacklogItemMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddShippedChangesReqCount(v)
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReworkCapOverride(v)
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem numeric field %s", name)
@@ -5414,6 +5512,9 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldShippedSnapshotCaptureFailed) {
 		fields = append(fields, backlogitem.FieldShippedSnapshotCaptureFailed)
+	}
+	if m.FieldCleared(backlogitem.FieldReworkCapOverride) {
+		fields = append(fields, backlogitem.FieldReworkCapOverride)
 	}
 	return fields
 }
@@ -5482,6 +5583,9 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		m.ClearShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ClearReworkCapOverride()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogItem nullable field %s", name)
@@ -5571,6 +5675,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
 		m.ResetShippedSnapshotCaptureFailed()
+		return nil
+	case backlogitem.FieldReworkCapOverride:
+		m.ResetReworkCapOverride()
 		return nil
 	case backlogitem.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -7129,22 +7236,26 @@ func (m *BacklogStatusEventMutation) ResetEdge(name string) error {
 // BacklogStuckStateMutation represents an operation that mutates the BacklogStuckState nodes in the graph.
 type BacklogStuckStateMutation struct {
 	config
-	op                Op
-	typ               string
-	id                *uuid.UUID
-	reason            *string
-	first_detected_at *time.Time
-	last_checked_at   *time.Time
-	notified_at       *time.Time
-	resolved_at       *time.Time
-	snoozed_until     *time.Time
-	context           *string
-	clearedFields     map[string]struct{}
-	item              *uuid.UUID
-	cleareditem       bool
-	done              bool
-	oldValue          func(context.Context) (*BacklogStuckState, error)
-	predicates        []predicate.BacklogStuckState
+	op                      Op
+	typ                     string
+	id                      *uuid.UUID
+	reason                  *string
+	first_detected_at       *time.Time
+	last_checked_at         *time.Time
+	notified_at             *time.Time
+	resolved_at             *time.Time
+	snoozed_until           *time.Time
+	context                 *string
+	remediation_attempts    *int32
+	addremediation_attempts *int32
+	next_remediation_at     *time.Time
+	grace_boot_time         *time.Time
+	clearedFields           map[string]struct{}
+	item                    *uuid.UUID
+	cleareditem             bool
+	done                    bool
+	oldValue                func(context.Context) (*BacklogStuckState, error)
+	predicates              []predicate.BacklogStuckState
 }
 
 var _ ent.Mutation = (*BacklogStuckStateMutation)(nil)
@@ -7591,6 +7702,160 @@ func (m *BacklogStuckStateMutation) ResetContext() {
 	delete(m.clearedFields, backlogstuckstate.FieldContext)
 }
 
+// SetRemediationAttempts sets the "remediation_attempts" field.
+func (m *BacklogStuckStateMutation) SetRemediationAttempts(i int32) {
+	m.remediation_attempts = &i
+	m.addremediation_attempts = nil
+}
+
+// RemediationAttempts returns the value of the "remediation_attempts" field in the mutation.
+func (m *BacklogStuckStateMutation) RemediationAttempts() (r int32, exists bool) {
+	v := m.remediation_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemediationAttempts returns the old "remediation_attempts" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldRemediationAttempts(ctx context.Context) (v int32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemediationAttempts is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemediationAttempts requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemediationAttempts: %w", err)
+	}
+	return oldValue.RemediationAttempts, nil
+}
+
+// AddRemediationAttempts adds i to the "remediation_attempts" field.
+func (m *BacklogStuckStateMutation) AddRemediationAttempts(i int32) {
+	if m.addremediation_attempts != nil {
+		*m.addremediation_attempts += i
+	} else {
+		m.addremediation_attempts = &i
+	}
+}
+
+// AddedRemediationAttempts returns the value that was added to the "remediation_attempts" field in this mutation.
+func (m *BacklogStuckStateMutation) AddedRemediationAttempts() (r int32, exists bool) {
+	v := m.addremediation_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetRemediationAttempts resets all changes to the "remediation_attempts" field.
+func (m *BacklogStuckStateMutation) ResetRemediationAttempts() {
+	m.remediation_attempts = nil
+	m.addremediation_attempts = nil
+}
+
+// SetNextRemediationAt sets the "next_remediation_at" field.
+func (m *BacklogStuckStateMutation) SetNextRemediationAt(t time.Time) {
+	m.next_remediation_at = &t
+}
+
+// NextRemediationAt returns the value of the "next_remediation_at" field in the mutation.
+func (m *BacklogStuckStateMutation) NextRemediationAt() (r time.Time, exists bool) {
+	v := m.next_remediation_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNextRemediationAt returns the old "next_remediation_at" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldNextRemediationAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNextRemediationAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNextRemediationAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNextRemediationAt: %w", err)
+	}
+	return oldValue.NextRemediationAt, nil
+}
+
+// ClearNextRemediationAt clears the value of the "next_remediation_at" field.
+func (m *BacklogStuckStateMutation) ClearNextRemediationAt() {
+	m.next_remediation_at = nil
+	m.clearedFields[backlogstuckstate.FieldNextRemediationAt] = struct{}{}
+}
+
+// NextRemediationAtCleared returns if the "next_remediation_at" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) NextRemediationAtCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldNextRemediationAt]
+	return ok
+}
+
+// ResetNextRemediationAt resets all changes to the "next_remediation_at" field.
+func (m *BacklogStuckStateMutation) ResetNextRemediationAt() {
+	m.next_remediation_at = nil
+	delete(m.clearedFields, backlogstuckstate.FieldNextRemediationAt)
+}
+
+// SetGraceBootTime sets the "grace_boot_time" field.
+func (m *BacklogStuckStateMutation) SetGraceBootTime(t time.Time) {
+	m.grace_boot_time = &t
+}
+
+// GraceBootTime returns the value of the "grace_boot_time" field in the mutation.
+func (m *BacklogStuckStateMutation) GraceBootTime() (r time.Time, exists bool) {
+	v := m.grace_boot_time
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGraceBootTime returns the old "grace_boot_time" field's value of the BacklogStuckState entity.
+// If the BacklogStuckState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogStuckStateMutation) OldGraceBootTime(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGraceBootTime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGraceBootTime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGraceBootTime: %w", err)
+	}
+	return oldValue.GraceBootTime, nil
+}
+
+// ClearGraceBootTime clears the value of the "grace_boot_time" field.
+func (m *BacklogStuckStateMutation) ClearGraceBootTime() {
+	m.grace_boot_time = nil
+	m.clearedFields[backlogstuckstate.FieldGraceBootTime] = struct{}{}
+}
+
+// GraceBootTimeCleared returns if the "grace_boot_time" field was cleared in this mutation.
+func (m *BacklogStuckStateMutation) GraceBootTimeCleared() bool {
+	_, ok := m.clearedFields[backlogstuckstate.FieldGraceBootTime]
+	return ok
+}
+
+// ResetGraceBootTime resets all changes to the "grace_boot_time" field.
+func (m *BacklogStuckStateMutation) ResetGraceBootTime() {
+	m.grace_boot_time = nil
+	delete(m.clearedFields, backlogstuckstate.FieldGraceBootTime)
+}
+
 // ClearItem clears the "item" edge to the BacklogItem entity.
 func (m *BacklogStuckStateMutation) ClearItem() {
 	m.cleareditem = true
@@ -7652,7 +7917,7 @@ func (m *BacklogStuckStateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogStuckStateMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 11)
 	if m.item != nil {
 		fields = append(fields, backlogstuckstate.FieldItemID)
 	}
@@ -7676,6 +7941,15 @@ func (m *BacklogStuckStateMutation) Fields() []string {
 	}
 	if m.context != nil {
 		fields = append(fields, backlogstuckstate.FieldContext)
+	}
+	if m.remediation_attempts != nil {
+		fields = append(fields, backlogstuckstate.FieldRemediationAttempts)
+	}
+	if m.next_remediation_at != nil {
+		fields = append(fields, backlogstuckstate.FieldNextRemediationAt)
+	}
+	if m.grace_boot_time != nil {
+		fields = append(fields, backlogstuckstate.FieldGraceBootTime)
 	}
 	return fields
 }
@@ -7701,6 +7975,12 @@ func (m *BacklogStuckStateMutation) Field(name string) (ent.Value, bool) {
 		return m.SnoozedUntil()
 	case backlogstuckstate.FieldContext:
 		return m.Context()
+	case backlogstuckstate.FieldRemediationAttempts:
+		return m.RemediationAttempts()
+	case backlogstuckstate.FieldNextRemediationAt:
+		return m.NextRemediationAt()
+	case backlogstuckstate.FieldGraceBootTime:
+		return m.GraceBootTime()
 	}
 	return nil, false
 }
@@ -7726,6 +8006,12 @@ func (m *BacklogStuckStateMutation) OldField(ctx context.Context, name string) (
 		return m.OldSnoozedUntil(ctx)
 	case backlogstuckstate.FieldContext:
 		return m.OldContext(ctx)
+	case backlogstuckstate.FieldRemediationAttempts:
+		return m.OldRemediationAttempts(ctx)
+	case backlogstuckstate.FieldNextRemediationAt:
+		return m.OldNextRemediationAt(ctx)
+	case backlogstuckstate.FieldGraceBootTime:
+		return m.OldGraceBootTime(ctx)
 	}
 	return nil, fmt.Errorf("unknown BacklogStuckState field %s", name)
 }
@@ -7791,6 +8077,27 @@ func (m *BacklogStuckStateMutation) SetField(name string, value ent.Value) error
 		}
 		m.SetContext(v)
 		return nil
+	case backlogstuckstate.FieldRemediationAttempts:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemediationAttempts(v)
+		return nil
+	case backlogstuckstate.FieldNextRemediationAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNextRemediationAt(v)
+		return nil
+	case backlogstuckstate.FieldGraceBootTime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGraceBootTime(v)
+		return nil
 	}
 	return fmt.Errorf("unknown BacklogStuckState field %s", name)
 }
@@ -7798,13 +8105,21 @@ func (m *BacklogStuckStateMutation) SetField(name string, value ent.Value) error
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *BacklogStuckStateMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addremediation_attempts != nil {
+		fields = append(fields, backlogstuckstate.FieldRemediationAttempts)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *BacklogStuckStateMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case backlogstuckstate.FieldRemediationAttempts:
+		return m.AddedRemediationAttempts()
+	}
 	return nil, false
 }
 
@@ -7813,6 +8128,13 @@ func (m *BacklogStuckStateMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *BacklogStuckStateMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case backlogstuckstate.FieldRemediationAttempts:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRemediationAttempts(v)
+		return nil
 	}
 	return fmt.Errorf("unknown BacklogStuckState numeric field %s", name)
 }
@@ -7832,6 +8154,12 @@ func (m *BacklogStuckStateMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogstuckstate.FieldContext) {
 		fields = append(fields, backlogstuckstate.FieldContext)
+	}
+	if m.FieldCleared(backlogstuckstate.FieldNextRemediationAt) {
+		fields = append(fields, backlogstuckstate.FieldNextRemediationAt)
+	}
+	if m.FieldCleared(backlogstuckstate.FieldGraceBootTime) {
+		fields = append(fields, backlogstuckstate.FieldGraceBootTime)
 	}
 	return fields
 }
@@ -7858,6 +8186,12 @@ func (m *BacklogStuckStateMutation) ClearField(name string) error {
 		return nil
 	case backlogstuckstate.FieldContext:
 		m.ClearContext()
+		return nil
+	case backlogstuckstate.FieldNextRemediationAt:
+		m.ClearNextRemediationAt()
+		return nil
+	case backlogstuckstate.FieldGraceBootTime:
+		m.ClearGraceBootTime()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogStuckState nullable field %s", name)
@@ -7890,6 +8224,15 @@ func (m *BacklogStuckStateMutation) ResetField(name string) error {
 		return nil
 	case backlogstuckstate.FieldContext:
 		m.ResetContext()
+		return nil
+	case backlogstuckstate.FieldRemediationAttempts:
+		m.ResetRemediationAttempts()
+		return nil
+	case backlogstuckstate.FieldNextRemediationAt:
+		m.ResetNextRemediationAt()
+		return nil
+	case backlogstuckstate.FieldGraceBootTime:
+		m.ResetGraceBootTime()
 		return nil
 	}
 	return fmt.Errorf("unknown BacklogStuckState field %s", name)

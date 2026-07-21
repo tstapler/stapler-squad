@@ -1,11 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
 
 interface StuckItemDetailProps {
   item: StuckBacklogItem;
+  /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
+  onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -20,11 +23,22 @@ function autoMergeLine(allowAutoMerge: boolean | undefined): string {
  * Expanded accordion detail panel for a StuckItem. Renders inline beneath the
  * card (no portal/modal), mirroring UnfinishedItemDetail.tsx.
  */
-export function StuckItemDetail({ item }: StuckItemDetailProps) {
+export function StuckItemDetail({ item, onReworkCapOverride }: StuckItemDetailProps) {
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
+  const isAutonomousStuck = item.reason === StuckReason.AUTONOMOUS_STUCK;
   const why = item.context?.trim() ? item.context : "No additional context recorded";
+
+  const [moreRounds, setMoreRounds] = useState("3");
+  const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
+
+  async function submitOverride(override: number) {
+    if (!onReworkCapOverride) return;
+    setOverrideState("pending");
+    const ok = await onReworkCapOverride(item.itemId, override);
+    setOverrideState(ok ? "idle" : "error");
+  }
 
   return (
     <div className={styles.detail} data-testid="stuck-item-detail">
@@ -48,10 +62,57 @@ export function StuckItemDetail({ item }: StuckItemDetailProps) {
       )}
 
       {isReworkCap && (
-        <p className={styles.actionCopy} data-testid="stuck-item-rework-cap-copy">
-          Hit the auto-rework cap after repeated failed reviews. Click &quot;Reopen for
-          Revision&quot; on the item to try one more round manually, or raise the cap in
-          Settings → Defaults if repeated failures are expected for this kind of change.
+        <>
+          <p className={styles.actionCopy} data-testid="stuck-item-rework-cap-copy">
+            Hit the auto-rework cap after repeated failed reviews. Raise this item&apos;s
+            own cap below to let it keep retrying automatically, or click &quot;Reopen for
+            Revision&quot; on the item to try one more round manually.
+          </p>
+          {onReworkCapOverride && (
+            <div className={styles.overrideForm} data-testid="stuck-item-rework-cap-override-form">
+              <input
+                type="number"
+                min={1}
+                value={moreRounds}
+                onChange={(e) => setMoreRounds(e.target.value)}
+                className={styles.overrideInput}
+                aria-label="This item's new rework cap"
+                data-testid="stuck-item-rework-cap-rounds-input"
+                disabled={overrideState === "pending"}
+              />
+              <button
+                type="button"
+                className={styles.overrideButton}
+                disabled={overrideState === "pending" || !Number(moreRounds) || Number(moreRounds) <= 0}
+                onClick={() => void submitOverride(Number(moreRounds))}
+                data-testid="stuck-item-rework-cap-allow-rounds"
+              >
+                Set this item&apos;s cap to {moreRounds || 0} &amp; resume
+              </button>
+              <button
+                type="button"
+                className={styles.overrideUnlimitedButton}
+                disabled={overrideState === "pending"}
+                onClick={() => void submitOverride(0)}
+                data-testid="stuck-item-rework-cap-unlimited"
+              >
+                Remove cap for this item &amp; resume
+              </button>
+              {overrideState === "error" && (
+                <span className={styles.overrideStatus} role="alert">
+                  Failed to apply — try again.
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {isAutonomousStuck && (
+        <p className={styles.actionCopy} data-testid="stuck-item-autonomous-stuck-copy">
+          Autonomous mode stopped without a completion signal. Open the session to see
+          what it accomplished, then either give it a manual instruction or use &quot;Reopen
+          for Revision&quot; / re-trigger triage to let it try again.
         </p>
       )}
 

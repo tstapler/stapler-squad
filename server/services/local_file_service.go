@@ -171,5 +171,6 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 	}
 
 	log.Info("[LocalFileService] serve", "path", filePath)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFile(w, r, filePath)
 }

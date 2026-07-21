@@ -722,6 +722,19 @@ func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, to
 	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
 }
 
+// FindDoneItemsOlderThan returns backlog items in "done" status whose most
+// recent done-transition happened at/before cutoff. Thin passthrough to the
+// ent-backed repository (same rationale as MarkStuck below) — returns
+// nil, nil for backends that don't support it (e.g. an in-memory test
+// double), never an error.
+func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.FindDoneItemsOlderThan(ctx, cutoff)
+}
+
 // --- BacklogStuckState (durable stuck-state read surface) ---
 
 // FindOpenStuckStates returns every open (unresolved, un-snoozed)
@@ -938,6 +951,16 @@ func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID 
 		return "", nil
 	}
 	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
+}
+
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
+// most recent first. Returns nil (not an error) when the repo isn't ent-backed.
+func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
 }
 
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
