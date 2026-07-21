@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -30,6 +31,28 @@ type DefaultsService struct {
 	// limit increased — DequeueNextQueuedItems is a cheap no-op when there's
 	// nothing to dequeue.
 	onGlobalDefaultsUpdated func()
+
+	// sharedBacklogCfg and sharedBacklogCfgMu, when wired via
+	// SetSharedBacklogConfig, are the SAME *config.Config instance (and
+	// guarding mutex) BacklogService reads MaxConcurrentBacklogWorkItems /
+	// MaxAutoReworkIterations from at request time. UpdateGlobalDefaults
+	// otherwise follows the same lock-free load-modify-save pattern as every
+	// other handler in this file (a fresh config.LoadConfig() per call,
+	// last-write-wins across handlers — the accepted project tradeoff
+	// documented on UpsertAlias). That pattern alone is why BacklogService's
+	// long-lived cfg pointer (loaded once at process start, see
+	// server/dependencies.go) never observed a raised WIP cap until a
+	// restart: nothing ever wrote back into BacklogService's instance
+	// (PR #199 review F1). Rather than switching this whole handler onto the
+	// shared instance (which would make it lose track of concurrent writes
+	// from OTHER handlers — aliases, profiles, directory rules — between
+	// calls), UpdateGlobalDefaults keeps its existing fresh-load flow and
+	// additionally copies just the two backlog-relevant fields onto the
+	// shared instance, under the mutex, right after a successful save. Both
+	// fields are nil-safe to leave unwired: every test that doesn't call
+	// SetSharedBacklogConfig keeps this handler's pre-existing behavior.
+	sharedBacklogCfg   *config.Config
+	sharedBacklogCfgMu *sync.RWMutex
 }
 
 // NewDefaultsService creates a DefaultsService.
@@ -41,6 +64,18 @@ func NewDefaultsService() *DefaultsService {
 // successful UpdateGlobalDefaults save.
 func (d *DefaultsService) SetOnGlobalDefaultsUpdated(fn func()) {
 	d.onGlobalDefaultsUpdated = fn
+}
+
+// SetSharedBacklogConfig wires the live *config.Config instance (and its
+// guarding mutex) that BacklogService reads MaxConcurrentBacklogWorkItems /
+// MaxAutoReworkIterations from — see sharedBacklogCfg's doc comment for why
+// this is needed and what it does and does not change about
+// UpdateGlobalDefaults's existing behavior. Called once from
+// server/dependencies.go with the exact same *config.Config pointer and
+// *sync.RWMutex passed to services.NewBacklogService / BacklogService.ConfigMu.
+func (d *DefaultsService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	d.sharedBacklogCfg = cfg
+	d.sharedBacklogCfgMu = mu
 }
 
 // GetSessionDefaults returns the full session defaults configuration.
@@ -102,6 +137,17 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 
 	if err := config.SaveConfig(cfg); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	// Propagate the two backlog-concurrency fields onto BacklogService's live
+	// config instance so a raised cap takes effect on the very next
+	// SpawnSessionFromItem/DequeueNextQueuedItems call instead of requiring a
+	// process restart — see sharedBacklogCfg's doc comment (PR #199 review F1).
+	if d.sharedBacklogCfg != nil {
+		d.sharedBacklogCfgMu.Lock()
+		d.sharedBacklogCfg.MaxAutoReworkIterations = cfg.MaxAutoReworkIterations
+		d.sharedBacklogCfg.MaxConcurrentBacklogWorkItems = cfg.MaxConcurrentBacklogWorkItems
+		d.sharedBacklogCfgMu.Unlock()
 	}
 
 	log.Info("updated global session defaults", "program", cfg.SessionDefaults.Program, "tags", cfg.SessionDefaults.Tags)

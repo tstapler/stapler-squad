@@ -75,7 +75,7 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 // gate: a MarkStuck/MarkStuckNotified failure is logged but must never
 // suppress the notification itself.
 func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string) {
-	reworkCap := s.cfg.MaxAutoReworkIterationsOrDefault()
+	reworkCap := s.maxAutoReworkIterations()
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
 			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
@@ -133,20 +133,25 @@ const (
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 )
 
-// maxAutoReworkIterations caps how many automated work sessions can be spawned for a single
-// backlog item by the auto-reopen loop. When this ceiling is hit, the item stays in review
-// so a human can inspect it rather than spinning indefinitely on a persistent FAIL verdict.
+// The auto-rework iteration cap bounds how many automated work sessions can be
+// spawned for a single backlog item by the auto-reopen loop. When this ceiling
+// is hit, the item stays in review so a human can inspect it rather than
+// spinning indefinitely on a persistent FAIL verdict.
 //
-// Configurable via config.Config.MaxAutoReworkIterationsOrDefault() (Settings → Defaults,
-// default 3) — call sites read s.cfg.MaxAutoReworkIterationsOrDefault(), not a constant.
+// Configurable via config.Config.MaxAutoReworkIterationsOrDefault() (Settings →
+// Defaults, default 3) — call sites read s.maxAutoReworkIterations(), not a
+// constant. That helper (not s.cfg directly) is required: cfg is a live,
+// shared *config.Config instance DefaultsService.UpdateGlobalDefaults can
+// write to concurrently (see cfgMu's doc comment on the BacklogService
+// struct), so reads must go through the mutex-guarded accessor.
 
 // The backlog work-item concurrency cap is configurable via
 // config.Config.MaxConcurrentBacklogWorkItemsOrDefault() (Settings → Defaults,
-// default 2) — call sites read s.cfg.MaxConcurrentBacklogWorkItemsOrDefault(),
-// not a constant. Fresh spawns beyond the cap are queued (BacklogStatusQueued)
-// instead of rejected; reopen/revision spawns for an item that's already
-// in_progress don't count against it, since they don't add a new concurrent
-// item.
+// default 2) — call sites read s.maxConcurrentBacklogWorkItems(), not a
+// constant, for the same cfgMu-guarded-accessor reason described above.
+// Fresh spawns beyond the cap are queued (BacklogStatusQueued) instead of
+// rejected; reopen/revision spawns for an item that's already in_progress
+// don't count against it, since they don't add a new concurrent item.
 //
 // Added 2026-07-12 after a kernel OOM caused by too many concurrent agent
 // sessions (backlog-spawned and otherwise) exhausting system memory.
@@ -240,7 +245,20 @@ func (s *BacklogService) SpawnSessionFromItem(
 				session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status, item.Status))
 	}
 
-	// 3b. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
+	// 3b. Planning gate (only for fresh spawns; on reopen planning is already approved).
+	// Autonomous mode bypasses the gate — the driver handles its own planning loop.
+	// Deliberately runs BEFORE the WIP-cap gate below: an item without an approved
+	// plan must be rejected outright here, never queued — a queued item skips this
+	// RPC entirely on dequeue (DequeueNextQueuedItems calls spawnSessionAfterGates
+	// directly), so queueing an unapproved-plan item would let it reach a real
+	// spawned session with no planning check at all (PR #199 review F2/F3).
+	if !isReopen && !item.SkipPlanning && !item.PlanApproved && !req.Msg.Autonomous {
+		log.InfoLog.Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
+	}
+
+	// 4. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
 	// item — it's already counted as in_progress). Not bypassed by Autonomous: the
 	// point is to cap total concurrent agent load regardless of how a spawn was
 	// triggered. At the cap, the item is queued (BacklogStatusQueued) rather than
@@ -252,7 +270,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 		})
 		if wipErr != nil {
 			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
-		} else if wipCap := s.cfg.MaxConcurrentBacklogWorkItemsOrDefault(); len(inProgress) >= wipCap {
+		} else if wipCap := s.maxConcurrentBacklogWorkItems(); len(inProgress) >= wipCap {
 			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit hit item=%s in_progress=%d cap=%d — queueing", item.ID, len(inProgress), wipCap)
 			if _, queueErr := s.queueBacklogItem(ctx, item, req.Msg.Autonomous); queueErr != nil {
 				return nil, queueErr
@@ -261,15 +279,43 @@ func (s *BacklogService) SpawnSessionFromItem(
 		}
 	}
 
-	// 4. Planning gate (only for fresh spawns; on reopen planning is already approved).
-	// Autonomous mode bypasses the gate — the driver handles its own planning loop.
-	if !isReopen && !item.SkipPlanning && !item.PlanApproved && !req.Msg.Autonomous {
-		log.InfoLog.Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
-	}
-
 	return s.spawnSessionAfterGates(ctx, item, isReopen, req.Msg.Autonomous)
+}
+
+// transitionWithGuard runs the domain transition-guard checks — structural
+// CanTransition plus the business-rule ValidateGates (e.g. ErrPlanRequired for
+// queued->in_progress) — before delegating to storage.TransitionBacklogItemStatus.
+// These are the exact two checks TransitionBacklogItemStatus's generic RPC
+// handler (backlog_service_lifecycle.go) always applies; queueBacklogItem and
+// DequeueNextQueuedItems's dequeue claim previously called
+// storage.TransitionBacklogItemStatus directly — a pure CAS with no guard at
+// all — which let an unapproved-plan item reach a real spawned session via
+// ready->queued->in_progress with the planning gate never once evaluated
+// (PR #199 review F3, structural root cause F4). Every status-mutating call
+// site outside the generic RPC handler should route through this helper so a
+// future call site can't reintroduce the same bug class.
+//
+// Returns the same errors storage.TransitionBacklogItemStatus returns
+// (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
+// domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
+// fails — un-wrapped in connect terms so each call site keeps doing its own
+// connect.NewError translation, matching this file's existing style.
+func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition) (*session.BacklogItemData, error) {
+	from := session.BacklogStatus(item.Status)
+	if !s.engine.CanTransition(from, to) {
+		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
+	}
+	guardInput := session.BacklogItemTransitionInput{
+		Status:            from,
+		AcCriteria:        item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
+	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+		return nil, guardErr
+	}
+	return s.storage.TransitionBacklogItemStatus(ctx, item.ID, to, precondition)
 }
 
 // queueBacklogItem transitions item from ready to queued after a fresh spawn hit
@@ -285,7 +331,7 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to record queue metadata: %w", err))
 	}
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued, precondition)
+	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
@@ -304,7 +350,19 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 // Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress,
 // ExpectedStatus=queued) before spawning, so concurrent callers (this method running
 // from both the exit hook and the sweep, or multiple server processes sharing one DB)
-// cannot double-claim the same item — see TransitionBacklogItemStatus's doc comment.
+// cannot double-claim the SAME item — see TransitionBacklogItemStatus's doc comment.
+// That per-item CAS alone does not prevent two concurrent calls to this method from
+// each computing their own freeSlots from an unsynchronized snapshot and jointly
+// claiming DIFFERENT queued items past the cap, so dequeueMu additionally serializes
+// the whole method body, making this method single-flight system-wide (PR #199
+// review F2 — the exact "uncontrolled concurrency overshoot" class of bug the WIP
+// cap feature exists to prevent).
+//
+// The claim itself now goes through transitionWithGuard (PR #199 review F4), so an
+// item without an approved plan (SkipPlanning=false, PlanApproved=false) cannot be
+// claimed at all — defense-in-depth against F3, on top of SpawnSessionFromItem's own
+// planning gate now running before the WIP-cap queue gate.
+//
 // If the claim succeeds but the spawn itself fails (missing repo_path, stale plan
 // approval, SessionCreator error), the item is rolled back to queued rather than left
 // stranded in_progress with no session.
@@ -312,13 +370,16 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
+	s.dequeueMu.Lock()
+	defer s.dequeueMu.Unlock()
+
 	inProgress, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
 	})
 	if err != nil {
 		return fmt.Errorf("list in_progress items: %w", err)
 	}
-	freeSlots := s.cfg.MaxConcurrentBacklogWorkItemsOrDefault() - len(inProgress)
+	freeSlots := s.maxConcurrentBacklogWorkItems() - len(inProgress)
 	if freeSlots <= 0 {
 		return nil
 	}
@@ -342,10 +403,23 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		if spawned >= freeSlots {
 			break
 		}
-		claimed, claimErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
+		claimed, claimErr := s.transitionWithGuard(ctx, &item,
+			session.BacklogStatusInProgress,
 			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued), Note: "dequeued: WIP slot freed"})
 		if claimErr != nil {
-			if !errors.Is(claimErr, session.ErrPreconditionFailed) {
+			switch {
+			case errors.Is(claimErr, session.ErrPreconditionFailed):
+				// Expected under concurrent claims (another process's dequeue
+				// sweep, or a manual un-queue) — not worth logging.
+			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+				// now that SpawnSessionFromItem's planning gate runs before the
+				// WIP-cap gate that queues an item, but refuse the claim rather
+				// than silently spawning an unapproved item if this is ever hit
+				// (e.g. a future call site regression, or a pre-existing queued
+				// row from before that ordering fix).
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s: %v — leaving queued", item.ID, claimErr)
+			default:
 				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s: %v", item.ID, claimErr)
 			}
 			continue
@@ -377,6 +451,21 @@ func (s *BacklogService) spawnSessionAfterGates(
 	isReopen bool,
 	autonomous bool,
 ) (*connect.Response[sessionv1.SpawnSessionFromItemResponse], error) {
+	// 4b. Planning-gate defense-in-depth (PR #199 review F2/F3). SpawnSessionFromItem's
+	// own planning gate (step 3b) only runs on that RPC's direct call path;
+	// DequeueNextQueuedItems claims a queued item via transitionWithGuard (which itself
+	// now enforces this — F4) and then calls this method directly, with no other gate in
+	// between. Re-checking here means an unapproved-plan item can never reach a real
+	// spawned session no matter which call site reaches this function, now or in the
+	// future. Skipped when autonomous=true (the driver runs its own planning loop) —
+	// this matches SpawnSessionFromItem's own gate and means it never fires for
+	// AutoReopenAfterFailedReview/AutoReopenForPRFix, which always pass autonomous=true.
+	if !item.SkipPlanning && !item.PlanApproved && !autonomous {
+		log.InfoLog.Printf("[spawnSessionAfterGates] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
+	}
+
 	// 5. Repo path required.
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,

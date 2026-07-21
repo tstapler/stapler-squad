@@ -298,6 +298,117 @@ func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status)
 }
 
+// TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyWithOneFreeSlot
+// is the regression test for PR #199 review F2: DequeueNextQueuedItems previously
+// had no mutex/singleflight serializing its body. Two concurrent callers (the
+// unsynchronized `go l.triggerDequeue(...)` fired from onSessionExited, and the
+// periodic ReconcileStuck sweep) could each compute freeSlots from their own
+// stale ListBacklogItems snapshot and jointly claim two DIFFERENT queued items
+// even though only one WIP slot was actually free — the per-item CAS in
+// TransitionBacklogItemStatus only prevents two callers claiming the SAME item,
+// not this "jointly overshoot the cap" class of race. This is the exact
+// uncontrolled-concurrency-overshoot bug the 2026-07-12 OOM incident (and this
+// whole feature) exists to prevent. With dequeueMu now serializing the entire
+// method body, only one of the two concurrent calls may observe and claim the
+// single free slot. Run with -race.
+func TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyWithOneFreeSlot(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill testWIPCap-1 in_progress slots, leaving exactly 1 free slot.
+	for i := 0; i < testWIPCap-1; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+	}
+	require.Len(t, creator.calls, testWIPCap-1)
+
+	// Queue 2 items (SkipPlanning so the claim isn't blocked by the planning gate
+	// this test isn't exercising).
+	queuedIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("queued %d", i))
+		item, err := storage.GetBacklogItem(t.Context(), id)
+		require.NoError(t, err)
+		_, err = svc.queueBacklogItem(t.Context(), item, false)
+		require.NoError(t, err)
+		queuedIDs = append(queuedIDs, id)
+	}
+
+	// Race two concurrent dequeue sweeps against the single free slot.
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+		}()
+	}
+	wg.Wait()
+
+	inProgressCount := 0
+	stillQueuedCount := 0
+	for _, id := range queuedIDs {
+		item, err := storage.GetBacklogItem(t.Context(), id)
+		require.NoError(t, err)
+		switch item.Status {
+		case string(session.BacklogStatusInProgress):
+			inProgressCount++
+		case string(session.BacklogStatusQueued):
+			stillQueuedCount++
+		}
+	}
+
+	assert.Equal(t, 1, inProgressCount, "exactly one queued item must be dequeued for the single free slot")
+	assert.Equal(t, 1, stillQueuedCount, "the other queued item must remain queued — the WIP cap must not be overshot")
+	assert.Len(t, creator.calls, testWIPCap, "no more sessions than the WIP cap allows should have been spawned")
+}
+
+// TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApprovedPlan
+// is the defense-in-depth regression test for PR #199 review F3/F4: even if an
+// unapproved-plan item somehow ends up "queued" (bypassing
+// SpawnSessionFromItem's own planning gate — e.g. a pre-existing row from before
+// that gate was reordered ahead of the WIP-cap gate, or a future regression at
+// some other call site), the dequeue claim (queued->in_progress) must still be
+// rejected by the domain TransitionGuard's ErrPlanRequired check now that the
+// claim routes through transitionWithGuard — never silently spawning a work
+// session with no planning check at all.
+func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApprovedPlan(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Directly construct an item already "queued" with no approved plan and
+	// SkipPlanning=false — a state the RPC surface should never produce after
+	// the F2 ordering fix, used here to exercise the defense-in-depth layer in
+	// isolation.
+	now := time.Now()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "queued without approved plan",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusQueued),
+		QueuedAt: &now,
+	})
+	require.NoError(t, err)
+	require.False(t, item.PlanApproved)
+	require.False(t, item.SkipPlanning)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(ctx))
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusQueued), final.Status, "an unapproved-plan item must never be claimed off the queue")
+	assert.Empty(t, creator.calls, "no session should have been spawned for an unapproved-plan item")
+}
+
 // --- AutoReopenForPRFix: live-bug regression (ReconcilePRPending churn) ---
 
 // TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn is the regression
