@@ -1326,6 +1326,16 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileTerminalItemSessions(ctx)
 	})
 
+	// Self-heal items whose real, cached PR reference (prNumber/prUrl) has
+	// drifted out of ReconcilePRPending's status=="pr_pending" view — see
+	// FindDriftedPRItems' doc comment. Registered immediately before
+	// pr_ready+merge_detection so a recovered item is picked up by the merge/
+	// CI polling sweep below in this same tick rather than an extra cycle
+	// later.
+	l.runStuckDetector("pr_drift_recovery", &okNames, &panickedNames, func() {
+		l.reconcileDriftedPRItems(ctx, er)
+	})
+
 	// Poll pr_pending items: auto-transition to done when the PR is merged,
 	// and (Story 2.1.1) flag/resolve pr_ready_unmerged.
 	l.runStuckDetector("pr_ready+merge_detection", &okNames, &panickedNames, func() {
@@ -2212,7 +2222,12 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 		}
 	}
 	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
-		log.DebugLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback pr_pending transition item=%s (may already be applied via RunOneShot's own RecordPRCreatedOutOfBand side effect): %v", item.ID, transErr)
+		// May just be a harmless race with RunOneShot's own RecordPRCreatedOutOfBand
+		// side effect already landing the same transition — handlePRPendingTransitionFailed
+		// re-checks the item's current status before doing anything, so that case is a
+		// silent no-op there. Anything else (a genuine drift) gets recovered immediately
+		// if safe, or picked up by the next reconcileDriftedPRItems tick.
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "shipViaAgentOrFallback", transErr)
 	}
 }
 
@@ -2368,7 +2383,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 	// Transition to pr_pending.
 	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] pushAndCreatePR pr_pending transition item=%s: %v", item.ID, transErr)
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
@@ -2392,6 +2407,119 @@ func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemI
 		l.resolveStuckLogged(ctx, er, itemID, domain.StuckReasonAbandonedReview, caller)
 	}
 	return nil
+}
+
+// hasActiveSession reports whether any of the provided ItemSessions is an
+// open (not yet ended) work- or review-role session. Package-local
+// equivalent of server/services' hasActiveWorkSession/hasActiveReviewSession
+// (not reusable directly — that package imports session, not the other way
+// around) used by recoverDriftedPRItem/reconcileDriftedPRItems to avoid
+// stealing an item away from a still-legitimately-running session, mirroring
+// AutoReopenForPRFix's/AutoRespawnReview's identical guard.
+func hasActiveSession(sessions []ItemSessionSummary) bool {
+	for _, s := range sessions {
+		if s.EndedAt == nil && (s.Role == SessionRoleWork || s.Role == SessionRoleReview) {
+			return true
+		}
+	}
+	return false
+}
+
+// recoverDriftedPRItem attempts to recover a single item whose real, cached
+// PR reference (prNumber/prUrl) has drifted out of ReconcilePRPending's view
+// — see FindDriftedPRItems' doc comment for the drift mechanism. Recovery is
+// a single CAS transition back to pr_pending, scoped to the item's own
+// currently-observed status/updated_at so a genuine concurrent transition
+// (e.g. a fresh work/review session starting between the caller's read and
+// this write) simply loses the CAS and is left alone rather than clobbered —
+// the same "anchor on reality, never force" discipline BUG-026's fix
+// established for TransitionBacklogItemStatus itself. Callers must have
+// already confirmed no active work/review session exists for this item
+// (hasActiveSession) before calling — this function does not re-check.
+// Returns true if the item was recovered. Best-effort: errors are logged,
+// never returned.
+func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, item *BacklogItemData, caller string) bool {
+	updatedAt := item.UpdatedAt
+	precondition := &BacklogItemPrecondition{
+		ExpectedStatus:    item.Status,
+		ExpectedUpdatedAt: &updatedAt,
+		Note: fmt.Sprintf("self-heal (%s): recovered from drift — item has PR #%d (%s) cached but status was %q, not pr_pending",
+			caller, item.PrNumber, item.PrURL, item.Status),
+	}
+	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition); transErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovery transition failed (likely a concurrent legitimate transition, will retry next tick): %v", caller, item.ID, transErr)
+		return false
+	}
+	log.WarningLog.Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovered from status drift — PR #%d (%s) was stranded at status %q with no active session; transitioned back to pr_pending", caller, item.ID, item.PrNumber, item.PrURL, item.Status)
+	l.notify(item.ID,
+		"Backlog item recovered from stuck state",
+		fmt.Sprintf("%s — had an open PR (#%d) but its status had drifted away from tracking; automatically recovered and resumed polling.", item.Title, item.PrNumber),
+		10, // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+		1,  // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+	)
+	return true
+}
+
+// handlePRPendingTransitionFailed is called when resolveToPRPending fails
+// after prNumber/prUrl were already durably persisted on the item — the
+// exact drift mechanism FindDriftedPRItems' doc comment describes (a
+// concurrent legitimate event, e.g. markAbandonedReview's grace period
+// respawning a review pass while an agent-driven ship is still mid-flight,
+// wins the race and moves status away from "review" before this call's own
+// CAS-gated transition to pr_pending lands). Rather than silently leaving
+// the item stranded until the periodic reconcileDriftedPRItems sweep's next
+// tick (ReconcileStuck runs every 60s — server/dependencies.go), this
+// attempts the same recovery immediately: if nothing is actively working the
+// item right now, transition it straight back to pr_pending so it re-enters
+// ReconcilePRPending's view in this same tick. If something IS actively
+// working it (a legitimate concurrent event genuinely owns the item now),
+// recovery correctly declines — the periodic sweep remains the backstop for
+// whenever that session later ends without itself resolving to pr_pending.
+// Also correctly no-ops when the "failure" was actually a harmless race with
+// another writer that already landed the same transition (e.g.
+// RecordPRCreatedOutOfBand beating shipViaAgentOrFallback to it) — the
+// re-fetched item's status is checked before attempting anything.
+func (l *BacklogLifecycleListener) handlePRPendingTransitionFailed(ctx context.Context, itemID, caller string, transErr error) {
+	log.WarningLog.Printf("[BacklogLifecycle] %s pr_pending transition item=%s failed after PR fields were already persisted — item may be stranded with a real PR outside pr_pending tracking until self-heal recovers it: %v", caller, itemID, transErr)
+
+	sessions, sessErr := l.storage.ListItemSessions(ctx, itemID)
+	if sessErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed ListItemSessions item=%s: %v", caller, itemID, sessErr)
+		return
+	}
+	if hasActiveSession(sessions) {
+		log.InfoLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed item=%s: active session found, leaving recovery to the next reconcileDriftedPRItems tick", caller, itemID)
+		return
+	}
+	item, getErr := l.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed GetBacklogItem item=%s: %v", caller, itemID, getErr)
+		return
+	}
+	if item.PrNumber <= 0 || item.PrURL == "" ||
+		item.Status == string(BacklogStatusPRPending) || item.Status == string(BacklogStatusDone) || item.Status == string(BacklogStatusArchived) {
+		return // already recovered, or resolved to a terminal state, by the time we got here
+	}
+	l.recoverDriftedPRItem(ctx, item, caller)
+}
+
+// reconcileDriftedPRItems is the periodic self-heal detector for the drift
+// class FindDriftedPRItems queries: items with a real, cached PR reference
+// whose status has fallen out of ReconcilePRPending's view with nothing left
+// actively working on them. Registered immediately before ReconcilePRPending
+// (Task: PR-lifecycle drift self-heal) so a recovered item is picked up by
+// the merge/CI polling sweep in the very same tick rather than waiting an
+// extra cycle. Best-effort: query failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileDriftedPRItems(ctx context.Context, er *EntRepository) {
+	items, err := er.FindDriftedPRItems(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileDriftedPRItems query error: %v", err)
+		return
+	}
+	for _, item := range items {
+		itemData := backlogItemToData(item)
+		l.recoverDriftedPRItem(ctx, &itemData, "reconcileDriftedPRItems")
+	}
 }
 
 // reconcilePushFailedItems retries the push+PR flow for every open
@@ -2608,7 +2736,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 
 	note := "PR created via manual Review Queue Create-PR flow (RunOneShot), not the automated pushAndCreatePR path"
 	if transErr := l.resolveToPRPending(ctx, item.ID, note, "RecordPRCreatedOutOfBand"); transErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand pr_pending transition item=%s: %v", item.ID, transErr)
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "RecordPRCreatedOutOfBand", transErr)
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand item=%s session=%s → pr_pending (PR #%d %s, via manual RunOneShot flow)", item.ID, workSessionUUID, prNumber, prURL)

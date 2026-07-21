@@ -1582,6 +1582,274 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 	assert.False(t, stillOpen, "abandoned_review must be resolved once an out-of-band PR moves the item out of review")
 }
 
+// ─── PR-lifecycle status drift (self-heal + immediate recovery) ───────────────
+//
+// Live 2026-07-20 repro: two backlog items (c2ad7bf3-91bf-4d47-8654-
+// 0f2f20869080, PR #251; 6700a3f2-8c0d-4a98-8bbd-39515d5391b1, PR #172) sat at
+// status="review" with a real, open, cached PR reference that ReconcilePRPending
+// could never see, because it anchors purely on status=="pr_pending". The tests
+// below cover the two-part fix: (1) pushAndCreatePR/shipViaAgentOrFallback/
+// RecordPRCreatedOutOfBand now attempt an immediate recovery when their own
+// resolveToPRPending CAS loses a race after PR fields were already persisted,
+// and (2) reconcileDriftedPRItems is the periodic self-heal backstop.
+
+// TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActiveSession
+// reproduces the exact drift mechanism: pushAndCreatePR persists prNumber/prUrl
+// unconditionally, then attempts a CAS transition to pr_pending that requires
+// the item to still be "review". If some other concurrent, legitimate event
+// (simulated here by forcing the item to "in_progress" mid-flight) wins that
+// race, the item would previously be left stranded — real PR fields cached,
+// status not pr_pending, invisible to ReconcilePRPending forever. With the fix,
+// since nothing is actively working the item (no active session), it is
+// recovered back to pr_pending immediately rather than waiting for the next
+// reconcileDriftedPRItems tick.
+func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActiveSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	// The work session has already ended by the time pushAndCreatePR runs — the
+	// real precondition under which handleReviewSessionExited(PASS) calls it
+	// (workEntry.EndedAt != nil), and also what makes this item eligible for
+	// immediate recovery (no active session to defer to).
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	// Simulate the race: something else moves the item off "review" while
+	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
+	// are still in flight, before its resolveToPRPending call runs.
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/251", createNumber: 251}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
+		"item must be recovered to pr_pending immediately, not left stranded at in_progress with a live PR")
+	assert.Equal(t, 251, fetched.PrNumber)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/251", fetched.PrURL)
+	assert.Contains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessionExists
+// verifies the safety guard: if a new session is actively working the item by
+// the time the CAS loses its race, immediate recovery must NOT steal the item
+// out from under it — forcing status back to pr_pending here would fight a
+// legitimate in-flight rework/fix session exactly the way BUG-026 warns
+// against. The item is left at its drifted status; only the periodic
+// reconcileDriftedPRItems sweep (itself guarded identically) may ever recover
+// it, once that session ends.
+func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	require.NoError(t, err)
+
+	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
+	// legitimately reopened it for rework — and is still active (no EndedAt).
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/252", createNumber: 252}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"must not force the item back to pr_pending while a new session is actively working it")
+	assert.Equal(t, 252, fetched.PrNumber, "PR fields are still persisted even though the status transition lost its race")
+	assert.NotContains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession is the
+// direct regression test for the periodic self-heal detector: an item with a
+// real, cached PR reference sitting at status="review" (matching the live
+// 2026-07-20 repro) with no active session must be found and transitioned back
+// to pr_pending.
+func TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	prURL := "https://github.com/tstapler/stelekit/pull/251"
+	prNumber := 251
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Drifted PR item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
+		"self-heal must anchor on the real PR reference and recover the item back to pr_pending")
+	assert.Equal(t, prNumber, fetched.PrNumber)
+	assert.Equal(t, prURL, fetched.PrURL)
+	assert.Contains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists verifies
+// the safety guard directly against the detector: an item with a real PR
+// cached at status="in_progress" — the exact shape AutoReopenForPRFix produces
+// while a CI-fix session is legitimately in flight, still pushing new commits
+// to the same PR — must be left completely alone while that session is active.
+// Forcing it back to pr_pending mid-fix would reintroduce the pr_pending<->
+// in_progress churn AutoReopenForPRFix's own hasActiveWorkSession guard was
+// added to stop (see its doc comment).
+func TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	prURL := "https://github.com/tstapler/stapler-squad/pull/172"
+	prNumber := 172
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Mid-fix PR item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	// An active (not-yet-ended) work session — AutoReopenForPRFix's fix session
+	// still pushing to the same PR/branch.
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"must not touch an item with an active work session mid-fix")
+	assert.Empty(t, notifier.calls, "must not notify about a recovery that never happened")
+}
+
+// TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR verifies the
+// query itself is scoped correctly: a "review"-status item with no PR yet
+// (genuinely mid-review, not drifted) must never be matched or touched by the
+// detector.
+func TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Healthy in-review item, no PR yet",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "must not touch a healthy item with no PR")
+	assert.Empty(t, notifier.calls)
+}
+
+// TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses verifies the
+// query's own status filter directly: items already in pr_pending (nothing to
+// recover), done, or archived must never be returned, even though they may
+// still carry PR fields.
+func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	for _, status := range []BacklogStatus{BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
+		prURL := "https://github.com/tstapler/stapler-squad/pull/900"
+		prNumber := 900
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:              "Terminal/pr_pending item " + string(status),
+			AcceptanceCriteria: `[]`,
+			Priority:           1,
+			Status:             string(status),
+			RepoPath:           "/tmp/fake-repo",
+		})
+		require.NoError(t, err)
+		_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+			PrURL:    &prURL,
+			PrNumber: &prNumber,
+		}, nil)
+		require.NoError(t, err)
+	}
+
+	items, err := er.FindDriftedPRItems(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, items, "pr_pending/done/archived items must never be treated as drifted")
+}
+
 // ─── handleReviewSessionExited ────────────────────────────────────────────────
 //
 // Review now always happens in a real, hidden session.Instance rather than a
