@@ -1637,11 +1637,15 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	assert.Empty(t, open, "bouncing row must resolve once the item reaches done")
 }
 
-// TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries verifies
-// rework_cap and push_failed rows — written with expectedStatus=<current> at
-// the event site, no fixed anchor — are excluded from the status sweep
-// entirely and rely only on their explicit event-site ResolveStuck calls.
-func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *testing.T) {
+// TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
+// verifies rework_cap rows — the one remaining reason with no non-terminal
+// anchor at all — stay open while the item has not yet reached done/archived.
+// Before this fix, rework_cap (like autonomous_stuck and push_failed before
+// PRs #200/#203) had no resolve path here whatsoever; now it relies on the
+// blanket terminal-status rule (see TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// below), which only fires once the item actually finishes — so it must
+// still stay open on a merely non-terminal, in-flight status.
+func TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1649,10 +1653,10 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *tes
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Event-shaped rows item",
-		Status: string(BacklogStatusDone), // arbitrary/unrelated status
+		Status: string(BacklogStatusInProgress), // non-terminal
 	})
 	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusDone, "cap hit")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusInProgress, "cap hit")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -1661,7 +1665,7 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *tes
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 1, "rework_cap must never be touched by the status sweep — it has no anchor at all, not even a terminal one")
+	require.Len(t, open, 1, "rework_cap has no non-terminal anchor — it must stay open until the item reaches done/archived")
 	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
 }
 
@@ -1698,71 +1702,113 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	assert.Empty(t, open, "the racing write must self-correct within one self-heal tick")
 }
 
-// --- autonomous_stuck terminal-state resolution (docs/bugs: orphaned
-// autonomous_stuck rows never auto-resolve once their item completes) ---
+// --- blanket terminal-status rule (docs/bugs: orphaned autonomous_stuck and
+// push_failed rows never auto-resolved once their item completed — fixed
+// once each, one-off, in PR #200 and PR #203. rework_cap was the third
+// reason sitting in the same trap, unfixed. Rather than a fourth one-off
+// case, selfHealStuck now checks a single blanket rule up front: any open
+// stuck row on an item that has reached a genuine terminal status (done or
+// archived) is resolved, regardless of reason. The table below is the
+// generic regression proof for that rule — any reason, once its item goes
+// terminal, resolves — superseding the old per-reason
+// resolveAutonomousStuckRow_When_ItemReachesDone/Archived and
+// resolvePushFailedRow_When_ItemReachesDone/Archived tests.) ---
 
-// TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesDone
-// verifies the primary regression: an item marked autonomous_stuck that
-// later legitimately completes via the automated pipeline (reaching done
-// through a path other than a subsequent successful onAutonomousDriverComplete
-// run, e.g. ReconcilePRPending's merge-detected transition) gets its stuck
-// row resolved by the self-heal sweep instead of leaking forever.
-func TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesDone(t *testing.T) {
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
+// TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// is the generic regression proof for selfHealStuck's blanket terminal rule:
+// for every StuckReason — including autonomous_stuck and push_failed (the
+// two reasons this was previously proven for, one PR at a time) and
+// rework_cap (the reason left behind, fixed here) — an open row resolves
+// once its item reaches done or archived, independent of whatever
+// reason-specific anchor (if any) that reason otherwise uses.
+func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus(t *testing.T) {
+	cases := []struct {
+		name          string
+		reason        domain.StuckReason
+		initialStatus BacklogStatus
+	}{
+		{"pr_ready_unmerged", domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending},
+		{"abandoned_review", domain.StuckReasonAbandonedReview, BacklogStatusReview},
+		{"stale_work", domain.StuckReasonStaleWork, BacklogStatusInProgress},
+		{"bouncing", domain.StuckReasonBouncing, BacklogStatusInProgress},
+		{"orphaned_triage", domain.StuckReasonOrphanedTriage, BacklogStatusIdea},
+		{"autonomous_stuck", domain.StuckReasonAutonomousStuck, BacklogStatusInProgress},
+		{"push_failed", domain.StuckReasonPushFailed, BacklogStatusReview},
+		{"rework_cap", domain.StuckReasonReworkCap, BacklogStatusInProgress},
+	}
+	terminals := []BacklogStatus{BacklogStatusDone, BacklogStatusArchived}
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "Autonomous item that finished",
-		Status: string(BacklogStatusInProgress),
-	})
-	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
-		"autonomous driver stopped after 20 turns without a DONE signal")
-	require.NoError(t, err)
-	require.True(t, applied)
+	for _, terminal := range terminals {
+		terminal := terminal
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name+"_to_"+string(terminal), func(t *testing.T) {
+				storage, cleanup := createTestStorage(t)
+				defer cleanup()
+				ctx := context.Background()
+				er := storage.repo.(*EntRepository)
 
-	// The item later legitimately completes via a path that never re-invokes
-	// onAutonomousDriverComplete for this item (e.g. ReconcilePRPending's
-	// merge-detected done transition).
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
-	require.NoError(t, err)
+				item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+					Title:  "Terminal blanket-rule item: " + tc.name,
+					Status: string(tc.initialStatus),
+				})
+				require.NoError(t, err)
+				applied, err := er.MarkStuck(ctx, item.ID, tc.reason, tc.initialStatus, "test-marked stuck")
+				require.NoError(t, err)
+				require.True(t, applied)
 
-	listener := NewBacklogLifecycleListener(storage)
-	listener.selfHealStuck(ctx, er)
+				// Reach the terminal status. Archived is only reachable through
+				// done from a non-idea/refining/ready status, so route through
+				// done first — mirrors how these transitions actually happen
+				// (auto-archive only ever acts on items already done).
+				_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+				require.NoError(t, err)
+				if terminal == BacklogStatusArchived {
+					_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
+					require.NoError(t, err)
+				}
 
-	open, err := er.FindOpenStuckStates(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, open, "autonomous_stuck row must resolve once the item reaches done")
+				listener := NewBacklogLifecycleListener(storage)
+				listener.selfHealStuck(ctx, er)
+
+				open, err := er.FindOpenStuckStates(ctx)
+				require.NoError(t, err)
+				assert.Empty(t, open, "%s row must resolve once the item reaches %s, via the blanket terminal rule", tc.reason, terminal)
+			})
+		}
+	}
 }
 
-// TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesArchived
-// verifies the second terminal status in the anchor set — this is also the
-// retroactive cleanup path for rows that predate the fix and were archived
-// (via the auto-archive sweep) before ever being resolved.
-func TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesArchived(t *testing.T) {
+// TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone is the
+// direct, narrow regression test for the bug this PR closes: rework_cap was
+// the one StuckReason still sitting in the "event-shaped, continue" trap that
+// PRs #200 and #203 fixed one-off for autonomous_stuck and push_failed —
+// unfixed only because nobody had hit it live yet. Before this PR, this
+// exact scenario (a rework_cap row open on an item that later reaches done)
+// left the row permanently orphaned; the blanket terminal rule now resolves
+// it like every other reason.
+func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 	er := storage.repo.(*EntRepository)
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "Autonomous item that was archived",
+		Title:  "Rework-cap item that finished",
 		Status: string(BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
-		"autonomous driver stopped after 20 turns without a DONE signal")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusInProgress,
+		"rework cap hit: unlimited backoff exhausted")
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	// Simulate one of the 5 live-repro'd orphans: the item finished long ago
-	// (done, then later auto-archived) with no forward-only hook ever having
-	// touched this exact row — this is the retroactive-cleanup path.
+	// The item later legitimately completes — e.g. a human took over and
+	// pushed it through manually after the automated rework budget ran out.
+	// Before this fix, rework_cap's row would have stayed open forever: it
+	// was excluded from the sweep entirely with no anchor, terminal or
+	// otherwise.
 	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
-	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -1770,7 +1816,7 @@ func TestSelfHealSweep_should_resolveAutonomousStuckRow_When_ItemReachesArchived
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, open, "autonomous_stuck row must resolve once the item reaches archived")
+	assert.Empty(t, open, "rework_cap row must now resolve once the item reaches done — this previously leaked forever")
 }
 
 // TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgress
@@ -1842,83 +1888,14 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
 }
 
-// --- push_failed terminal-state resolution (docs/bugs: orphaned push_failed
-// rows never auto-resolve once their item completes — sibling of the
-// autonomous_stuck fix above, same root cause and same fix shape). ---
-
-// TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesDone verifies
-// the primary regression: an item marked push_failed that later legitimately
-// completes via a path that never routes back through resolveToPRPending
-// (e.g. ReconcilePRPending's merge-detected done transition firing because a
-// human merged the PR directly on GitHub) gets its stuck row resolved by the
-// self-heal sweep instead of leaking forever — live-repro'd on item
-// c2ad7bf3-91bf-4d47-8654-0f2f20869080.
-func TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesDone(t *testing.T) {
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
-
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "Push-failed item that finished",
-		Status: string(BacklogStatusReview),
-	})
-	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
-		"push rejected: non-fast-forward")
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	// The item later legitimately completes via a path that never re-invokes
-	// resolveToPRPending for this item (e.g. a human merged the PR directly
-	// on GitHub, and ReconcilePRPending's merge-detected transition takes the
-	// item straight to done).
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
-	require.NoError(t, err)
-
-	listener := NewBacklogLifecycleListener(storage)
-	listener.selfHealStuck(ctx, er)
-
-	open, err := er.FindOpenStuckStates(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, open, "push_failed row must resolve once the item reaches done")
-}
-
-// TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesArchived
-// verifies the second terminal status in the anchor set — this is also the
-// retroactive cleanup path for rows that predate the fix and were archived
-// before ever being resolved.
-func TestSelfHealSweep_should_resolvePushFailedRow_When_ItemReachesArchived(t *testing.T) {
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	ctx := context.Background()
-	er := storage.repo.(*EntRepository)
-
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "Push-failed item that was archived",
-		Status: string(BacklogStatusReview),
-	})
-	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
-		"push rejected: non-fast-forward")
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	// Simulate the live-repro'd orphan shape: the item finished long ago
-	// (done, then later auto-archived) with no forward-only hook ever having
-	// touched this exact row.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
-	require.NoError(t, err)
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
-	require.NoError(t, err)
-
-	listener := NewBacklogLifecycleListener(storage)
-	listener.selfHealStuck(ctx, er)
-
-	open, err := er.FindOpenStuckStates(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, open, "push_failed row must resolve once the item reaches archived")
-}
+// --- push_failed: still-relevant negative coverage (docs/bugs: orphaned
+// push_failed rows never auto-resolved once their item completed — fixed by
+// PR #203, now generalized into the blanket terminal rule proven by
+// TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// above). The positive done/archived cases live in that generic table now;
+// what's still worth testing per-reason is the negative case below, which
+// guards a specific false-resolve risk unique to push_failed's non-terminal
+// behavior. ---
 
 // TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview
 // verifies an item that is genuinely still stuck (never reached done or

@@ -2034,64 +2034,67 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 // expected item-status no longer matches the item's current status (Task
 // 2.1.5d, adversarial concern C1). This backstops racing MarkStuck writes
 // (the best-effort precondition in MarkStuck is not atomic with the write)
-// and any un-stick call site that was missed. The sweep MUST key off the
-// exact per-reason anchor-set table below, not a single "expected status"
-// scalar:
+// and any un-stick call site that was missed.
 //
-//	pr_ready_unmerged  -> anchor {pr_pending}                 resolve when status not in anchor
-//	abandoned_review   -> anchor {review}                     resolve when status not in anchor
-//	stale_work         -> anchor {in_progress}                resolve when status not in anchor
-//	bouncing           -> anchor {in_progress, review}         resolve ONLY on done/PASS (never mid-cycle)
-//	autonomous_stuck   -> terminal set {done, archived}        resolve ONLY on reaching the set (inverted anchor)
-//	push_failed        -> terminal set {done, archived}        resolve ONLY on reaching the set (inverted anchor)
-//	rework_cap         -> event-shaped, no anchor              excluded from the sweep entirely
+// The sweep applies ONE blanket rule up front, before any reason-specific
+// logic: an open stuck row on an item that has reached a genuine terminal
+// status (done or archived) is always resolved, regardless of which reason
+// it is for. An item that has truly finished has nothing left needing
+// operator attention, no matter what it was ever stuck for — so this check
+// runs first and short-circuits the rest of the loop body for that row.
+// This is what closes the recurring bug shape fixed one reason at a time in
+// PR #200 (autonomous_stuck) and PR #203 (push_failed): rather than adding a
+// fourth near-identical case for the next reason that turns out to need it
+// (rework_cap, fixed here), any reason gets this behavior for free, forever,
+// with no further PRs required.
 //
-// autonomous_stuck and push_failed are the two rows in this table that anchor
-// the opposite way from the others: those resolve when the item LEAVES its
-// anchor status; these resolve only once the item REACHES a genuinely
-// terminal status (done or archived).
+// For a row on an item that has NOT yet reached a terminal status, the sweep
+// falls through to the per-reason anchor-set table below — most reasons
+// anchor on a single non-terminal status and resolve as soon as the item
+// LEAVES it:
 //
-// autonomous_stuck's row must legitimately survive transient
-// in_progress<->review cycling while a stuck item is respawned and retried
-// (AutoRespawnAutonomousWork) or manually pushed through review. As of PR
-// #180, onAutonomousDriverComplete's SessionRoleWork case no longer
-// force-transitions in_progress->review on a turn-cap stop (it leaves the
-// item in_progress and respawns instead), so there is no false "left
-// in_progress" signal to anchor on mid-cycle the way there was when this
-// exclusion was originally written. This case doubles as the retroactive
-// cleanup path for autonomous_stuck rows left open by items that reached
-// done/archived via a completion path other than a subsequent successful
-// onAutonomousDriverComplete run (e.g. ReconcilePRPending's merge-detected
-// done transition, pushAndCreatePR's skip-review-gate fallback, or
-// auto-archive) — see resolveAutonomousStuck in
-// server/services/autonomous_orchestration_service.go for the faster,
-// event-driven counterpart that covers the common "driver succeeds on a
-// later attempt" case immediately instead of waiting for this sweep's next
-// tick.
+//	pr_ready_unmerged  -> anchor {pr_pending}          resolve when status not in anchor
+//	abandoned_review   -> anchor {review}               resolve when status not in anchor
+//	stale_work         -> anchor {in_progress}          resolve when status not in anchor
+//	bouncing           -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
+//	orphaned_triage    -> anchor {idea}                 resolve when status not in anchor
 //
-// push_failed's row must likewise survive being retried in place while the
-// item stays at "review" (reconcilePushFailedItems/attemptPushRemediation
-// retry the push+PR flow without ever changing item status until a retry
-// succeeds), so it cannot anchor on "leaves review" — a naive same-status
-// anchor tells us nothing about whether the underlying push actually
-// succeeded. Unlike autonomous_stuck, push_failed never had an "in_progress"
-// false-resolve risk to guard against in the first place (its anchor status
-// is "review", not "in_progress", and the sweep only fires on done/archived,
-// never merely on leaving review) — it was excluded purely because it is
-// event-shaped, not because a terminal anchor was unsafe. Reaching
-// done/archived is always authoritative: either resolveToPRPending's own
-// call already resolved the row (the common path, via a successful
-// pushAndCreatePR retry), or the item reached done/archived through some
-// other legitimate path that supersedes the stale row — e.g.
-// pushAndCreatePR's own fallbackToDone("no worktree") declaring "nothing
-// left to ship" is already treated as authoritative elsewhere in this same
-// function, or (the live-repro'd case, item c2ad7bf3-91bf-4d47-8654-0f2f20869080)
-// ReconcilePRPending's merge-detected done transition firing because a human
-// merged the PR directly on GitHub, bypassing resolveToPRPending's explicit
-// resolve entirely even though the code genuinely shipped. This case doubles
-// as the retroactive cleanup path for push_failed rows left open by items
-// that reached done/archived without ever routing back through
-// resolveToPRPending.
+// autonomous_stuck, push_failed, and rework_cap have no non-terminal anchor
+// at all — before the item reaches done/archived they stay open, relying
+// entirely on the blanket terminal rule above (or, for autonomous_stuck and
+// push_failed, their own faster event-driven resolution paths — see
+// resolveAutonomousStuck in server/services/autonomous_orchestration_service.go
+// and resolveToPRPending respectively — which typically resolve the row
+// before this sweep's next tick even runs). Any future StuckReason added
+// without an explicit case here behaves the same way: excluded from
+// non-terminal anchoring, covered by the blanket rule once the item finishes.
+//
+// Why the blanket terminal rule is safe for every reason, not just the ones
+// it was originally proven safe for: the concern that motivated excluding
+// autonomous_stuck from anchoring in the first place (documented in the
+// original PR #200 investigation) was specifically an "in_progress" false-resolve
+// risk — pre-PR #180, onAutonomousDriverComplete's SessionRoleWork case could
+// force an in_progress->review transition on a turn-cap stop even while the
+// item was genuinely still stuck, which would have made a naive {in_progress}
+// anchor resolve the row before an operator ever saw it. That risk is
+// specific to anchoring on a NON-terminal, mid-cycle status simply being
+// "left" (in_progress, or push_failed's "review"), which a routine, expected
+// state transition can trigger while real work is still incomplete.
+// done/archived are not reachable that way: nothing in this codebase
+// transitions an item to done or archived as a side effect of a retry,
+// respawn, or turn-cap stop — reaching either status is only ever the result
+// of the item's work being genuinely, verifiably finished (a successful
+// pipeline run, a human merging the PR directly, or the auto-archive sweep
+// acting on an item already done). This holds for every existing reason
+// (autonomous_stuck, push_failed) and for rework_cap: a rework_cap row is
+// marked when an item exhausts its retry budget, but nothing about hitting
+// that cap can itself force the item to done/archived — those transitions
+// only happen through the same genuinely-finished paths as every other
+// reason, so the same safety argument PR #200 made for autonomous_stuck and
+// PR #203 re-derived for push_failed applies unconditionally to rework_cap
+// and to any future reason: this settles the question for the blanket rule
+// as a whole, not per-reason, and no future reason should need to re-derive
+// it again.
 //
 // Same-status clears (e.g. a pr_pending item whose PR stops being ready
 // while it's still pr_pending) are NOT this sweep's job — they are handled
@@ -2104,6 +2107,13 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		return
 	}
 	for _, row := range open {
+		if row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived {
+			// Blanket terminal rule — see doc comment above. An item that has
+			// truly finished has nothing left needing operator attention,
+			// regardless of which reason its stuck row is for.
+			l.resolveStuckLogged(ctx, er, row.ItemID, row.Reason, "selfHealStuck/terminal")
+			continue
+		}
 		resolve := false
 		switch row.Reason {
 		case domain.StuckReasonPRReadyUnmerged:
@@ -2116,16 +2126,11 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonAutonomousStuck, domain.StuckReasonPushFailed:
-			// Inverted anchor — see the table above. Resolve only once the item
-			// has genuinely finished, never merely because it left in_progress
-			// (autonomous_stuck) or review (push_failed).
-			resolve = row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived
-		case domain.StuckReasonReworkCap:
-			// Event-shaped: resolved only at an explicit call site, not by
-			// anchoring on item status.
-			continue
 		default:
+			// autonomous_stuck, push_failed, rework_cap, and any future reason
+			// with no non-terminal anchor: stays open until the blanket
+			// terminal rule above catches it, or its own event-site resolves
+			// it first.
 			continue
 		}
 		if !resolve {
