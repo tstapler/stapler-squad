@@ -183,25 +183,25 @@ func TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_Proces
 	assert.Nil(t, resp.Msg.PidIdentity)
 }
 
-func TestImportService_CommitImportExternalSession_ReturnsUnimplemented(t *testing.T) {
+func TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_CandidateNil(t *testing.T) {
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CommitImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
-func TestImportService_ConfirmKillExternalSession_ReturnsUnimplemented(t *testing.T) {
+func TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.ConfirmKillExternalSession(context.Background(), connect.NewRequest(&sessionv1.ConfirmKillExternalSessionRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
-func TestImportService_CancelPendingKill_ReturnsUnimplemented(t *testing.T) {
+func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
 	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CancelPendingKill(context.Background(), connect.NewRequest(&sessionv1.CancelPendingKillRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
 // newGatedImportTestServer wires ImportService behind the same
@@ -291,19 +291,20 @@ func TestImportService_AllFourRPCs_ExecuteNormally_When_FeatureFlagTrue(t *testi
 	}))
 	require.NoError(t, err)
 
-	// The three mutating RPCs are still unimplemented stubs (Stories 1.2.1 /
-	// 1.3.1 / 1.3.3 land in later tasks), so with the flag on they must fail
-	// with CodeUnimplemented from the handler itself, never from the
-	// interceptor -- i.e. the interceptor must be a complete no-op here.
+	// The three mutating RPCs are now fully implemented (Stories 1.2.1 /
+	// 1.3.1 / 1.3.3). With the flag on, an empty request reaches the handler
+	// itself -- which rejects it with CodeInvalidArgument for missing
+	// required fields -- never CodeUnimplemented from the interceptor, i.e.
+	// the interceptor must be a complete no-op here.
 	_, err = client.CommitImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
 	_, err = client.ConfirmKillExternalSession(context.Background(), connect.NewRequest(&sessionv1.ConfirmKillExternalSessionRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
 	_, err = client.CancelPendingKill(context.Background(), connect.NewRequest(&sessionv1.CancelPendingKillRequest{}))
 	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }

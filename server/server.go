@@ -434,7 +434,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// CodeUnimplemented rather than the CodeNotFound used by the
 	// config-persisted "backlog" flag, since this is an unshipped/opt-in
 	// capability rather than a togglable UI feature.
-	importSvc := services.NewImportServiceWithRealInspector()
+	suspendedStore, err := session.NewSuspendedProcessStore()
+	if err != nil {
+		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
+	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore); err != nil {
+		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
+	}
+	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
 	importOpts := append(
 		ConnectOptions(deps.ErrorRegistry),
 		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
