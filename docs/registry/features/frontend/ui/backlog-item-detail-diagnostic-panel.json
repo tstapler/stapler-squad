@@ -11,7 +11,8 @@
     "routes a manual-review-* session to BlockedNotice with the identical treatment as blocked_guardrail",
     "routes a review-blocked-* session to BlockedNotice too",
     "uses role=status for the one-line summary and never role=log",
-    "never renders nothing for malformed/partial headless_diagnostic data"
+    "never renders nothing for malformed/partial headless_diagnostic data",
+    "backlog item detail redesign > reveals the synthetic session row's TriageReviewPanel readOnly summary when expanded"
   ],
   "lastModified": "2026-07-21T00:00:00Z"
 }

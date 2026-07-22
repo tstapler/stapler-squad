@@ -1,4 +1,4 @@
-// @feature backlog:item-detail
+// @feature backlog-item-detail-lifecycle-summary, backlog-item-detail-diagnostic-panel
 /**
  * E2E tests for the redesigned backlog item detail panel
  * (project_plans/backlog-item-detail-ux, Epic 6.1 / Story 6.1.2) — proves

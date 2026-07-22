@@ -25,11 +25,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// headlessTriageSeedUUIDPrefix mirrors server/services/backlog_service_triage.go's
-// headlessTriageUUIDPrefix constant so seeded rows are classified identically by
-// the frontend's classifySessionKind() (web-app/src/lib/backlog/sessionKind.ts).
-const headlessTriageSeedUUIDPrefix = "headless-triage-"
-
 // BacklogDebugSeedHandler seeds BacklogStuckState rows for the e2e suite.
 type BacklogDebugSeedHandler struct {
 	storage *session.Storage
@@ -297,7 +292,7 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		return
 	}
 
-	sessionUUID := headlessTriageSeedUUIDPrefix + uuid.New().String()
+	sessionUUID := headlessTriageUUIDPrefix + uuid.New().String()
 	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:       item.ID,
 		SessionUUID:  sessionUUID,

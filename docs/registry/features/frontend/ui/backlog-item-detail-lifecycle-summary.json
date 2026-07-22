@@ -12,7 +12,8 @@
     "LifecycleSummary_should_RetainLastKnownBlockerChip_When_UseStuckBacklogItemsReturnsError",
     "LifecycleSummary_should_RenderDataTestIdWithStageTrackerActive_When_ComposedFromAllThreeChildren",
     "LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault",
-    "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault"
+    "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault",
+    "backlog item detail redesign > shows the Lifecycle Summary with zero prior clicks"
   ],
   "lastModified": "2026-07-21T00:00:00Z"
 }
