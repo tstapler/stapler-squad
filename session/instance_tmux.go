@@ -216,8 +216,17 @@ func (i *Instance) promptArg() string {
 		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
 		return shellQuote(i.Prompt)
 	}
+	// Capture the delay here, on the calling goroutine, rather than reading
+	// promptFileCleanupDelay inside the spawned goroutine below: tests mutate
+	// that package var (see withShortPromptFileCleanupDelay) and restore it in
+	// t.Cleanup, which races with a still-sleeping cleanup goroutine from an
+	// earlier promptArg call reading the same var concurrently. Capturing a
+	// local copy means the background goroutine never touches the shared var,
+	// so only the (sequential, non-parallel) test/production goroutine ever
+	// accesses it.
+	delay := promptFileCleanupDelay
 	go func() {
-		time.Sleep(promptFileCleanupDelay)
+		time.Sleep(delay)
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 			log.Warn("promptArg: failed to clean up temp prompt file", "path", path, "err", rmErr)
 		}
