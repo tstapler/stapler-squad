@@ -75,11 +75,25 @@ describe("SessionsSection", () => {
     const showMore = screen.getByTestId("sessions-show-more");
     expect(showMore).toHaveTextContent("Show 6 more");
 
+    // Identity check (regression for the "shows oldest, not most recent" bug):
+    // linkedSessions is ascending by createdAt, so the visible 5 must be the
+    // TAIL of the list (the 3 most recent triage/review + both work sessions),
+    // never the oldest triage sessions from the head of the list.
+    expect(screen.getByText("work-session-1")).toBeInTheDocument();
+    expect(screen.getByText("work-session-0")).toBeInTheDocument();
+    expect(screen.getByText("headless-re-review-2")).toBeInTheDocument();
+    expect(screen.queryByText("headless-triage-0")).not.toBeInTheDocument();
+    expect(screen.queryByText("headless-triage-5")).not.toBeInTheDocument();
+
     fireEvent.click(showMore);
 
     // All 11 shown inline, in the same list, no route change.
     expect(screen.getAllByRole("listitem")).toHaveLength(11);
     expect(screen.queryByTestId("sessions-show-more")).not.toBeInTheDocument();
+
+    // Once expanded, the previously-hidden oldest sessions must now be present.
+    expect(screen.getByText("headless-triage-0")).toBeInTheDocument();
+    expect(screen.getByText("headless-triage-5")).toBeInTheDocument();
   });
 
   it("renders no Show More button when session count is at or below the cap", () => {

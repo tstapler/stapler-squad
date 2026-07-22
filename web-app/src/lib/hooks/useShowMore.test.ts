@@ -15,6 +15,18 @@ describe("useShowMore", () => {
     expect(result.current.remaining).toBe(6);
   });
 
+  it("useShowMore_should_ReturnTheMostRecentCapItemsInAscendingOrder_When_ItemsAreOrderedOldestToNewest", () => {
+    // Every real caller (session/ent_repository_backlog.go, session/storage_backlog.go)
+    // sorts by createdAt ascending, so index 0 is the OLDEST item and the tail is the
+    // most recent. `visible` must be the tail, not the head, and must preserve the
+    // ascending (chronological) order — not reverse it.
+    const items = ["old-1", "old-2", "old-3", "recent-1", "recent-2", "recent-3"];
+    const { result } = renderHook(() => useShowMore("itm_a1b2c3", "sessions", items, 3));
+
+    expect(result.current.visible).toEqual(["recent-1", "recent-2", "recent-3"]);
+    expect(result.current.visible).not.toEqual(["old-1", "old-2", "old-3"]);
+  });
+
   it("useShowMore_should_ReturnAllItemsVisibleAndHasMoreFalse_When_ItemCountAtOrBelowCap", () => {
     const items = [1, 2, 3];
     const { result } = renderHook(() => useShowMore("itm_a1b2c3", "sessions", items, 5));

@@ -55,7 +55,7 @@ export function useShowMore<T>(
   const hasMore = items.length > cap && !showingAll;
   const remaining = Math.max(items.length - cap, 0);
   const visible = useMemo(
-    () => (showingAll || items.length <= cap ? items : items.slice(0, cap)),
+    () => (showingAll || items.length <= cap ? items : items.slice(-cap)),
     [items, cap, showingAll]
   );
 
