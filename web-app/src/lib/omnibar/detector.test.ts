@@ -150,4 +150,53 @@ describe("Detector", () => {
       expect(registry.detect("squad").type).toBe(InputType.SessionSearch);
     });
   });
+
+  // detectAll() mirrors detect()'s try/catch around each detector.detect() call
+  // but was added without its own test coverage — verify the same resilience
+  // guarantees hold: a throwing detector must not prevent detectAll() from
+  // returning results collected from the other, non-throwing detectors.
+  describe("detectAll() exception handling", () => {
+    class ThrowingDetector implements Detector {
+      name = "Throwing";
+      priority = 1; // runs before every default detector
+      detect(): DetectionResult | null {
+        throw new Error("boom");
+      }
+    }
+
+    let consoleErrorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
+    it("does not throw and still returns results from other detectors when one detector throws", () => {
+      registry.register(new ThrowingDetector());
+
+      let results: DetectionResult[] = [];
+      expect(() => {
+        results = registry.detectAll("squad");
+      }).not.toThrow();
+
+      expect(results.some((r) => r.type === InputType.SessionSearch)).toBe(true);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+
+    it("returns an empty array (not a crash) when every registered detector throws", () => {
+      const isolated = new DetectorRegistry();
+      isolated.register(new ThrowingDetector());
+
+      let results: DetectionResult[] = [];
+      expect(() => {
+        results = isolated.detectAll("anything");
+      }).not.toThrow();
+
+      expect(results).toEqual([]);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+  });
 });

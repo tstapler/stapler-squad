@@ -39,6 +39,12 @@ import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
 import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
 
+// Stable identity for callers that omit the `workflows` prop. `workflows` is a
+// dependency of the detection debounce effect below — a fresh `[]` literal as
+// the default parameter value would get a new identity every render, which
+// would restart the 150ms debounce on every render for such callers.
+const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
+
 interface OmnibarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -153,7 +159,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = [] }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -425,119 +431,119 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     debounceRef.current = setTimeout(() => {
       try {
         if (input.trim()) {
-        // Pre-process slash commands before detection so /oneoff etc. aren't
-        // misidentified as local paths by LocalPathDetector (priority 100).
-        const slashCmd = parseSlashCommand(input);
-        if (slashCmd) {
-          setFormField("sessionType", slashCmd.sessionType);
-        }
-        const detectInput = slashCmd ? slashCmd.remainder : input;
-        const result = detect(detectInput || input);
-        setDetection(result);
-
-        // Reset dropdown dismissed state when input type changes modes.
-        // Prevents session results from being suppressed after user dismisses
-        // path completion dropdown then backspaces to bare text.
-        if (result.type !== prevDetectionTypeRef.current) {
-          setDropdownDismissed(false);
-        }
-        prevDetectionTypeRef.current = result.type;
-
-        // Update mode based on detection type
-        if (result.type === InputType.NewSession) {
-          // "new/" prefix typed → creation_with_repo mode with query from parsedValue
-          dispatchMode({ kind: "new_prefix_typed", query: result.parsedValue });
-        } else {
-          dispatchMode({ kind: "detect", detection: result });
-          if (result.type === InputType.SessionSearch) {
-            setResultHighlightIndex(-1);
+          // Pre-process slash commands before detection so /oneoff etc. aren't
+          // misidentified as local paths by LocalPathDetector (priority 100).
+          const slashCmd = parseSlashCommand(input);
+          if (slashCmd) {
+            setFormField("sessionType", slashCmd.sessionType);
           }
-        }
+          const detectInput = slashCmd ? slashCmd.remainder : input;
+          const result = detect(detectInput || input);
+          setDetection(result);
 
-        // Auto-fill session name (and firstPrompt for `>` separator) if:
-        // 1. Session name is empty, OR
-        // 2. Session name matches the last auto-suggested name (not manually edited)
-        // This allows suggestions to update as the user types the path (e.g., "~" → "sqlway")
-        if (result.type === InputType.SessionSearch && !slashCmd) {
-          // Derive-on-read: split on first `>` to populate name + firstPrompt
-          const parsed = parseInputWithSeparator(input);
-          const derivedName = parsed.name;
-          if (derivedName && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            setSessionName(derivedName);
-            lastSuggestedNameRef.current = derivedName;
+          // Reset dropdown dismissed state when input type changes modes.
+          // Prevents session results from being suppressed after user dismisses
+          // path completion dropdown then backspaces to bare text.
+          if (result.type !== prevDetectionTypeRef.current) {
+            setDropdownDismissed(false);
           }
-          if (parsed.firstPrompt) {
-            setFormField("firstPrompt", parsed.firstPrompt);
-          }
-        } else if (
-          result.suggestedName &&
-          result.type !== InputType.Alias &&
-          result.type !== InputType.Command &&
-          result.type !== InputType.SpawnShell
-        ) {
-          // Skip for Alias — the alias-specific block below handles name population
-          // (running both would reset lastSuggestedNameRef mid-effect and cause oscillation).
-          // Skip for Command/SpawnShell — their suggestedName is a human-readable label
-          // ("Switch to Matrix theme"), not a session-name candidate.
-          if (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current) {
-            // Detectors like LocalPath/PathWithBranch/NewSession/GitHub* build suggestedName
-            // from raw path segments, branch names, or free text — slug it here so every
-            // detector gets a valid kebab-case name for free instead of each one remembering to.
-            const slugged = toSessionSlug(result.suggestedName);
-            setSessionName(slugged);
-            lastSuggestedNameRef.current = slugged;
-          }
-        }
+          prevDetectionTypeRef.current = result.type;
 
-        // Auto-fill branch if detected
-        if (result.branch && !branchRef.current) {
-          setBranch(result.branch);
-        }
-
-        // When an alias resolves, populate form fields from its configured defaults
-        // so the user can see (and optionally adjust) what will be created.
-        if (result.type === InputType.Alias) {
-          const aliasMeta = result.metadata as AliasMetadata | undefined;
-          const alias = aliasMeta?.alias;
-          if (alias) {
-            if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
-              setFormField("program", alias.program);
-              lastSuggestedProgramRef.current = alias.program;
+          // Update mode based on detection type
+          if (result.type === InputType.NewSession) {
+            // "new/" prefix typed → creation_with_repo mode with query from parsedValue
+            dispatchMode({ kind: "new_prefix_typed", query: result.parsedValue });
+          } else {
+            dispatchMode({ kind: "detect", detection: result });
+            if (result.type === InputType.SessionSearch) {
+              setResultHighlightIndex(-1);
             }
-            // UNSPECIFIED means "Default (directory)" in the alias editor — always apply it.
-            // Skipping UNSPECIFIED left the form at its initial "new_worktree" default.
-            const resolvedSessionType = alias.sessionType !== SessionType.UNSPECIFIED
-              ? protoSessionTypeToFormString(alias.sessionType)
-              : "directory";
-            setFormField("sessionType", resolvedSessionType);
-            setFormField("autoYes", alias.autoYes);
           }
-          // Populate branch from @alias:branch syntax so the user can see/edit it.
-          if (aliasMeta?.branch && !branchRef.current) {
-            setBranch(aliasMeta.branch);
+
+          // Auto-fill session name (and firstPrompt for `>` separator) if:
+          // 1. Session name is empty, OR
+          // 2. Session name matches the last auto-suggested name (not manually edited)
+          // This allows suggestions to update as the user types the path (e.g., "~" → "sqlway")
+          if (result.type === InputType.SessionSearch && !slashCmd) {
+            // Derive-on-read: split on first `>` to populate name + firstPrompt
+            const parsed = parseInputWithSeparator(input);
+            const derivedName = parsed.name;
+            if (derivedName && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              setSessionName(derivedName);
+              lastSuggestedNameRef.current = derivedName;
+            }
+            if (parsed.firstPrompt) {
+              setFormField("firstPrompt", parsed.firstPrompt);
+            }
+          } else if (
+            result.suggestedName &&
+            result.type !== InputType.Alias &&
+            result.type !== InputType.Command &&
+            result.type !== InputType.SpawnShell
+          ) {
+            // Skip for Alias — the alias-specific block below handles name population
+            // (running both would reset lastSuggestedNameRef mid-effect and cause oscillation).
+            // Skip for Command/SpawnShell — their suggestedName is a human-readable label
+            // ("Switch to Matrix theme"), not a session-name candidate.
+            if (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current) {
+              // Detectors like LocalPath/PathWithBranch/NewSession/GitHub* build suggestedName
+              // from raw path segments, branch names, or free text — slug it here so every
+              // detector gets a valid kebab-case name for free instead of each one remembering to.
+              const slugged = toSessionSlug(result.suggestedName);
+              setSessionName(slugged);
+              lastSuggestedNameRef.current = slugged;
+            }
           }
-          // If the user typed a label after the alias name (e.g. "@ssq my-feature"),
-          // use it as the session name so they can see and edit it before submitting.
-          // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
-          const typedLabel = aliasMeta?.label;
-          const namePrefix = alias?.namePrefix ?? "";
-          if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            // Slug the typed portion only — speech-to-text and free typing won't
-            // produce dashes on their own (e.g. "deck drainage" → "deck-drainage").
-            const suggested = namePrefix ? `${namePrefix}${toSessionSlug(typedLabel)}` : toSessionSlug(typedLabel);
-            setSessionName(suggested);
-            lastSuggestedNameRef.current = suggested;
-          } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            // No label yet but prefix defined: show just the prefix so the user knows what to complete.
-            setSessionName(namePrefix);
-            lastSuggestedNameRef.current = namePrefix;
+
+          // Auto-fill branch if detected
+          if (result.branch && !branchRef.current) {
+            setBranch(result.branch);
           }
+
+          // When an alias resolves, populate form fields from its configured defaults
+          // so the user can see (and optionally adjust) what will be created.
+          if (result.type === InputType.Alias) {
+            const aliasMeta = result.metadata as AliasMetadata | undefined;
+            const alias = aliasMeta?.alias;
+            if (alias) {
+              if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
+                setFormField("program", alias.program);
+                lastSuggestedProgramRef.current = alias.program;
+              }
+              // UNSPECIFIED means "Default (directory)" in the alias editor — always apply it.
+              // Skipping UNSPECIFIED left the form at its initial "new_worktree" default.
+              const resolvedSessionType = alias.sessionType !== SessionType.UNSPECIFIED
+                ? protoSessionTypeToFormString(alias.sessionType)
+                : "directory";
+              setFormField("sessionType", resolvedSessionType);
+              setFormField("autoYes", alias.autoYes);
+            }
+            // Populate branch from @alias:branch syntax so the user can see/edit it.
+            if (aliasMeta?.branch && !branchRef.current) {
+              setBranch(aliasMeta.branch);
+            }
+            // If the user typed a label after the alias name (e.g. "@ssq my-feature"),
+            // use it as the session name so they can see and edit it before submitting.
+            // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
+            const typedLabel = aliasMeta?.label;
+            const namePrefix = alias?.namePrefix ?? "";
+            if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              // Slug the typed portion only — speech-to-text and free typing won't
+              // produce dashes on their own (e.g. "deck drainage" → "deck-drainage").
+              const suggested = namePrefix ? `${namePrefix}${toSessionSlug(typedLabel)}` : toSessionSlug(typedLabel);
+              setSessionName(suggested);
+              lastSuggestedNameRef.current = suggested;
+            } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              // No label yet but prefix defined: show just the prefix so the user knows what to complete.
+              setSessionName(namePrefix);
+              lastSuggestedNameRef.current = namePrefix;
+            }
+          }
+        } else {
+          setDetection(null);
+          dispatchMode({ kind: "reset_to_discovery" });
+          setResultHighlightIndex(-1);
         }
-      } else {
-        setDetection(null);
-        dispatchMode({ kind: "reset_to_discovery" });
-        setResultHighlightIndex(-1);
-      }
       } catch (err) {
         // Never let a thrown exception mid-update abandon UI state — leave the
         // last valid detection/canSubmit state in place and surface the failure.

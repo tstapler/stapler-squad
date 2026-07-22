@@ -358,9 +358,12 @@ func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
 // CreateSession's GitHub URL resolution step (the one known synchronous
 // sub-operation that can block for up to ~120s on a real clone) is bound to
 // the request context rather than able to hang the RPC forever. An
-// already-expired context makes the goroutine+select race in
-// session_service.go deterministic: ctx.Done() is closed before the
-// resolver's real network call could possibly complete.
+// already-expired context is threaded all the way down to
+// safeexec.CommandContext for the underlying `git clone` subprocess, so the
+// subprocess itself should be killed at/near start rather than merely having
+// the RPC give up while a clone keeps running in the background. This makes
+// the test deterministic and fast: ctx.Done() is already closed before the
+// subprocess can do any meaningful network I/O.
 func TestCreateSession_GitHubURLResolution_BoundedByContext(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)

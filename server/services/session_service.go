@@ -1249,33 +1249,20 @@ func (s *SessionService) CreateSession(
 	if session.IsGitHubURL(req.Msg.Path) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
 
-		// ResolveGitHubInput doesn't accept a context (it shells out to git
-		// clone internally), so bound it with a goroutine + select against
-		// createSessionTimeout rather than letting a stalled clone/fetch hang
-		// the RPC — and the client's Create button — forever.
-		type githubResolveResult struct {
-			localPath string
-			ref       *session.GitHubRef
-			err       error
+		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
+		// timeout genuinely cancels the subprocess instead of abandoning it
+		// to keep running in the background after the RPC returns.
+		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
+			}
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
 		}
-		resultCh := make(chan githubResolveResult, 1)
-		go func() {
-			localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
-			resultCh <- githubResolveResult{localPath: localPath, ref: ref, err: err}
-		}()
-
-		var resolved githubResolveResult
-		select {
-		case resolved = <-resultCh:
-		case <-ctx.Done():
-			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
-		}
-		if resolved.err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", resolved.err))
-		}
-		resolvedPath = resolved.localPath
-		gitHubRef = resolved.ref
-		clonedRepoPath = resolved.localPath
+		resolvedPath = localPath
+		gitHubRef = ref
+		clonedRepoPath = localPath
 
 		// Use branch from GitHub URL if not explicitly provided
 		if branch == "" && gitHubRef.Branch != "" {
