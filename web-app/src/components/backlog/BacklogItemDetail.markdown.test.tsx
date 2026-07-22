@@ -88,6 +88,10 @@ const baseItem: BacklogItem = {
 describe("BacklogItemDetail — description markdown rendering", () => {
   beforeEach(() => {
     getBacklogItem.mockReset();
+    // Story 3.1.4's useSectionExpandState persists collapse state to
+    // localStorage keyed by itemId — clear between tests so one test's
+    // expand click never leaks into the next test reusing "item-1".
+    localStorage.clear();
   });
 
   it("renders bold text and links instead of literal markdown syntax", async () => {

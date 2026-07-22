@@ -126,4 +126,51 @@ describe("LifecycleSummary", () => {
     expect(screen.getByTestId("stage-node-review")).toHaveAttribute("aria-current", "step");
     expect(screen.getByTestId("liveness-line")).toBeInTheDocument();
   });
+
+  it("LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault", () => {
+    useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+
+    render(
+      <LifecycleSummary
+        item={makeItem({ id: "itm_a1b2c3" })}
+        pipelineDisplay={{ kind: "resolved", name: "Fast Track", drifted: false }}
+      />
+    );
+
+    expect(screen.getByTestId("lifecycle-pipeline-badge")).toHaveTextContent("Pipeline: Fast Track");
+  });
+
+  it("LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault", () => {
+    useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+
+    render(
+      <LifecycleSummary
+        item={makeItem({ id: "itm_a1b2c3" })}
+        pipelineDisplay={{ kind: "resolved", name: "default", drifted: false }}
+      />
+    );
+
+    expect(screen.queryByTestId("lifecycle-pipeline-badge")).not.toBeInTheDocument();
+  });
+
+  it("omits the badge when no pipelineDisplay prop is passed at all", () => {
+    useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+
+    render(<LifecycleSummary item={makeItem({ id: "itm_a1b2c3" })} />);
+
+    expect(screen.queryByTestId("lifecycle-pipeline-badge")).not.toBeInTheDocument();
+  });
+
+  it("omits the badge for an unrecognized pipeline mode", () => {
+    useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+
+    render(
+      <LifecycleSummary
+        item={makeItem({ id: "itm_a1b2c3" })}
+        pipelineDisplay={{ kind: "unrecognized", slug: "legacy-fast" }}
+      />
+    );
+
+    expect(screen.queryByTestId("lifecycle-pipeline-badge")).not.toBeInTheDocument();
+  });
 });

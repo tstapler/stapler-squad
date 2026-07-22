@@ -13,3 +13,16 @@ export const container = style({
   gap: vars.space["3"],
   padding: `${vars.space["2"]} 0`,
 });
+
+/** D6 fix (Task 3.1.4g): compact "Pipeline: <name>" badge next to the tracker. */
+export const pipelineBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.full,
+  border: `1px solid ${vars.color.inputBorder}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});

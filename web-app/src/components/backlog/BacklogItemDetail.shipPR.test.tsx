@@ -118,6 +118,10 @@ function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
 async function renderItem(item: BacklogItem) {
   getBacklogItem.mockReset().mockResolvedValue(item);
   triggerShipPR.mockClear();
+  // Story 3.1.4's useSectionExpandState persists collapse state to
+  // localStorage keyed by itemId — clear so one test's expand/collapse
+  // interactions never leak into the next test reusing the same itemId.
+  localStorage.clear();
 
   render(<BacklogItemDetail itemId={item.id} />);
 

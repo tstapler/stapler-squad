@@ -9,14 +9,15 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
+import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { getApiBaseUrl } from "@/lib/config";
-import { VcsWidget } from "@/components/shared/VcsWidget";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
+import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
+import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
-import { SessionMonitor } from "./SessionMonitor";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
@@ -28,6 +29,12 @@ import { ReviewingSection } from "./detail/ReviewingSection";
 import { PullRequestSection } from "./detail/PullRequestSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
+import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
+import { VersionControlSection } from "./detail/VersionControlSection";
+import { SessionsSection } from "./detail/SessionsSection";
+import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
+import { ProgressHistorySection } from "./detail/ProgressHistorySection";
+import { NotesSection } from "./detail/NotesSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -75,43 +82,6 @@ function formatDate(iso?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-/**
- * Epic 3.4 "what ran" surface — resolves an ItemSession's frozen
- * pipelineModeSnapshot against the currently-fetched mode list, purely for
- * display (looking up the human-readable name). The underlying stored
- * value is never re-resolved live. Case priority (see plan.md Story 3.4.1):
- *   1. Snapshot slug not found in the current mode list → "unrecognized"
- *      (checked first — there's no live mode to compare a hash against).
- *   2. Snapshot slug found, but its content hash has since changed →
- *      "resolved" with drifted: true.
- *   3. Snapshot slug found and unchanged (or snapshot hash is empty,
- *      meaning default mode / a pre-feature session) → "resolved" with
- *      drifted: false. Empty pipelineModeSnapshot always short-circuits to
- *      the "default" case before any lookup is attempted.
- */
-type PipelineModeDisplay =
-  | { kind: "resolved"; name: string; drifted: boolean }
-  | { kind: "unrecognized"; slug: string };
-
-function resolvePipelineModeDisplay(
-  session: LinkedSession,
-  modes: PipelineMode[]
-): PipelineModeDisplay {
-  const snapshot = session.pipelineModeSnapshot ?? "";
-  if (snapshot === "") {
-    return { kind: "resolved", name: "default", drifted: false };
-  }
-
-  const match = modes.find((m) => m.slug === snapshot);
-  if (!match) {
-    return { kind: "unrecognized", slug: snapshot };
-  }
-
-  const snapshotHash = session.pipelineModeSnapshotHash ?? "";
-  const drifted = snapshotHash !== "" && snapshotHash !== match.contentHash;
-  return { kind: "resolved", name: match.name, drifted };
 }
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
@@ -188,6 +158,102 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // state for a done item) — vcsStatus above comes back null in that case since
   // useVcsStatus needs a live in-memory Instance to query.
   const { data: shipStatus } = useBacklogItemShipStatus(!vcsStatus && item ? item.id : "");
+  const vcsWidgetData = vcsStatus ? fromSessionVcs(vcsStatus) : shipStatus ? fromShipStatus(shipStatus) : null;
+
+  // D6 fix: the current work session's resolved pipeline mode, surfaced as
+  // a compact badge in LifecycleSummary (Task 3.1.4g) — same value the
+  // Sessions section resolves per-row, just also glanceable at the top.
+  const pipelineDisplay = latestWorkSession
+    ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
+    : undefined;
+
+  // Task 3.1.4i: every sibling CollapsibleSection (Reviewing/Pull Request
+  // from Story 3.1.2, Description from 3.1.3, the rest from 3.1.4) shares
+  // one CollapsibleGroup so their headers get Home/End/Arrow roving-
+  // tabindex nav. Persistence (Story 1.1.1's contract) is threaded through
+  // as a controlled `value`/`onValueChange` on the group, backed by
+  // useSectionExpandState per section key — the same
+  // `backlog-detail-section-${itemId}-${sectionKey}` localStorage
+  // convention used everywhere else.
+  //
+  // `item` is still null on this component's very first render (load()
+  // resolves asynchronously), so a status-derived default computed here
+  // would always evaluate against a not-yet-loaded item and get locked in
+  // as false by useSectionExpandState's one-time useState initializer —
+  // every status-dependent section would default to false regardless of
+  // the actual loaded status. Sections with a static default (not
+  // status-dependent) are unaffected and get it directly.
+  const [reviewingExpanded, setReviewingExpanded] = useSectionExpandState(itemId, "reviewing", false);
+  const [pullRequestExpanded, setPullRequestExpanded] = useSectionExpandState(itemId, "pull-request", true);
+  const [planArtifactsExpanded, setPlanArtifactsExpanded] = useSectionExpandState(itemId, "plan-artifacts", false);
+  const [versionControlExpanded, setVersionControlExpanded] = useSectionExpandState(itemId, "version-control", false);
+  const [sessionsExpanded, setSessionsExpanded] = useSectionExpandState(itemId, "sessions", true);
+  const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
+  const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
+  const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
+  const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", false);
+
+  // Story 3.1.5: applies each status-dependent section's real default
+  // exactly once, the first time `item` becomes available after this
+  // instance's initial load — never again afterward (guarded by the ref),
+  // so a later poll-driven status change can never retroactively re-open a
+  // section the user has since collapsed. Combined with Story 3.1.1's
+  // `key={itemId}` remount at the call site, this ref naturally resets per
+  // item with no extra plumbing. Only opens a section when the user has no
+  // existing persisted preference for it (a direct localStorage read,
+  // bypassing useSectionExpandState's own already-applied fallback) — it
+  // must never clobber a preference from a previous visit to this same
+  // item.
+  const initialExpandAppliedRef = useRef(false);
+  useEffect(() => {
+    if (initialExpandAppliedRef.current || !item) return;
+    initialExpandAppliedRef.current = true;
+
+    const hasStoredPreference = (sectionKey: string): boolean => {
+      try {
+        return localStorage.getItem(`backlog-detail-section-${itemId}-${sectionKey}`) !== null;
+      } catch {
+        return false;
+      }
+    };
+
+    if (item.status === "review" && !hasStoredPreference("reviewing")) {
+      setReviewingExpanded(true);
+    }
+    if (
+      ["in_progress", "review", "pr_pending"].includes(item.status) &&
+      !hasStoredPreference("version-control")
+    ) {
+      setVersionControlExpanded(true);
+    }
+    if (item.notes && !hasStoredPreference("notes")) {
+      setNotesExpanded(true);
+    }
+    // Deliberately omits setExpanded functions from deps — they're stable
+    // (useCallback in useSectionExpandState) and including them would
+    // invite a lint-driven "fix" that reintroduces a re-run per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item, itemId]);
+
+  const sectionExpandEntries: Array<[string, boolean, (next: boolean) => void]> = [
+    ["reviewing", reviewingExpanded, setReviewingExpanded],
+    ["pull-request", pullRequestExpanded, setPullRequestExpanded],
+    ["description", descriptionExpanded, setDescriptionExpanded],
+    ["plan-artifacts", planArtifactsExpanded, setPlanArtifactsExpanded],
+    ["version-control", versionControlExpanded, setVersionControlExpanded],
+    ["sessions", sessionsExpanded, setSessionsExpanded],
+    ["workflow", workflowExpanded, setWorkflowExpanded],
+    ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
+    ["notes", notesExpanded, setNotesExpanded],
+  ];
+  const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
+  const handleGroupValueChange = (next: string[]) => {
+    const nextSet = new Set(next);
+    for (const [key, expanded, setExpanded] of sectionExpandEntries) {
+      const shouldBeExpanded = nextSet.has(key);
+      if (shouldBeExpanded !== expanded) setExpanded(shouldBeExpanded);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,6 +277,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Extracted verbatim from the inline session-delete onClick handler
+  // (Story 3.1.4, Task 3.1.4c) so SessionsSection stays a props-down/
+  // callbacks-up presentational component.
+  const handleDeleteSession = useCallback(
+    async (s: LinkedSession) => {
+      if (!item) return;
+      if (!confirm("Delete this session? This cannot be undone.")) return;
+      const toastKey = `${item.id}:delete_session:${s.sessionId}`;
+      setDeletingSessionId(s.sessionId);
+      try {
+        if (s.role === "triage") {
+          await cancelTriage(item.id);
+        } else {
+          track({
+            name: "backlog_delete_session",
+            category: "user_action",
+            component: "BacklogItemDetail",
+            labels: { role: s.role },
+          });
+          await deleteSession(s.sessionId, true);
+        }
+        showActionToast("Session deleted.", "success", toastKey);
+        await load();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to delete session.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", toastKey);
+      } finally {
+        if (mountedRef.current) setDeletingSessionId(null);
+      }
+    },
+    [item, cancelTriage, track, deleteSession, showActionToast, load]
+  );
 
   // Epic 3.4: fetch the current mode list once, for resolving each linked
   // session's frozen pipelineModeSnapshot to a name/drift state. Not
@@ -767,7 +867,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
         {/* Always-visible lifecycle summary — the single authoritative
             status display, replacing the old standalone status badge (D1). */}
-        <LifecycleSummary item={item} />
+        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} />
       </div>
 
       <div className={styles.scrollArea}>
@@ -823,22 +923,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           </div>
         )}
 
-        {/* Gate Verdict + review context */}
-        {item.status === "review" && (
-          <ReviewingSection
-            item={item}
-            workSession={latestWorkSession}
-            actionLoading={actionLoading}
-            defaultExpanded={item.status === "review"}
-            onViewChanges={() => setShowChangesModal(true)}
-            onGateApprove={handleGateApprove}
-            onGateReopen={handleGateReopen}
-            onGateOverride={handleGateOverride}
-            onGateSkip={handleGateSkip}
-            onReReview={() => triggerReReview(item.id).then(() => load())}
-          />
-        )}
-
         {/* Diff modal — reused by the review-flow "View Changes" button above and
             the Version Control section's "View Diff" button below; works for any
             status since GetBacklogItemDiff resolves the shipped range from durable
@@ -859,18 +943,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             onClose={() => setShowFileBrowser(false)}
           />
         )}
-
-        {/* PR Pending */}
-        {item.status === "pr_pending" && (
-          <PullRequestSection
-            item={item}
-            actionLoading={actionLoading}
-            onMarkDone={() => handleAction("mark_done")}
-          />
-        )}
-
-        {/* Description */}
-        <DescriptionSection item={item} />
 
         {/* Acceptance Criteria */}
         <div className={styles.section}>
@@ -896,317 +968,92 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           onManualReviewOutcomeChange={setManualReviewOutcome}
           onManualReviewSummaryChange={setManualReviewSummary}
           onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
-          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(''); }}
+          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
         />
 
-        {/* Plan Artifacts Path */}
-        {item.planArtifactsPath && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Plan Artifacts</h3>
-            <code className={styles.artifactsPath}>{item.planArtifactsPath}</code>
-          </div>
-        )}
-
-        {/* Version Control — live VCS state for the most recent work session, falling
-            back to the durable ship-status check once the live worktree is gone (the
-            normal state for a done item — see useBacklogItemShipStatus). The
-            fallback-by-data-presence rule (vcsStatus wins when both resolve non-null)
-            is preserved exactly from the pre-VcsWidget implementation. */}
-        {(() => {
-          const widgetData = vcsStatus ? fromSessionVcs(vcsStatus) : shipStatus ? fromShipStatus(shipStatus) : null;
-          return (
-            widgetData && (
-              <div className={styles.section}>
-                <h3 className={styles.sectionTitle}>Version Control</h3>
-                <VcsWidget
-                  data={widgetData}
-                  mode="full"
-                  onViewDiff={() => setShowChangesModal(true)}
-                  activeSessionCount={activeWorkSessionCount}
-                  worktreePath={latestWorkSession?.worktreePath}
-                  onBrowseFiles={() => setShowFileBrowser(true)}
-                />
-              </div>
-            )
-          );
-        })()}
-
-        {/* Linked Sessions */}
-        {item.linkedSessions.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Sessions ({item.linkedSessions.length})</h3>
-            <div className={styles.sessionList} role="list" aria-label="Linked sessions">
-              {item.linkedSessions.map((s) => {
-                // A session without endedAt that isn't in the active phase for this
-                // item's current status is a stale/orphaned record — label it ended.
-                const statusToRole: Record<string, string> = {
-                  idea: "triage",
-                  in_progress: "work",
-                  review: "review",
-                };
-                const isOrphan = !s.endedAt && s.role !== statusToRole[item.status];
-                const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
-                return (
-                  <div
-                    key={s.entityId ?? s.sessionId}
-                    className={styles.sessionRow}
-                    role="listitem"
-                  >
-                    <div className={styles.sessionRowMain}>
-                    {classifySessionKind(s) !== "work" && classifySessionKind(s) !== "review" ? (
-                      <span className={styles.sessionLink}>
-                        <span className={styles.sessionId} title={s.sessionId}>
-                          {s.sessionId.startsWith("headless-review-") ? "headless review" : s.sessionId.startsWith("review-blocked-") ? "review blocked" : s.sessionId}
-                        </span>
-                        <span className={styles.sessionRole}>{s.role}</span>
-                        {s.worktreeBranch && (
-                          <span className={styles.branchBadge} title="Git branch for this work session">{s.worktreeBranch}</span>
-                        )}
-                        {s.startedAt && (
-                          <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>
-                        )}
-                        {s.estimatedCostUsd > 0 && (
-                          <span className={styles.sessionCost} title="Estimated session cost">${s.estimatedCostUsd.toFixed(4)}</span>
-                        )}
-                        {isOrphan && (
-                          <span className={styles.sessionEndedBadge}>ended</span>
-                        )}
-                      </span>
-                    ) : (
-                      <a
-                        className={styles.sessionLink}
-                        href={`/?session=${s.sessionId}`}
-                        title="Open in terminal"
-                      >
-                        <span className={styles.sessionId} title={s.sessionId}>
-                          {s.sessionId}
-                        </span>
-                        <span className={styles.sessionRole}>{s.role}</span>
-                        {s.worktreeBranch && (
-                          <span className={styles.branchBadge} title="Git branch for this work session">{s.worktreeBranch}</span>
-                        )}
-                        {s.startedAt && (
-                          <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>
-                        )}
-                        {s.estimatedCostUsd > 0 && (
-                          <span className={styles.sessionCost} title="Estimated session cost">${s.estimatedCostUsd.toFixed(4)}</span>
-                        )}
-                        {isOrphan && (
-                          <span className={styles.sessionEndedBadge}>ended</span>
-                        )}
-                      </a>
-                    )}
-                    <button
-                      className={styles.sessionDeleteBtn}
-                      disabled={deletingSessionId === s.sessionId}
-                      aria-label="Delete session"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        if (!confirm("Delete this session? This cannot be undone.")) return;
-                        const toastKey = `${item.id}:delete_session:${s.sessionId}`;
-                        setDeletingSessionId(s.sessionId);
-                        try {
-                          if (s.role === "triage") {
-                            await cancelTriage(item.id);
-                          } else {
-                            track({ name: "backlog_delete_session", category: "user_action", component: "BacklogItemDetail", labels: { role: s.role } });
-                            await deleteSession(s.sessionId, true);
-                          }
-                          showActionToast("Session deleted.", "success", toastKey);
-                          await load();
-                        } catch (err) {
-                          const msg = err instanceof Error ? err.message : "Failed to delete session.";
-                          if (mountedRef.current) setError(msg);
-                          showActionToast(msg, "error", toastKey);
-                        } finally {
-                          if (mountedRef.current) setDeletingSessionId(null);
-                        }
-                      }}
-                    >
-                      {deletingSessionId === s.sessionId ? "…" : "Delete"}
-                    </button>
-                  </div>
-                  <div className={styles.pipelineGroup} role="group" aria-label="Pipeline">
-                    <span className={styles.pipelineLabel}>Pipeline:</span>{" "}
-                    {pipelineDisplay.kind === "unrecognized" ? (
-                      <span className={styles.pipelineValue}>
-                        {`custom (unrecognized mode: '${pipelineDisplay.slug}')`}
-                      </span>
-                    ) : (
-                      <>
-                        <span className={styles.pipelineValue}>{pipelineDisplay.name}</span>
-                        {pipelineDisplay.drifted && (
-                          <>
-                            {" "}
-                            <span className={styles.pipelineDriftBadge}>(content since changed)</span>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {s.reviewVerdict && (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
-                    <div className={styles.verdictDetail} aria-label="Review verdict detail">
-                      {s.reviewVerdict.summary && (
-                        <span className={styles.verdictSummary}>
-                          <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
-                        </span>
-                      )}
-                      {s.reviewVerdict.perCriterion?.map((c) => (
-                        <div key={c.criterionIndex} className={styles.verdictCriterion}>
-                          <span>#{c.criterionIndex} {c.outcome}</span>
-                          {c.evidence && <span>— {c.evidence}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  </div>
-                );
-              })}
-            </div>
-            {item.totalEstimatedCostUsd > 0 && (
-              <p className={styles.sessionTotalCost}>
-                Total estimated cost: <strong>${item.totalEstimatedCostUsd.toFixed(4)}</strong>
-              </p>
-            )}
-
-            {/* Session monitor for the most recent active session.
-                A session is only considered active if the item is in the
-                matching lifecycle phase — prevents ghost "RUNNING" tiles for
-                sessions that died without setting endedAt. */}
-            {(() => {
-              const statusToRole: Record<string, string> = {
-                idea: "triage",
-                in_progress: "work",
-                review: "review",
-              };
-              const expectedRole = statusToRole[item.status];
-              // For the "work" role, source from the same current-work-session
-              // value as every other call site (Story 1.1.2, D3) instead of
-              // re-scanning independently; other roles keep their own lookup
-              // since "current work session" isn't what they're asking for.
-              const active =
-                expectedRole === "work"
-                  ? latestWorkSession && !latestWorkSession.endedAt
-                    ? latestWorkSession
-                    : undefined
-                  : [...item.linkedSessions]
-                      .reverse()
-                      .find(
-                        (s) =>
-                          !s.endedAt &&
-                          s.role === expectedRole &&
-                          (classifySessionKind(s) === "work" || classifySessionKind(s) === "review")
-                      );
-              if (!active) return null;
-              return (
-                <SessionMonitor
-                  sessionId={active.sessionId}
-                  sessionRole={active.role}
-                  isRunning={true}
-                />
-              );
-            })()}
-          </div>
-        )}
-
-        {/* Workflow / Status History */}
-        {item.statusEvents.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Workflow</h3>
-            <div className={styles.workflowTimeline} role="list" aria-label="Status history">
-              {item.statusEvents.map((ev) => (
-                <div key={ev.id} className={styles.workflowEvent} role="listitem">
-                  <div className={styles.workflowEventRow}>
-                    <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
-                    <span className={styles.workflowEventArrow}>→</span>
-                    <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
-                    <span className={styles.workflowEventMeta}>
-                      {ev.createdAt ? formatDate(ev.createdAt) : ""}
-                      {" · "}{ev.triggeredBy}
-                    </span>
-                  </div>
-                  {ev.note && <span className={styles.workflowEventNote}>{ev.note}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Progress History — the implementer's report_progress audit trail */}
-        {item.progressNotes.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Progress History</h3>
-            <div className={styles.progressNoteList} role="list" aria-label="Implementer progress history">
-              {item.progressNotes.map((n) => (
-                <div key={n.id} className={styles.progressNoteItem} role="listitem">
-                  <div className={styles.progressNoteMeta}>
-                    <span>Criterion #{n.criterionIndex}</span>
-                    <span>·</span>
-                    <span>{n.status}</span>
-                    {n.createdAt && (
-                      <>
-                        <span>·</span>
-                        <span>{formatDate(n.createdAt)}</span>
-                      </>
-                    )}
-                  </div>
-                  {n.note && <span>{n.note}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Notes */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Notes</h3>
-          {editingNotes ? (
-            <>
-              <textarea
-                className={styles.notesTextarea}
-                value={notesValue}
-                onChange={(e) => setNotesValue(e.target.value)}
-                aria-label="Notes"
-                data-testid="backlog-notes-textarea"
-              />
-              <div className={styles.inlineEditActions}>
-                <button
-                  className={styles.saveNotesButton}
-                  onClick={handleSaveNotes}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "save_notes"}
-                  data-testid="backlog-notes-save"
-                >
-                  <ActionButtonLabel pending={actionLoading === "save_notes"} label="Save" />
-                </button>
-                <button
-                  className={styles.cancelNotesButton}
-                  onClick={() => {
-                    setNotesValue(item.notes ?? "");
-                    setEditingNotes(false);
-                  }}
-                  data-testid="backlog-notes-cancel"
-                >
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <p
-              className={item.notes ? styles.description : styles.emptyText}
-              onClick={() => setEditingNotes(true)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") setEditingNotes(true);
-              }}
-              aria-label="Click to edit notes"
-              data-testid="backlog-notes-display"
-            >
-              {item.notes ?? "Click to add notes…"}
-            </p>
+        {/* Secondary sections — sibling CollapsibleSections sharing one
+            CollapsibleGroup so their headers get Home/End/Arrow roving-
+            tabindex keyboard nav across all of them (Task 3.1.4i; the
+            concrete justification ADR-027 gives for Radix Accordion over
+            @radix-ui/react-collapsible). Expand state is persisted per
+            item/section via useSectionExpandState and threaded through the
+            group as a controlled value (Story 1.1.1's persistence
+            contract). PlanningSection/ActionsSection are primary,
+            always-visible content and intentionally sit outside the
+            group — since Actions needs to stay reachable without
+            expanding anything, it is positioned before the group rather
+            than in its original position between Description and Plan
+            Artifacts, so every Collapsible-wrapped section (including
+            Reviewing/Pull Request, extracted in Story 3.1.2) can share one
+            contiguous Radix Root. */}
+        <CollapsibleGroup value={openSectionKeys} onValueChange={handleGroupValueChange}>
+          {item.status === "review" && (
+            <ReviewingSection
+              item={item}
+              workSession={latestWorkSession}
+              actionLoading={actionLoading}
+              defaultExpanded={reviewingExpanded}
+              onViewChanges={() => setShowChangesModal(true)}
+              onGateApprove={handleGateApprove}
+              onGateReopen={handleGateReopen}
+              onGateOverride={handleGateOverride}
+              onGateSkip={handleGateSkip}
+              onReReview={() => triggerReReview(item.id).then(() => load())}
+            />
           )}
-        </div>
+
+          {item.status === "pr_pending" && (
+            <PullRequestSection
+              item={item}
+              actionLoading={actionLoading}
+              onMarkDone={() => handleAction("mark_done")}
+            />
+          )}
+
+          <DescriptionSection item={item} />
+
+          {item.planArtifactsPath && (
+            <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />
+          )}
+
+          <VersionControlSection
+            item={item}
+            widgetData={vcsWidgetData}
+            activeSessionCount={activeWorkSessionCount}
+            worktreePath={latestWorkSession?.worktreePath}
+            defaultExpanded={versionControlExpanded}
+            onViewDiff={() => setShowChangesModal(true)}
+            onBrowseFiles={() => setShowFileBrowser(true)}
+          />
+
+          <SessionsSection
+            item={item}
+            pipelineModes={pipelineModes}
+            latestWorkSession={latestWorkSession}
+            deletingSessionId={deletingSessionId}
+            defaultExpanded={sessionsExpanded}
+            onDeleteSession={handleDeleteSession}
+          />
+
+          <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
+
+          <ProgressHistorySection item={item} defaultExpanded={progressHistoryExpanded} />
+
+          <NotesSection
+            item={item}
+            actionLoading={actionLoading}
+            editingNotes={editingNotes}
+            notesValue={notesValue}
+            defaultExpanded={notesExpanded}
+            onNotesValueChange={setNotesValue}
+            onStartEditing={() => setEditingNotes(true)}
+            onSave={handleSaveNotes}
+            onCancel={() => {
+              setNotesValue(item.notes ?? "");
+              setEditingNotes(false);
+            }}
+          />
+        </CollapsibleGroup>
       </div>
 
     </article>

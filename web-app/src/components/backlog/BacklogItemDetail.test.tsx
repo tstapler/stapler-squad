@@ -129,6 +129,11 @@ beforeEach(() => {
   useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
   overrideVerdict.mockReset();
+  // Story 3.1.4's per-section expand state (useSectionExpandState) and
+  // "Show N more" state (useShowMore) both persist to localStorage keyed
+  // by itemId — clear between tests so one test's expand/collapse
+  // interactions never leak into the next test reusing the same itemId.
+  localStorage.clear();
 });
 
 function makeMode(overrides: Partial<PipelineMode> & Pick<PipelineMode, "slug" | "name">): PipelineMode {
@@ -274,6 +279,10 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
       await Promise.resolve();
     });
 
+    // VersionControlSection (Story 3.1.4) is collapsed by default for an
+    // "idea"-status item — expand it before asserting on its contents.
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
     expect(screen.getByText("Shipped")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("vcs-widget-view-diff"));
@@ -307,6 +316,10 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
       await Promise.resolve();
     });
 
+    // VersionControlSection (Story 3.1.4) is collapsed by default for an
+    // "idea"-status item — expand it before asserting on its contents.
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
+
     // Live vcsStatus wins over the historical shipStatus when both resolve non-null.
     expect(screen.getByText("feat/live-branch")).toBeInTheDocument();
     expect(screen.queryByText("feat/historical-branch")).not.toBeInTheDocument();
@@ -333,6 +346,10 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+
+    // VersionControlSection (Story 3.1.4) is collapsed by default for an
+    // "idea"-status item — expand it before asserting on its contents.
+    fireEvent.click(screen.getByTestId("collapsible-header-version-control"));
 
     expect(screen.queryByTestId("file-browser-modal-stub")).not.toBeInTheDocument();
 
@@ -609,5 +626,38 @@ describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review 
     expect(getBacklogItem).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("backlog-action-override-done")).toHaveAttribute("aria-busy", "true");
     expect(screen.getByTestId("backlog-action-override-done")).toBeDisabled();
+  });
+});
+
+describe("BacklogItemDetail — Story 3.1.4 Task 3.1.4i/3.1.4j: shared CollapsibleGroup keyboard nav", () => {
+  it("BacklogItemDetail_should_MoveFocusBetweenAllSiblingSectionHeaders_When_ArrowKeyPressedInSharedCollapsibleGroup", async () => {
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      status: "in_progress",
+      planArtifactsPath: "/tmp/plans/item-1.md",
+      notes: "some notes",
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Full composed tree — not an isolated 2-section fixture (that's
+    // Collapsible.test.tsx's unit-level proof) — asserting the real
+    // sibling sections wired into one CollapsibleGroup (Task 3.1.4i)
+    // actually deliver ADR-027's cross-header keyboard-nav benefit.
+    const descriptionHeader = screen.getByTestId("collapsible-header-description");
+    const planArtifactsHeader = screen.getByTestId("collapsible-header-plan-artifacts");
+
+    descriptionHeader.focus();
+    expect(descriptionHeader).toHaveFocus();
+
+    fireEvent.keyDown(descriptionHeader, { key: "ArrowDown", code: "ArrowDown" });
+
+    expect(planArtifactsHeader).toHaveFocus();
   });
 });

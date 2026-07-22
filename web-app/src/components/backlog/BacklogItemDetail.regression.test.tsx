@@ -127,6 +127,10 @@ describe("BacklogItemDetail — background refresh must not unmount the view", (
   beforeEach(() => {
     jest.useFakeTimers();
     getBacklogItem.mockReset();
+    // Story 3.1.4's useSectionExpandState persists collapse state to
+    // localStorage keyed by itemId — clear between tests so one test's
+    // expand/collapse interactions never leak into the next.
+    localStorage.clear();
   });
   afterEach(() => {
     jest.runOnlyPendingTimers();
@@ -197,6 +201,10 @@ describe("BacklogItemDetail — Story 3.1.1: itemId state-reset fix", () => {
   beforeEach(() => {
     jest.useFakeTimers();
     getBacklogItem.mockReset();
+    // Story 3.1.4's useSectionExpandState persists collapse state to
+    // localStorage keyed by itemId — clear between tests so one test's
+    // expand/collapse interactions never leak into the next.
+    localStorage.clear();
   });
   afterEach(() => {
     jest.runOnlyPendingTimers();
