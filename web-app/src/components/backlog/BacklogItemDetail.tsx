@@ -273,6 +273,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (!item) return;
       setActionLoading(action);
       const toastKey = `${item.id}:${action}`;
+      let successMessage = ACTION_SUCCESS_MESSAGES[action] ?? "Done.";
       try {
         switch (action) {
           case "mark_ready":
@@ -281,12 +282,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "trigger_triage":
             await triggerTriage(item.id);
             break;
-          case "spawn_session":
-            await spawnSessionFromItem(item.id);
+          case "spawn_session": {
+            const resp = await spawnSessionFromItem(item.id);
+            if (resp?.queued) successMessage = "At capacity — item queued, will start automatically.";
             break;
-          case "spawn_session_autonomous":
-            await spawnSessionFromItem(item.id, { autonomous: true });
+          }
+          case "spawn_session_autonomous": {
+            const resp = await spawnSessionFromItem(item.id, { autonomous: true });
+            if (resp?.queued) successMessage = "At capacity — item queued, will start automatically.";
             break;
+          }
           case "restart_session":
             await spawnSessionFromItem(item.id, { force: true });
             break;
@@ -338,7 +343,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           default:
             return;
         }
-        showActionToast(ACTION_SUCCESS_MESSAGES[action] ?? "Done.", "success", toastKey);
+        showActionToast(successMessage, "success", toastKey);
         await load();
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Action failed.";

@@ -523,6 +523,19 @@ func (s *SessionService) IsSessionLive(sessionUUID string) bool {
 	return s.FindLiveInstance(sessionUUID) != nil
 }
 
+// TimeSinceLastMeaningfulOutput satisfies the BacklogService.SessionStopper
+// interface. It reports how long it has been since sessionUUID's live
+// Instance last produced meaningful terminal output. ok is false when the
+// session isn't currently tracked live (mirrors IsSessionLive's "not found"
+// case) — callers must not use dur in that case.
+func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time.Duration, bool) {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return 0, false
+	}
+	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
 // KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
 // It closes the tmux pane only (Instance.KillSession), leaving the worktree
 // intact — unlike StopSessionByUUID (Instance.Kill/Destroy), which also runs
@@ -3222,6 +3235,23 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save (server/dependencies.go uses this to
+// trigger an immediate backlog-queue dequeue sweep when the concurrency limit
+// is raised).
+func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
+	s.defaultsSvc.SetOnGlobalDefaultsUpdated(fn)
+}
+
+// SetSharedBacklogConfig wires the *config.Config instance (and its guarding
+// mutex) BacklogService reads its concurrency fields from into this
+// SessionService's DefaultsService, so UpdateGlobalDefaults can propagate a
+// Settings change into BacklogService's live view without a process restart
+// (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
+func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
 // UpsertProfile creates or updates a named profile.

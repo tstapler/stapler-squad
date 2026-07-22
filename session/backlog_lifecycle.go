@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -84,6 +86,14 @@ type StaleWorkRemediator interface {
 // marked complete, just never actually re-reviewed).
 type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
+}
+
+// QueueDequeuer claims and spawns as many queued backlog items as there are
+// free WIP slots, oldest-queued first. Called the moment a slot frees up
+// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
+// for a missed exit hook or a concurrency limit raised while items were queued.
+type QueueDequeuer interface {
+	DequeueNextQueuedItems(ctx context.Context) error
 }
 
 // OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
@@ -237,6 +247,10 @@ type BacklogLifecycleListener struct {
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
 
+	// dequeuerMu guards dequeuer for concurrent Set/get access.
+	dequeuerMu sync.RWMutex
+	dequeuer   QueueDequeuer
+
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
 	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
@@ -246,6 +260,7 @@ type BacklogLifecycleListener struct {
 	// mechanical pushAndCreatePR path — preserves pre-existing behavior for
 	// any test/caller that hasn't wired it.
 	oneShotShipRunner OneShotShipRunner
+
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
@@ -403,6 +418,34 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	return l.reviewRespawner
 }
 
+// SetDequeuer wires in the spawner used to dequeue queued backlog items once a
+// WIP slot frees up.
+func (l *BacklogLifecycleListener) SetDequeuer(d QueueDequeuer) {
+	l.dequeuerMu.Lock()
+	defer l.dequeuerMu.Unlock()
+	l.dequeuer = d
+}
+
+// getDequeuer returns the current dequeuer under a read lock.
+func (l *BacklogLifecycleListener) getDequeuer() QueueDequeuer {
+	l.dequeuerMu.RLock()
+	defer l.dequeuerMu.RUnlock()
+	return l.dequeuer
+}
+
+// triggerDequeue best-effort dequeues queued items on the current goroutine. It
+// swallows and logs errors — a failed dequeue attempt must never block or fail
+// the caller (a session-exit transition or the periodic stuck sweep).
+func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
+	d := l.getDequeuer()
+	if d == nil {
+		return
+	}
+	if err := d.DequeueNextQueuedItems(ctx); err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
+	}
+}
+
 // SetOneShotShipRunner wires in the runner used by shipViaAgentOrFallback to
 // attempt an agent-driven PR ship (see agentShipPrompt) before falling back
 // to the mechanical pushAndCreatePR path. Optional — nil means every PASS
@@ -420,6 +463,7 @@ func (l *BacklogLifecycleListener) getOneShotShipRunner() OneShotShipRunner {
 	defer l.oneShotShipRunnerMu.RUnlock()
 	return l.oneShotShipRunner
 }
+
 
 // SetPRPendingCheckerFactory overrides the factory used to construct the
 // PR-status checker for ReconcilePRPending. Overridable in tests (mirrors the
@@ -702,6 +746,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	}
 
 	log.InfoLog.Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
+
+	// The item just left in_progress, freeing a WIP slot — dequeue immediately
+	// rather than waiting for the next ReconcileStuck tick (safety-net only).
+	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
 	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
@@ -1326,10 +1374,29 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileTerminalItemSessions(ctx)
 	})
 
+	// Self-heal items whose real, cached PR reference (prNumber/prUrl) has
+	// drifted out of ReconcilePRPending's status=="pr_pending" view — see
+	// FindDriftedPRItems' doc comment. Registered immediately before
+	// pr_ready+merge_detection so a recovered item is picked up by the merge/
+	// CI polling sweep below in this same tick rather than an extra cycle
+	// later.
+	l.runStuckDetector("pr_drift_recovery", &okNames, &panickedNames, func() {
+		l.reconcileDriftedPRItems(ctx, er)
+	})
+
 	// Poll pr_pending items: auto-transition to done when the PR is merged,
 	// and (Story 2.1.1) flag/resolve pr_ready_unmerged.
 	l.runStuckDetector("pr_ready+merge_detection", &okNames, &panickedNames, func() {
 		l.ReconcilePRPending(ctx, er)
+	})
+
+	// Safety net for the backlog work-item queue: dequeues queued items whose
+	// exit-hook trigger was missed (server restart mid-transition, panic in the
+	// hook's own goroutine) or whose slot was freed by the concurrency limit
+	// being raised via Settings while items were queued (not itself a session
+	// exit, so onSessionExited never fires for it).
+	l.runStuckDetector("dequeue_backlog_items", &okNames, &panickedNames, func() {
+		l.triggerDequeue(ctx)
 	})
 
 	openRows, countErr := er.FindOpenStuckStates(ctx)
@@ -1956,11 +2023,105 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
 }
 
+// resolveLatestWorkCommit returns the true current tip commit of the work
+// session identified by sessionUUID — never ItemSessionSummary.LastCommitSha,
+// which is only ever seeded once at session spawn with the pre-work base SHA
+// (see the UpdateItemSessionGitActivity calls in
+// backlog_service_triage.go/backlog_service_sync.go, all of which pass
+// baseSHA) and is never updated afterward as the agent commits real work.
+// Treating that field as "the agent's latest commit" made
+// mostRecentWorkCommitShippedToMain trivially true for almost any PR-less
+// item, because a branch's own base commit is — by construction — always an
+// ancestor of main. Confirmed live 2026-07-21: items 635a373d, e99d3f4a, and
+// 54e5aa1f were all auto-marked done in a single reconciliation tick despite
+// each having real, unmerged work (an open PR for 635a373d, and unpushed
+// branches for the other two).
+//
+// Prefers the session's own worktree HEAD; falls back to resolving the
+// branch's tip directly in repoPath if the worktree directory is gone, since
+// worktrees of the same repo share one object store — the same fallback
+// shape getWorkSessionDiff/GetGitDiffRef already rely on for the review-diff
+// path. Returns "" if neither resolves.
+func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
+	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		return ""
+	}
+	if wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+				return sha
+			}
+		}
+	}
+	if wt.BranchName == "" {
+		return ""
+	}
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
+	cmd.Dir = repoPath
+	out, revErr := cmd.Output()
+	if revErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// mostRecentWorkCommitShippedToMain finds itemID's most recent work session
+// and reports whether its current tip commit (resolveLatestWorkCommit, NOT
+// the session's stale LastCommitSha field — see that function's doc comment)
+// has landed on bounceMainBranch. Mirrors BacklogService.isCodeShippedToMain's
+// "keep overwriting while scanning ascending-by-CreatedAt" pattern
+// (server/services/backlog_service_lifecycle.go) for finding the most recent
+// work session, but — unlike that method — deliberately does NOT treat "no
+// commit resolvable" as shipped: isCodeShippedToMain's caller uses it as a
+// block-a-transition guard, where "nothing to verify" should not block; this
+// caller uses it as a fire-a-transition trigger, where "nothing to verify"
+// must never fire one. Returns ("", false) when there is no work session or
+// no commit could be resolved for it.
+func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context.Context, itemID, repoPath string) (sha string, shipped bool) {
+	itemSessions, err := l.storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain ListItemSessions item=%s: %v", itemID, err)
+		return "", false
+	}
+	var lastWorkSessionUUID string
+	for _, is := range itemSessions {
+		// ListItemSessions orders ascending by CreatedAt — keep overwriting so
+		// this ends up holding the *most recent* work session.
+		if is.Role == SessionRoleWork {
+			lastWorkSessionUUID = is.SessionUUID
+		}
+	}
+	if lastWorkSessionUUID == "" {
+		return "", false // no work session ever ran — nothing to confirm shipped
+	}
+	sha = l.resolveLatestWorkCommit(ctx, lastWorkSessionUUID, repoPath)
+	if sha == "" {
+		return "", false // nothing resolvable — nothing to confirm shipped
+	}
+	onMain, mainErr := git.IsCommitOnMain(repoPath, bounceMainBranch, sha)
+	if mainErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain IsCommitOnMain item=%s sha=%s: %v", itemID, sha, mainErr)
+		return sha, false
+	}
+	return sha, onMain
+}
+
 // reconcileBouncingItems flags items that have crossed in_progress->review
 // >= bounceThreshold times within bounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
-// (root cause #4). Best-effort: query/notify failures are logged, never
-// returned.
+// (root cause #4). Before flagging, it first checks whether the item's
+// linked PR has already merged (including a manual merge outside the app's
+// own ship flow) — a merged item isn't bouncing, it's done, and is
+// transitioned to done instead of being marked stuck. For an item with no PR
+// number at all (real work committed and merged/pushed straight to main
+// without ever going through a PR — see item 93565fa1, 2026-07-21), it falls
+// back to checking the item's own most recent work-session commit directly
+// against main via mostRecentWorkCommitShippedToMain, so an item isn't left
+// bouncing forever just because it never had a PR to check. Best-effort:
+// query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, er *EntRepository) {
 	// Scan items in the two statuses a bouncing cycle spans; a converged item
 	// (done) is handled by the self-heal sweep, not re-flagged here.
@@ -1974,6 +2135,55 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 
 	since := time.Now().Add(-bounceLookback)
 	for _, item := range items {
+		// Before treating this item as failing, check whether its linked PR
+		// already merged — including a PR merged manually, outside the app's
+		// own ship flow (allow_auto_merge is disabled at the repo-settings
+		// level). Without this check, an item whose code already landed on
+		// main keeps bouncing and accumulates further remediation attempts
+		// (worktrees, sessions, tokens) on work that's already done. Reuses
+		// the same prPendingChecker/TransitionBacklogItemStatus path
+		// ReconcilePRPending already uses for its own merge->done transition,
+		// rather than inventing a new one.
+		if item.PrNumber > 0 && item.RepoPath != "" {
+			checker := l.getPRPendingCheckerFactory()(item.RepoPath)
+			merged, mergedErr := checker.IsPRMerged(item.PrNumber)
+			if mergedErr != nil {
+				log.DebugLog.Printf("[BacklogLifecycle] reconcileBouncingItems IsPRMerged item=%s pr=%d: %v", item.ID, item.PrNumber, mergedErr)
+			} else if merged {
+				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
+				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
+				} else {
+					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
+					// Best-effort: clear any bouncing row from a prior tick
+					// immediately, rather than waiting for the next
+					// selfHealStuck sweep to notice the terminal status.
+					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/merged")
+				}
+				continue
+			}
+		} else if item.RepoPath != "" {
+			// No PR was ever linked to this item — check whether the item's own
+			// most recent work-session commit landed on main anyway (a direct
+			// merge/push to main outside the app's ship flow entirely, so
+			// item.PrNumber was never set). Only that specific commit is
+			// checked, never an arbitrary one, so an unrelated commit merged to
+			// main elsewhere can't produce a false positive.
+			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
+				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
+				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
+					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
+				} else {
+					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
+					// Best-effort: clear any bouncing row from a prior tick
+					// immediately, rather than waiting for the next
+					// selfHealStuck sweep to notice the terminal status.
+					l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonBouncing, "reconcileBouncingItems/shipped-no-pr")
+				}
+				continue
+			}
+		}
+
 		count, countErr := er.CountReviewCyclesSince(ctx, item.ID, since)
 		if countErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems CountReviewCyclesSince item=%s: %v", item.ID, countErr)
@@ -2024,16 +2234,67 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 // expected item-status no longer matches the item's current status (Task
 // 2.1.5d, adversarial concern C1). This backstops racing MarkStuck writes
 // (the best-effort precondition in MarkStuck is not atomic with the write)
-// and any un-stick call site that was missed. The sweep MUST key off the
-// exact per-reason anchor-set table below, not a single "expected status"
-// scalar:
+// and any un-stick call site that was missed.
 //
-//	pr_ready_unmerged  -> anchor {pr_pending}                 resolve when status not in anchor
-//	abandoned_review   -> anchor {review}                     resolve when status not in anchor
-//	stale_work         -> anchor {in_progress}                resolve when status not in anchor
-//	bouncing           -> anchor {in_progress, review}         resolve ONLY on done/PASS (never mid-cycle)
-//	rework_cap         -> event-shaped, no anchor              excluded from the sweep entirely
-//	push_failed        -> event-shaped, no anchor              excluded from the sweep entirely
+// The sweep applies ONE blanket rule up front, before any reason-specific
+// logic: an open stuck row on an item that has reached a genuine terminal
+// status (done or archived) is always resolved, regardless of which reason
+// it is for. An item that has truly finished has nothing left needing
+// operator attention, no matter what it was ever stuck for — so this check
+// runs first and short-circuits the rest of the loop body for that row.
+// This is what closes the recurring bug shape fixed one reason at a time in
+// PR #200 (autonomous_stuck) and PR #203 (push_failed): rather than adding a
+// fourth near-identical case for the next reason that turns out to need it
+// (rework_cap, fixed here), any reason gets this behavior for free, forever,
+// with no further PRs required.
+//
+// For a row on an item that has NOT yet reached a terminal status, the sweep
+// falls through to the per-reason anchor-set table below — most reasons
+// anchor on a single non-terminal status and resolve as soon as the item
+// LEAVES it:
+//
+//	pr_ready_unmerged  -> anchor {pr_pending}          resolve when status not in anchor
+//	abandoned_review   -> anchor {review}               resolve when status not in anchor
+//	stale_work         -> anchor {in_progress}          resolve when status not in anchor
+//	bouncing           -> anchor {in_progress, review}  resolve ONLY on leaving both (never mid-cycle)
+//	orphaned_triage    -> anchor {idea}                 resolve when status not in anchor
+//
+// autonomous_stuck, push_failed, and rework_cap have no non-terminal anchor
+// at all — before the item reaches done/archived they stay open, relying
+// entirely on the blanket terminal rule above (or, for autonomous_stuck and
+// push_failed, their own faster event-driven resolution paths — see
+// resolveAutonomousStuck in server/services/autonomous_orchestration_service.go
+// and resolveToPRPending respectively — which typically resolve the row
+// before this sweep's next tick even runs). Any future StuckReason added
+// without an explicit case here behaves the same way: excluded from
+// non-terminal anchoring, covered by the blanket rule once the item finishes.
+//
+// Why the blanket terminal rule is safe for every reason, not just the ones
+// it was originally proven safe for: the concern that motivated excluding
+// autonomous_stuck from anchoring in the first place (documented in the
+// original PR #200 investigation) was specifically an "in_progress" false-resolve
+// risk — pre-PR #180, onAutonomousDriverComplete's SessionRoleWork case could
+// force an in_progress->review transition on a turn-cap stop even while the
+// item was genuinely still stuck, which would have made a naive {in_progress}
+// anchor resolve the row before an operator ever saw it. That risk is
+// specific to anchoring on a NON-terminal, mid-cycle status simply being
+// "left" (in_progress, or push_failed's "review"), which a routine, expected
+// state transition can trigger while real work is still incomplete.
+// done/archived are not reachable that way: nothing in this codebase
+// transitions an item to done or archived as a side effect of a retry,
+// respawn, or turn-cap stop — reaching either status is only ever the result
+// of the item's work being genuinely, verifiably finished (a successful
+// pipeline run, a human merging the PR directly, or the auto-archive sweep
+// acting on an item already done). This holds for every existing reason
+// (autonomous_stuck, push_failed) and for rework_cap: a rework_cap row is
+// marked when an item exhausts its retry budget, but nothing about hitting
+// that cap can itself force the item to done/archived — those transitions
+// only happen through the same genuinely-finished paths as every other
+// reason, so the same safety argument PR #200 made for autonomous_stuck and
+// PR #203 re-derived for push_failed applies unconditionally to rework_cap
+// and to any future reason: this settles the question for the blanket rule
+// as a whole, not per-reason, and no future reason should need to re-derive
+// it again.
 //
 // Same-status clears (e.g. a pr_pending item whose PR stops being ready
 // while it's still pr_pending) are NOT this sweep's job — they are handled
@@ -2046,6 +2307,13 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		return
 	}
 	for _, row := range open {
+		if row.ItemStatus == BacklogStatusDone || row.ItemStatus == BacklogStatusArchived {
+			// Blanket terminal rule — see doc comment above. An item that has
+			// truly finished has nothing left needing operator attention,
+			// regardless of which reason its stuck row is for.
+			l.resolveStuckLogged(ctx, er, row.ItemID, row.Reason, "selfHealStuck/terminal")
+			continue
+		}
 		resolve := false
 		switch row.Reason {
 		case domain.StuckReasonPRReadyUnmerged:
@@ -2058,17 +2326,11 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
-		case domain.StuckReasonReworkCap, domain.StuckReasonPushFailed, domain.StuckReasonAutonomousStuck:
-			// Event-shaped: resolved only at an explicit call site, not by anchoring
-			// on item status. autonomous_stuck specifically cannot anchor on the
-			// item's status at mark-time: onAutonomousDriverComplete's SessionRoleWork
-			// case transitions in_progress->review even when the driver is stuck (a
-			// separate, flagged behavior — see that function's doc comment), so an
-			// in_progress anchor would immediately false-resolve on the very next
-			// tick once the status-transition below it runs, before an operator ever
-			// sees the row.
-			continue
 		default:
+			// autonomous_stuck, push_failed, rework_cap, and any future reason
+			// with no non-terminal anchor: stays open until the blanket
+			// terminal rule above catches it, or its own event-site resolves
+			// it first.
 			continue
 		}
 		if !resolve {
@@ -2192,7 +2454,12 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 		}
 	}
 	if transErr := l.resolveToPRPending(ctx, item.ID, "agent-driven ship via one-shot /backlog/ship", "shipViaAgentOrFallback"); transErr != nil {
-		log.DebugLog.Printf("[BacklogLifecycle] shipViaAgentOrFallback pr_pending transition item=%s (may already be applied via RunOneShot's own RecordPRCreatedOutOfBand side effect): %v", item.ID, transErr)
+		// May just be a harmless race with RunOneShot's own RecordPRCreatedOutOfBand
+		// side effect already landing the same transition — handlePRPendingTransitionFailed
+		// re-checks the item's current status before doing anything, so that case is a
+		// silent no-op there. Anything else (a genuine drift) gets recovered immediately
+		// if safe, or picked up by the next reconcileDriftedPRItems tick.
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "shipViaAgentOrFallback", transErr)
 	}
 }
 
@@ -2348,7 +2615,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 
 	// Transition to pr_pending.
 	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] pushAndCreatePR pr_pending transition item=%s: %v", item.ID, transErr)
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s → pr_pending (PR #%d %s)", item.ID, prNumber, prURL)
@@ -2374,16 +2641,130 @@ func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemI
 	return nil
 }
 
+// hasActiveSession reports whether any of the provided ItemSessions is an
+// open (not yet ended) work- or review-role session. Package-local
+// equivalent of server/services' hasActiveWorkSession/hasActiveReviewSession
+// (not reusable directly — that package imports session, not the other way
+// around) used by recoverDriftedPRItem/reconcileDriftedPRItems to avoid
+// stealing an item away from a still-legitimately-running session, mirroring
+// AutoReopenForPRFix's/AutoRespawnReview's identical guard.
+func hasActiveSession(sessions []ItemSessionSummary) bool {
+	for _, s := range sessions {
+		if s.EndedAt == nil && (s.Role == SessionRoleWork || s.Role == SessionRoleReview) {
+			return true
+		}
+	}
+	return false
+}
+
+// recoverDriftedPRItem attempts to recover a single item whose real, cached
+// PR reference (prNumber/prUrl) has drifted out of ReconcilePRPending's view
+// — see FindDriftedPRItems' doc comment for the drift mechanism. Recovery is
+// a single CAS transition back to pr_pending, scoped to the item's own
+// currently-observed status/updated_at so a genuine concurrent transition
+// (e.g. a fresh work/review session starting between the caller's read and
+// this write) simply loses the CAS and is left alone rather than clobbered —
+// the same "anchor on reality, never force" discipline BUG-026's fix
+// established for TransitionBacklogItemStatus itself. Callers must have
+// already confirmed no active work/review session exists for this item
+// (hasActiveSession) before calling — this function does not re-check.
+// Returns true if the item was recovered. Best-effort: errors are logged,
+// never returned.
+func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, item *BacklogItemData, caller string) bool {
+	updatedAt := item.UpdatedAt
+	precondition := &BacklogItemPrecondition{
+		ExpectedStatus:    item.Status,
+		ExpectedUpdatedAt: &updatedAt,
+		Note: fmt.Sprintf("self-heal (%s): recovered from drift — item has PR #%d (%s) cached but status was %q, not pr_pending",
+			caller, item.PrNumber, item.PrURL, item.Status),
+	}
+	if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, precondition, TriggeredBySystem); transErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovery transition failed (likely a concurrent legitimate transition, will retry next tick): %v", caller, item.ID, transErr)
+		return false
+	}
+	log.WarningLog.Printf("[BacklogLifecycle] recoverDriftedPRItem(%s) item=%s: recovered from status drift — PR #%d (%s) was stranded at status %q with no active session; transitioned back to pr_pending", caller, item.ID, item.PrNumber, item.PrURL, item.Status)
+	l.notify(item.ID,
+		"Backlog item recovered from stuck state",
+		fmt.Sprintf("%s — had an open PR (#%d) but its status had drifted away from tracking; automatically recovered and resumed polling.", item.Title, item.PrNumber),
+		10, // sessionv1.NotificationType_NOTIFICATION_TYPE_INFO
+		1,  // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+	)
+	return true
+}
+
+// handlePRPendingTransitionFailed is called when resolveToPRPending fails
+// after prNumber/prUrl were already durably persisted on the item — the
+// exact drift mechanism FindDriftedPRItems' doc comment describes (a
+// concurrent legitimate event, e.g. markAbandonedReview's grace period
+// respawning a review pass while an agent-driven ship is still mid-flight,
+// wins the race and moves status away from "review" before this call's own
+// CAS-gated transition to pr_pending lands). Rather than silently leaving
+// the item stranded until the periodic reconcileDriftedPRItems sweep's next
+// tick (ReconcileStuck runs every 60s — server/dependencies.go), this
+// attempts the same recovery immediately: if nothing is actively working the
+// item right now, transition it straight back to pr_pending so it re-enters
+// ReconcilePRPending's view in this same tick. If something IS actively
+// working it (a legitimate concurrent event genuinely owns the item now),
+// recovery correctly declines — the periodic sweep remains the backstop for
+// whenever that session later ends without itself resolving to pr_pending.
+// Also correctly no-ops when the "failure" was actually a harmless race with
+// another writer that already landed the same transition (e.g.
+// RecordPRCreatedOutOfBand beating shipViaAgentOrFallback to it) — the
+// re-fetched item's status is checked before attempting anything.
+func (l *BacklogLifecycleListener) handlePRPendingTransitionFailed(ctx context.Context, itemID, caller string, transErr error) {
+	log.WarningLog.Printf("[BacklogLifecycle] %s pr_pending transition item=%s failed after PR fields were already persisted — item may be stranded with a real PR outside pr_pending tracking until self-heal recovers it: %v", caller, itemID, transErr)
+
+	sessions, sessErr := l.storage.ListItemSessions(ctx, itemID)
+	if sessErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed ListItemSessions item=%s: %v", caller, itemID, sessErr)
+		return
+	}
+	if hasActiveSession(sessions) {
+		log.InfoLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed item=%s: active session found, leaving recovery to the next reconcileDriftedPRItems tick", caller, itemID)
+		return
+	}
+	item, getErr := l.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] %s handlePRPendingTransitionFailed GetBacklogItem item=%s: %v", caller, itemID, getErr)
+		return
+	}
+	if item.PrNumber <= 0 || item.PrURL == "" ||
+		item.Status == string(BacklogStatusPRPending) || item.Status == string(BacklogStatusDone) || item.Status == string(BacklogStatusArchived) {
+		return // already recovered, or resolved to a terminal state, by the time we got here
+	}
+	l.recoverDriftedPRItem(ctx, item, caller)
+}
+
+// reconcileDriftedPRItems is the periodic self-heal detector for the drift
+// class FindDriftedPRItems queries: items with a real, cached PR reference
+// whose status has fallen out of ReconcilePRPending's view with nothing left
+// actively working on them. Registered immediately before ReconcilePRPending
+// (Task: PR-lifecycle drift self-heal) so a recovered item is picked up by
+// the merge/CI polling sweep in the very same tick rather than waiting an
+// extra cycle. Best-effort: query failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileDriftedPRItems(ctx context.Context, er *EntRepository) {
+	items, err := er.FindDriftedPRItems(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileDriftedPRItems query error: %v", err)
+		return
+	}
+	for _, item := range items {
+		itemData := backlogItemToData(item)
+		l.recoverDriftedPRItem(ctx, &itemData, "reconcileDriftedPRItems")
+	}
+}
+
 // reconcilePushFailedItems retries the push+PR flow for every open
 // push_failed stuck row still anchored at "review" — see the doc comment on
 // its ReconcileStuck call site for why this periodic sweep is needed at all
 // (pushAndCreatePR itself only ever runs in response to a review-session
 // event, so an item with no active session would otherwise never get a
-// second attempt). push_failed is event-shaped (see selfHealStuck's doc
-// comment) so it is never auto-resolved by the status-anchor self-heal
-// sweep; resolution instead happens through resolveToPRPending once a
-// retried push succeeds. Best-effort: query failures are logged, never
-// returned.
+// second attempt). While the item remains at "review", resolution happens
+// through resolveToPRPending once a retried push succeeds — selfHealStuck's
+// terminal-anchor case only backstops the item reaching done/archived some
+// other way (see its doc comment), so this loop's own row-status filter
+// below still only needs to consider "review" as an active retry target.
+// Best-effort: query failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcilePushFailedItems(ctx context.Context, er *EntRepository) {
 	open, err := er.FindOpenStuckStates(ctx)
 	if err != nil {
@@ -2588,7 +2969,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 
 	note := "PR created via manual Review Queue Create-PR flow (RunOneShot), not the automated pushAndCreatePR path"
 	if transErr := l.resolveToPRPending(ctx, item.ID, note, "RecordPRCreatedOutOfBand"); transErr != nil {
-		log.ErrorLog.Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand pr_pending transition item=%s: %v", item.ID, transErr)
+		l.handlePRPendingTransitionFailed(ctx, item.ID, "RecordPRCreatedOutOfBand", transErr)
 		return
 	}
 	log.InfoLog.Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand item=%s session=%s → pr_pending (PR #%d %s, via manual RunOneShot flow)", item.ID, workSessionUUID, prNumber, prURL)
@@ -2776,6 +3157,21 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				// immediately (Task 2.1.5a) rather than waiting for the
 				// self-heal sweep's next tick.
 				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
+				// The PR is merged, so ship.md's "must still exist for a
+				// possible one-shot /backlog/ship re-invocation" constraint
+				// (see CleanupSlashCommands' doc comment) no longer applies —
+				// this is the first point in the lifecycle where scaffolding
+				// cleanup is safe. Best-effort: the worktree directory is
+				// often already gone by now (Instance.Kill/Pause deletes it
+				// independently), in which case these are no-ops.
+				if wt != nil && wt.WorktreePath != "" {
+					if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)
+					}
+					if cleanupErr := CleanupSlashCommands(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupSlashCommands item=%s: %v", item.ID, cleanupErr)
+					}
+				}
 			}
 			continue
 		}

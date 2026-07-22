@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1275,6 +1276,349 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	assert.Empty(t, open, "an item with fewer than bounceThreshold cycles must not be flagged")
 }
 
+// TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged
+// verifies the reconciler recognizes a bouncing item whose linked PR has
+// already merged — including a PR merged manually, outside the app's own
+// ship flow (allow_auto_merge is disabled at the repo-settings level) — and
+// transitions it to done instead of flagging it STUCK_REASON_BOUNCING.
+// Regression test for the 2026-07-20 live repro: backlog item "Add sorting
+// and grouping by repository path" bounced with remediationAttempts: 4 and a
+// remediation scheduled three hours *after* its PR #172 had already merged,
+// because reconcileBouncingItems never checked merge state before MarkStuck.
+func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 172
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/172"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	// 3 in_progress->review round trips with no PASS verdict — the exact
+	// shape isBouncing flags.
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"an item whose linked PR already merged must transition to done, not stay bouncing")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a merged item must never be flagged bouncing")
+	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+}
+
+// TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged verifies
+// the new merge check doesn't suppress detection for a bouncing item whose PR
+// is still open — only an actually-merged PR should short-circuit MarkStuck.
+func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with open PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status, "an unmerged item must not be auto-transitioned to done")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason, "an item with an unmerged PR must still be flagged bouncing")
+}
+
+// setupBounceMainRepo creates a temporary git repo with a single commit on a
+// branch explicitly renamed to "main" (git's init default branch name isn't
+// guaranteed to be "main" — see session/git/worktree_creation_test.go's
+// setupTestRepo for the same pattern), matching bounceMainBranch. Returns the
+// repo path and the tip commit's SHA.
+func setupBounceMainRepo(t *testing.T) (repoPath, mainSHA string) {
+	t.Helper()
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	runGitTestCmd(t, dir, "branch", "-M", "main")
+	mainSHA = strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+	return dir, mainSHA
+}
+
+// TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR
+// verifies the fallback added alongside the PR-merge check above: a bouncing
+// item that never had a PR at all (item.PrNumber == 0) — because its real
+// work was committed and merged/pushed straight to main outside the app's
+// ship flow entirely — is recognized via its own most recent work session's
+// commit and transitioned to done instead of being left bouncing forever.
+// Regression test for the 2026-07-21 live repro: backlog item "Rich File
+// Browser" (93565fa1) had its acceptance-criteria commits verified as
+// ancestors of main via `git merge-base --is-ancestor`, but item.PrNumber was
+// never set (no PR ever existed for those commits), so the PR-merge check
+// added earlier that day never fired and the item kept bouncing/getting
+// flagged stuck indefinitely despite its work already having shipped.
+//
+// The work session's worktree is recorded via SaveInstances (not
+// UpdateItemSessionGitActivity, which only ever seeds the pre-work base SHA
+// — see resolveLatestWorkCommit's doc comment) so mostRecentWorkCommitShippedToMain
+// resolves the commit the same way production does: from the worktree's own
+// HEAD, not the stale LastCommitSha field.
+func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	repoPath, mainSHA := setupBounceMainRepo(t)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item shipped without a PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := "shipped-no-pr-work-session"
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// repoPath's checked-out HEAD is already the shipped mainSHA (its only
+	// commit) — using repoPath as the worktree path mirrors a work session
+	// whose worktree is the shared main checkout itself.
+	inst := newTestInstance("shipped-no-pr-instance")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "shipped-no-pr-instance", "main", mainSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	// 3 in_progress->review round trips with no PASS verdict — the exact
+	// shape isBouncing flags.
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status,
+		"an item with no PR whose most recent work-session commit is already on main must transition to done, not stay bouncing")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item whose code already shipped to main without a PR must never be flagged bouncing")
+	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+}
+
+// TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain
+// verifies the new no-PR fallback doesn't suppress detection for a genuinely
+// stuck item: when there's no PR AND the item's most recent work-session
+// commit was never actually merged to main, the item must still be flagged
+// bouncing exactly as before — no regression on the normal (truly stuck) case.
+//
+// The work session's worktree is recorded via SaveInstances so
+// mostRecentWorkCommitShippedToMain resolves the commit from the worktree's
+// own HEAD (as production does), not the stale LastCommitSha field.
+func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	repoPath, _ := setupBounceMainRepo(t)
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with unshipped commit and no PR",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := "unshipped-no-pr-work-session"
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// repoPath's checked-out HEAD is the "feature" branch's unshipped commit.
+	inst := newTestInstance("unshipped-no-pr-instance")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "unshipped-no-pr-instance", "feature", featureSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"an item with no PR and a commit that never landed on main must not be auto-transitioned to done")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason,
+		"an item with no PR whose commit isn't on main must still be flagged bouncing, same as before this fix")
+}
+
+// TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSeed
+// is the direct regression test for the 2026-07-21 false-done bug: ItemSession
+// .LastCommitSha is only ever seeded once at spawn with the pre-work base SHA
+// (UpdateItemSessionGitActivity's callers all pass baseSHA — see
+// resolveLatestWorkCommit's doc comment) and never updated as the agent
+// commits real work. A base SHA is, by construction, always an ancestor of
+// main, so trusting LastCommitSha as "the agent's latest commit" made
+// mostRecentWorkCommitShippedToMain trivially true for any PR-less bouncing
+// item regardless of whether real work ever shipped — confirmed live: items
+// 635a373d, e99d3f4a, and 54e5aa1f were all incorrectly auto-marked done in a
+// single reconciliation tick despite each having real, unmerged work. This
+// test sets LastCommitSha to the shipped mainSHA (the stale-but-plausible
+// value spawn seeding actually produces) while the work session's real
+// worktree HEAD sits on an unshipped "feature" commit, and asserts the item
+// is still correctly flagged bouncing rather than false-positive "done".
+func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSeed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	repoPath, mainSHA := setupBounceMainRepo(t)
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with a stale shipped-looking LastCommitSha",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := "stale-base-seed-work-session"
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	// Exactly what real spawn-time seeding writes: the base SHA (here, mainSHA
+	// itself — always shipped), not the agent's actual latest commit.
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, mainSHA, "", time.Now(), 0))
+
+	// repoPath's checked-out HEAD is the "feature" branch's unshipped commit —
+	// the worktree's real state disagrees with the stale LastCommitSha above.
+	inst := newTestInstance("stale-base-seed-instance")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "stale-base-seed-instance", "feature", featureSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"a stale base-seeded LastCommitSha that happens to be on main must NOT be trusted as proof of shipped work")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason,
+		"the item must still be flagged bouncing based on the worktree's real HEAD, not the stale LastCommitSha")
+}
+
 // --- Story 2.1.6: push_failed ---
 
 // TestStayInReviewAndNotify_should_markPushFailedRow_When_PushAndCreatePRFails
@@ -1637,11 +1981,15 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	assert.Empty(t, open, "bouncing row must resolve once the item reaches done")
 }
 
-// TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries verifies
-// rework_cap and push_failed rows — written with expectedStatus=<current> at
-// the event site, no fixed anchor — are excluded from the status sweep
-// entirely and rely only on their explicit event-site ResolveStuck calls.
-func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *testing.T) {
+// TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal
+// verifies rework_cap rows — the one remaining reason with no non-terminal
+// anchor at all — stay open while the item has not yet reached done/archived.
+// Before this fix, rework_cap (like autonomous_stuck and push_failed before
+// PRs #200/#203) had no resolve path here whatsoever; now it relies on the
+// blanket terminal-status rule (see TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// below), which only fires once the item actually finishes — so it must
+// still stay open on a merely non-terminal, in-flight status.
+func TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -1649,13 +1997,10 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *tes
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
 		Title:  "Event-shaped rows item",
-		Status: string(BacklogStatusDone), // arbitrary/unrelated status
+		Status: string(BacklogStatusInProgress), // non-terminal
 	})
 	require.NoError(t, err)
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusDone, "cap hit")
-	require.NoError(t, err)
-	require.True(t, applied)
-	applied, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusDone, "push failed")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusInProgress, "cap hit")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -1664,13 +2009,8 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_StatusVaries(t *tes
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 2, "event-shaped rows must never be touched by the status sweep")
-	reasons := map[domain.StuckReason]bool{}
-	for _, row := range open {
-		reasons[row.Reason] = true
-	}
-	assert.True(t, reasons[domain.StuckReasonReworkCap])
-	assert.True(t, reasons[domain.StuckReasonPushFailed])
+	require.Len(t, open, 1, "rework_cap has no non-terminal anchor — it must stay open until the item reaches done/archived")
+	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
 }
 
 // TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone verifies
@@ -1704,6 +2044,268 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "the racing write must self-correct within one self-heal tick")
+}
+
+// --- blanket terminal-status rule (docs/bugs: orphaned autonomous_stuck and
+// push_failed rows never auto-resolved once their item completed — fixed
+// once each, one-off, in PR #200 and PR #203. rework_cap was the third
+// reason sitting in the same trap, unfixed. Rather than a fourth one-off
+// case, selfHealStuck now checks a single blanket rule up front: any open
+// stuck row on an item that has reached a genuine terminal status (done or
+// archived) is resolved, regardless of reason. The table below is the
+// generic regression proof for that rule — any reason, once its item goes
+// terminal, resolves — superseding the old per-reason
+// resolveAutonomousStuckRow_When_ItemReachesDone/Archived and
+// resolvePushFailedRow_When_ItemReachesDone/Archived tests.) ---
+
+// TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// is the generic regression proof for selfHealStuck's blanket terminal rule:
+// for every StuckReason — including autonomous_stuck and push_failed (the
+// two reasons this was previously proven for, one PR at a time) and
+// rework_cap (the reason left behind, fixed here) — an open row resolves
+// once its item reaches done or archived, independent of whatever
+// reason-specific anchor (if any) that reason otherwise uses.
+func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus(t *testing.T) {
+	cases := []struct {
+		name          string
+		reason        domain.StuckReason
+		initialStatus BacklogStatus
+	}{
+		{"pr_ready_unmerged", domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending},
+		{"abandoned_review", domain.StuckReasonAbandonedReview, BacklogStatusReview},
+		{"stale_work", domain.StuckReasonStaleWork, BacklogStatusInProgress},
+		{"bouncing", domain.StuckReasonBouncing, BacklogStatusInProgress},
+		{"orphaned_triage", domain.StuckReasonOrphanedTriage, BacklogStatusIdea},
+		{"autonomous_stuck", domain.StuckReasonAutonomousStuck, BacklogStatusInProgress},
+		{"push_failed", domain.StuckReasonPushFailed, BacklogStatusReview},
+		{"rework_cap", domain.StuckReasonReworkCap, BacklogStatusInProgress},
+	}
+	terminals := []BacklogStatus{BacklogStatusDone, BacklogStatusArchived}
+
+	for _, terminal := range terminals {
+		terminal := terminal
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name+"_to_"+string(terminal), func(t *testing.T) {
+				storage, cleanup := createTestStorage(t)
+				defer cleanup()
+				ctx := context.Background()
+				er := storage.repo.(*EntRepository)
+
+				item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+					Title:  "Terminal blanket-rule item: " + tc.name,
+					Status: string(tc.initialStatus),
+				})
+				require.NoError(t, err)
+				applied, err := er.MarkStuck(ctx, item.ID, tc.reason, tc.initialStatus, "test-marked stuck")
+				require.NoError(t, err)
+				require.True(t, applied)
+
+				// Reach the terminal status. Archived is only reachable through
+				// done from a non-idea/refining/ready status, so route through
+				// done first — mirrors how these transitions actually happen
+				// (auto-archive only ever acts on items already done).
+				_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+				require.NoError(t, err)
+				if terminal == BacklogStatusArchived {
+					_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil, TriggeredBySystem)
+					require.NoError(t, err)
+				}
+
+				listener := NewBacklogLifecycleListener(storage)
+				listener.selfHealStuck(ctx, er)
+
+				open, err := er.FindOpenStuckStates(ctx)
+				require.NoError(t, err)
+				assert.Empty(t, open, "%s row must resolve once the item reaches %s, via the blanket terminal rule", tc.reason, terminal)
+			})
+		}
+	}
+}
+
+// TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone is the
+// direct, narrow regression test for the bug this PR closes: rework_cap was
+// the one StuckReason still sitting in the "event-shaped, continue" trap that
+// PRs #200 and #203 fixed one-off for autonomous_stuck and push_failed —
+// unfixed only because nobody had hit it live yet. Before this PR, this
+// exact scenario (a rework_cap row open on an item that later reaches done)
+// left the row permanently orphaned; the blanket terminal rule now resolves
+// it like every other reason.
+func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Rework-cap item that finished",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, BacklogStatusInProgress,
+		"rework cap hit: unlimited backoff exhausted")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item later legitimately completes — e.g. a human took over and
+	// pushed it through manually after the automated rework budget ran out.
+	// Before this fix, rework_cap's row would have stayed open forever: it
+	// was excluded from the sweep entirely with no anchor, terminal or
+	// otherwise.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "rework_cap row must now resolve once the item reaches done — this previously leaked forever")
+}
+
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgress
+// verifies an item that is genuinely still stuck (never reached done or
+// archived) keeps its row open — the sweep must not resolve on a bare
+// "left in_progress" signal the way the other, non-inverted anchors do.
+func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgress(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item still stuck",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a genuinely stuck item must keep its autonomous_stuck row open")
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
+
+// TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState
+// is the anti-regression test named directly by the bug report: the
+// selfHealStuck doc comment used to exclude autonomous_stuck from the sweep
+// entirely because (pre-PR #180) a turn-cap stop could force an
+// in_progress->review transition even while genuinely stuck, which would
+// have made a naive {in_progress} anchor false-resolve the row before an
+// operator ever saw it. This test proves the new {done, archived} anchor
+// does not reintroduce that failure mode: an item that has merely cycled
+// forward into review (a real, but non-terminal, status) on its way to a
+// later stuck condition must NOT have its row resolved.
+func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyInReviewBeforeLaterStuckState(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Autonomous item mid-cycle",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, BacklogStatusInProgress,
+		"autonomous driver stopped after 20 turns without a DONE signal")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item cycles forward into review — a real transition (e.g. a human
+	// pushed the stuck work through manually), but not yet a terminal one.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an item merely cycling through review (not yet done/archived) must not false-resolve")
+	assert.Equal(t, domain.StuckReasonAutonomousStuck, open[0].Reason)
+}
+
+// --- push_failed: still-relevant negative coverage (docs/bugs: orphaned
+// push_failed rows never auto-resolved once their item completed — fixed by
+// PR #203, now generalized into the blanket terminal rule proven by
+// TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
+// above). The positive done/archived cases live in that generic table now;
+// what's still worth testing per-reason is the negative case below, which
+// guards a specific false-resolve risk unique to push_failed's non-terminal
+// behavior. ---
+
+// TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview
+// verifies an item that is genuinely still stuck (never reached done or
+// archived, e.g. retries are still in flight or the backoff gate has parked
+// it) keeps its row open — the sweep must not resolve on a bare "left
+// review" signal, since push_failed retries never change the item's status
+// until a retry actually succeeds.
+func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item still stuck",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a genuinely stuck item must keep its push_failed row open")
+	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
+}
+
+// TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProgressBeforeLaterStuckState
+// proves the new {done, archived} anchor does not reintroduce a false-resolve
+// on a same-status-anchored reason: an item that has merely cycled backward
+// into in_progress (e.g. a human sent it back for rework) on its way to a
+// later stuck condition must NOT have its row resolved just because it left
+// "review" — the anchor is inverted-terminal, not "left review".
+func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProgressBeforeLaterStuckState(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Push-failed item mid-cycle",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview,
+		"push rejected: non-fast-forward")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The item cycles backward into in_progress — a real transition (e.g. a
+	// human sent it back for rework), but not yet a terminal one.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an item merely cycling through in_progress (not yet done/archived) must not false-resolve")
+	assert.Equal(t, domain.StuckReasonPushFailed, open[0].Reason)
 }
 
 // --- Story 2.1.5e: per-detector panic isolation ---

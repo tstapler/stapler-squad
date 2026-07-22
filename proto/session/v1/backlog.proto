@@ -401,6 +401,10 @@ message SpawnSessionFromItemRequest {
 message SpawnSessionFromItemResponse {
   string session_uuid = 1;
   ItemSession item_session = 2;
+  // True if the spawn hit the concurrency cap and the item was transitioned to
+  // "queued" instead of spawning a session. session_uuid/item_session are empty
+  // in that case.
+  bool queued = 3;
 }
 
 message AttachSessionToItemRequest {

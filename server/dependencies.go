@@ -943,6 +943,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	backlogLifecycleListener.SetDequeuer(backlogSvc)
+	// Share BacklogService's live *config.Config instance (and its guarding
+	// mutex) with DefaultsService so a Settings update to the WIP cap / rework
+	// cap takes effect on BacklogService's very next read instead of requiring
+	// a process restart (PR #199 review F1) — see
+	// DefaultsService.SetSharedBacklogConfig's doc comment.
+	sessionService.SetSharedBacklogConfig(cfg, backlogSvc.ConfigMu())
+	// Raising the concurrency limit via Settings should dequeue eligible items
+	// immediately rather than waiting up to 60s for the next ReconcileStuck tick.
+	sessionService.SetOnGlobalDefaultsUpdated(func() {
+		if err := backlogSvc.DequeueNextQueuedItems(context.Background()); err != nil {
+			log.Error("backlog dequeue after global defaults update failed", "err", err)
+		}
+	})
 	// Wire the stale_work remediator so an in_progress item whose work session
 	// has gone quiet (agent finished and is idle at an interactive prompt,
 	// rather than crashed — TmuxAlive/PaneProcessDead both report healthy, so
@@ -974,16 +988,30 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// than inventing a new liveness mechanism. Acquire failure (session not
 	// tracked live) is treated as "not alive" — the whole point of this check
 	// is to catch sessions whose DB row looks active but whose process is gone.
+	//
+	// Prefer the already-live in-memory instance (tracked by ReviewQueuePoller,
+	// which every backlog-spawned session — review-gate and work/rework alike —
+	// registers with via CreateDirectorySession/CreateWorktreeSession) over
+	// registry.WithInstance. Backlog-spawned sessions are never Registry.Register()'d
+	// (only the main CreateSession RPC path does that), so registry.WithInstance's
+	// Acquire falls through to its "construct fresh" branch on every call:
+	// newLiveInstance -> FromInstanceData synchronously calls instance.Start(false)
+	// as a side effect of merely constructing an Active-status Instance (see
+	// fromInstanceData's Active branch), and WithInstance's deferred release() tears
+	// the throwaway instance back down the moment this closure returns. Because this
+	// checker runs on every 60s ReconcileStuck tick for every review-status item's
+	// linked sessions, that reconstruct-Start-teardown cycle repeated forever,
+	// spawning and killing a redundant tmux attach-session PTY client against the
+	// SAME tmux pane the real, already-wired review session's own controller was
+	// using — confirmed live 2026-07-20 (item 93565fa1) as the actual cause of a
+	// review-gate session whose controller never made progress. TmuxSessionExists()
+	// is a pure tmux-existence probe that works on the real, already-started
+	// instance with no reconstruction needed, so checking it there avoids the churn
+	// entirely. Fall back to the heavier Registry path only when no live instance is
+	// tracked (e.g. immediately after a restart, before the poller reloads it).
 	if svc.Registry != nil {
-		registry := svc.Registry
-		backlogLifecycleListener.SetSessionLivenessChecker(func(sessionUUID string) bool {
-			alive := false
-			_ = registry.WithInstance(context.Background(), sessionUUID, func(li *session.LiveInstance) error {
-				alive = li.TmuxSessionExists()
-				return nil
-			})
-			return alive
-		})
+		backlogLifecycleListener.SetSessionLivenessChecker(
+			newSessionLivenessChecker(sessionService.FindLiveInstance, svc.Registry))
 	}
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
 	sessionService.SetReviewGateTrigger(backlogLifecycleListener)
@@ -1134,6 +1162,55 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		WorkflowScheduler:       workflowScheduler,
 		Registry:                svc.Registry,
 	}, nil
+}
+
+// registryInstanceChecker is the narrow slice of *session.Registry that
+// newSessionLivenessChecker's fallback path needs — defined here (the consuming
+// package) rather than in session, per this repo's interface-pollution convention,
+// so a fake with no real *session.Storage can stand in for tests.
+type registryInstanceChecker interface {
+	WithInstance(ctx context.Context, sessionID string, fn func(*session.LiveInstance) error) error
+}
+
+// newSessionLivenessChecker builds the func(sessionUUID string) bool wired onto
+// BacklogLifecycleListener.SetSessionLivenessChecker (see the call site in
+// BuildRuntimeDeps for the full history/rationale).
+//
+// findLive should be SessionService.FindLiveInstance: it returns the session's
+// already-live, already-wired *session.Instance when one is tracked by
+// ReviewQueuePoller — which every backlog-spawned session (review-gate, work,
+// rework, triage) registers with at creation via CreateDirectorySession /
+// CreateWorktreeSession. Checking TmuxSessionExists() directly on that instance
+// answers the liveness question with zero side effects.
+//
+// registry is consulted only when findLive returns nil (no live instance is
+// currently tracked — e.g. immediately after a server restart, before the
+// startup reconciliation loop reloads it). That path goes through
+// registry.WithInstance/Acquire, which — for backlog-spawned sessions, never
+// Registry.Register()'d — reconstructs a fresh *session.Instance from storage on
+// every call (session.FromInstanceData synchronously calls Instance.Start() for
+// an Active-status session as a side effect of construction) and tears it back
+// down the moment the callback returns. Left as the unconditional path (as it
+// was before this fix), that reconstruct-Start-teardown cycle ran on every 60s
+// ReconcileStuck tick for every review-status item's linked sessions, spawning
+// and killing a redundant tmux attach-session PTY client against the same pane
+// the real, already-wired session's own controller was using — confirmed live
+// 2026-07-20 (backlog item 93565fa1) as the actual reason a review-gate
+// session's controller never made progress, despite the session having been
+// correctly started and wired (Start + SetStatusManager + StartController) at
+// spawn time in SpawnReviewSession → CreateDirectorySession.
+func newSessionLivenessChecker(findLive func(sessionUUID string) *session.Instance, registry registryInstanceChecker) func(sessionUUID string) bool {
+	return func(sessionUUID string) bool {
+		if live := findLive(sessionUUID); live != nil {
+			return live.TmuxSessionExists()
+		}
+		alive := false
+		_ = registry.WithInstance(context.Background(), sessionUUID, func(li *session.LiveInstance) error {
+			alive = li.TmuxSessionExists()
+			return nil
+		})
+		return alive
+	}
 }
 
 // prNumFromTitle extracts a PR number from a session title following the

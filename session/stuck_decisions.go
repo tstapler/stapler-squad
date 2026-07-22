@@ -37,6 +37,12 @@ const bounceThreshold = 3
 // bounceLookback bounds the bouncing detector to *active* thrashing.
 const bounceLookback = 24 * time.Hour
 
+// bounceMainBranch is the branch reconcileBouncingItems' shipped-without-a-PR
+// fallback checks a bouncing item's most recent work-session commit against.
+// Matches server/services/backlog_service_triage.go's prFixMainBranch — kept
+// as an independent constant since this package cannot import server/services.
+const bounceMainBranch = "main"
+
 // stuckPRReady reports whether a pr_ready_unmerged condition first observed
 // at firstDetected has held long enough (> prReadyThreshold) as of now to be
 // notification-worthy. Exact-threshold and under-threshold both return false

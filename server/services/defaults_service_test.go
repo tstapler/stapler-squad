@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -116,6 +117,79 @@ func TestUpdateGlobalDefaults_UpdatesProgram(t *testing.T) {
 	require.NotNil(t, resp.Msg)
 	require.NotNil(t, resp.Msg.Defaults)
 	assert.Equal(t, "aider", resp.Msg.Defaults.Program)
+}
+
+// TestUpdateGlobalDefaults_SetsMaxConcurrentBacklogWorkItems verifies that the
+// backlog work-item concurrency cap round-trips through UpdateGlobalDefaults /
+// GetSessionDefaults, replacing what used to be a hardcoded constant.
+func TestUpdateGlobalDefaults_SetsMaxConcurrentBacklogWorkItems(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+	ctx := context.Background()
+
+	resp, err := svc.UpdateGlobalDefaults(ctx, connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		MaxConcurrentBacklogWorkItems: 5,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Defaults)
+	assert.Equal(t, int32(5), resp.Msg.Defaults.MaxConcurrentBacklogWorkItems)
+
+	getResp, err := svc.GetSessionDefaults(ctx, connect.NewRequest(&sessionv1.GetSessionDefaultsRequest{}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(5), getResp.Msg.Defaults.MaxConcurrentBacklogWorkItems)
+}
+
+// TestUpdateGlobalDefaults_RaisingLimitTriggersImmediateDequeue verifies that a
+// successful UpdateGlobalDefaults call invokes the onGlobalDefaultsUpdated
+// callback (wired in server/dependencies.go to an immediate backlog dequeue
+// sweep), rather than requiring callers to wait for the next 60s reconcile tick.
+func TestUpdateGlobalDefaults_RaisingLimitTriggersImmediateDequeue(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	called := make(chan struct{}, 1)
+	svc.SetOnGlobalDefaultsUpdated(func() { called <- struct{}{} })
+
+	_, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		MaxConcurrentBacklogWorkItems: 5,
+	}))
+	require.NoError(t, err)
+
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onGlobalDefaultsUpdated callback was not invoked after UpdateGlobalDefaults")
+	}
+}
+
+// TestUpdateGlobalDefaults_should_UpdateBacklogServiceLiveConfig_When_SharedConfigWired
+// is the regression test for PR #199 review F1: BacklogService.cfg is a
+// *config.Config pointer set once at process start, while UpdateGlobalDefaults
+// previously called config.LoadConfig() again independently — a fresh read into
+// a brand new struct — and saved that, never writing back into the pointer
+// BacklogService actually reads MaxConcurrentBacklogWorkItemsOrDefault() from.
+// Raising the cap via Settings therefore had zero runtime effect until a
+// restart. With SetSharedBacklogConfig wiring BacklogService's own
+// *config.Config + mutex into DefaultsService (mirroring
+// server/dependencies.go's production wiring), a successful UpdateGlobalDefaults
+// call must be immediately observable through that SAME instance — not just
+// through a second, independent config.LoadConfig() call.
+func TestUpdateGlobalDefaults_should_UpdateBacklogServiceLiveConfig_When_SharedConfigWired(t *testing.T) {
+	svc := newIsolatedDefaultsService(t)
+
+	// The exact instance BacklogService would hold in production (see
+	// server/dependencies.go: cfg := config.LoadConfig(); ... NewBacklogService(..., cfg, ...)).
+	cfg := config.LoadConfig()
+	backlogSvc := NewBacklogService(nil, nil, cfg, nil, nil, nil)
+	svc.SetSharedBacklogConfig(cfg, backlogSvc.ConfigMu())
+
+	require.Equal(t, 2, cfg.MaxConcurrentBacklogWorkItemsOrDefault(), "sanity check: default cap before any update")
+
+	_, err := svc.UpdateGlobalDefaults(context.Background(), connect.NewRequest(&sessionv1.UpdateGlobalDefaultsRequest{
+		MaxConcurrentBacklogWorkItems: 5,
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, 5, cfg.MaxConcurrentBacklogWorkItemsOrDefault(),
+		"BacklogService's own live config instance must observe the raised cap immediately, with no restart or reload")
 }
 
 // TestUpsertProfile_EmptyName verifies that UpsertProfile with an empty profile name

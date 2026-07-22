@@ -2,10 +2,12 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,6 +113,300 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 	require.Len(t, open, 1)
 	assert.Equal(t, itemID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
+}
+
+// --- Backlog work-item queue: DequeueNextQueuedItems ---
+
+// TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst verifies that once a
+// WIP slot frees up, the oldest (by QueuedAt) queued item is claimed and
+// spawned — a newer queued item must stay queued until its own slot frees.
+func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the (default, cfg=nil) WIP cap of 2.
+	inProgressIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		inProgressIDs = append(inProgressIDs, id)
+	}
+
+	// Queue two more items with a small gap so QueuedAt ordering is deterministic.
+	olderID := createReadyItemForSpawn(t, svc, repoPath, "older queued")
+	resp, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: olderID}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Queued)
+
+	time.Sleep(5 * time.Millisecond)
+
+	newerID := createReadyItemForSpawn(t, svc, repoPath, "newer queued")
+	resp, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: newerID}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Queued)
+
+	// Free exactly one slot: end the first in_progress item's work session and
+	// transition it out of in_progress (mirrors what onSessionExited does).
+	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	olderItem, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: olderID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", olderItem.Msg.Item.Status, "the older queued item must be dequeued first")
+
+	newerItem, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: newerID}))
+	require.NoError(t, err)
+	assert.Equal(t, "queued", newerItem.Msg.Item.Status, "only one slot freed — the newer item must stay queued")
+}
+
+// TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure verifies that when
+// the claim (queued->in_progress) succeeds but the spawn itself fails (here:
+// missing repo_path), the item is rolled back to queued rather than stranded
+// in_progress with no session.
+func TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:              "no repo path",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+		SkipTriage:         true,
+		SkipPlanning:       true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: itemID, TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	item, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	_, err = svc.queueBacklogItem(t.Context(), item, false)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "queued", getResp.Msg.Item.Status, "spawn failure must roll the item back to queued, not strand it in_progress")
+	assert.Empty(t, creator.calls)
+}
+
+// TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance
+// verifies that "queued" status and queued_at are durable ent state, not
+// in-memory — a simulated server restart (DB close/reopen from the same file,
+// fresh BacklogService instance) still dequeues and spawns the item once a
+// slot is free, exactly like the live process would on its first reconcile
+// tick after boot.
+func TestDequeueNextQueuedItems_SurvivesRestart_DequeuesOnFreshServiceInstance(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "queue-restart.db")
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	var itemID string
+	func() {
+		repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+		require.NoError(t, err)
+		defer repo.Close()
+		storage, err := session.NewStorageWithRepository(repo)
+		require.NoError(t, err)
+
+		svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+		itemID = createReadyItemForSpawn(t, svc, repoPath, "restart-surviving queued item")
+		item, err := storage.GetBacklogItem(t.Context(), itemID)
+		require.NoError(t, err)
+		_, err = svc.queueBacklogItem(t.Context(), item, false)
+		require.NoError(t, err)
+	}()
+
+	// Simulate a server restart: fresh repo/storage/service against the same DB file.
+	repo2, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	defer repo2.Close()
+	storage2, err := session.NewStorageWithRepository(repo2)
+	require.NoError(t, err)
+
+	fetched, err := storage2.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "queued", fetched.Status, "queued status must survive a restart")
+	require.NotNil(t, fetched.QueuedAt, "queued_at must survive a restart")
+
+	creator2 := &mockSessionCreator{}
+	svc2 := NewBacklogService(storage2, creator2, nil, nil, nil, nil)
+	require.NoError(t, svc2.DequeueNextQueuedItems(context.Background()))
+
+	final, err := storage2.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", final.Status, "a fresh service instance must dequeue the restart-surviving item")
+	assert.Len(t, creator2.calls, 1)
+}
+
+// TestDequeue_ConcurrentClaimsAreExclusive races two concurrent calls to
+// TransitionBacklogItemStatus with the same ExpectedStatus=queued precondition
+// against the same item — the SQL-level compare-and-swap (Update().Where(...),
+// not a read-then-write check) must let exactly one caller win. Run with -race.
+func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "concurrent claim item",
+		Status: string(session.BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
+
+	const attempts = 8
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	for err := range results {
+		if err == nil {
+			successCount++
+		}
+	}
+	assert.Equal(t, 1, successCount, "exactly one concurrent claim must win")
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status)
+}
+
+// TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyWithOneFreeSlot
+// is the regression test for PR #199 review F2: DequeueNextQueuedItems previously
+// had no mutex/singleflight serializing its body. Two concurrent callers (the
+// unsynchronized `go l.triggerDequeue(...)` fired from onSessionExited, and the
+// periodic ReconcileStuck sweep) could each compute freeSlots from their own
+// stale ListBacklogItems snapshot and jointly claim two DIFFERENT queued items
+// even though only one WIP slot was actually free — the per-item CAS in
+// TransitionBacklogItemStatus only prevents two callers claiming the SAME item,
+// not this "jointly overshoot the cap" class of race. This is the exact
+// uncontrolled-concurrency-overshoot bug the 2026-07-12 OOM incident (and this
+// whole feature) exists to prevent. With dequeueMu now serializing the entire
+// method body, only one of the two concurrent calls may observe and claim the
+// single free slot. Run with -race.
+func TestDequeueNextQueuedItems_should_ClaimOnlyOneItem_When_CalledConcurrentlyWithOneFreeSlot(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill testWIPCap-1 in_progress slots, leaving exactly 1 free slot.
+	for i := 0; i < testWIPCap-1; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+	}
+	require.Len(t, creator.calls, testWIPCap-1)
+
+	// Queue 2 items (SkipPlanning so the claim isn't blocked by the planning gate
+	// this test isn't exercising).
+	queuedIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("queued %d", i))
+		item, err := storage.GetBacklogItem(t.Context(), id)
+		require.NoError(t, err)
+		_, err = svc.queueBacklogItem(t.Context(), item, false)
+		require.NoError(t, err)
+		queuedIDs = append(queuedIDs, id)
+	}
+
+	// Race two concurrent dequeue sweeps against the single free slot.
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+		}()
+	}
+	wg.Wait()
+
+	inProgressCount := 0
+	stillQueuedCount := 0
+	for _, id := range queuedIDs {
+		item, err := storage.GetBacklogItem(t.Context(), id)
+		require.NoError(t, err)
+		switch item.Status {
+		case string(session.BacklogStatusInProgress):
+			inProgressCount++
+		case string(session.BacklogStatusQueued):
+			stillQueuedCount++
+		}
+	}
+
+	assert.Equal(t, 1, inProgressCount, "exactly one queued item must be dequeued for the single free slot")
+	assert.Equal(t, 1, stillQueuedCount, "the other queued item must remain queued — the WIP cap must not be overshot")
+	assert.Len(t, creator.calls, testWIPCap, "no more sessions than the WIP cap allows should have been spawned")
+}
+
+// TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApprovedPlan
+// is the defense-in-depth regression test for PR #199 review F3/F4: even if an
+// unapproved-plan item somehow ends up "queued" (bypassing
+// SpawnSessionFromItem's own planning gate — e.g. a pre-existing row from before
+// that gate was reordered ahead of the WIP-cap gate, or a future regression at
+// some other call site), the dequeue claim (queued->in_progress) must still be
+// rejected by the domain TransitionGuard's ErrPlanRequired check now that the
+// claim routes through transitionWithGuard — never silently spawning a work
+// session with no planning check at all.
+func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApprovedPlan(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Directly construct an item already "queued" with no approved plan and
+	// SkipPlanning=false — a state the RPC surface should never produce after
+	// the F2 ordering fix, used here to exercise the defense-in-depth layer in
+	// isolation.
+	now := time.Now()
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "queued without approved plan",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusQueued),
+		QueuedAt: &now,
+	})
+	require.NoError(t, err)
+	require.False(t, item.PlanApproved)
+	require.False(t, item.SkipPlanning)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(ctx))
+
+	final, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusQueued), final.Status, "an unapproved-plan item must never be claimed off the queue")
+	assert.Empty(t, creator.calls, "no session should have been spawned for an unapproved-plan item")
 }
 
 // --- AutoReopenForPRFix: live-bug regression (ReconcilePRPending churn) ---
@@ -260,6 +556,121 @@ func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason, "reuses the bouncing reason — same non-converging-cycle semantics, tripped immediately instead of waiting for the periodic sweep")
+}
+
+// --- Stale-but-alive blocking work session: closes the "zero operator signal" gap ---
+//
+// hasActiveWorkSession's guard (above) is purely liveness-based (EndedAt == nil) and
+// cannot distinguish a session that's genuinely making progress from one that's alive
+// but has produced no output for hours. Confirmed live 2026-07-20 on backlog item
+// 9264efe7: the session manager reported the blocking work session Active with a
+// current last_activity_at, while review_queue_determiner.go's independently-computed
+// staleness detector flagged the SAME session "STALENESS DETECTED ... 6h 35m since
+// last meaningful output" on every reconciliation tick — with nothing ever surfaced to
+// the operator. These two tests cover notifyIfActiveWorkSessionStale, which closes
+// that visibility gap without changing the reopen decision itself (the stale session
+// is never stopped, killed, or bypassed — see that function's doc comment for why).
+
+// TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator verifies
+// that when the active work session blocking a reopen attempt is ALSO independently
+// confirmed stale — using the exact same staleness computation and threshold
+// review_queue_determiner.go's own detector uses
+// (Instance.GetTimeSinceLastMeaningfulOutput vs
+// session.DefaultReviewQueuePollerConfig().StalenessThreshold) — an operator
+// notification fires, while the reopen decision itself (item stays in review, no new
+// session spawned, nothing stopped) is unchanged.
+func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		// Mirrors the live incident's observed staleness (6h 35m), well past
+		// the review queue's own 2-minute StalenessThreshold.
+		staleFor: map[string]time.Duration{"active-work-uuid": 6*time.Hour + 35*time.Minute},
+	}
+	svc.SetSessionStopper(stopper)
+
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item with a stale-but-alive blocking work session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "an active work session is an expected 'leave it in place' outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "the reopen decision itself must be unchanged — this fix only adds a notification")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator notification when the blocking work session is independently stale")
+	}
+}
+
+// TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification is the
+// companion negative case: an active work session that is NOT independently flagged
+// stale (idle time well under review_queue_determiner.go's own staleness threshold)
+// must not trigger a notification — this closes the "silent skip" gap only for
+// genuinely stuck sessions, not every routine active-session skip (which would make
+// the notification spam-prone rather than a meaningful signal).
+func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 5 * time.Second},
+	}
+	svc.SetSessionStopper(stopper)
+
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item with a genuinely-active blocking work session",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr)
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no notification for a genuinely active (non-stale) session, got %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+		// expected: no notification fired
+	}
 }
 
 // TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies is the regression
@@ -1357,4 +1768,176 @@ func TestSpawnSessionFromItem_should_UseDefaultInitialPrompt_When_PipelineModeIs
 	wantPrompt := session.BuildTokenBudgetedPrompt(preSpawn, nil)
 	assert.Equal(t, wantPrompt, creator.calls[0].prompt,
 		"default PipelineMode must still produce BuildTokenBudgetedPrompt's unmodified output")
+}
+
+// ─── getWorkSessionDiff / resolveCodebaseWorkDir: worktree-gone false-FAIL regression ──
+//
+// Root cause (confirmed live on the "Backlog History feature Broken" item, PR #173,
+// branch backlog/stapler-squad-fix-backlog-status-audit-trail-r3, 2026-07-20): the
+// review gate's own diff-read path (ReviewGateRunner.Run, session/review_gate.go) is
+// hardened against a gone worktree — it falls back to GetGitDiffRef/RecoverBaseCommitSHA
+// and, failing that, blocks the review with a synthetic FAIL and an operator
+// notification rather than proceeding. TriggerReReview's re-review path
+// (getWorkSessionDiff/resolveCodebaseWorkDir, this file) had no equivalent hardening:
+// getWorkSessionDiff logged a warning and silently returned "", and
+// resolveCodebaseWorkDir hands the reviewer the DB-recorded worktree path without ever
+// checking it still exists on disk. The reviewer is then granted Read/Grep/Glob access
+// scoped to a directory that isn't there, finds no evidence for any criterion, and
+// FAILs/UNVERIFIABLEs everything — even though the real work is sitting on a pushed
+// branch. The two tests below cover both halves of the fix.
+
+// TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseShaCorrupted
+// mirrors TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch
+// (session/review_gate_test.go) for the TriggerReReview path: the session's worktree
+// directory is gone AND its recorded base_commit_sha is a well-formed but nonexistent
+// SHA (the same corruption shape as backlog item ae1e2070), but the work branch is real
+// and reachable from repoPath's own object store. getWorkSessionDiff must recover the
+// diff via RecoverBaseCommitSHA's merge-base repair instead of giving up empty the
+// moment the naive branch-ref fallback also fails.
+func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseShaCorrupted(t *testing.T) {
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+	runGitTestCmd(t, repoDir, "branch", "-M", "main")
+
+	const workBranch = "backlog/recover-diff-merge-base"
+	runGitTestCmd(t, repoDir, "branch", workBranch)
+	runGitTestCmd(t, repoDir, "checkout", workBranch)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "feature.txt"), []byte("real work\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "feature.txt")
+	runGitTestCmd(t, repoDir, "commit", "-m", "real fix")
+	runGitTestCmd(t, repoDir, "checkout", "main")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Diff auto-repair via TriggerReReview",
+		RepoPath: repoDir,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	const workSessionUUID = "diff-repair-triage-uuid"
+	workIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
+
+	// The worktree directory itself no longer exists (simulating cleanup deleting it),
+	// and base_commit_sha is corrupted — both GetGitDiff(worktree) and the naive
+	// GetGitDiffRef(repo fallback) must fail before the merge-base repair kicks in.
+	goneWT := filepath.Join(t.TempDir(), "worktree-that-is-gone")
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       goneWT,
+		WorkingDir: goneWT,
+		Branch:     workBranch,
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:      repoDir,
+			WorktreePath:  goneWT,
+			SessionName:   workSessionUUID,
+			BranchName:    workBranch,
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		},
+	}))
+
+	diff := svc.getWorkSessionDiff(context.Background(), repoDir, &session.ItemSessionSummary{SessionUUID: workSessionUUID})
+	assert.Contains(t, diff, "feature.txt",
+		"must recover the real diff via merge-base auto-repair instead of giving up empty")
+}
+
+// TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiffUnrecoverable
+// reproduces the live bug end to end: no diff is recoverable (worktree gone, branch
+// itself unresolvable — simulating a fully torn-down session, the case where even the
+// merge-base repair above cannot help) and resolveCodebaseWorkDir's fallback directory
+// does not exist on disk either. TriggerReReview must block before ever spending a
+// headless call — proven here by a fake pool that would confidently return FAIL if it
+// were ever actually invoked — and must record an explicit UNVERIFIABLE verdict plus an
+// operator notification, never a false FAIL synthesized from reading nothing.
+func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiffUnrecoverable(t *testing.T) {
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	// This response would (falsely) confirm the original bug if the pool were ever
+	// actually called — asserting callCount()==0 below proves the fix short-circuits
+	// before spending a headless call, not merely that some downstream heuristic
+	// happens to catch a bad result afterward.
+	//
+	// The pool is wired AFTER setupItemInReview: CreateBacklogItem triggers automatic
+	// triage when a headless pool is already set, which would otherwise consume this
+	// pool's single scripted response before the re-review call under test ever runs
+	// (same ordering setupItemInReview's other callers rely on).
+	repoDir := t.TempDir()
+	initGitRepoWithCommit(t, repoDir)
+
+	itemID := setupItemInReview(t, svc, repoDir)
+
+	pool := &fakeHeadlessPool{response: `{"overall":"FAIL","summary":"no diff exists; codebase shows none of the claimed work","tool_reads":[],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	const workSessionUUID = "gone-worktree-unrecoverable-uuid"
+	workIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: workSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
+
+	goneWT := filepath.Join(t.TempDir(), "worktree-that-is-gone")
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+		Title:      workSessionUUID,
+		UUID:       workSessionUUID,
+		Path:       goneWT,
+		WorkingDir: goneWT,
+		Branch:     "backlog/gone-branch-nowhere",
+		Status:     session.Paused,
+		Program:    "claude",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Worktree: session.GitWorktreeData{
+			RepoPath:     repoDir,
+			WorktreePath: goneWT,
+			SessionName:  workSessionUUID,
+			// BranchName was never created in repoDir, so it is unresolvable — neither
+			// GetGitDiffRef nor RecoverBaseCommitSHA's merge-base lookup can recover
+			// anything, forcing the empty-diff codebase-read path.
+			BranchName:    "backlog/gone-branch-nowhere",
+			BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		},
+	}))
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.Equal(t, 0, pool.callCount(), "must block before ever calling the headless pool")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
+		"must not record a false FAIL when the codebase-read directory does not exist")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator notification when the review is blocked")
+	}
 }

@@ -561,6 +561,51 @@ func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogI
 	return items, nil
 }
 
+// FindDriftedPRItems returns backlog items with a live PR reference (a
+// non-zero pr_number and non-empty pr_url) whose status is neither
+// "pr_pending" nor a terminal state (done/archived) — i.e. items that
+// ReconcilePRPending's FindPRPendingItems can never see because it anchors
+// purely on status=="pr_pending", even though the item demonstrably has a
+// real PR that needs the same merge/CI polling. This happens when
+// pushAndCreatePR/shipViaAgentOrFallback persist prNumber/prUrl (which they
+// do unconditionally, before attempting the status transition) but the
+// follow-up CAS transition to pr_pending then loses a race to some other
+// legitimate concurrent event — e.g. markAbandonedReview's grace period
+// firing and respawning a review pass while an agent-driven ship is still
+// mid-flight, or a rework/bounce cycle that exhausts its cap before ever
+// re-shipping. Confirmed live 2026-07-20 on two items (c2ad7bf3-91bf-4d47-
+// 8654-0f2f20869080, PR #251; 6700a3f2-8c0d-4a98-8bbd-39515d5391b1, PR #172)
+// stuck at status="review" with real, still-open PRs neither
+// ReconcilePRPending nor any other reconciler was polling.
+//
+// Excludes items with an active (EndedAt still nil) work or review session:
+// recovery must never steal an item out from under a live, still-legitimately
+// -running session — mirrors AutoReopenForPRFix's/AutoRespawnReview's
+// identical hasActiveWorkSession/hasActiveReviewSession guard. An item with a
+// genuinely active session will naturally reappear in this query once that
+// session ends without making further progress.
+func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(
+			backlogitem.PrNumberGT(0),
+			backlogitem.PrURLNEQ(""),
+			backlogitem.StatusNotIn(
+				string(BacklogStatusPRPending),
+				string(BacklogStatusDone),
+				string(BacklogStatusArchived),
+			),
+			backlogitem.Not(backlogitem.HasItemSessionsWith(
+				itemsession.EndedAtIsNil(),
+				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
+			)),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query drifted PR items: %w", err)
+	}
+	return items, nil
+}
+
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
 // e.g. "https://github.com/owner/repo/pull/148" -> 148.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)

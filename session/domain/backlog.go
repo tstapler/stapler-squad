@@ -16,6 +16,7 @@ const (
 	BacklogStatusIdea       BacklogStatus = "idea"
 	BacklogStatusRefining   BacklogStatus = "refining"
 	BacklogStatusReady      BacklogStatus = "ready"
+	BacklogStatusQueued     BacklogStatus = "queued"
 	BacklogStatusInProgress BacklogStatus = "in_progress"
 	BacklogStatusReview     BacklogStatus = "review"
 	BacklogStatusPRPending  BacklogStatus = "pr_pending"
@@ -241,8 +242,15 @@ var validTransitions = map[BacklogStatus]map[BacklogStatus]bool{
 	},
 	BacklogStatusReady: {
 		BacklogStatusInProgress: true,
+		BacklogStatusQueued:     true, // WIP cap hit at spawn time
 		BacklogStatusIdea:       true, // backward: re-triage
 		BacklogStatusRefining:   true, // backward: refine ACs
+		BacklogStatusArchived:   true,
+	},
+	BacklogStatusQueued: {
+		BacklogStatusInProgress: true, // dequeued: WIP slot freed up
+		BacklogStatusReady:      true, // backward: manually un-queue
+		BacklogStatusIdea:       true, // backward: re-triage from scratch
 		BacklogStatusArchived:   true,
 	},
 	BacklogStatusInProgress: {
@@ -346,7 +354,8 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		return nil
 
-	case from == BacklogStatusReady && to == BacklogStatusInProgress:
+	case from == BacklogStatusReady && to == BacklogStatusInProgress,
+		from == BacklogStatusQueued && to == BacklogStatusInProgress:
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
 		}
