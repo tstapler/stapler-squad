@@ -71,8 +71,13 @@ describe("WorkflowHistorySection", () => {
     expect(screen.queryByTestId("workflow-show-more")).not.toBeInTheDocument();
   });
 
-  it("renders nothing when there are no status events", () => {
-    const { container } = render(<WorkflowHistorySection item={makeItem([])} defaultExpanded={true} />);
-    expect(container).toBeEmptyDOMElement();
+  it("WorkflowHistorySection_should_ShowEmptyStateText_When_NoStatusEventsExist", () => {
+    // Regression guard for #198: items created before the audit-trail fix
+    // have zero BacklogStatusEvent rows — the section must still render
+    // (not disappear entirely) with an explicit "no history" message.
+    render(<WorkflowHistorySection item={makeItem([])} defaultExpanded={true} />);
+    expect(screen.getByText("No status history recorded.")).toBeInTheDocument();
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    expect(screen.queryByTestId("workflow-show-more")).not.toBeInTheDocument();
   });
 });

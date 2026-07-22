@@ -82,4 +82,28 @@ test.describe('existing worktree session creation', () => {
     expect(body.path).toBeTruthy();
     expect(body.oneOff).toBeFalsy();
   });
+
+  // AC1: a hung ListWorktrees backend request must not leave the dropdown
+  // (or the surrounding Create button) stuck loading forever — it must fall
+  // back to a bounded error/manual-entry state within useWorktreeSuggestions'
+  // client-side timeout.
+  test('falls back to manual entry when ListWorktrees hangs', async ({ page }) => {
+    await openInCreationMode(page);
+
+    // Never fulfill the request — simulates a hung backend.
+    await page.route('**/session.v1.SessionService/ListWorktrees', () => {
+      // Intentionally never calls route.fulfill/continue/abort.
+    });
+
+    await page.getByRole('radio', { name: 'Use Worktree' }).click();
+    await page.locator('input[aria-label="Session source input"]').fill('/tmp');
+
+    // Loading state shows first...
+    await expect(page.getByText(/Scanning for git worktrees/i)).toBeVisible({ timeout: 3000 });
+
+    // ...but must resolve to the manual-entry fallback within the client
+    // timeout, not stay stuck loading indefinitely.
+    await expect(page.getByLabel('Existing Worktree Path')).toBeEnabled({ timeout: 8000 });
+    await expect(page.getByText(/Scanning for git worktrees/i)).not.toBeVisible();
+  });
 });

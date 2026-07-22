@@ -503,7 +503,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_skipStaleVerdict_When_ItemRee
 	// whatever put it there live (a separate, already-fixed bug). No new
 	// review-role session is created: the only one on record is the one
 	// whose verdict already shipped the item above.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
@@ -1191,9 +1191,9 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 
 	// 3 in_progress->review round trips.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1223,9 +1223,9 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	})
 	require.NoError(t, err)
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1262,9 +1262,9 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	})
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, belowThreshold.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1308,9 +1308,9 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1356,9 +1356,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1450,9 +1450,9 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
 	// shape isBouncing flags.
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1517,9 +1517,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1595,9 +1595,9 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -1886,7 +1886,7 @@ func TestReconcilePushFailedItems_should_skip_When_ItemNoLongerInReview(t *testi
 	listener.SetNotifier(&fakeNotifier{})
 	listener.pushAndCreatePR(ctx, item, is)
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	reconcileCalled := false
@@ -2035,7 +2035,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -2105,10 +2105,10 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 				// done from a non-idea/refining/ready status, so route through
 				// done first — mirrors how these transitions actually happen
 				// (auto-archive only ever acts on items already done).
-				_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+				_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 				require.NoError(t, err)
 				if terminal == BacklogStatusArchived {
-					_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil)
+					_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, nil, TriggeredBySystem)
 					require.NoError(t, err)
 				}
 
@@ -2152,7 +2152,7 @@ func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testin
 	// Before this fix, rework_cap's row would have stayed open forever: it
 	// was excluded from the sweep entirely with no anchor, terminal or
 	// otherwise.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -2220,7 +2220,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 
 	// The item cycles forward into review — a real transition (e.g. a human
 	// pushed the stuck work through manually), but not yet a terminal one.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -2296,7 +2296,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 
 	// The item cycles backward into in_progress — a real transition (e.g. a
 	// human sent it back for rework), but not yet a terminal one.
-	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

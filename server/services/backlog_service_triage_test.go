@@ -156,7 +156,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
-	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil)
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
@@ -278,7 +278,7 @@ func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition)
+			_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
 			results <- err
 		}()
 	}

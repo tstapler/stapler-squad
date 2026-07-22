@@ -718,8 +718,8 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
+func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
 // FindDoneItemsOlderThan returns backlog items in "done" status whose most

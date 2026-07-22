@@ -41,6 +41,16 @@ import (
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
+// createSessionTimeout bounds the synchronous portion of CreateSession (path
+// resolution, GitHub URL clone). It must stay comfortably above the slowest
+// known synchronous sub-operation — GitHub URL resolution can shell out to
+// `git clone`, which research puts at up to ~120s for large repos — so a
+// legitimate slow-but-successful create still completes. NOTE: this is
+// decoupled from the tmux startup poll (~10s), which runs in a background
+// goroutine *after* the RPC returns and is intentionally not bound by this
+// deadline; if that internal bound is retuned, revisit this value too.
+const createSessionTimeout = 150 * time.Second
+
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -1171,6 +1181,9 @@ func (s *SessionService) CreateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateSessionRequest],
 ) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, createSessionTimeout)
+	defer cancel()
+
 	// Validate required fields
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
@@ -1235,8 +1248,16 @@ func (s *SessionService) CreateSession(
 
 	if session.IsGitHubURL(req.Msg.Path) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
-		localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
+
+		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
+		// timeout genuinely cancels the subprocess instead of abandoning it
+		// to keep running in the background after the RPC returns.
+		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
+			}
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
 		}
 		resolvedPath = localPath
@@ -1244,8 +1265,8 @@ func (s *SessionService) CreateSession(
 		clonedRepoPath = localPath
 
 		// Use branch from GitHub URL if not explicitly provided
-		if branch == "" && ref.Branch != "" {
-			branch = ref.Branch
+		if branch == "" && gitHubRef.Branch != "" {
+			branch = gitHubRef.Branch
 		}
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)

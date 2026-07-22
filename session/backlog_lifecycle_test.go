@@ -1701,7 +1701,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 	// Simulate the race: something else moves the item off "review" while
 	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
 	// are still in flight, before its resolveToPRPending call runs.
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -1740,7 +1740,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 
-	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil)
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview

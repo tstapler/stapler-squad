@@ -379,7 +379,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	// Transition item to review status (from in_progress only).
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition); transErr != nil {
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredBySystem); transErr != nil {
 		log.InfoLog.Printf("[mcp:request_review] transition to review failed: %v", transErr)
 		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
 	}
