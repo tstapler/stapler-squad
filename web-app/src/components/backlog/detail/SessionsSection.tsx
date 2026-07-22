@@ -1,13 +1,23 @@
 "use client";
 
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
-import { CollapsibleSection } from "@/components/ui/Collapsible";
-import { classifySessionKind } from "@/lib/backlog/sessionKind";
+import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
+import { classifySessionKind, type SessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { SessionMonitor } from "../SessionMonitor";
+import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./SessionsSection.css";
+
+// Partial (not a full Record<SessionKind, ...>) because "work"/"review" are
+// Real Sessions rendered via the plain <a> branch below and never look this
+// map up — only the 3 Synthetic Session kinds need an icon here.
+const SYNTHETIC_KIND_ICON: Partial<Record<SessionKind, string>> = {
+  headless_diagnostic: "🩺",
+  blocked_guardrail: "🚫",
+  manual_review_marker: "✍️",
+};
 
 function formatDate(iso?: string): string {
   if (!iso) return "—";
@@ -89,110 +99,139 @@ export function SessionsSection({
       defaultExpanded={defaultExpanded}
     >
       <div className={styles.section}>
-        <div className={styles.sessionList} role="list" aria-label="Linked sessions">
-          {visible.map((s) => {
-            // A session without endedAt that isn't in the active phase for
-            // this item's current status is a stale/orphaned record — label
-            // it ended.
-            const isOrphan = !s.endedAt && s.role !== statusToRole[item.status];
-            const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
-            return (
-              <div key={s.entityId ?? s.sessionId} className={styles.sessionRow} role="listitem">
-                <div className={styles.sessionRowMain}>
-                  {classifySessionKind(s) !== "work" && classifySessionKind(s) !== "review" ? (
-                    <span className={styles.sessionLink}>
-                      <span className={styles.sessionId} title={s.sessionId}>
-                        {s.sessionId.startsWith("headless-review-")
-                          ? "headless review"
-                          : s.sessionId.startsWith("review-blocked-")
-                            ? "review blocked"
-                            : s.sessionId}
-                      </span>
-                      <span className={styles.sessionRole}>{s.role}</span>
-                      {s.worktreeBranch && (
-                        <span className={styles.branchBadge} title="Git branch for this work session">
-                          {s.worktreeBranch}
-                        </span>
-                      )}
-                      {s.startedAt && <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>}
-                      {s.estimatedCostUsd > 0 && (
-                        <span className={styles.sessionCost} title="Estimated session cost">
-                          ${s.estimatedCostUsd.toFixed(4)}
-                        </span>
-                      )}
-                      {isOrphan && <span className={styles.sessionEndedBadge}>ended</span>}
-                    </span>
-                  ) : (
-                    <a className={styles.sessionLink} href={`/?session=${s.sessionId}`} title="Open in terminal">
-                      <span className={styles.sessionId} title={s.sessionId}>
-                        {s.sessionId}
-                      </span>
-                      <span className={styles.sessionRole}>{s.role}</span>
-                      {s.worktreeBranch && (
-                        <span className={styles.branchBadge} title="Git branch for this work session">
-                          {s.worktreeBranch}
-                        </span>
-                      )}
-                      {s.startedAt && <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>}
-                      {s.estimatedCostUsd > 0 && (
-                        <span className={styles.sessionCost} title="Estimated session cost">
-                          ${s.estimatedCostUsd.toFixed(4)}
-                        </span>
-                      )}
-                      {isOrphan && <span className={styles.sessionEndedBadge}>ended</span>}
-                    </a>
-                  )}
-                  <button
-                    className={styles.sessionDeleteBtn}
-                    disabled={deletingSessionId === s.sessionId}
-                    aria-label="Delete session"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onDeleteSession(s);
-                    }}
-                  >
-                    {deletingSessionId === s.sessionId ? "…" : "Delete"}
-                  </button>
-                </div>
-                <div className={styles.pipelineGroup} role="group" aria-label="Pipeline">
-                  <span className={styles.pipelineLabel}>Pipeline:</span>{" "}
-                  {pipelineDisplay.kind === "unrecognized" ? (
-                    <span className={styles.pipelineValue}>
-                      {`custom (unrecognized mode: '${pipelineDisplay.slug}')`}
-                    </span>
-                  ) : (
-                    <>
-                      <span className={styles.pipelineValue}>{pipelineDisplay.name}</span>
-                      {pipelineDisplay.drifted && (
-                        <>
-                          {" "}
-                          <span className={styles.pipelineDriftBadge}>(content since changed)</span>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-                {s.reviewVerdict && (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
-                  <div className={styles.verdictDetail} aria-label="Review verdict detail">
-                    {s.reviewVerdict.summary && (
-                      <span className={styles.verdictSummary}>
-                        <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
-                      </span>
-                    )}
-                    {s.reviewVerdict.perCriterion?.map((c) => (
-                      <div key={c.criterionIndex} className={styles.verdictCriterion}>
-                        <span>
-                          #{c.criterionIndex} {c.outcome}
-                        </span>
-                        {c.evidence && <span>— {c.evidence}</span>}
+        {/* Story 4.1.4: synthetic-session rows (Collapsible + SessionDiagnosticPanel)
+            get their own local CollapsibleGroup, deliberately NOT the page-level
+            CollapsibleGroup BacklogItemDetail.tsx wraps every top-level sibling
+            section in (Task 3.1.4i). SessionsSection's own "sessions"
+            CollapsibleSection is a controlled Accordion.Item in that outer group
+            (value/onValueChange driven by BacklogItemDetail's sectionExpandEntries,
+            which only knows about the fixed top-level section-key set) — nesting
+            per-row Items directly into that same shared Accordion.Root would (a)
+            immediately be forced closed again by the outer group's controlled
+            `value` prop, since a row's sectionKey is never a member of that fixed
+            set, and (b) merge dozens of ephemeral row headers into the page-level
+            Home/End/Arrow nav loop ADR-027 scoped to top-level siblings only. A
+            fresh, uncontrolled CollapsibleGroup here mounts its own Accordion.Root,
+            isolating the rows' open/closed state and giving them their own
+            row-to-row keyboard nav without disturbing the outer group. */}
+        <CollapsibleGroup>
+          <div className={styles.sessionList} role="list" aria-label="Linked sessions">
+            {visible.map((s) => {
+              // A session without endedAt that isn't in the active phase for
+              // this item's current status is a stale/orphaned record — label
+              // it ended.
+              const isOrphan = !s.endedAt && s.role !== statusToRole[item.status];
+              const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
+              const kind = classifySessionKind(s);
+              const isSynthetic = kind !== "work" && kind !== "review";
+              return (
+                <div key={s.entityId ?? s.sessionId} className={styles.sessionRow} role="listitem">
+                  <div className={styles.sessionRowMain}>
+                    {isSynthetic ? (
+                      <div className={sectionStyles.diagnosticRowWrapper}>
+                        <CollapsibleSection
+                          sectionKey={`session-${s.entityId ?? s.sessionId}`}
+                          defaultExpanded={false}
+                          title={
+                            <span className={sectionStyles.diagnosticRowTitle}>
+                              <span aria-hidden="true">{SYNTHETIC_KIND_ICON[kind] ?? "🔍"}</span>
+                              <span className={styles.sessionId} title={s.sessionId}>
+                                {s.sessionId}
+                              </span>
+                              <span className={styles.sessionRole}>{s.role}</span>
+                              {s.startedAt && (
+                                <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>
+                              )}
+                              {s.estimatedCostUsd > 0 && (
+                                <span className={styles.sessionCost} title="Estimated session cost">
+                                  ${s.estimatedCostUsd.toFixed(4)}
+                                </span>
+                              )}
+                            </span>
+                          }
+                        >
+                          <SessionDiagnosticPanel session={s} item={item} />
+                        </CollapsibleSection>
                       </div>
-                    ))}
+                    ) : (
+                      <a className={styles.sessionLink} href={`/?session=${s.sessionId}`} title="Open in terminal">
+                        <span className={styles.sessionId} title={s.sessionId}>
+                          {s.sessionId}
+                        </span>
+                        <span className={styles.sessionRole}>{s.role}</span>
+                        {s.worktreeBranch && (
+                          <span className={styles.branchBadge} title="Git branch for this work session">
+                            {s.worktreeBranch}
+                          </span>
+                        )}
+                        {s.startedAt && <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>}
+                        {s.estimatedCostUsd > 0 && (
+                          <span className={styles.sessionCost} title="Estimated session cost">
+                            ${s.estimatedCostUsd.toFixed(4)}
+                          </span>
+                        )}
+                        {isOrphan && <span className={styles.sessionEndedBadge}>ended</span>}
+                      </a>
+                    )}
+                    <button
+                      className={styles.sessionDeleteBtn}
+                      disabled={deletingSessionId === s.sessionId}
+                      aria-label="Delete session"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onDeleteSession(s);
+                      }}
+                    >
+                      {deletingSessionId === s.sessionId ? "…" : "Delete"}
+                    </button>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                  <div className={styles.pipelineGroup} role="group" aria-label="Pipeline">
+                    <span className={styles.pipelineLabel}>Pipeline:</span>{" "}
+                    {pipelineDisplay.kind === "unrecognized" ? (
+                      <span className={styles.pipelineValue}>
+                        {`custom (unrecognized mode: '${pipelineDisplay.slug}')`}
+                      </span>
+                    ) : (
+                      <>
+                        <span className={styles.pipelineValue}>{pipelineDisplay.name}</span>
+                        {pipelineDisplay.drifted && (
+                          <>
+                            {" "}
+                            <span className={styles.pipelineDriftBadge}>(content since changed)</span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {/* Synthetic rows' reviewVerdict is shown inside the
+                      collapsed SessionDiagnosticPanel above (BlockedNotice /
+                      GateVerdictBox readOnly) — showing it again here,
+                      always-visible, would both duplicate it and defeat the
+                      progressive-disclosure default-collapsed intent. */}
+                  {!isSynthetic &&
+                    s.reviewVerdict &&
+                    (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
+                      <div className={styles.verdictDetail} aria-label="Review verdict detail">
+                        {s.reviewVerdict.summary && (
+                          <span className={styles.verdictSummary}>
+                            <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
+                          </span>
+                        )}
+                        {s.reviewVerdict.perCriterion?.map((c) => (
+                          <div key={c.criterionIndex} className={styles.verdictCriterion}>
+                            <span>
+                              #{c.criterionIndex} {c.outcome}
+                            </span>
+                            {c.evidence && <span>— {c.evidence}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                </div>
+              );
+            })}
+          </div>
+        </CollapsibleGroup>
 
         {hasMore && (
           <button

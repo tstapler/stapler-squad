@@ -24,3 +24,21 @@ export const showMoreButton = style({
     background: vars.color.hoverBackground,
   },
 });
+
+/**
+ * Story 4.1.4: takes the same flex slot `sessionLink`'s <a> occupied for a
+ * real session row, sized to fill the row's main axis while leaving room for
+ * the sibling delete button (`sessionRowMain` is a flex row).
+ */
+export const diagnosticRowWrapper = style({
+  flex: 1,
+  minWidth: 0,
+});
+
+export const diagnosticRowTitle = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["3"],
+  minWidth: 0,
+  flex: 1,
+});

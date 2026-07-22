@@ -115,11 +115,8 @@ describe("SessionsSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders real work/review sessions as links and synthetic sessions as non-clickable spans", () => {
-    const item = makeItem([
-      makeSession({ sessionId: "a1b2c3d4", role: "work" }),
-      makeSession({ sessionId: "headless-triage-xyz", role: "triage" }),
-    ]);
+  it("SessionsSection_should_RenderAnchorLinkUnchanged_When_SessionKindIsWork", () => {
+    const item = makeItem([makeSession({ sessionId: "a1b2c3d4", role: "work" })]);
     render(
       <SessionsSection
         item={item}
@@ -132,6 +129,128 @@ describe("SessionsSection", () => {
     );
 
     expect(screen.getByRole("link", { name: /a1b2c3d4/ })).toHaveAttribute("href", "/?session=a1b2c3d4");
-    expect(screen.queryByRole("link", { name: /headless-triage-xyz/ })).not.toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_RenderCollapsibleNotDeadAnchor_When_ClassifySessionKindReturnsBlockedGuardrail", () => {
+    const item = makeItem([
+      makeSession({
+        entityId: "e-diff-error",
+        sessionId: "diff-error-9c1d4a",
+        role: "review",
+        reviewVerdict: { overallOutcome: "FAIL", summary: "Review blocked: could not compute a diff." },
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("link", { name: /diff-error-9c1d4a/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId("collapsible-header-session-e-diff-error")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_RenderCollapsibleDiagnosticInsteadOfDeadAnchor_When_SessionKindIsManualReviewMarker", () => {
+    // Previously a dead <a href="/?session=manual-review-..."> per the
+    // Story 1.1.3 bug — now a Collapsible header expanding to BlockedNotice.
+    const item = makeItem([
+      makeSession({
+        entityId: "e-manual-review",
+        sessionId: "manual-review-a1b2c3d4-1721577600000000000",
+        role: "review",
+        reviewVerdict: { overallOutcome: "PASS", summary: "Manual review: verified fix locally" },
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+      />
+    );
+
+    expect(
+      screen.queryByRole("link", { name: /manual-review-a1b2c3d4/ })
+    ).not.toBeInTheDocument();
+    const header = screen.getByTestId("collapsible-header-session-e-manual-review");
+    expect(header.tagName).toBe("BUTTON");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(header);
+
+    expect(screen.getByTestId("blocked-notice")).toBeInTheDocument();
+    expect(screen.getByText("Manual review: verified fix locally")).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_ExpandInlineDiagnosticPanelForAllFiveKinds_When_UserClicksEachSyntheticSessionRow", () => {
+    const item = makeItem([
+      makeSession({ sessionId: "work-uuid-1", role: "work", entityId: "e-work" }),
+      makeSession({
+        sessionId: "real-review-uuid-1",
+        role: "review",
+        entityId: "e-review",
+        endedAt: new Date().toISOString(),
+      }),
+      makeSession({
+        sessionId: "headless-triage-uuid-1",
+        role: "triage",
+        entityId: "e-headless",
+        triageResult: { summary: "Looks good.", suggestions: [], clarifyingQuestions: [] },
+      }),
+      makeSession({
+        sessionId: "review-blocked-uuid-1",
+        role: "review",
+        entityId: "e-blocked",
+        reviewVerdict: { overallOutcome: "FAIL", summary: "Blocked by security check." },
+      }),
+      makeSession({
+        sessionId: "manual-review-uuid-1",
+        role: "review",
+        entityId: "e-manual",
+        reviewVerdict: { overallOutcome: "PASS", summary: "Verified manually." },
+      }),
+    ]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+      />
+    );
+
+    // Real sessions (work, review) — unchanged link behavior.
+    expect(screen.getByRole("link", { name: /work-uuid-1/ })).toHaveAttribute("href", "/?session=work-uuid-1");
+    expect(screen.getByRole("link", { name: /real-review-uuid-1/ })).toHaveAttribute(
+      "href",
+      "/?session=real-review-uuid-1"
+    );
+
+    // Synthetic sessions — Collapsible header, click to expand inline.
+    const headlessHeader = screen.getByTestId("collapsible-header-session-e-headless");
+    const blockedHeader = screen.getByTestId("collapsible-header-session-e-blocked");
+    const manualHeader = screen.getByTestId("collapsible-header-session-e-manual");
+    for (const header of [headlessHeader, blockedHeader, manualHeader]) {
+      expect(header).toHaveAttribute("aria-expanded", "false");
+    }
+
+    fireEvent.click(headlessHeader);
+    expect(screen.getByText("Looks good.")).toBeInTheDocument();
+
+    fireEvent.click(blockedHeader);
+    expect(screen.getByText("Blocked by security check.")).toBeInTheDocument();
+
+    fireEvent.click(manualHeader);
+    expect(screen.getByText("Verified manually.")).toBeInTheDocument();
   });
 });
