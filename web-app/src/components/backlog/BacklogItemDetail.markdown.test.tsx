@@ -5,9 +5,20 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+
+/**
+ * DescriptionSection (Story 3.1.3) is collapsed by default — its content is
+ * removed from the DOM (not just hidden) until the header is expanded, per
+ * CollapsibleSection's contract. Expand it before asserting on rendered
+ * description content.
+ */
+async function expandDescription() {
+  const header = await screen.findByTestId("collapsible-header-description");
+  fireEvent.click(header);
+}
 
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
@@ -86,6 +97,7 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
+    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("strong")).toHaveTextContent("bold");
@@ -101,6 +113,7 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
+    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     const img = rendered.querySelector("img");
@@ -114,6 +127,7 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
+    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("script")).not.toBeInTheDocument();

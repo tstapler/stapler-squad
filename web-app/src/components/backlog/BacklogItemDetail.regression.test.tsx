@@ -241,15 +241,20 @@ describe("BacklogItemDetail — Story 3.1.1: itemId state-reset fix", () => {
     fireEvent.click(screen.getByTestId("backlog-action-manual-review"));
     expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
 
-    // Same itemId → same `key` → React keeps the existing instance mounted;
-    // simulate a poll tick returning a fresh item object for the same id.
+    // Same itemId → same `key` → React keeps the existing instance mounted
+    // (proving the remount fix doesn't over-trigger on unrelated
+    // re-renders). Note: since Story 3.1.3, polling is itself suspended
+    // while the manual-review form is open (Task 3.1.3c) — the poll tick
+    // below is a no-op for that reason, which only reinforces the form
+    // staying open; the parent-level rerender is what this test is
+    // actually proving doesn't reset local component state.
     rerender(<Harness itemId="itm_a" />);
     await act(async () => {
       jest.advanceTimersByTime(5_000);
       await Promise.resolve();
     });
 
-    expect(pollCount).toBeGreaterThan(1);
+    expect(pollCount).toBe(1);
     expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
   });
 });

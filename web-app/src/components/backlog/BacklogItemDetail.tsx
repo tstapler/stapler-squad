@@ -2,8 +2,6 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
@@ -28,8 +26,9 @@ import { LifecycleSummary } from "./detail/LifecycleSummary";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { PullRequestSection } from "./detail/PullRequestSection";
+import { DescriptionSection } from "./detail/DescriptionSection";
+import { ActionsSection } from "./detail/ActionsSection";
 import * as styles from "./BacklogItemDetail.css";
-import * as markdownStyles from "./markdownBody.css";
 
 interface BacklogItemDetailProps {
   itemId: string;
@@ -232,13 +231,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   }, [listPipelineModes]);
 
   // Poll for updated item data while triage is running or while in review (waiting for gate verdict).
-  // Suspend polling while the edit form is open so a background refresh can't clobber unsaved edits.
+  // Suspend polling while the edit form is open, the manual-review form is
+  // open (Story 3.1.3, Task 3.1.3c — a poll firing mid-draft would clobber
+  // unsaved manual-review text the same way it would clobber an open edit
+  // form), or any action is in flight (Task 3.1.3c, pre-mortem P1 #4 — a
+  // poll-triggered re-render while an Approve/Override request with real
+  // backend side effects is in flight could unmount its containing section,
+  // risking a double-submit).
   useEffect(() => {
-    const shouldPoll = (item?.triageStatus === "running" || (item?.status === "review" && (!item?.gateVerdict || item.gateVerdict === "PENDING")) || item?.status === "pr_pending") && !editMode;
+    const shouldPoll = (item?.triageStatus === "running" || (item?.status === "review" && (!item?.gateVerdict || item.gateVerdict === "PENDING")) || item?.status === "pr_pending") && !editMode && !showManualReview && actionLoading === null;
     if (!shouldPoll) return;
     const interval = setInterval(() => { void load(); }, 5_000);
     return () => clearInterval(interval);
-  }, [item?.triageStatus, item?.status, item?.gateVerdict, editMode, load]); // item.status covers pr_pending polling
+  }, [item?.triageStatus, item?.status, item?.gateVerdict, editMode, showManualReview, actionLoading, load]); // item.status covers pr_pending polling
 
   // Track triage progress: increment elapsed time while triageStatus === "running"
   useEffect(() => {
@@ -347,6 +352,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     },
     [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
+
+  // Extracted verbatim from the inline manual-review-submit onClick handler
+  // (Story 3.1.3, Task 3.1.3b) so ActionsSection stays a props-down/
+  // callbacks-up presentational component.
+  const handleManualReviewSubmit = useCallback(async () => {
+    if (!item) return;
+    const toastKey = `${item.id}:manual_review_submit`;
+    setActionLoading("manual_review_submit");
+    try {
+      await submitManualReview(item.id, manualReviewOutcome, manualReviewSummary.trim());
+      showActionToast("Review submitted.", "success", toastKey);
+      setShowManualReview(false);
+      setManualReviewSummary("");
+      setManualReviewOutcome("PASS");
+      await load();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Submit failed.";
+      if (mountedRef.current) setError(msg);
+      showActionToast(msg, "error", toastKey);
+    } finally {
+      if (mountedRef.current) setActionLoading(null);
+    }
+  }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
 
   // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
   // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
@@ -842,16 +870,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         )}
 
         {/* Description */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Description</h3>
-          {item.description ? (
-            <div className={markdownStyles.markdownBody} data-testid="backlog-description-rendered">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.description}</ReactMarkdown>
-            </div>
-          ) : (
-            <p className={styles.emptyText}>No description.</p>
-          )}
-        </div>
+        <DescriptionSection item={item} />
 
         {/* Acceptance Criteria */}
         <div className={styles.section}>
@@ -862,301 +881,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
 
         {/* Actions */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Actions</h3>
-          <div className={styles.actionsPanel} role="group" aria-label="Item actions">
-            {item.status === "idea" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("mark_ready")}
-                  disabled={actionLoading !== null || item.acCriteria.length === 0}
-                  aria-disabled={item.acCriteria.length === 0}
-                  aria-busy={actionLoading === "mark_ready"}
-                  title={item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined}
-                  data-testid="backlog-action-mark-ready"
-                >
-                  <ActionButtonLabel pending={actionLoading === "mark_ready"} label="Mark Ready" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading !== null || !item.repoPath}
-                  aria-disabled={!item.repoPath}
-                  aria-busy={actionLoading === "trigger_triage"}
-                  title={!item.repoPath ? "Set repository path first" : undefined}
-                  data-testid="backlog-action-trigger-triage"
-                >
-                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-                </button>
-              </>
-            )}
-
-            {item.status === "ready" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading !== null || !item.repoPath}
-                  aria-disabled={!item.repoPath}
-                  aria-busy={actionLoading === "trigger_triage"}
-                  title={!item.repoPath ? "Set repository path first" : undefined}
-                  data-testid="backlog-action-trigger-triage"
-                >
-                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("spawn_session")}
-                  disabled={actionLoading !== null || !canSpawnSession}
-                  aria-disabled={!canSpawnSession}
-                  aria-busy={actionLoading === "spawn_session"}
-                  title={
-                    !canSpawnSession
-                      ? "Approve the plan or enable skip_planning to spawn a session"
-                      : undefined
-                  }
-                  data-testid="backlog-action-spawn-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "spawn_session"} label="Spawn Session" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("spawn_session_autonomous")}
-                  disabled={actionLoading !== null || !canRunAutonomously}
-                  aria-disabled={!canRunAutonomously}
-                  aria-busy={actionLoading === "spawn_session_autonomous"}
-                  title={
-                    !canRunAutonomously
-                      ? "Item must be in Ready status to run autonomously"
-                      : "Run the agent without human approval for tool calls"
-                  }
-                  data-testid="backlog-action-run-autonomously"
-                >
-                  <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
-                </button>
-                {item.planArtifactsPath && (
-                  <button
-                    className={styles.actionButton}
-                    onClick={() => handleAction("approve_plan")}
-                    disabled={actionLoading !== null}
-                    aria-busy={actionLoading === "approve_plan"}
-                    data-testid="backlog-action-approve-plan"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
-                  </button>
-                )}
-              </>
-            )}
-
-            {item.status === "in_progress" && item.linkedSessions.length > 0 && (
-              <>
-                <a
-                  className={styles.actionButton}
-                  href={`/?session=${(latestWorkSession ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
-                  data-testid="backlog-action-view-session"
-                >
-                  View Session
-                </a>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "restart_session"}
-                  title="Stop the current session and re-spawn it in a fresh git worktree"
-                  data-testid="backlog-action-restart-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-                </button>
-              </>
-            )}
-
-            {item.status === "review" && (
-              <>
-                {canShipPR && (
-                  <button
-                    className={styles.actionButton}
-                    onClick={() => handleAction("ship_pr")}
-                    disabled={actionLoading !== null || !acAllComplete}
-                    aria-disabled={!acAllComplete}
-                    aria-busy={actionLoading === "ship_pr"}
-                    title={
-                      !acAllComplete
-                        ? "All acceptance criteria must be complete before shipping a PR."
-                        : "Ask the agent to push the branch and open a pull request for this item."
-                    }
-                    data-testid="backlog-action-ship-pr"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "ship_pr"} label="🚀 Ship PR" />
-                  </button>
-                )}
-                <button
-                  className={`${styles.actionButton} ${styles.actionButtonDanger}`}
-                  onClick={() => handleAction("override_done")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "override_done"}
-                  data-testid="backlog-action-override-done"
-                >
-                  <ActionButtonLabel pending={actionLoading === "override_done"} label="Override → Done" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("re_review")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "re_review"}
-                  data-testid="backlog-action-re-review"
-                >
-                  <ActionButtonLabel pending={actionLoading === "re_review"} label="Re-review" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("manual_review")}
-                  disabled={actionLoading !== null}
-                  data-testid="backlog-action-manual-review"
-                >
-                  Submit Review
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "restart_session"}
-                  title="Stop the review session and restart work from scratch in a fresh git worktree"
-                  data-testid="backlog-action-restart-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-                </button>
-              </>
-            )}
-
-            {showManualReview && item.status === "review" && (
-              <div className={styles.manualReviewForm} data-testid="manual-review-form">
-                <h4 className={styles.manualReviewTitle}>Submit Review</h4>
-                <div className={styles.manualReviewRow}>
-                  <label className={styles.manualReviewLabel}>Verdict</label>
-                  <select
-                    className={styles.manualReviewSelect}
-                    value={manualReviewOutcome}
-                    onChange={(e) => setManualReviewOutcome(e.target.value)}
-                    data-testid="manual-review-outcome"
-                  >
-                    <option value="PASS">PASS — meets all criteria</option>
-                    <option value="FAIL">FAIL — does not meet criteria</option>
-                    <option value="PARTIAL">PARTIAL — partially meets criteria</option>
-                    <option value="UNVERIFIABLE">UNVERIFIABLE — cannot verify</option>
-                  </select>
-                </div>
-                <div className={styles.manualReviewRow}>
-                  <label className={styles.manualReviewLabel}>Summary</label>
-                  <textarea
-                    className={styles.manualReviewTextarea}
-                    placeholder="Describe your findings…"
-                    value={manualReviewSummary}
-                    onChange={(e) => setManualReviewSummary(e.target.value)}
-                    rows={4}
-                    data-testid="manual-review-summary"
-                  />
-                </div>
-                <div className={styles.manualReviewActions}>
-                  <button
-                    className={styles.actionButton}
-                    disabled={!manualReviewSummary.trim() || actionLoading !== null}
-                    aria-busy={actionLoading === "manual_review_submit"}
-                    onClick={async () => {
-                      const toastKey = `${item.id}:manual_review_submit`;
-                      setActionLoading("manual_review_submit");
-                      try {
-                        await submitManualReview(item.id, manualReviewOutcome, manualReviewSummary.trim());
-                        showActionToast("Review submitted.", "success", toastKey);
-                        setShowManualReview(false);
-                        setManualReviewSummary("");
-                        setManualReviewOutcome("PASS");
-                        await load();
-                      } catch (e) {
-                        const msg = e instanceof Error ? e.message : "Submit failed.";
-                        if (mountedRef.current) setError(msg);
-                        showActionToast(msg, "error", toastKey);
-                      } finally {
-                        if (mountedRef.current) setActionLoading(null);
-                      }
-                    }}
-                    data-testid="manual-review-submit"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "manual_review_submit"} label="Submit" />
-                  </button>
-                  <button
-                    className={styles.actionButtonSecondary}
-                    onClick={() => { setShowManualReview(false); setManualReviewSummary(""); }}
-                    data-testid="manual-review-cancel"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {item.status === "done" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("archive")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "archive"}
-                  data-testid="backlog-action-archive"
-                >
-                  <ActionButtonLabel pending={actionLoading === "archive"} label="Archive" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("reopen")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "reopen"}
-                  data-testid="backlog-action-reopen"
-                >
-                  <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
-                </button>
-              </>
-            )}
-
-            {/* Backward transitions — visible whenever there's an earlier stage to return to */}
-            {["refining", "ready", "in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-              <>
-                <button
-                  className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-                  onClick={() => handleAction("send_back_idea")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "send_back_idea"}
-                  title="Reset to Idea and clear plan approval so triage can re-run"
-                  data-testid="backlog-action-send-back-idea"
-                >
-                  <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
-                </button>
-                {["in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-                  <button
-                    className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-                    onClick={() => handleAction("send_back_ready")}
-                    disabled={actionLoading !== null}
-                    aria-busy={actionLoading === "send_back_ready"}
-                    title="Move back to Ready to re-spawn without full re-triage"
-                    data-testid="backlog-action-send-back-ready"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
-                  </button>
-                )}
-              </>
-            )}
-
-            <button
-              className={styles.actionButtonDanger}
-              onClick={() => handleAction("delete")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "delete"}
-              data-testid="backlog-action-delete"
-            >
-              <ActionButtonLabel pending={actionLoading === "delete"} label="Delete" />
-            </button>
-          </div>
-        </div>
+        <ActionsSection
+          item={item}
+          actionLoading={actionLoading}
+          latestWorkSession={latestWorkSession}
+          canSpawnSession={canSpawnSession}
+          canRunAutonomously={canRunAutonomously}
+          canShipPR={canShipPR}
+          acAllComplete={acAllComplete}
+          showManualReview={showManualReview}
+          manualReviewOutcome={manualReviewOutcome}
+          manualReviewSummary={manualReviewSummary}
+          onAction={handleAction}
+          onManualReviewOutcomeChange={setManualReviewOutcome}
+          onManualReviewSummaryChange={setManualReviewSummary}
+          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
+          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(''); }}
+        />
 
         {/* Plan Artifacts Path */}
         {item.planArtifactsPath && (

@@ -86,6 +86,10 @@ jest.mock("@/lib/analytics", () => ({
 
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn();
+// Hoisted (like getBacklogItem/listPipelineModes above) so individual tests
+// can control resolution timing — needed for the actionLoading polling-
+// suspend regression test (Story 3.1.3, Task 3.1.3c).
+const overrideVerdict = jest.fn();
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
@@ -95,7 +99,7 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
     cancelTriage: jest.fn(),
     spawnSessionFromItem: jest.fn(),
     approvePlan: jest.fn(),
-    overrideVerdict: jest.fn(),
+    overrideVerdict,
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
     submitManualReview: jest.fn(),
@@ -124,6 +128,7 @@ beforeEach(() => {
   useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
   useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
+  overrideVerdict.mockReset();
 });
 
 function makeMode(overrides: Partial<PipelineMode> & Pick<PipelineMode, "slug" | "name">): PipelineMode {
@@ -500,5 +505,109 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
     const summary = screen.getByTestId("lifecycle-summary");
     expect(summary).toBeInTheDocument();
     expect(screen.getByTestId("stage-node-review")).toHaveAttribute("aria-current", "step");
+  });
+});
+
+describe("BacklogItemDetail — Story 3.1.3: polling suspends for manual-review + in-flight actions", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
+    return {
+      ...makeItem([]),
+      status: "review",
+      gateVerdict: "PENDING",
+      ...overrides,
+    };
+  }
+
+  it("BacklogItemDetail_should_SuspendPollingLoad_When_ShowManualReviewIsTrueEvenWithEditModeFalse", async () => {
+    getBacklogItem.mockReset().mockResolvedValue(makeReviewItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getBacklogItem).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("backlog-action-manual-review"));
+    expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    // showManualReview === true, editMode === false — the poll must still be
+    // suspended (extends the existing editMode-only guard, Task 3.1.3c).
+    expect(getBacklogItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("BacklogItemDetail_should_NotClobberManualReviewDraftText_When_PollTickFiresWhileFormOpen", async () => {
+    getBacklogItem.mockReset().mockResolvedValue(makeReviewItem());
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-manual-review"));
+    fireEvent.change(screen.getByTestId("manual-review-summary"), {
+      target: { value: "Verified the fix locally" },
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+
+    expect(getBacklogItem).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("manual-review-summary")).toHaveValue("Verified the fix locally");
+  });
+
+  it("BacklogItemDetail_should_SuspendPollingAndPreservePendingState_When_ActionLoadingIsNonNull", async () => {
+    const reviewSession = makeSession({
+      entityId: "review-session-1",
+      sessionId: "session-1",
+      role: "review",
+    });
+    getBacklogItem.mockReset().mockResolvedValue(makeReviewItem({ linkedSessions: [reviewSession] }));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    // Never resolves — keeps actionLoading non-null for the duration of this test.
+    overrideVerdict.mockReturnValue(new Promise(() => {}));
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getBacklogItem).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("backlog-action-override-done"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("backlog-action-override-done")).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    // actionLoading !== null — the poll must be suspended (pre-mortem P1 #4,
+    // Task 3.1.3c), and the pending button's state must survive untouched
+    // (no unmount, no double-submit risk).
+    expect(getBacklogItem).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("backlog-action-override-done")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("backlog-action-override-done")).toBeDisabled();
   });
 });

@@ -253,7 +253,11 @@ export function GateVerdictBox({
         <p className={styles.verdictSummary}>{summary}</p>
 
         {showCriteria && (
-          <ul className={styles.criteriaList} aria-label="Criteria results">
+          <>
+            {/* D2 fix: distinguishes this per-criterion review outcome list
+                from AcCriteriaList's "Acceptance Criteria" checklist. */}
+            <p className={styles.criteriaHeading}>Review outcome per criterion</p>
+            <ul className={styles.criteriaList} aria-label="Criteria results">
             {criteria!.map((c, i) => (
               <li key={i} className={styles.criteriaItem}>
                 <span
@@ -265,7 +269,8 @@ export function GateVerdictBox({
                 {c.label}
               </li>
             ))}
-          </ul>
+            </ul>
+          </>
         )}
       </div>
 
