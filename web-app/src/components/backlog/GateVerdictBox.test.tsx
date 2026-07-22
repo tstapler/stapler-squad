@@ -23,13 +23,13 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { GateVerdictBox } from "./GateVerdictBox";
+import { GateVerdictBox, type GateVerdictBoxWriteProps } from "./GateVerdictBox";
 
 // ---------------------------------------------------------------------------
 // Default props factory
 // ---------------------------------------------------------------------------
 
-function makeProps(overrides: Partial<React.ComponentProps<typeof GateVerdictBox>> = {}) {
+function makeProps(overrides: Partial<GateVerdictBoxWriteProps> = {}): GateVerdictBoxWriteProps {
   return {
     verdict: "PASS" as const,
     summary: "All checks passed.",
@@ -366,7 +366,9 @@ describe("GateVerdictBox_should_HideActionButtonRowButShowPerCriterionOutcomes_W
     ];
     render(
       <GateVerdictBox
-        {...makeProps({ verdict: "FAIL", criteria, summary: "2 of 5 criteria still not met." })}
+        verdict="FAIL"
+        criteria={criteria}
+        summary="2 of 5 criteria still not met."
         readOnly
       />
     );
@@ -385,13 +387,16 @@ describe("GateVerdictBox_should_HideActionButtonRowButShowPerCriterionOutcomes_W
     expect(screen.queryByRole("button", { name: /Re-run Gate/i })).not.toBeInTheDocument();
   });
 
-  it("does not fire onApprove when Ctrl+Enter is pressed in readOnly mode", () => {
-    const onApprove = jest.fn().mockResolvedValue(undefined);
-    render(<GateVerdictBox {...makeProps({ verdict: "PASS", onApprove })} readOnly />);
+  it("ignores Ctrl+Enter in readOnly mode — no action buttons or forms appear", () => {
+    // readOnly props have no write-mode callbacks at all (discriminated union),
+    // so there is nothing to spy on here — the compiler enforces the "never
+    // invoked" contract that this test used to check with a noop mock.
+    render(<GateVerdictBox verdict="PASS" summary="All checks passed." readOnly />);
 
     const section = screen.getByRole("status", { name: /Gate verdict/i });
     fireEvent.keyDown(section, { key: "Enter", ctrlKey: true });
 
-    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: /Reopen for revision/i })).not.toBeInTheDocument();
   });
 });

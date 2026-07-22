@@ -359,6 +359,8 @@ describe("TriageReviewPanel_refine_with_feedback", () => {
 
 describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySuggestionsTasks_When_ReadOnlyIsTrue", () => {
   it("omits Apply/Skip/Refine/dismiss buttons but keeps summary, suggestions, and task list", () => {
+    // readOnly props have no write-mode callbacks at all (discriminated
+    // union) — nothing to fabricate noop stand-ins for.
     render(
       <TriageReviewPanel
         item={makeItem()}
@@ -367,8 +369,6 @@ describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySugge
           tasks: [{ text: "Reworded AC #2", estimate: "", category: "" }],
         }}
         readOnly
-        onApply={jest.fn()}
-        onSkip={jest.fn()}
       />
     );
 
@@ -398,8 +398,6 @@ describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySugge
         item={makeItem()}
         triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
         readOnly
-        onApply={jest.fn()}
-        onSkip={jest.fn()}
       />
     );
 

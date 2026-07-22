@@ -13,12 +13,6 @@ export interface SessionDiagnosticPanelProps {
   item: BacklogItem;
 }
 
-// readOnly panels never invoke these — required only to satisfy the
-// underlying components' prop contracts (Task 4.1.2d).
-const noopSync = () => {};
-const noopAsync = async () => {};
-const noopAsyncWithArg = async (_arg: string) => {};
-
 function summarizeTriage(triageResult: NonNullable<LinkedSession["triageResult"]>): string {
   const suggestionCount = triageResult.suggestions.filter((s) => s.rationale !== "question").length;
   return `Triage completed — ${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}`;
@@ -58,8 +52,6 @@ export function SessionDiagnosticPanel({ session, item }: SessionDiagnosticPanel
             item={item}
             triageResult={session.triageResult}
             readOnly
-            onApply={noopAsync}
-            onSkip={noopSync}
           />
         </div>
       );
@@ -80,10 +72,6 @@ export function SessionDiagnosticPanel({ session, item }: SessionDiagnosticPanel
               passed: c.outcome === "PASS",
             }))}
             readOnly
-            onApprove={noopAsync}
-            onReopen={noopAsyncWithArg}
-            onOverride={noopAsyncWithArg}
-            onSkipGate={noopAsync}
           />
         </div>
       );

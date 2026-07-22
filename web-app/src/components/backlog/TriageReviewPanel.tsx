@@ -20,9 +20,26 @@ function setDismissed(itemId: string) {
   }
 }
 
-interface TriageReviewPanelProps {
+interface TriageReviewPanelBaseProps {
   item: BacklogItem;
   triageResult: TriageResult;
+}
+
+/**
+ * Story 4.1.2 (Structured Diagnostic): renders this panel as a read-only
+ * historical record for a Headless Diagnostic Session — Apply/Skip/Refine
+ * buttons and the dismiss ("Skip ×") button are omitted from the DOM (not
+ * disabled — absent), and dismissal is a no-op (a historical record
+ * shouldn't be dismissible). All informational content (summary,
+ * suggestions, task list) still renders. There is no write-mode callback to
+ * fabricate a stand-in for: the readOnly variant simply has none of them.
+ */
+export interface TriageReviewPanelReadOnlyProps extends TriageReviewPanelBaseProps {
+  readOnly: true;
+}
+
+export interface TriageReviewPanelWriteProps extends TriageReviewPanelBaseProps {
+  readOnly?: false;
   /** Called when the user clicks Apply — parent is responsible for the actual update + transition. */
   onApply: (preApplyCriteria: AcCriterion[]) => Promise<void>;
   /** Called when the user clicks Undo in the toast — parent reverts AC and status. */
@@ -30,17 +47,12 @@ interface TriageReviewPanelProps {
   onSkip: () => void;
   /** Called when the user submits feedback to refine this triage result. */
   onRefine?: (feedback: string) => Promise<void>;
-  /**
-   * Story 4.1.2 (Structured Diagnostic): renders this panel as a read-only
-   * historical record for a Headless Diagnostic Session — Apply/Skip/Refine
-   * buttons and the dismiss ("Skip ×") button are omitted from the DOM (not
-   * disabled — absent), and dismissal is a no-op (a historical record
-   * shouldn't be dismissible). All informational content (summary,
-   * suggestions, task list) still renders. `onApply`/`onSkip`/`onUndoApply`/
-   * `onRefine` remain typed as required/optional per their normal contract
-   * but are never invoked in this mode.
-   */
-  readOnly?: boolean;
+}
+
+export type TriageReviewPanelProps = TriageReviewPanelReadOnlyProps | TriageReviewPanelWriteProps;
+
+function isReadOnlyProps(props: TriageReviewPanelProps): props is TriageReviewPanelReadOnlyProps {
+  return props.readOnly === true;
 }
 
 /**
@@ -49,7 +61,13 @@ interface TriageReviewPanelProps {
  *
  * Per UX spec Section 3.1 and Section 7.2.
  */
-export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, onSkip, onRefine, readOnly = false }: TriageReviewPanelProps) {
+export function TriageReviewPanel(props: TriageReviewPanelProps) {
+  const { item, triageResult } = props;
+  const readOnly = isReadOnlyProps(props);
+  const onApply = isReadOnlyProps(props) ? undefined : props.onApply;
+  const onUndoApply = isReadOnlyProps(props) ? undefined : props.onUndoApply;
+  const onSkip = isReadOnlyProps(props) ? undefined : props.onSkip;
+  const onRefine = isReadOnlyProps(props) ? undefined : props.onRefine;
   // readOnly panels ignore the interactive dismissed flag entirely — it's
   // keyed by item.id, which a readOnly historical-record render (Story
   // 4.1.2) shares with the live interactive panel for the same item, so
@@ -79,13 +97,14 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
   }, [item.id, readOnly]);
 
   const handleDismiss = useCallback(() => {
-    if (readOnly) return;
+    if (readOnly || !onSkip) return;
     setDismissed(item.id);
     setDismissedState(true);
     onSkip();
   }, [item.id, onSkip, readOnly]);
 
   const handleApply = useCallback(async () => {
+    if (!onApply) return;
     // Cache pre-apply criteria for undo
     const cached = [...item.acCriteria];
     setPreApplyCriteria(cached);

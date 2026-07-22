@@ -5,28 +5,41 @@ import { useEffect, useRef, useState } from "react";
 import * as styles from "./GateVerdictBox.css";
 import { InlineError } from "./InlineError";
 
-interface GateVerdictBoxProps {
+interface GateVerdictBoxBaseProps {
   verdict: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
   summary: string;
   criteria?: Array<{ label: string; passed: boolean }>;
   elapsedSeconds?: number;
+  actionPending?: boolean;
+}
+
+/**
+ * Story 4.1.2 (Structured Diagnostic): renders this box as a read-only
+ * historical record for a Headless Diagnostic Session (a
+ * `headless-re-review-*` row) — the entire action-button row
+ * (Approve/Reopen/Override/Skip Gate/Re-review), the Reopen and Override
+ * forms, and the Skip Gate confirmation are all omitted from the DOM. The
+ * verdict card and per-criterion outcome list still render. There is no
+ * write-mode callback to fabricate a stand-in for: the readOnly variant
+ * simply has none of them.
+ */
+export interface GateVerdictBoxReadOnlyProps extends GateVerdictBoxBaseProps {
+  readOnly: true;
+}
+
+export interface GateVerdictBoxWriteProps extends GateVerdictBoxBaseProps {
+  readOnly?: false;
   onApprove: () => Promise<void>;
   onReopen: (feedback: string) => Promise<void>;
   onOverride: (reason: string) => Promise<void>;
   onSkipGate: () => Promise<void>;
   onReReview?: () => Promise<void>;
-  actionPending?: boolean;
-  /**
-   * Story 4.1.2 (Structured Diagnostic): renders this box as a read-only
-   * historical record for a Headless Diagnostic Session (a
-   * `headless-re-review-*` row) — the entire action-button row
-   * (Approve/Reopen/Override/Skip Gate/Re-review), the Reopen and Override
-   * forms, and the Skip Gate confirmation are all omitted from the DOM. The
-   * verdict card and per-criterion outcome list still render.
-   * `onApprove`/`onReopen`/`onOverride`/`onSkipGate`/`onReReview` remain
-   * typed per their normal contract but are never invoked in this mode.
-   */
-  readOnly?: boolean;
+}
+
+export type GateVerdictBoxProps = GateVerdictBoxReadOnlyProps | GateVerdictBoxWriteProps;
+
+function isReadOnlyProps(props: GateVerdictBoxProps): props is GateVerdictBoxReadOnlyProps {
+  return props.readOnly === true;
 }
 
 const MIN_OVERRIDE_REASON_LENGTH = 5;
@@ -69,19 +82,15 @@ const VERDICT_CONFIG = {
   },
 } as const;
 
-export function GateVerdictBox({
-  verdict,
-  summary,
-  criteria,
-  elapsedSeconds,
-  onApprove,
-  onReopen,
-  onOverride,
-  onSkipGate,
-  onReReview,
-  actionPending = false,
-  readOnly = false,
-}: GateVerdictBoxProps) {
+export function GateVerdictBox(props: GateVerdictBoxProps) {
+  const { verdict, summary, criteria, elapsedSeconds, actionPending = false } = props;
+  const readOnly = isReadOnlyProps(props);
+  const onApprove = isReadOnlyProps(props) ? undefined : props.onApprove;
+  const onReopen = isReadOnlyProps(props) ? undefined : props.onReopen;
+  const onOverride = isReadOnlyProps(props) ? undefined : props.onOverride;
+  const onSkipGate = isReadOnlyProps(props) ? undefined : props.onSkipGate;
+  const onReReview = isReadOnlyProps(props) ? undefined : props.onReReview;
+
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
   const [showReopen, setShowReopen] = useState(false);
@@ -137,6 +146,7 @@ export function GateVerdictBox({
   }
 
   async function handleApprove() {
+    if (!onApprove) return;
     setLocalPending(true);
     try {
       await onApprove();
@@ -162,6 +172,7 @@ export function GateVerdictBox({
   }
 
   async function handleReopenSubmit() {
+    if (!onReopen) return;
     setLocalPending(true);
     try {
       await onReopen(reopenFeedback);
@@ -176,6 +187,7 @@ export function GateVerdictBox({
   }
 
   async function handleOverrideSubmit() {
+    if (!onOverride) return;
     setLocalPending(true);
     try {
       await onOverride(overrideReason);
@@ -188,6 +200,7 @@ export function GateVerdictBox({
   }
 
   async function handleSkipGateConfirm() {
+    if (!onSkipGate) return;
     setLocalPending(true);
     try {
       await onSkipGate();
