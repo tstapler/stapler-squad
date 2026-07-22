@@ -8,6 +8,7 @@ import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
+import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -125,6 +126,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   // Triage progress tracking
   const [triageElapsedSeconds, setTriageElapsedSeconds] = useState(0);
+
+  // Called once here (not inside LifecycleSummary) so this component owns the
+  // single fetch/poll — mirrors board/page.tsx calling it once at the page
+  // level and passing the resolved StuckBacklogItem down as a prop, rather
+  // than LifecycleSummary standing up its own transport/client and 60s poll
+  // on every remount (this component remounts via `key={selectedItemId}` on
+  // every backlog item click — see stapler-squad PR #208 review).
+  const { items: stuckItems } = useStuckBacklogItems();
+  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -830,7 +840,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
         {/* Always-visible lifecycle summary — the single authoritative
             status display, replacing the old standalone status badge (D1). */}
-        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} />
+        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} stuckItem={stuckItem} />
       </div>
 
       <div className={styles.scrollArea}>

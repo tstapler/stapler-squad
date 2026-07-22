@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog:item-detail-lifecycle-summary
 
-import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import type { PipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { BlockerChip } from "../BlockerChip";
@@ -18,6 +18,18 @@ export interface LifecycleSummaryProps {
    * to skip the badge entirely — the common path stays uncluttered.
    */
   pipelineDisplay?: PipelineModeDisplay;
+  /**
+   * This item's entry from useStuckBacklogItems()'s open list, or undefined
+   * when the item isn't currently flagged stuck. Resolved once at the
+   * BacklogItemDetail level (not per-render-of-this-component) and passed
+   * down — mirrors BacklogItemCard's `stuckItem?` prop, which is resolved
+   * once at the board page level. Keeping the fetch/poll at a single call
+   * site avoids a fresh useStuckBacklogItems() poll firing on every
+   * BacklogItemDetail remount (it remounts via `key={selectedItemId}` on
+   * every backlog item click) and avoids N-independent-polls if a future
+   * page ever renders BacklogBoard and BacklogItemDetail together.
+   */
+  stuckItem?: StuckBacklogItem;
 }
 
 /**
@@ -25,17 +37,7 @@ export interface LifecycleSummaryProps {
  * badge + Liveness Line — replacing the old standalone status badge (D1).
  * The single authoritative place lifecycle status is shown.
  */
-export function LifecycleSummary({ item, pipelineDisplay }: LifecycleSummaryProps) {
-  // useStuckBacklogItems() already retains the last-known `items` across a
-  // failed refresh (see the hook's own documented contract) and starts with
-  // an empty `items` array while its first fetch is in flight — so a plain
-  // `.find()` here already satisfies both "never a false all-clear on
-  // fetch error" (Surface 8) and "render nothing while loading, not a
-  // spinner or neutral placeholder" (Surface 1/2 loading-race note)
-  // without any special-casing.
-  const { items } = useStuckBacklogItems();
-  const stuckMatch = items.find((i) => i.itemId === item.id);
-
+export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: LifecycleSummaryProps) {
   // Only a "resolved" mode with a non-default name is glanceable-worthy —
   // the common default-pipeline case renders no badge at all (Task 3.1.4g).
   const showPipelineBadge = pipelineDisplay?.kind === "resolved" && pipelineDisplay.name !== "default";
@@ -43,7 +45,7 @@ export function LifecycleSummary({ item, pipelineDisplay }: LifecycleSummaryProp
   return (
     <div className={styles.container} data-testid="lifecycle-summary">
       <StageTracker status={item.status} />
-      {stuckMatch && <BlockerChip variant="full" item={stuckMatch} />}
+      {stuckItem && <BlockerChip variant="full" item={stuckItem} />}
       {showPipelineBadge && pipelineDisplay?.kind === "resolved" && (
         <span className={styles.pipelineBadge} data-testid="lifecycle-pipeline-badge">
           Pipeline: {pipelineDisplay.name}

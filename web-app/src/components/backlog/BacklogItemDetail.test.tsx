@@ -16,10 +16,11 @@
 import React from "react";
 import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { VCSStatusSchema } from "@/gen/session/v1/types_pb";
-import { BacklogItemShipStatusSchema } from "@/gen/session/v1/backlog_pb";
+import { BacklogItemShipStatusSchema, StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 
 // Heavy children pull their own hooks/timers; stub them out so this test is
 // focused on BacklogItemDetail's own render behavior.
@@ -52,10 +53,11 @@ jest.mock("@/lib/hooks/useBacklogItemShipStatus", () => ({
   useBacklogItemShipStatus: (...args: unknown[]) => useBacklogItemShipStatusMock(...args),
 }));
 
-// LifecycleSummary (Story 2.1.4) calls useStuckBacklogItems() internally —
-// stub it so this suite never attempts a real ConnectRPC call. Individual
-// tests that care about BlockerChip behavior override this per-case;
-// everything else gets a stable "nothing stuck" default.
+// BacklogItemDetail calls useStuckBacklogItems() once and passes the
+// resolved StuckBacklogItem down to LifecycleSummary as a prop — stub it so
+// this suite never attempts a real ConnectRPC call. Individual tests that
+// care about BlockerChip behavior override this per-case; everything else
+// gets a stable "nothing stuck" default.
 const useStuckBacklogItemsMock = jest.fn();
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
@@ -522,6 +524,60 @@ describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old s
     const summary = screen.getByTestId("lifecycle-summary");
     expect(summary).toBeInTheDocument();
     expect(screen.getByTestId("stage-node-review")).toHaveAttribute("aria-current", "step");
+  });
+
+  it("BacklogItemDetail_should_PassMatchingStuckItemToLifecycleSummary_When_UseStuckBacklogItemsReturnsMatchingItemId", async () => {
+    // Regression guard for the MAJOR finding on PR #208: BacklogItemDetail
+    // (not LifecycleSummary) must own the single useStuckBacklogItems() call
+    // and resolve the `.find(i => i.itemId === item.id)` lookup itself,
+    // passing the result down as a plain `stuckItem` prop.
+    const stuckItem: StuckBacklogItem = {
+      itemId: "item-1",
+      title: "Refactor auth middleware",
+      status: "in_progress",
+      reason: StuckReason.STALE_WORK,
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    } as StuckBacklogItem;
+    useStuckBacklogItemsMock.mockReturnValue({ items: [stuckItem], isLoading: false, error: null });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("blocker-chip")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_NotPassStuckItemToLifecycleSummary_When_UseStuckBacklogItemsReturnsNoMatchingItemId", async () => {
+    const stuckItem: StuckBacklogItem = {
+      itemId: "some-other-item",
+      title: "Unrelated item",
+      status: "in_progress",
+      reason: StuckReason.STALE_WORK,
+      firstDetectedAt: timestampFromDate(new Date(Date.now() - 4 * 60 * 60 * 1000)),
+      lastCheckedAt: timestampFromDate(new Date()),
+      prNumber: 0,
+      prUrl: "",
+      context: "",
+    } as StuckBacklogItem;
+    useStuckBacklogItemsMock.mockReturnValue({ items: [stuckItem], isLoading: false, error: null });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("blocker-chip")).not.toBeInTheDocument();
   });
 });
 

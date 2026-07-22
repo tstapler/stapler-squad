@@ -38,8 +38,9 @@ jest.mock("@/lib/analytics", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
-// LifecycleSummary (Story 2.1.4) calls useStuckBacklogItems() internally —
-// stub it so this suite never attempts a real ConnectRPC call.
+// BacklogItemDetail calls useStuckBacklogItems() once and passes the
+// resolved StuckBacklogItem down to LifecycleSummary as a prop — stub it so
+// this suite never attempts a real ConnectRPC call.
 jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
   useStuckBacklogItems: () => ({ items: [], isLoading: false, error: null }),
 }));
