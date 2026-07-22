@@ -352,7 +352,12 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   };
 }
 
-function mapBacklogItem(p: BacklogItemProto): BacklogItem {
+/**
+ * Exported for direct unit testing of triageStatus derivation — see
+ * useBacklogService.test.ts. Not intended for use outside this module and
+ * its tests.
+ */
+export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
   const linkedSessions = (p.itemSessions ?? []).map(mapItemSession);
 
   // Extract gate verdict from the most recent session (for review status)

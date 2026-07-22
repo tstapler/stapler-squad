@@ -1,7 +1,8 @@
 /**
  * Tests for TriageReviewPanel component (T-12, cases 6–11).
- * Also covers mapBacklogItem triageStatus logic (cases 12–13) via direct unit tests
- * on the mapping helper (tested by proxy through the BacklogItem domain type shape).
+ *
+ * mapBacklogItem's triageStatus derivation logic is tested directly against
+ * the real function in useBacklogService.test.ts — it is not re-tested here.
  */
 
 import React from "react";
@@ -402,58 +403,5 @@ describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySugge
     );
 
     expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests 12–13: mapBacklogItem triageStatus logic
-// These test the domain mapping rules in useBacklogService via the BacklogItem type.
-// We construct BacklogItem objects directly using the same rules as mapBacklogItem
-// to verify the P12 fix logic is correct.
-// ---------------------------------------------------------------------------
-
-describe("mapBacklogItem_triageStatus_is_failed_when_session_ended_but_no_triageResult", () => {
-  it("triageStatus is 'failed' when triage session has endedAt but no triageResult.summary", () => {
-    // Simulates the P12 fix: ended session with no triage result → "failed"
-    const item: BacklogItem = makeItem({
-      triageStatus: "failed",
-      triageResult: undefined,
-      linkedSessions: [
-        {
-          entityId: "session-001",
-          sessionId: "uuid-001",
-          role: "triage",
-          endedAt: new Date().toISOString(),
-          triageResult: undefined,
-          estimatedCostUsd: 0,
-        },
-      ],
-    });
-
-    expect(item.triageStatus).toBe("failed");
-    expect(item.triageResult).toBeUndefined();
-  });
-});
-
-describe("mapBacklogItem_triageStatus_is_completed_when_session_ended_and_triageResult_present", () => {
-  it("triageStatus is 'completed' when triage session has endedAt AND non-empty summary", () => {
-    // Simulates the P12 fix: ended session with result → "completed"
-    const item: BacklogItem = makeItem({
-      triageStatus: "completed",
-      triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,
-      linkedSessions: [
-        {
-          entityId: "session-002",
-          sessionId: "uuid-002",
-          role: "triage",
-          endedAt: new Date().toISOString(),
-          triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,
-          estimatedCostUsd: 0,
-        },
-      ],
-    });
-
-    expect(item.triageStatus).toBe("completed");
-    expect(item.triageResult?.summary).toBeTruthy();
   });
 });
