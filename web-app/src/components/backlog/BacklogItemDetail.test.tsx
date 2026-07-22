@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
@@ -324,5 +324,136 @@ describe("BacklogItemDetail — Story 2.2.3: VcsWidget wiring", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse files in this worktree" }));
 
     expect(screen.getByTestId("file-browser-modal-stub")).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemDetail — Story 1.1.2: current work session selector (D3)", () => {
+  it("BacklogItemDetail_should_ReturnIdenticalWorkSessionAcrossAllCallSites_When_MultipleWorkSessionsLinked", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+
+    const sessions = [
+      makeSession({ entityId: "s1", sessionId: "session-older", role: "work", startedAt: "2026-07-01T00:00:00Z" }),
+      makeSession({ entityId: "s2", sessionId: "session-newer", role: "work", startedAt: "2026-07-02T00:00:00Z" }),
+    ];
+
+    // Actions-section call site: item.status === "in_progress".
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem(sessions), status: "in_progress" });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Header call site: useVcsStatus is called with the current work session's id.
+    expect(useVcsStatusMock).toHaveBeenCalledWith("session-newer", expect.anything());
+
+    // Actions-section call site: "View Session" link targets the same session.
+    expect(screen.getByTestId("backlog-action-view-session")).toHaveAttribute(
+      "href",
+      "/?session=session-newer"
+    );
+  });
+
+  it("BacklogItemDetail_should_ReturnIdenticalWorkSessionAcrossAllCallSites_When_StatusIsReview", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+
+    const sessions = [
+      makeSession({ entityId: "s1", sessionId: "session-older", role: "work", startedAt: "2026-07-01T00:00:00Z" }),
+      makeSession({ entityId: "s2", sessionId: "session-newer", role: "work", startedAt: "2026-07-02T00:00:00Z" }),
+    ];
+
+    // Reviewing-section call site: item.status === "review".
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem(sessions), status: "review" });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Header call site: useVcsStatus is called with the current work session's id.
+    expect(useVcsStatusMock).toHaveBeenCalledWith("session-newer", expect.anything());
+
+    // Reviewing-section call site: the "Work session" link targets the same session.
+    const reviewingHeading = screen.getByText("Reviewing");
+    const reviewingSection = reviewingHeading.closest("div") as HTMLElement;
+    expect(within(reviewingSection).getByText("session-newer")).toBeInTheDocument();
+    expect(within(reviewingSection).queryByText("session-older")).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemDetail — Story 1.1.3: session kind classifier wired into the Sessions row", () => {
+  it("renders a manual-review- session as a non-clickable span, not a dead <a href> link", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+
+    const session = makeSession({
+      entityId: "s1",
+      sessionId: "manual-review-a1b2c3d4-1721577600000000000",
+      role: "review",
+    });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.queryByRole("link", { name: /manual-review-a1b2c3d4/ })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("manual-review-a1b2c3d4-1721577600000000000")).toBeInTheDocument();
+  });
+
+  it("renders a diff-error- session as a non-clickable span, not a dead <a href> link", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+
+    const session = makeSession({
+      entityId: "s1",
+      sessionId: "diff-error-a1b2c3d4",
+      role: "review",
+    });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("link", { name: /diff-error-a1b2c3d4/ })).not.toBeInTheDocument();
+    expect(screen.getByText("diff-error-a1b2c3d4")).toBeInTheDocument();
+  });
+
+  it("still renders a normal work session as a clickable link", async () => {
+    useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
+    useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+
+    const session = makeSession({
+      entityId: "s1",
+      sessionId: "a1b2c3d4-e5f6-7890-abcd-1234567890ab",
+      role: "work",
+    });
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([session]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByRole("link", { name: /a1b2c3d4-e5f6-7890-abcd-1234567890ab/ })
+    ).toHaveAttribute("href", "/?session=a1b2c3d4-e5f6-7890-abcd-1234567890ab");
   });
 });

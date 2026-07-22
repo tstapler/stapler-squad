@@ -10,6 +10,8 @@ import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
+import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { getApiBaseUrl } from "@/lib/config";
@@ -187,7 +189,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [triageElapsedSeconds, setTriageElapsedSeconds] = useState(0);
 
   // Version control state for the most recent work session's worktree.
-  const latestWorkSession = [...(item?.linkedSessions ?? [])].reverse().find((s) => s.role === "work");
+  const latestWorkSession = useCurrentWorkSession(item);
   // Surfaces the "most recent work session" heuristic's ambiguity when more than
   // one work session is currently active — the heuristic above is unchanged, this
   // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
@@ -826,7 +828,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
         {/* Gate Verdict + review context */}
         {item.status === "review" && (() => {
-          const workSession = [...item.linkedSessions].reverse().find((s) => s.role === "work");
+          // Same "current work session" value as the header (Story 1.1.2, D3) —
+          // not re-derived independently.
+          const workSession = latestWorkSession;
           const activeReviewSession = [...item.linkedSessions].reverse().find((s) => s.role === "review" && !s.endedAt && !s.sessionId.startsWith("headless-") && !s.sessionId.startsWith("review-blocked-"));
           return (
             <>
@@ -1071,7 +1075,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               <>
                 <a
                   className={styles.actionButton}
-                  href={`/?session=${([...item.linkedSessions].reverse().find(s => s.role === "work") ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
+                  href={`/?session=${(latestWorkSession ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
                   data-testid="backlog-action-view-session"
                 >
                   View Session
@@ -1330,7 +1334,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                     role="listitem"
                   >
                     <div className={styles.sessionRowMain}>
-                    {s.role === "triage" || s.sessionId.startsWith("headless-") || s.sessionId.startsWith("review-blocked-") ? (
+                    {classifySessionKind(s) !== "work" && classifySessionKind(s) !== "review" ? (
                       <span className={styles.sessionLink}>
                         <span className={styles.sessionId} title={s.sessionId}>
                           {s.sessionId.startsWith("headless-review-") ? "headless review" : s.sessionId.startsWith("review-blocked-") ? "review blocked" : s.sessionId}
@@ -1457,9 +1461,23 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 review: "review",
               };
               const expectedRole = statusToRole[item.status];
-              const active = [...item.linkedSessions]
-                .reverse()
-                .find((s) => !s.endedAt && s.role === expectedRole && !s.sessionId.startsWith("headless-") && !s.sessionId.startsWith("review-blocked-"));
+              // For the "work" role, source from the same current-work-session
+              // value as every other call site (Story 1.1.2, D3) instead of
+              // re-scanning independently; other roles keep their own lookup
+              // since "current work session" isn't what they're asking for.
+              const active =
+                expectedRole === "work"
+                  ? latestWorkSession && !latestWorkSession.endedAt
+                    ? latestWorkSession
+                    : undefined
+                  : [...item.linkedSessions]
+                      .reverse()
+                      .find(
+                        (s) =>
+                          !s.endedAt &&
+                          s.role === expectedRole &&
+                          (classifySessionKind(s) === "work" || classifySessionKind(s) === "review")
+                      );
               if (!active) return null;
               return (
                 <SessionMonitor
