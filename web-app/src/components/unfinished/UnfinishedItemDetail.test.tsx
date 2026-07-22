@@ -85,4 +85,26 @@ describe("UnfinishedItemDetail", () => {
     fireEvent.click(commitPushBtn);
     expect(screen.getByTestId("commit-push-modal")).toBeInTheDocument();
   });
+
+  it("UnfinishedItemDetail_should_RenderPrNumberLinkUnchanged_When_VcsWidgetDefaultsShowPrLinkTrue", () => {
+    // Regression guard for Story 3.1.2 Task 3.1.2d (D4's `showPrLink` opt-out
+    // prop). UnfinishedItemDetail renders its VcsWidget in mode="compact",
+    // which never shows the GitHub PR-identity row regardless of
+    // `showPrLink` (that row only ever renders in mode="full" — see
+    // VcsWidget.tsx). This proves the new prop's addition — and its default
+    // value — left this out-of-scope page's rendering completely unchanged:
+    // no PR link appeared before, none appears now, and no new prop is
+    // passed at this call site.
+    const worktree = create(UnfinishedWorktreeSchema, {
+      changedFiles: 5,
+      linesAdded: 42,
+      linesRemoved: 8,
+      aheadCommitMessages: ["fix: typo"],
+    });
+
+    render(<UnfinishedItemDetail worktree={worktree} />);
+
+    expect(screen.getByTestId("vcs-widget-loaded")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /PR #/ })).not.toBeInTheDocument();
+  });
 });

@@ -19,13 +19,15 @@ import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { SessionMonitor } from "./SessionMonitor";
-import { GateVerdictBox } from "./GateVerdictBox";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
+import { PlanningSection } from "./detail/PlanningSection";
+import { ReviewingSection } from "./detail/ReviewingSection";
+import { PullRequestSection } from "./detail/PullRequestSection";
 import * as styles from "./BacklogItemDetail.css";
 import * as markdownStyles from "./markdownBody.css";
 
@@ -784,25 +786,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           )}
 
         {/* Planning record — read-only triage result for items past idea status */}
-        {item.triageResult && item.status !== "idea" && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Planning</h3>
-            <p className={styles.planSummary}>{item.triageResult.summary}</p>
-            {item.triageResult.tasks && item.triageResult.tasks.length > 0 && (
-              <div className={styles.planTaskList}>
-                {item.triageResult.tasks.map((t, i) => (
-                  <div key={i} className={styles.planTask}>
-                    <span className={styles.planTaskText}>{t.text}</span>
-                    <span className={styles.planTaskMeta}>
-                      {t.estimate && <span className={styles.planTaskBadge}>{t.estimate}</span>}
-                      {t.category && <span className={styles.planTaskBadge}>{t.category}</span>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <PlanningSection item={item} />
 
         {/* Triage failed banner */}
         {item.triageStatus === "failed" && item.status === "idea" && (
@@ -812,79 +796,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         )}
 
         {/* Gate Verdict + review context */}
-        {item.status === "review" && (() => {
-          // Same "current work session" value as the header (Story 1.1.2, D3) —
-          // not re-derived independently.
-          const workSession = latestWorkSession;
-          const activeReviewSession = [...item.linkedSessions].reverse().find((s) => s.role === "review" && !s.endedAt && !s.sessionId.startsWith("headless-") && !s.sessionId.startsWith("review-blocked-"));
-          return (
-            <>
-              <div className={styles.section}>
-                <h3 className={styles.sectionTitle}>Reviewing</h3>
-                <div className={styles.reviewContextBox}>
-                  <div className={styles.reviewContextInfo}>
-                    {workSession ? (
-                      <>
-                        <span className={styles.reviewContextLabel}>Work session</span>
-                        <a
-                          className={styles.reviewContextSessionId}
-                          href={`/?session=${workSession.sessionId}`}
-                          title="Open in terminal"
-                        >
-                          {workSession.sessionId}
-                        </a>
-                        {workSession.endedAt && (
-                          <span className={styles.reviewContextDate}>
-                            Completed {new Date(workSession.endedAt).toLocaleString()}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className={styles.reviewContextLabel}>No work session found</span>
-                    )}
-                    {activeReviewSession && (
-                      <>
-                        <span className={styles.reviewContextLabel}>Review session</span>
-                        <a
-                          className={styles.reviewContextSessionId}
-                          href={`/?session=${activeReviewSession.sessionId}`}
-                          title="Open review session in terminal"
-                        >
-                          {activeReviewSession.sessionId}
-                        </a>
-                      </>
-                    )}
-                  </div>
-                  {workSession && (
-                    <button
-                      className={styles.viewChangesButton}
-                      onClick={() => setShowChangesModal(true)}
-                      data-testid="backlog-review-view-changes"
-                    >
-                      View Changes ↗
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className={styles.section}>
-                <GateVerdictBox
-                  verdict={item.gateVerdict ?? "PENDING"}
-                  summary={item.gateVerdictSummary || "Review in progress"}
-                  criteria={item.gateCriteria}
-                  elapsedSeconds={undefined}
-                  onApprove={handleGateApprove}
-                  onReopen={handleGateReopen}
-                  onOverride={handleGateOverride}
-                  onSkipGate={handleGateSkip}
-                  onReReview={() => triggerReReview(item.id).then(() => load())}
-                  actionPending={actionLoading !== null}
-                />
-              </div>
-
-            </>
-          );
-        })()}
+        {item.status === "review" && (
+          <ReviewingSection
+            item={item}
+            workSession={latestWorkSession}
+            actionLoading={actionLoading}
+            defaultExpanded={item.status === "review"}
+            onViewChanges={() => setShowChangesModal(true)}
+            onGateApprove={handleGateApprove}
+            onGateReopen={handleGateReopen}
+            onGateOverride={handleGateOverride}
+            onGateSkip={handleGateSkip}
+            onReReview={() => triggerReReview(item.id).then(() => load())}
+          />
+        )}
 
         {/* Diff modal — reused by the review-flow "View Changes" button above and
             the Version Control section's "View Diff" button below; works for any
@@ -909,43 +834,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
         {/* PR Pending */}
         {item.status === "pr_pending" && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Pull Request</h3>
-            <div className={styles.reviewContextBox}>
-              <div className={styles.reviewContextInfo}>
-                {item.prUrl ? (
-                  <>
-                    <span className={styles.reviewContextLabel}>
-                      PR #{item.prNumber} — waiting for merge
-                    </span>
-                    <a
-                      className={styles.reviewContextSessionId}
-                      href={item.prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open pull request on GitHub"
-                    >
-                      {item.prUrl}
-                    </a>
-                  </>
-                ) : (
-                  <span className={styles.reviewContextLabel}>
-                    PR pending — no URL recorded yet
-                  </span>
-                )}
-              </div>
-              <button
-                className={styles.actionButton}
-                onClick={() => handleAction("mark_done")}
-                disabled={actionLoading !== null}
-                aria-busy={actionLoading === "mark_done"}
-                title="Mark done manually (if PR already merged)"
-                data-testid="backlog-action-mark-done"
-              >
-                <ActionButtonLabel pending={actionLoading === "mark_done"} label="Mark Done" />
-              </button>
-            </div>
-          </div>
+          <PullRequestSection
+            item={item}
+            actionLoading={actionLoading}
+            onMarkDone={() => handleAction("mark_done")}
+          />
         )}
 
         {/* Description */}

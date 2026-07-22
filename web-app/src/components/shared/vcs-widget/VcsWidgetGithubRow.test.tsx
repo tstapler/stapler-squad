@@ -90,4 +90,27 @@ describe("VcsWidgetGithubRow", () => {
     expect(screen.getByText("CI: success")).toBeInTheDocument();
     expect(screen.getByText("Couldn't fully capture PR status at ship time")).toBeInTheDocument();
   });
+
+  it("VcsWidgetGithubRow_should_StillRenderPrLinkText_When_ShowPrLinkPropOmitted", () => {
+    // No `showPrLink` prop passed (existing call-site shape, e.g. VcsPanel.tsx,
+    // UnfinishedItemDetail.tsx) → defaults true, PR link line still renders —
+    // proves the D4 opt-out is additive, not a default-off breaking change
+    // (Blocker A guard, Story 3.1.2 Task 3.1.2d).
+    render(<VcsWidgetGithubRow data={makeData({ github: makeGithub({ prNumber: 42 }) })} />);
+    expect(screen.getByRole("link", { name: /PR #42/ })).toBeInTheDocument();
+  });
+
+  it("omits only the PR link line when showPrLink={false}, keeping review/CI status", () => {
+    render(
+      <VcsWidgetGithubRow
+        data={makeData({
+          github: makeGithub({ prNumber: 42, approvedCount: 1, checkConclusion: "success" }),
+        })}
+        showPrLink={false}
+      />
+    );
+    expect(screen.queryByRole("link", { name: /PR #42/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("1 approved")).toBeInTheDocument();
+    expect(screen.getByText("CI: success")).toBeInTheDocument();
+  });
 });

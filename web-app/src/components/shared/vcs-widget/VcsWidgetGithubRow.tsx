@@ -6,6 +6,17 @@ import * as styles from "./VcsWidgetGithubRow.css";
 
 interface VcsWidgetGithubRowProps {
   data: VcsWidgetData;
+  /**
+   * When `false`, omits only the PR identity line (the `PR #<n>` link and
+   * its adjacent draft badge) — review-count and CI-conclusion spans still
+   * render, since those aren't duplicated elsewhere (D4). Default `true`
+   * (unchanged behavior) so every existing call site (`VcsPanel.tsx`,
+   * `UnfinishedItemDetail.tsx`) is unaffected by this prop's addition.
+   * `BacklogItemDetail`'s `VersionControlSection` (Story 3.1.4) is the only
+   * call site that ever passes `false`, and only when `PullRequestSection`
+   * is also rendering the same PR URL for the current status.
+   */
+  showPrLink?: boolean;
 }
 
 function ciClassName(conclusion: string): string {
@@ -19,7 +30,7 @@ function ciClassName(conclusion: string): string {
   }
 }
 
-export function VcsWidgetGithubRow({ data }: VcsWidgetGithubRowProps) {
+export function VcsWidgetGithubRow({ data, showPrLink = true }: VcsWidgetGithubRowProps) {
   const captureFailed = data.kind === "historical" && data.snapshotCaptureFailed === true;
 
   if (!data.github && !captureFailed) return null;
@@ -37,11 +48,15 @@ export function VcsWidgetGithubRow({ data }: VcsWidgetGithubRowProps) {
 
   return (
     <div className={styles.container}>
-      <a href={github.prUrl} target="_blank" rel="noopener noreferrer" className={styles.prLink}>
-        <PrIcon aria-hidden="true" size={14} />
-        PR #{github.prNumber}
-      </a>
-      {github.isDraft && <span className={styles.draftBadge}>Draft</span>}
+      {showPrLink && (
+        <>
+          <a href={github.prUrl} target="_blank" rel="noopener noreferrer" className={styles.prLink}>
+            <PrIcon aria-hidden="true" size={14} />
+            PR #{github.prNumber}
+          </a>
+          {github.isDraft && <span className={styles.draftBadge}>Draft</span>}
+        </>
+      )}
 
       {(github.approvedCount > 0 || github.changesReqCount > 0) && (
         <span className={styles.reviewCounts}>
