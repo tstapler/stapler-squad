@@ -3,19 +3,9 @@
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { useShowMore } from "@/lib/hooks/useShowMore";
+import { formatDate } from "@/lib/backlog/formatDate";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./WorkflowHistorySection.css";
-
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export interface WorkflowHistorySectionProps {
   item: BacklogItem;

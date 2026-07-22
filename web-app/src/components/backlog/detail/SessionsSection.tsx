@@ -4,6 +4,7 @@ import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBa
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
 import { classifySessionKind, type SessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
@@ -18,17 +19,6 @@ const SYNTHETIC_KIND_ICON: Partial<Record<SessionKind, string>> = {
   blocked_guardrail: "🚫",
   manual_review_marker: "✍️",
 };
-
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export interface SessionsSectionProps {
   item: BacklogItem;

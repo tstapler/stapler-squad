@@ -2,26 +2,12 @@
 
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import * as styles from "../BacklogItemDetail.css";
-
-/** Swaps in a spinner + "Running…" while `pending` — mirrors BacklogItemDetail's ActionButtonLabel. */
-function ActionButtonLabel({ pending, label }: { pending: boolean; label: string }) {
-  if (!pending) return <>{label}</>;
-  return (
-    <>
-      <span className={styles.buttonSpinner} aria-hidden="true" />
-      Running…
-    </>
-  );
-}
+import { ActionButtonLabel } from "./ActionButtonLabel";
 
 export interface ActionsSectionProps {
   item: BacklogItem;
   actionLoading: string | null;
   latestWorkSession: LinkedSession | undefined;
-  canSpawnSession: boolean;
-  canRunAutonomously: boolean;
-  canShipPR: boolean;
-  acAllComplete: boolean;
   showManualReview: boolean;
   manualReviewOutcome: string;
   manualReviewSummary: string;
@@ -47,10 +33,6 @@ export function ActionsSection({
   item,
   actionLoading,
   latestWorkSession,
-  canSpawnSession,
-  canRunAutonomously,
-  canShipPR,
-  acAllComplete,
   showManualReview,
   manualReviewOutcome,
   manualReviewSummary,
@@ -60,6 +42,26 @@ export function ActionsSection({
   onManualReviewSubmit,
   onManualReviewCancel,
 }: ActionsSectionProps) {
+  // Pure derivations of `item`, moved in from BacklogItemDetail.tsx (code
+  // review follow-up) — nothing outside this component consumed them, so
+  // there was no reason to compute them in the parent and thread them
+  // through as props.
+  const canSpawnSession =
+    item.status === "ready" &&
+    (item.skipPlanning || item.planApproved);
+  // Autonomous mode does its own planning — no plan-approval gate needed.
+  const canRunAutonomously = item.status === "ready";
+
+  // Self-service "Ship PR" action: only makes sense for an item sitting in
+  // review with no PR yet — the exact gap this closes (see
+  // docs/tasks/backlog-feature-improvement.md, 2026-07-18 update). All AC
+  // criteria must be complete before shipping; a gate verdict of PASS is
+  // encouraged (via the button's title) but not required — same
+  // human-override philosophy as the existing "Override → Done" action.
+  const acAllComplete =
+    item.acCriteria.length > 0 && item.acCriteria.every((c) => c.status === "done");
+  const canShipPR = item.status === "review" && !item.prUrl;
+
   return (
     <div className={styles.section}>
       <h3 className={styles.sectionTitle}>Actions</h3>

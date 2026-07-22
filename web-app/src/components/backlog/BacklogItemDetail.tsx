@@ -10,6 +10,7 @@ import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { formatDate } from "@/lib/backlog/formatDate";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
 import { getApiBaseUrl } from "@/lib/config";
@@ -61,28 +62,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   send_back_refining: "Sent back to refining.",
   send_back_ready: "Sent back to ready.",
 };
-
-/** Renders a button's label, swapping in a spinner + "Running…" while `pending`. */
-function ActionButtonLabel({ pending, label }: { pending: boolean; label: string }) {
-  if (!pending) return <>{label}</>;
-  return (
-    <>
-      <span className={styles.buttonSpinner} aria-hidden="true" />
-      Running…
-    </>
-  );
-}
-
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
@@ -763,22 +742,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     );
   }
 
-  const canSpawnSession =
-    item.status === "ready" &&
-    (item.skipPlanning || item.planApproved);
-  // Autonomous mode does its own planning — no plan-approval gate needed.
-  const canRunAutonomously = item.status === "ready";
-
-  // Self-service "Ship PR" action: only makes sense for an item sitting in
-  // review with no PR yet — the exact gap this closes (see
-  // docs/tasks/backlog-feature-improvement.md, 2026-07-18 update). All AC
-  // criteria must be complete before shipping; a gate verdict of PASS is
-  // encouraged (via the button's title) but not required — same
-  // human-override philosophy as the existing "Override → Done" action.
-  const acAllComplete =
-    item.acCriteria.length > 0 && item.acCriteria.every((c) => c.status === "done");
-  const canShipPR = item.status === "review" && !item.prUrl;
-
   if (editMode) {
     return (
       <article
@@ -957,10 +920,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           item={item}
           actionLoading={actionLoading}
           latestWorkSession={latestWorkSession}
-          canSpawnSession={canSpawnSession}
-          canRunAutonomously={canRunAutonomously}
-          canShipPR={canShipPR}
-          acAllComplete={acAllComplete}
           showManualReview={showManualReview}
           manualReviewOutcome={manualReviewOutcome}
           manualReviewSummary={manualReviewSummary}
