@@ -101,6 +101,28 @@ const baseItem: BacklogItem = {
   totalEstimatedCostUsd: 0,
 };
 
+function makeReviewItem(id: string, overrides: Partial<BacklogItem> = {}): BacklogItem {
+  return {
+    ...baseItem,
+    id,
+    title: `Review item ${id}`,
+    status: "review",
+    triageStatus: undefined,
+    gateVerdict: "PENDING",
+    ...overrides,
+  };
+}
+
+/**
+ * Test harness mirroring the fix in web-app/src/app/backlog/page.tsx:
+ * `<BacklogItemDetail key={itemId} itemId={itemId} .../>` — the `key` is
+ * what forces a full remount when the selected item changes (Story 3.1.1,
+ * Task 3.1.1a).
+ */
+function Harness({ itemId }: { itemId: string }) {
+  return <BacklogItemDetail key={itemId} itemId={itemId} />;
+}
+
 describe("BacklogItemDetail — background refresh must not unmount the view", () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -168,5 +190,66 @@ describe("BacklogItemDetail — background refresh must not unmount the view", (
 
     expect(getBacklogItem).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("backlog-criterion-text-1")).toHaveValue("Encode Fix Version");
+  });
+});
+
+describe("BacklogItemDetail — Story 3.1.1: itemId state-reset fix", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    getBacklogItem.mockReset();
+  });
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  it("BacklogItemDetail_should_RemountAndCloseManualReviewForm_When_KeyedItemIdChangesFromAToB", async () => {
+    const itemA = makeReviewItem("itm_a");
+    const itemB = makeReviewItem("itm_b");
+    getBacklogItem.mockImplementation((id: string) =>
+      Promise.resolve(id === "itm_a" ? itemA : itemB)
+    );
+
+    const { rerender } = render(<Harness itemId="itm_a" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-manual-review"));
+    expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
+
+    rerender(<Harness itemId="itm_b" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("manual-review-form")).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_PreserveManualReviewFormOpen_When_SameItemIdRerendersWithFreshPollData", async () => {
+    let pollCount = 0;
+    getBacklogItem.mockImplementation(() => {
+      pollCount += 1;
+      return Promise.resolve(makeReviewItem("itm_a", { updatedAt: `2026-07-01T00:0${pollCount}:00Z` }));
+    });
+
+    const { rerender } = render(<Harness itemId="itm_a" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-action-manual-review"));
+    expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
+
+    // Same itemId → same `key` → React keeps the existing instance mounted;
+    // simulate a poll tick returning a fresh item object for the same id.
+    rerender(<Harness itemId="itm_a" />);
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    expect(pollCount).toBeGreaterThan(1);
+    expect(screen.getByTestId("manual-review-form")).toBeInTheDocument();
   });
 });
