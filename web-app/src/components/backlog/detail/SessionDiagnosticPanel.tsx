@@ -1,4 +1,5 @@
 "use client";
+// +feature: backlog:item-detail-diagnostic-panel
 
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";

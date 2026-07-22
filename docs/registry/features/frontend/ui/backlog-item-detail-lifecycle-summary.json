@@ -1,0 +1,18 @@
+{
+  "id": "backlog-item-detail-lifecycle-summary",
+  "type": "frontend",
+  "component": "LifecycleSummary",
+  "path": "web-app/src/components/backlog/detail/LifecycleSummary.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "LifecycleSummary_should_RenderBlockerChip_When_UseStuckBacklogItemsReturnsMatchingItemId",
+    "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsReturnsNoMatchingItemId",
+    "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsIsStillLoading",
+    "LifecycleSummary_should_RetainLastKnownBlockerChip_When_UseStuckBacklogItemsReturnsError",
+    "LifecycleSummary_should_RenderDataTestIdWithStageTrackerActive_When_ComposedFromAllThreeChildren",
+    "LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault",
+    "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault"
+  ],
+  "lastModified": "2026-07-21T00:00:00Z"
+}

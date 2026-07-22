@@ -1,4 +1,5 @@
 "use client";
+// +feature: backlog:item-detail-lifecycle-summary
 
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";

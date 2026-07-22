@@ -35,6 +35,24 @@
       "lastModified": "2026-07-19T00:00:00Z"
     },
     {
+      "id": "backlog-sort-group-repo-path",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogPage",
+        "path": "web-app/src/app/backlog/page.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "tests/e2e/backlog.spec.ts",
+        "e2e:backlog-sort-by-repository-path-toggles-direction",
+        "e2e:backlog-group-by-repository-buckets-items",
+        "compareByRepoPath",
+        "groupByRepoPath"
+      ],
+      "lastModified": "2026-07-17T00:00:00Z"
+    },
+    {
       "id": "backlog-stuck-items",
       "type": "frontend",
       "frontend": {
@@ -197,11 +215,55 @@
       "frontend": {
         "component": "BacklogItemCard",
         "path": "web-app/src/components/backlog/BacklogItemCard.tsx",
-        "markerLine": 0
+        "markerLine": 2
       },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-05-12T00:00:00Z"
+      "tested": true,
+      "testIds": [
+        "BacklogItemCard_should_RenderStatusLabelFromGetStatusLabel_When_ItemStatusIsReview",
+        "BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetActionSpecFallsThroughToDefaultBranch",
+        "BacklogItemCard_should_RenderCompactBlockerChip_When_StuckItemPropProvided",
+        "BacklogItemCard_should_OmitBlockerChipAndKeepFooterUnchanged_When_StuckItemPropUndefined"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-detail-diagnostic-panel",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionDiagnosticPanel",
+        "path": "web-app/src/components/backlog/detail/SessionDiagnosticPanel.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "routes to TriageReviewPanel readOnly, not GateVerdictBox, when triageResult is populated",
+        "routes to GateVerdictBox readOnly when reviewVerdict is populated and triageResult is absent",
+        "routes a manual-review-* session to BlockedNotice with the identical treatment as blocked_guardrail",
+        "routes a review-blocked-* session to BlockedNotice too",
+        "uses role=status for the one-line summary and never role=log",
+        "never renders nothing for malformed/partial headless_diagnostic data"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-detail-lifecycle-summary",
+      "type": "frontend",
+      "frontend": {
+        "component": "LifecycleSummary",
+        "path": "web-app/src/components/backlog/detail/LifecycleSummary.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "LifecycleSummary_should_RenderBlockerChip_When_UseStuckBacklogItemsReturnsMatchingItemId",
+        "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsReturnsNoMatchingItemId",
+        "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsIsStillLoading",
+        "LifecycleSummary_should_RetainLastKnownBlockerChip_When_UseStuckBacklogItemsReturnsError",
+        "LifecycleSummary_should_RenderDataTestIdWithStageTrackerActive_When_ComposedFromAllThreeChildren",
+        "LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault",
+        "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
     },
     {
       "id": "backlog-item-detail",
