@@ -398,6 +398,11 @@ export const statusReady = style({
   color: vars.statusBadge.inputFg,
   border: `1px solid ${vars.statusBadge.inputBorder}`,
 });
+export const statusQueued = style({
+  background: vars.statusBadge.idleBg,
+  color: vars.statusBadge.idleFg,
+  border: `1px solid ${vars.statusBadge.idleBorder}`,
+});
 export const statusInProgress = style({
   background: vars.statusBadge.uncommittedBg,
   color: vars.statusBadge.uncommittedFg,

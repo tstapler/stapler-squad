@@ -100,6 +100,24 @@ type BacklogService struct {
 	// a partially-written .claude/backlog-context.md.
 	worktreeMu sync.Mutex
 
+	// cfgMu guards concurrent reads of the two backlog-concurrency fields on cfg
+	// (MaxConcurrentBacklogWorkItems, MaxAutoReworkIterations) against
+	// DefaultsService.UpdateGlobalDefaults's writes to that SAME *config.Config
+	// instance (wired via ConfigMu()/server/dependencies.go's
+	// SetSharedBacklogConfig call) — see maxConcurrentBacklogWorkItems and
+	// maxAutoReworkIterations. Previously cfg was a snapshot loaded once at
+	// process start with no writer ever touching it, so raising the WIP cap via
+	// Settings had zero runtime effect until a restart (PR #199 review F1).
+	cfgMu sync.RWMutex
+
+	// dequeueMu serializes the entire body of DequeueNextQueuedItems so the two
+	// independent, unsynchronized call paths — BacklogLifecycleListener.
+	// onSessionExited's `go l.triggerDequeue(...)` and the periodic
+	// ReconcileStuck sweep — can never run concurrently and jointly overshoot
+	// the WIP cap by each computing freeSlots from their own stale snapshot
+	// (PR #199 review F2).
+	dequeueMu sync.Mutex
+
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
 	// Delete atomic check-and-set idiom as review_queue_manager.go's
@@ -127,6 +145,7 @@ type BacklogService struct {
 	// constraint was not needed. See SpawnSessionFromItem for the guarded
 	// section.
 	spawnInFlight sync.Map
+
 
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
@@ -218,6 +237,33 @@ type BacklogService struct {
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
 func (s *BacklogService) PipelineEngine() session.PipelineEngine {
 	return s.pipelineEngine
+}
+
+// ConfigMu exposes the mutex guarding cfg's backlog-concurrency fields so
+// server/dependencies.go can wire the exact same mutex into
+// DefaultsService.SetSharedBacklogConfig — see cfgMu's doc comment on the
+// BacklogService struct for why this must be shared, not merely the same
+// *config.Config pointer.
+func (s *BacklogService) ConfigMu() *sync.RWMutex {
+	return &s.cfgMu
+}
+
+// maxConcurrentBacklogWorkItems reads cfg.MaxConcurrentBacklogWorkItemsOrDefault()
+// under cfgMu's read lock so a concurrent DefaultsService.UpdateGlobalDefaults
+// write (propagated via SetSharedBacklogConfig) is always observed by the next
+// call rather than requiring a process restart (PR #199 review F1).
+func (s *BacklogService) maxConcurrentBacklogWorkItems() int {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.MaxConcurrentBacklogWorkItemsOrDefault()
+}
+
+// maxAutoReworkIterations reads cfg.MaxAutoReworkIterationsOrDefault() under
+// cfgMu's read lock — see maxConcurrentBacklogWorkItems's doc comment.
+func (s *BacklogService) maxAutoReworkIterations() int {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.MaxAutoReworkIterationsOrDefault()
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.

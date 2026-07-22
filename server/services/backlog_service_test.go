@@ -1149,11 +1149,15 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	return itemID
 }
 
-// TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap verifies that a fresh spawn
-// is rejected with CodeResourceExhausted once maxConcurrentBacklogWorkItems items
-// are already in_progress, and that the blocked item is left untouched (still
-// "ready", no session created for it).
-func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
+// testWIPCap mirrors config.Config.MaxConcurrentBacklogWorkItemsOrDefault's
+// default (cfg=nil in these tests, so the default applies).
+const testWIPCap = 2
+
+// TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting verifies that a
+// fresh spawn is queued (not rejected) once testWIPCap items are already
+// in_progress: the response carries Queued=true with no error, and the item
+// transitions to "queued" with QueuedAt set.
+func TestSpawnSessionFromItem_WIPLimit_QueuesInsteadOfRejecting(t *testing.T) {
 	storage := createTestStorage(t)
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
@@ -1162,24 +1166,24 @@ func TestSpawnSessionFromItem_WIPLimit_BlocksSpawnAtCap(t *testing.T) {
 	initGitRepoWithCommit(t, repoPath)
 
 	// Fill the WIP cap with successful spawns.
-	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+	for i := 0; i < testWIPCap; i++ {
 		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
 		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
 		require.NoError(t, err, "spawn %d must succeed while under the cap", i)
 	}
-	require.Len(t, creator.calls, maxConcurrentBacklogWorkItems)
+	require.Len(t, creator.calls, testWIPCap)
 
-	// One more fresh spawn, at cap, must be rejected.
+	// One more fresh spawn, at cap, must be queued rather than rejected.
 	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
-	_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
-	require.Error(t, err, "spawn at the WIP cap must be rejected")
-	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
-	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems, "no session should have been spawned for the over-cap item")
+	resp, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.NoError(t, err, "spawn at the WIP cap must not return an error")
+	assert.True(t, resp.Msg.Queued, "response must indicate the item was queued")
+	assert.Len(t, creator.calls, testWIPCap, "no session should have been spawned for the queued item")
 
-	// The rejected item must be untouched — still "ready", not silently advanced.
+	// The queued item must reflect the new status and have queued_at set.
 	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: overCapID}))
 	require.NoError(t, err)
-	assert.Equal(t, "ready", getResp.Msg.Item.Status)
+	assert.Equal(t, "queued", getResp.Msg.Item.Status)
 }
 
 // TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap verifies that a reopen
@@ -1195,7 +1199,7 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 
 	// Fill the WIP cap.
 	var reopenTargetID string
-	for i := 0; i < maxConcurrentBacklogWorkItems; i++ {
+	for i := 0; i < testWIPCap; i++ {
 		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
 		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
 		require.NoError(t, err)
@@ -1213,7 +1217,68 @@ func TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap(t *testing.T) {
 	// succeed even though the cap is reached.
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: reopenTargetID}))
 	require.NoError(t, err, "reopen spawn must not be blocked by the WIP limit")
-	assert.Len(t, creator.calls, maxConcurrentBacklogWorkItems+1)
+	assert.Len(t, creator.calls, testWIPCap+1)
+}
+
+// TestSpawnSessionFromItem_should_RejectNotQueue_When_UnapprovedPlanHitsWIPCap is
+// the regression test for PR #199 review F2/F3: previously the WIP-cap gate ran
+// BEFORE the planning-approval gate, so an item that reached "ready" without an
+// approved plan (idea->ready only requires non-empty acceptance criteria, not
+// planning approval) could be queued instead of rejected once the cap was hit.
+// DequeueNextQueuedItems later claims queued items and spawns a real work
+// session with no planning check of its own — so queueing such an item let it
+// bypass the plan-required invariant entirely. The planning gate must now run
+// first: an unapproved-plan item must be rejected outright, even at the cap,
+// and never transition to "queued".
+func TestSpawnSessionFromItem_should_RejectNotQueue_When_UnapprovedPlanHitsWIPCap(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the WIP cap with SkipPlanning items so the cap is genuinely reached.
+	for i := 0; i < testWIPCap; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("wip item %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+	}
+	require.Len(t, creator.calls, testWIPCap)
+
+	// Create an item that reached "ready" WITHOUT SkipPlanning or an approved
+	// plan — idea->ready only requires non-empty acceptance criteria.
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:      "unapproved plan item",
+		RepoPath:   repoPath,
+		SkipTriage: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: itemID, TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	// Sanity check: the item genuinely has no approved plan.
+	loaded, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	require.False(t, loaded.SkipPlanning)
+	require.False(t, loaded.PlanApproved)
+
+	// Spawning at the WIP cap must be rejected by the planning gate — never queued.
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err, "an unapproved-plan item must be rejected, not queued, even when the WIP cap is hit")
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "approve the plan")
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", getResp.Msg.Item.Status, "item must remain ready, not be queued, when the plan is unapproved")
+	assert.Len(t, creator.calls, testWIPCap, "no additional session should have been spawned")
 }
 
 // TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions is the regression test for
@@ -1246,14 +1311,14 @@ func TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions(t *testing.T) {
 		TargetStatus: string(session.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
-	require.Equal(t, 2, maxConcurrentBacklogWorkItems, "test assumes the default cap of 2; update the fixture if this changes")
+	require.Equal(t, testWIPCap, 2, "test assumes the default cap of 2; update the fixture if this changes")
 
-	// A fresh spawn for a third item must now be rejected: two agents (one in_progress,
-	// one live-in-review) are already running, at the cap.
+	// A fresh spawn for a third item must now be queued, not rejected: two agents (one
+	// in_progress, one live-in-review) are already running, at the cap.
 	overCapID := createReadyItemForSpawn(t, svc, repoPath, "over cap item")
-	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
-	require.Error(t, err, "spawn must be rejected — the review-status session is still live")
-	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+	resp, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: overCapID}))
+	require.NoError(t, err, "spawn at the WIP cap must not return an error — the review-status session is still live")
+	assert.True(t, resp.Msg.Queued, "response must indicate the item was queued")
 }
 
 // TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn is the regression
@@ -1847,10 +1912,16 @@ func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
 // pushed or turned into a PR — silently losing the ship step. The item must now
 // stay in review so the "Ship PR" action can recover it.
 func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t *testing.T) {
-	storage := createTestStorage(t)
+	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	repoDir := t.TempDir()
+	_, repoDir := setupPRFixSyncRepo(t)
 	require.NoError(t, os.WriteFile(repoDir+"/README.md", []byte("hello\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "README.md")
+	runGitTestCmd(t, repoDir, "commit", "-m", "add README")
+	runGitTestCmd(t, repoDir, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(repoDir+"/feature.txt", []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoDir, "add", "feature.txt")
+	runGitTestCmd(t, repoDir, "commit", "-m", "wip")
 	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"looks good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"verified"}],"tool_reads":["README.md"]}`}
 	svc.SetHeadlessPool(pool)
 	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
@@ -1881,14 +1952,13 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 	}
 
 	// Seed a work session with committed-but-unpushed code — the scenario the
-	// ErrPRRequired guard (and this replicated check) exists for.
-	workIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
-		ItemID:      itemID,
-		SessionUUID: "work-session-uuid",
-		SessionRole: session.SessionRoleWork,
-	})
+	// ErrPRRequired guard (and this replicated check) exists for. repoDir is
+	// checked out on "feature" right now (the unshipped commit) — use it as
+	// the work session's own worktree path so isCodeShippedToMain resolves
+	// the commit from its live HEAD, not a stale LastCommitSha field.
+	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	require.NoError(t, storage.UpdateItemSessionGitActivity(t.Context(), workIS.ID, "abc123", "wip", time.Now(), 1))
+	attachPRFixWorkSession(t, storage, repo, item, "work-session-uuid", repoDir, repoDir, "feature")
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,

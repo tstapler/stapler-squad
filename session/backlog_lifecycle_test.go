@@ -163,6 +163,88 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 	require.NotNil(t, fetchedIS.EndedAt)
 }
 
+// fakeQueueDequeuer is a test double implementing QueueDequeuer, recording every
+// call and signaling on a channel so async callers (onSessionExited invokes it
+// in a goroutine) can be synchronized with in tests.
+type fakeQueueDequeuer struct {
+	called chan struct{}
+}
+
+func newFakeQueueDequeuer() *fakeQueueDequeuer {
+	return &fakeQueueDequeuer{called: make(chan struct{}, 8)}
+}
+
+func (f *fakeQueueDequeuer) DequeueNextQueuedItems(ctx context.Context) error {
+	f.called <- struct{}{}
+	return nil
+}
+
+// TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue
+// verifies that once a work session exit frees a WIP slot (item leaves
+// in_progress), onSessionExited invokes the wired QueueDequeuer immediately
+// rather than waiting for the next ReconcileStuck tick.
+func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Test Item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via onSessionExited")
+	}
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue verifies the
+// safety-net path: the periodic ReconcileStuck sweep invokes the wired
+// QueueDequeuer on every tick (not just onSessionExited), so a missed exit
+// hook or a concurrency limit raised while items were queued still gets
+// picked up.
+func TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	listener.ReconcileStuck(context.Background())
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via ReconcileStuck")
+	}
+}
+
 // TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_WhenSkipReviewGate
 // verifies that when SkipReviewGate=true, item transitions directly to done.
 func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_WhenSkipReviewGate(t *testing.T) {
@@ -2603,4 +2685,58 @@ func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_
 	require.NotNil(t, fetched.ShippedSnapshotAt, "CaptureShipSnapshot must have run and captured at least the GitHub group before the done transition")
 	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
 	assert.Equal(t, 1, fetched.ShippedApprovedCount)
+}
+
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged is the call-site
+// regression test for wiring CleanupBacklogContextFile/CleanupSlashCommands into
+// production: previously these functions had zero call sites. Once an item's
+// last work session's worktree is known and its PR merges, ReconcilePRPending
+// must remove the leftover .backlog-context.md and .claude/commands/backlog/
+// scaffolding from that worktree — ship.md's "must still exist" constraint
+// (see CleanupSlashCommands' doc comment) no longer applies once the PR is
+// merged and the item has reached done.
+func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9010)
+
+	worktreePath := t.TempDir()
+	contextPath := filepath.Join(worktreePath, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+
+	inst := newTestInstance("pr-pending-worktree")
+	inst.UUID = uuid.New().String()
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: true,
+		status: &git.PRStatus{ApprovedCount: 1},
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+
+	_, statErr := os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up once the item reaches done")
+	_, statErr = os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command files must be cleaned up once the item reaches done")
 }

@@ -305,6 +305,10 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
+	// "in_progress" at the same time. 0 = use the default (2). Values above
+	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
+	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
 
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
@@ -574,6 +578,28 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return 20
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
+// or negative — 0 concurrency would wedge the queue forever).
+// maxConcurrentBacklogWorkItemsHardCeiling caps how high the setting can go even via a
+// modified frontend request, to guard against reintroducing the 2026-07-12 OOM.
+const (
+	maxConcurrentBacklogWorkItemsDefault     = 2
+	maxConcurrentBacklogWorkItemsHardCeiling = 10
+)
+
+// MaxConcurrentBacklogWorkItemsOrDefault returns the configured backlog work-item
+// concurrency cap, clamped to [1, maxConcurrentBacklogWorkItemsHardCeiling]. Falls back
+// to the default (2) if unset (<=0) or c is nil.
+func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
+	if c == nil || c.MaxConcurrentBacklogWorkItems <= 0 {
+		return maxConcurrentBacklogWorkItemsDefault
+	}
+	if c.MaxConcurrentBacklogWorkItems > maxConcurrentBacklogWorkItemsHardCeiling {
+		return maxConcurrentBacklogWorkItemsHardCeiling
+	}
+	return c.MaxConcurrentBacklogWorkItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,

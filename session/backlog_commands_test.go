@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // setupTestGitRepo creates a temporary git repository with an initial commit and a
@@ -325,7 +326,7 @@ func TestCleanupBacklogContextFile_NoErrorWhenAbsent(t *testing.T) {
 
 // TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile is the core
 // regression test for the chronic bug this PR fixes: a branch that at some point got
-// .backlog-context.md committed (however that happened — see backlogExcludePatterns'
+// .backlog-context.md committed (however that happened — see git.ScaffoldingExcludePatterns'
 // doc comment) must self-heal the next time a session is spawned/reattached on it,
 // rather than requiring a manual "chore(backlog): untrack ..." commit. Confirmed via
 // `git log --all --oneline -- "*.backlog-context.md"` in this repo's own history:
@@ -482,7 +483,7 @@ func TestWriteBacklogContextFile_NoStaleContentLeaksAcrossRespawn(t *testing.T) 
 // handling of the same case.
 func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
 	dir := t.TempDir()
-	removed, err := untrackTrackedScaffolding(dir, backlogExcludePatterns)
+	removed, err := git.UntrackScaffolding(dir, git.ScaffoldingExcludePatterns)
 	if err != nil {
 		t.Errorf("expected no error for a non-git directory, got: %v", err)
 	}
@@ -492,8 +493,8 @@ func TestUntrackTrackedScaffolding_NoErrorOnNonGitDirectory(t *testing.T) {
 }
 
 // TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone verifies the self-heal
-// only touches paths matching backlogExcludePatterns and leaves everything else in the
-// index untouched.
+// only touches paths matching git.ScaffoldingExcludePatterns and leaves everything else in
+// the index untouched.
 func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T) {
 	repo := setupTestGitRepo(t)
 
@@ -502,9 +503,9 @@ func TestUntrackTrackedScaffolding_LeavesUnrelatedTrackedFilesAlone(t *testing.T
 		t.Fatalf("test setup failed: README.md is not tracked")
 	}
 
-	removed, err := untrackTrackedScaffolding(repo, backlogExcludePatterns)
+	removed, err := git.UntrackScaffolding(repo, git.ScaffoldingExcludePatterns)
 	if err != nil {
-		t.Fatalf("untrackTrackedScaffolding returned error: %v", err)
+		t.Fatalf("UntrackScaffolding returned error: %v", err)
 	}
 	if len(removed) != 0 {
 		t.Errorf("expected nothing to be untracked (no scaffolding files present), got: %v", removed)

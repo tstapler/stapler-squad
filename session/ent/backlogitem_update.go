@@ -248,6 +248,40 @@ func (_u *BacklogItemUpdate) ClearPlanApprovedAt() *BacklogItemUpdate {
 	return _u
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (_u *BacklogItemUpdate) SetQueuedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetQueuedAt(v)
+	return _u
+}
+
+// SetNillableQueuedAt sets the "queued_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableQueuedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetQueuedAt(*v)
+	}
+	return _u
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (_u *BacklogItemUpdate) ClearQueuedAt() *BacklogItemUpdate {
+	_u.mutation.ClearQueuedAt()
+	return _u
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (_u *BacklogItemUpdate) SetQueuedAutonomous(v bool) *BacklogItemUpdate {
+	_u.mutation.SetQueuedAutonomous(v)
+	return _u
+}
+
+// SetNillableQueuedAutonomous sets the "queued_autonomous" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableQueuedAutonomous(v *bool) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetQueuedAutonomous(*v)
+	}
+	return _u
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (_u *BacklogItemUpdate) SetPlanArtifactsPath(v string) *BacklogItemUpdate {
 	_u.mutation.SetPlanArtifactsPath(v)
@@ -909,6 +943,15 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.PlanApprovedAtCleared() {
 		_spec.ClearField(backlogitem.FieldPlanApprovedAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.QueuedAt(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAt, field.TypeTime, value)
+	}
+	if _u.mutation.QueuedAtCleared() {
+		_spec.ClearField(backlogitem.FieldQueuedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QueuedAutonomous(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAutonomous, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.PlanArtifactsPath(); ok {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)
 	}
@@ -1498,6 +1541,40 @@ func (_u *BacklogItemUpdateOne) SetNillablePlanApprovedAt(v *time.Time) *Backlog
 // ClearPlanApprovedAt clears the value of the "plan_approved_at" field.
 func (_u *BacklogItemUpdateOne) ClearPlanApprovedAt() *BacklogItemUpdateOne {
 	_u.mutation.ClearPlanApprovedAt()
+	return _u
+}
+
+// SetQueuedAt sets the "queued_at" field.
+func (_u *BacklogItemUpdateOne) SetQueuedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetQueuedAt(v)
+	return _u
+}
+
+// SetNillableQueuedAt sets the "queued_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableQueuedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetQueuedAt(*v)
+	}
+	return _u
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (_u *BacklogItemUpdateOne) ClearQueuedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearQueuedAt()
+	return _u
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (_u *BacklogItemUpdateOne) SetQueuedAutonomous(v bool) *BacklogItemUpdateOne {
+	_u.mutation.SetQueuedAutonomous(v)
+	return _u
+}
+
+// SetNillableQueuedAutonomous sets the "queued_autonomous" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableQueuedAutonomous(v *bool) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetQueuedAutonomous(*v)
+	}
 	return _u
 }
 
@@ -2191,6 +2268,15 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.PlanApprovedAtCleared() {
 		_spec.ClearField(backlogitem.FieldPlanApprovedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QueuedAt(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAt, field.TypeTime, value)
+	}
+	if _u.mutation.QueuedAtCleared() {
+		_spec.ClearField(backlogitem.FieldQueuedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.QueuedAutonomous(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAutonomous, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.PlanArtifactsPath(); ok {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)

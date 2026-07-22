@@ -2938,9 +2938,13 @@ func (x *SpawnSessionFromItemRequest) GetForce() bool {
 }
 
 type SpawnSessionFromItemResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionUuid   string                 `protobuf:"bytes,1,opt,name=session_uuid,json=sessionUuid,proto3" json:"session_uuid,omitempty"`
-	ItemSession   *ItemSession           `protobuf:"bytes,2,opt,name=item_session,json=itemSession,proto3" json:"item_session,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	SessionUuid string                 `protobuf:"bytes,1,opt,name=session_uuid,json=sessionUuid,proto3" json:"session_uuid,omitempty"`
+	ItemSession *ItemSession           `protobuf:"bytes,2,opt,name=item_session,json=itemSession,proto3" json:"item_session,omitempty"`
+	// True if the spawn hit the concurrency cap and the item was transitioned to
+	// "queued" instead of spawning a session. session_uuid/item_session are empty
+	// in that case.
+	Queued        bool `protobuf:"varint,3,opt,name=queued,proto3" json:"queued,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2987,6 +2991,13 @@ func (x *SpawnSessionFromItemResponse) GetItemSession() *ItemSession {
 		return x.ItemSession
 	}
 	return nil
+}
+
+func (x *SpawnSessionFromItemResponse) GetQueued() bool {
+	if x != nil {
+		return x.Queued
+	}
+	return false
 }
 
 type AttachSessionToItemRequest struct {
@@ -6909,10 +6920,11 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\n" +
 	"autonomous\x18\x03 \x01(\bR\n" +
 	"autonomous\x12\x14\n" +
-	"\x05force\x18\x04 \x01(\bR\x05force\"}\n" +
+	"\x05force\x18\x04 \x01(\bR\x05force\"\x95\x01\n" +
 	"\x1cSpawnSessionFromItemResponse\x12!\n" +
 	"\fsession_uuid\x18\x01 \x01(\tR\vsessionUuid\x12:\n" +
-	"\fitem_session\x18\x02 \x01(\v2\x17.session.v1.ItemSessionR\vitemSession\"X\n" +
+	"\fitem_session\x18\x02 \x01(\v2\x17.session.v1.ItemSessionR\vitemSession\x12\x16\n" +
+	"\x06queued\x18\x03 \x01(\bR\x06queued\"X\n" +
 	"\x1aAttachSessionToItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12!\n" +
 	"\fsession_uuid\x18\x02 \x01(\tR\vsessionUuid\"Y\n" +

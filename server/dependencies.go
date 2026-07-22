@@ -943,6 +943,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	backlogLifecycleListener.SetDequeuer(backlogSvc)
+	// Share BacklogService's live *config.Config instance (and its guarding
+	// mutex) with DefaultsService so a Settings update to the WIP cap / rework
+	// cap takes effect on BacklogService's very next read instead of requiring
+	// a process restart (PR #199 review F1) — see
+	// DefaultsService.SetSharedBacklogConfig's doc comment.
+	sessionService.SetSharedBacklogConfig(cfg, backlogSvc.ConfigMu())
+	// Raising the concurrency limit via Settings should dequeue eligible items
+	// immediately rather than waiting up to 60s for the next ReconcileStuck tick.
+	sessionService.SetOnGlobalDefaultsUpdated(func() {
+		if err := backlogSvc.DequeueNextQueuedItems(context.Background()); err != nil {
+			log.Error("backlog dequeue after global defaults update failed", "err", err)
+		}
+	})
 	// Wire the stale_work remediator so an in_progress item whose work session
 	// has gone quiet (agent finished and is idle at an interactive prompt,
 	// rather than crashed — TmuxAlive/PaneProcessDead both report healthy, so

@@ -204,6 +204,34 @@ func (_c *BacklogItemCreate) SetNillablePlanApprovedAt(v *time.Time) *BacklogIte
 	return _c
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (_c *BacklogItemCreate) SetQueuedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetQueuedAt(v)
+	return _c
+}
+
+// SetNillableQueuedAt sets the "queued_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableQueuedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetQueuedAt(*v)
+	}
+	return _c
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (_c *BacklogItemCreate) SetQueuedAutonomous(v bool) *BacklogItemCreate {
+	_c.mutation.SetQueuedAutonomous(v)
+	return _c
+}
+
+// SetNillableQueuedAutonomous sets the "queued_autonomous" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableQueuedAutonomous(v *bool) *BacklogItemCreate {
+	if v != nil {
+		_c.SetQueuedAutonomous(*v)
+	}
+	return _c
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (_c *BacklogItemCreate) SetPlanArtifactsPath(v string) *BacklogItemCreate {
 	_c.mutation.SetPlanArtifactsPath(v)
@@ -617,6 +645,10 @@ func (_c *BacklogItemCreate) defaults() {
 		v := backlogitem.DefaultPlanApproved
 		_c.mutation.SetPlanApproved(v)
 	}
+	if _, ok := _c.mutation.QueuedAutonomous(); !ok {
+		v := backlogitem.DefaultQueuedAutonomous
+		_c.mutation.SetQueuedAutonomous(v)
+	}
 	if _, ok := _c.mutation.PrNumber(); !ok {
 		v := backlogitem.DefaultPrNumber
 		_c.mutation.SetPrNumber(v)
@@ -685,6 +717,9 @@ func (_c *BacklogItemCreate) check() error {
 	}
 	if _, ok := _c.mutation.PlanApproved(); !ok {
 		return &ValidationError{Name: "plan_approved", err: errors.New(`ent: missing required field "BacklogItem.plan_approved"`)}
+	}
+	if _, ok := _c.mutation.QueuedAutonomous(); !ok {
+		return &ValidationError{Name: "queued_autonomous", err: errors.New(`ent: missing required field "BacklogItem.queued_autonomous"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "BacklogItem.created_at"`)}
@@ -779,6 +814,14 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PlanApprovedAt(); ok {
 		_spec.SetField(backlogitem.FieldPlanApprovedAt, field.TypeTime, value)
 		_node.PlanApprovedAt = &value
+	}
+	if value, ok := _c.mutation.QueuedAt(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAt, field.TypeTime, value)
+		_node.QueuedAt = &value
+	}
+	if value, ok := _c.mutation.QueuedAutonomous(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAutonomous, field.TypeBool, value)
+		_node.QueuedAutonomous = value
 	}
 	if value, ok := _c.mutation.PlanArtifactsPath(); ok {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)
@@ -1180,6 +1223,36 @@ func (u *BacklogItemUpsert) UpdatePlanApprovedAt() *BacklogItemUpsert {
 // ClearPlanApprovedAt clears the value of the "plan_approved_at" field.
 func (u *BacklogItemUpsert) ClearPlanApprovedAt() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldPlanApprovedAt)
+	return u
+}
+
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsert) SetQueuedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldQueuedAt, v)
+	return u
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateQueuedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldQueuedAt)
+	return u
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsert) ClearQueuedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldQueuedAt)
+	return u
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsert) SetQueuedAutonomous(v bool) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldQueuedAutonomous, v)
+	return u
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateQueuedAutonomous() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldQueuedAutonomous)
 	return u
 }
 
@@ -1754,6 +1827,41 @@ func (u *BacklogItemUpsertOne) UpdatePlanApprovedAt() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearPlanApprovedAt() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPlanApprovedAt()
+	})
+}
+
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsertOne) SetQueuedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAt(v)
+	})
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateQueuedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAt()
+	})
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsertOne) ClearQueuedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearQueuedAt()
+	})
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsertOne) SetQueuedAutonomous(v bool) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAutonomous(v)
+	})
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateQueuedAutonomous() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAutonomous()
 	})
 }
 
@@ -2546,6 +2654,41 @@ func (u *BacklogItemUpsertBulk) UpdatePlanApprovedAt() *BacklogItemUpsertBulk {
 func (u *BacklogItemUpsertBulk) ClearPlanApprovedAt() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPlanApprovedAt()
+	})
+}
+
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsertBulk) SetQueuedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAt(v)
+	})
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateQueuedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAt()
+	})
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsertBulk) ClearQueuedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearQueuedAt()
+	})
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsertBulk) SetQueuedAutonomous(v bool) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAutonomous(v)
+	})
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateQueuedAutonomous() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAutonomous()
 	})
 }
 

@@ -35,6 +35,7 @@ export function GlobalDefaultsForm() {
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
   const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(3);
+  const [maxConcurrentBacklogWorkItems, setMaxConcurrentBacklogWorkItems] = useState(2);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export function GlobalDefaultsForm() {
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
         setMaxAutoReworkIterations(defaults.maxAutoReworkIterations || 3);
+        setMaxConcurrentBacklogWorkItems(defaults.maxConcurrentBacklogWorkItems || 2);
         const vars = Object.entries(defaults.envVars).map(([key, value]) => ({
           key,
           value,
@@ -95,6 +97,7 @@ export function GlobalDefaultsForm() {
         envVars: envVarsMap,
         cliFlags,
         maxAutoReworkIterations,
+        maxConcurrentBacklogWorkItems,
       });
       setSuccess("Global defaults saved.");
       setTimeout(() => setSuccess(null), 3000);
@@ -320,6 +323,30 @@ export function GlobalDefaultsForm() {
           <p className={hint}>
             How many times a backlog item can be auto-reopened for rework after a failed
             review before it&apos;s left in review for manual action.
+          </p>
+        </div>
+
+        {/* Max Concurrent Backlog Work Items */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-max-concurrent-backlog-work-items">
+            Max Concurrent Backlog Work Items
+          </label>
+          <input
+            id="global-max-concurrent-backlog-work-items"
+            type="number"
+            min={1}
+            max={10}
+            className={input}
+            value={maxConcurrentBacklogWorkItems}
+            onChange={(e) =>
+              setMaxConcurrentBacklogWorkItems(
+                Math.min(10, Math.max(1, Number(e.target.value) || 1))
+              )
+            }
+          />
+          <p className={hint}>
+            How many backlog items can have a live work session at once. Items spawned
+            beyond this cap are queued and start automatically as slots free up.
           </p>
         </div>
 

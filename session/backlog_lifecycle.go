@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -84,6 +86,14 @@ type StaleWorkRemediator interface {
 // marked complete, just never actually re-reviewed).
 type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
+}
+
+// QueueDequeuer claims and spawns as many queued backlog items as there are
+// free WIP slots, oldest-queued first. Called the moment a slot frees up
+// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
+// for a missed exit hook or a concurrency limit raised while items were queued.
+type QueueDequeuer interface {
+	DequeueNextQueuedItems(ctx context.Context) error
 }
 
 // OneShotShipRunner runs a one-shot LLM prompt against a session's worktree,
@@ -237,6 +247,10 @@ type BacklogLifecycleListener struct {
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
 
+	// dequeuerMu guards dequeuer for concurrent Set/get access.
+	dequeuerMu sync.RWMutex
+	dequeuer   QueueDequeuer
+
 	// oneShotShipRunnerMu guards oneShotShipRunner for concurrent Set/get access.
 	oneShotShipRunnerMu sync.RWMutex
 	// oneShotShipRunner runs the agent-driven ship flow (see agentShipPrompt)
@@ -246,6 +260,7 @@ type BacklogLifecycleListener struct {
 	// mechanical pushAndCreatePR path — preserves pre-existing behavior for
 	// any test/caller that hasn't wired it.
 	oneShotShipRunner OneShotShipRunner
+
 
 	// prPendingCheckerMu guards prPendingCheckerFactory for concurrent Set/get access.
 	prPendingCheckerMu      sync.RWMutex
@@ -403,6 +418,34 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	return l.reviewRespawner
 }
 
+// SetDequeuer wires in the spawner used to dequeue queued backlog items once a
+// WIP slot frees up.
+func (l *BacklogLifecycleListener) SetDequeuer(d QueueDequeuer) {
+	l.dequeuerMu.Lock()
+	defer l.dequeuerMu.Unlock()
+	l.dequeuer = d
+}
+
+// getDequeuer returns the current dequeuer under a read lock.
+func (l *BacklogLifecycleListener) getDequeuer() QueueDequeuer {
+	l.dequeuerMu.RLock()
+	defer l.dequeuerMu.RUnlock()
+	return l.dequeuer
+}
+
+// triggerDequeue best-effort dequeues queued items on the current goroutine. It
+// swallows and logs errors — a failed dequeue attempt must never block or fail
+// the caller (a session-exit transition or the periodic stuck sweep).
+func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
+	d := l.getDequeuer()
+	if d == nil {
+		return
+	}
+	if err := d.DequeueNextQueuedItems(ctx); err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] DequeueNextQueuedItems error: %v", err)
+	}
+}
+
 // SetOneShotShipRunner wires in the runner used by shipViaAgentOrFallback to
 // attempt an agent-driven PR ship (see agentShipPrompt) before falling back
 // to the mechanical pushAndCreatePR path. Optional — nil means every PASS
@@ -420,6 +463,7 @@ func (l *BacklogLifecycleListener) getOneShotShipRunner() OneShotShipRunner {
 	defer l.oneShotShipRunnerMu.RUnlock()
 	return l.oneShotShipRunner
 }
+
 
 // SetPRPendingCheckerFactory overrides the factory used to construct the
 // PR-status checker for ReconcilePRPending. Overridable in tests (mirrors the
@@ -702,6 +746,10 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	}
 
 	log.InfoLog.Printf("[BacklogLifecycle] item %s transitioned to %s (session %s exited)", item.ID, toStatus, sessionUUID)
+
+	// The item just left in_progress, freeing a WIP slot — dequeue immediately
+	// rather than waiting for the next ReconcileStuck tick (safety-net only).
+	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
 	if toStatus == BacklogStatusReview && !item.SkipReviewGate && l.getSessionCreator() != nil {
@@ -1342,6 +1390,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.ReconcilePRPending(ctx, er)
 	})
 
+	// Safety net for the backlog work-item queue: dequeues queued items whose
+	// exit-hook trigger was missed (server restart mid-transition, panic in the
+	// hook's own goroutine) or whose slot was freed by the concurrency limit
+	// being raised via Settings while items were queued (not itself a session
+	// exit, so onSessionExited never fires for it).
+	l.runStuckDetector("dequeue_backlog_items", &okNames, &panickedNames, func() {
+		l.triggerDequeue(ctx)
+	})
+
 	openRows, countErr := er.FindOpenStuckStates(ctx)
 	openCount := -1
 	if countErr == nil {
@@ -1966,40 +2023,90 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
 }
 
-// mostRecentWorkCommitShippedToMain finds itemID's most recent work-session
-// commit (if any) and reports whether that specific commit has landed on
-// bounceMainBranch. Mirrors BacklogService.isCodeShippedToMain's "keep
-// overwriting while scanning ascending-by-CreatedAt" pattern
+// resolveLatestWorkCommit returns the true current tip commit of the work
+// session identified by sessionUUID — never ItemSessionSummary.LastCommitSha,
+// which is only ever seeded once at session spawn with the pre-work base SHA
+// (see the UpdateItemSessionGitActivity calls in
+// backlog_service_triage.go/backlog_service_sync.go, all of which pass
+// baseSHA) and is never updated afterward as the agent commits real work.
+// Treating that field as "the agent's latest commit" made
+// mostRecentWorkCommitShippedToMain trivially true for almost any PR-less
+// item, because a branch's own base commit is — by construction — always an
+// ancestor of main. Confirmed live 2026-07-21: items 635a373d, e99d3f4a, and
+// 54e5aa1f were all auto-marked done in a single reconciliation tick despite
+// each having real, unmerged work (an open PR for 635a373d, and unpushed
+// branches for the other two).
+//
+// Prefers the session's own worktree HEAD; falls back to resolving the
+// branch's tip directly in repoPath if the worktree directory is gone, since
+// worktrees of the same repo share one object store — the same fallback
+// shape getWorkSessionDiff/GetGitDiffRef already rely on for the review-diff
+// path. Returns "" if neither resolves.
+func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
+	wt, err := l.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		return ""
+	}
+	if wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			if sha, headErr := GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+				return sha
+			}
+		}
+	}
+	if wt.BranchName == "" {
+		return ""
+	}
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
+	cmd.Dir = repoPath
+	out, revErr := cmd.Output()
+	if revErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// mostRecentWorkCommitShippedToMain finds itemID's most recent work session
+// and reports whether its current tip commit (resolveLatestWorkCommit, NOT
+// the session's stale LastCommitSha field — see that function's doc comment)
+// has landed on bounceMainBranch. Mirrors BacklogService.isCodeShippedToMain's
+// "keep overwriting while scanning ascending-by-CreatedAt" pattern
 // (server/services/backlog_service_lifecycle.go) for finding the most recent
-// work session's commit, but — unlike that method — deliberately does NOT
-// treat "no commit ever recorded" as shipped: isCodeShippedToMain's caller
-// uses it as a block-a-transition guard, where "nothing to verify" should not
-// block; this caller uses it as a fire-a-transition trigger, where "nothing
-// to verify" must never fire one. Returns ("", false) when there is no
-// work-session commit to check at all.
+// work session, but — unlike that method — deliberately does NOT treat "no
+// commit resolvable" as shipped: isCodeShippedToMain's caller uses it as a
+// block-a-transition guard, where "nothing to verify" should not block; this
+// caller uses it as a fire-a-transition trigger, where "nothing to verify"
+// must never fire one. Returns ("", false) when there is no work session or
+// no commit could be resolved for it.
 func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context.Context, itemID, repoPath string) (sha string, shipped bool) {
 	itemSessions, err := l.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain ListItemSessions item=%s: %v", itemID, err)
 		return "", false
 	}
-	var lastCommitSha string
+	var lastWorkSessionUUID string
 	for _, is := range itemSessions {
 		// ListItemSessions orders ascending by CreatedAt — keep overwriting so
-		// this ends up holding the *most recent* work session's commit.
-		if is.Role == SessionRoleWork && is.LastCommitSha != "" {
-			lastCommitSha = is.LastCommitSha
+		// this ends up holding the *most recent* work session.
+		if is.Role == SessionRoleWork {
+			lastWorkSessionUUID = is.SessionUUID
 		}
 	}
-	if lastCommitSha == "" {
-		return "", false // nothing was ever committed — nothing to confirm shipped
+	if lastWorkSessionUUID == "" {
+		return "", false // no work session ever ran — nothing to confirm shipped
 	}
-	onMain, mainErr := git.IsCommitOnMain(repoPath, bounceMainBranch, lastCommitSha)
+	sha = l.resolveLatestWorkCommit(ctx, lastWorkSessionUUID, repoPath)
+	if sha == "" {
+		return "", false // nothing resolvable — nothing to confirm shipped
+	}
+	onMain, mainErr := git.IsCommitOnMain(repoPath, bounceMainBranch, sha)
 	if mainErr != nil {
-		log.WarningLog.Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain IsCommitOnMain item=%s sha=%s: %v", itemID, lastCommitSha, mainErr)
-		return lastCommitSha, false
+		log.WarningLog.Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain IsCommitOnMain item=%s sha=%s: %v", itemID, sha, mainErr)
+		return sha, false
 	}
-	return lastCommitSha, onMain
+	return sha, onMain
 }
 
 // reconcileBouncingItems flags items that have crossed in_progress->review
@@ -3050,6 +3157,21 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				// immediately (Task 2.1.5a) rather than waiting for the
 				// self-heal sweep's next tick.
 				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
+				// The PR is merged, so ship.md's "must still exist for a
+				// possible one-shot /backlog/ship re-invocation" constraint
+				// (see CleanupSlashCommands' doc comment) no longer applies —
+				// this is the first point in the lifecycle where scaffolding
+				// cleanup is safe. Best-effort: the worktree directory is
+				// often already gone by now (Instance.Kill/Pause deletes it
+				// independently), in which case these are no-ops.
+				if wt != nil && wt.WorktreePath != "" {
+					if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)
+					}
+					if cleanupErr := CleanupSlashCommands(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupSlashCommands item=%s: %v", item.ID, cleanupErr)
+					}
+				}
 			}
 			continue
 		}

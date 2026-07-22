@@ -54,6 +54,13 @@ func (BacklogItem) Fields() []ent.Field {
 		field.Time("plan_approved_at").
 			Optional().
 			Nillable(),
+		field.Time("queued_at").
+			Optional().
+			Nillable().
+			Comment("Set when a fresh spawn hits the concurrency cap and the item is queued instead of rejected. Drives FIFO dequeue ordering."),
+		field.Bool("queued_autonomous").
+			Default(false).
+			Comment("Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully."),
 		field.String("plan_artifacts_path").
 			Optional(),
 		field.String("user_modified_fields").
@@ -131,6 +138,7 @@ func (BacklogItem) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("status", "priority"),
 		index.Fields("status", "updated_at"),
+		index.Fields("status", "queued_at"),
 		index.Fields("external_id"),
 		index.Fields("status"),
 	}

@@ -3258,6 +3258,23 @@ func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
 }
 
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save (server/dependencies.go uses this to
+// trigger an immediate backlog-queue dequeue sweep when the concurrency limit
+// is raised).
+func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
+	s.defaultsSvc.SetOnGlobalDefaultsUpdated(fn)
+}
+
+// SetSharedBacklogConfig wires the *config.Config instance (and its guarding
+// mutex) BacklogService reads its concurrency fields from into this
+// SessionService's DefaultsService, so UpdateGlobalDefaults can propagate a
+// Settings change into BacklogService's live view without a process restart
+// (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
+func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)

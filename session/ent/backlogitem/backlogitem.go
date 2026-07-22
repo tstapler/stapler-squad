@@ -41,6 +41,10 @@ const (
 	FieldPlanApproved = "plan_approved"
 	// FieldPlanApprovedAt holds the string denoting the plan_approved_at field in the database.
 	FieldPlanApprovedAt = "plan_approved_at"
+	// FieldQueuedAt holds the string denoting the queued_at field in the database.
+	FieldQueuedAt = "queued_at"
+	// FieldQueuedAutonomous holds the string denoting the queued_autonomous field in the database.
+	FieldQueuedAutonomous = "queued_autonomous"
 	// FieldPlanArtifactsPath holds the string denoting the plan_artifacts_path field in the database.
 	FieldPlanArtifactsPath = "plan_artifacts_path"
 	// FieldUserModifiedFields holds the string denoting the user_modified_fields field in the database.
@@ -147,6 +151,8 @@ var Columns = []string{
 	FieldPipelineMode,
 	FieldPlanApproved,
 	FieldPlanApprovedAt,
+	FieldQueuedAt,
+	FieldQueuedAutonomous,
 	FieldPlanArtifactsPath,
 	FieldUserModifiedFields,
 	FieldNotes,
@@ -214,6 +220,8 @@ var (
 	DefaultPipelineMode string
 	// DefaultPlanApproved holds the default value on creation for the "plan_approved" field.
 	DefaultPlanApproved bool
+	// DefaultQueuedAutonomous holds the default value on creation for the "queued_autonomous" field.
+	DefaultQueuedAutonomous bool
 	// DefaultPrNumber holds the default value on creation for the "pr_number" field.
 	DefaultPrNumber int
 	// DefaultShippedApprovedCount holds the default value on creation for the "shipped_approved_count" field.
@@ -303,6 +311,16 @@ func ByPlanApproved(opts ...sql.OrderTermOption) OrderOption {
 // ByPlanApprovedAt orders the results by the plan_approved_at field.
 func ByPlanApprovedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlanApprovedAt, opts...).ToFunc()
+}
+
+// ByQueuedAt orders the results by the queued_at field.
+func ByQueuedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQueuedAt, opts...).ToFunc()
+}
+
+// ByQueuedAutonomous orders the results by the queued_autonomous field.
+func ByQueuedAutonomous(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldQueuedAutonomous, opts...).ToFunc()
 }
 
 // ByPlanArtifactsPath orders the results by the plan_artifacts_path field.

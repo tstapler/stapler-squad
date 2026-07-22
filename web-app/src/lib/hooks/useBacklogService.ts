@@ -19,7 +19,7 @@ import {
 // Domain types exposed to UI (mapped from proto, but without Message<> noise)
 // ---------------------------------------------------------------------------
 
-export type KnownBacklogStatus = "idea" | "refining" | "ready" | "in_progress" | "review" | "pr_pending" | "done" | "archived";
+export type KnownBacklogStatus = "idea" | "refining" | "ready" | "queued" | "in_progress" | "review" | "pr_pending" | "done" | "archived";
 // (string & {}) preserves autocomplete for KnownBacklogStatus values while still
 // accepting unknown statuses returned by newer server versions.
 export type BacklogItemStatus = KnownBacklogStatus | (string & {});
@@ -491,7 +491,7 @@ interface UseBacklogServiceReturn {
     toStatus: BacklogItemStatus,
     precondition?: BacklogItemStatus
   ) => Promise<BacklogItem | null>;
-  spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string } | null>;
+  spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string; queued: boolean } | null>;
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
@@ -691,7 +691,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const spawnSessionFromItem = useCallback(
-    async (id: string, options?: { autonomous?: boolean; force?: boolean }): Promise<{ sessionUuid: string } | null> => {
+    async (id: string, options?: { autonomous?: boolean; force?: boolean }): Promise<{ sessionUuid: string; queued: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -700,7 +700,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           autonomous: options?.autonomous ?? false,
           force: options?.force ?? false,
         });
-        return { sessionUuid: resp.sessionUuid };
+        return { sessionUuid: resp.sessionUuid, queued: resp.queued };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));

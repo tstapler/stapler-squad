@@ -149,6 +149,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		PipelineMode:                 item.PipelineMode,
 		PlanApproved:                 item.PlanApproved,
 		PlanApprovedAt:               item.PlanApprovedAt,
+		QueuedAt:                     item.QueuedAt,
+		QueuedAutonomous:             item.QueuedAutonomous,
 		PlanArtifactsPath:            item.PlanArtifactsPath,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
@@ -229,6 +231,8 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetPipelineMode(data.PipelineMode).
 		SetPlanApproved(data.PlanApproved).
 		SetNillablePlanApprovedAt(data.PlanApprovedAt).
+		SetNillableQueuedAt(data.QueuedAt).
+		SetQueuedAutonomous(data.QueuedAutonomous).
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
@@ -536,6 +540,12 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.PlanApprovedAt != nil {
 		u.SetPlanApprovedAt(*update.PlanApprovedAt)
 	}
+	if update.QueuedAt != nil {
+		u.SetQueuedAt(*update.QueuedAt)
+	}
+	if update.QueuedAutonomous != nil {
+		u.SetQueuedAutonomous(*update.QueuedAutonomous)
+	}
 	if update.PlanArtifactsPath != nil {
 		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
 	}
@@ -642,19 +652,25 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // TransitionBacklogItemStatus changes the status of a backlog item with
 // optional precondition.
 //
-// The precondition is enforced as a genuine compare-and-swap: it is folded
-// into the UPDATE statement's WHERE clause (status = ? AND updated_at = ?)
-// rather than checked against a separately-fetched row beforehand. The
-// previous implementation did Get() → check-in-Go → UpdateOneID().Save(),
-// which is a read-then-write race — nothing stopped a second, concurrent
-// caller's write from landing in the gap between this call's read and its
-// write, so a precondition that was true at read time could be false (and
-// silently ignored) by write time. That TOCTOU window is exactly what let a
-// stale AutoReopenAfterFailedReview call (reading the item while it was
-// still "review", then queued/delayed behind other work) reopen an item that
-// had, in the meantime, already legitimately shipped to "done" — see
-// docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md for the
-// live 2026-07-20 repro (item 0fd4a940, PR #176) this closes.
+// The precondition is enforced as a genuine SQL-level compare-and-swap: it is
+// folded into the UPDATE statement's own WHERE clause (status = ? AND
+// updated_at = ?, via the bulk Update().Where(...) builder — not
+// UpdateOneID, which cannot scope beyond id) rather than checked against a
+// separately-fetched row beforehand. Save() on a bulk update returns the
+// affected row count instead of the updated entity, so the row is re-fetched
+// after a successful write.
+//
+// The previous implementation did Get() → check-in-Go → UpdateOneID().Save(),
+// a read-then-write race: nothing stopped a second, concurrent caller's write
+// from landing in the gap between this call's read and its write, so a
+// precondition that was true at read time could be false (and silently
+// ignored) by write time. Two concrete incidents motivated closing this: a
+// stale AutoReopenAfterFailedReview call reopened an item that had, in the
+// meantime, already legitimately shipped to "done" (see
+// docs/bugs/fixed/BUG-026-backlog-transition-status-toctou-reopen.md, live
+// 2026-07-20 repro, item 0fd4a940, PR #176), and the backlog work-item queue
+// feature's concurrent-dequeue-claim test found the same race could
+// double-claim a single queued item between two dequeue sweeps (PR #199).
 func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {

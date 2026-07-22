@@ -133,7 +133,6 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
 	runGitTestCmd(t, repoPath, "add", "feature.txt")
 	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
-	unshippedSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -157,13 +156,11 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "unmerged-work-session",
-		SessionRole: session.SessionRoleWork,
-	})
-	require.NoError(t, err)
-	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, unshippedSHA, "work that never actually merged", time.Now(), 1))
+	// repoPath is checked out on "feature" right now (the unshipped commit) —
+	// use it as the work session's own worktree path so isCodeShippedToMain
+	// resolves the commit from its live HEAD (mirrors production), not a
+	// stale LastCommitSha field.
+	attachPRFixWorkSession(t, storage, repo, item, "unmerged-work-session", repoPath, repoPath, "feature")
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
@@ -213,7 +210,6 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
 	runGitTestCmd(t, repoPath, "add", "feature.txt")
 	runGitTestCmd(t, repoPath, "commit", "-m", "work behind an open, conflicted PR")
-	unshippedSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -236,13 +232,10 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "unmerged-work-session",
-		SessionRole: session.SessionRoleWork,
-	})
-	require.NoError(t, err)
-	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, unshippedSHA, "work behind an open, conflicted PR", time.Now(), 1))
+	// repoPath is checked out on "feature" right now (the unshipped commit) —
+	// use it as the work session's own worktree path so isCodeShippedToMain
+	// resolves the commit from its live HEAD, not a stale LastCommitSha field.
+	attachPRFixWorkSession(t, storage, repo, item, "unmerged-work-session", repoPath, repoPath, "feature")
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
@@ -255,6 +248,81 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
 		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
+}
+
+// TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed
+// is the direct regression test for the 2026-07-21 false-done bug found via the
+// archived-items audit: ItemSession.LastCommitSha is only ever seeded once at
+// session spawn with the pre-work base SHA (UpdateItemSessionGitActivity's
+// callers all pass baseSHA — see resolveLatestWorkCommit's doc comment) and
+// never updated as the agent commits real work. A base SHA is, by
+// construction, always an ancestor of main, so trusting LastCommitSha as "the
+// agent's latest commit" made isCodeShippedToMain trivially true regardless
+// of whether real work ever shipped — confirmed live: archived items
+// 693c2700, 61684863, and 40cf8885 were all approved as "shipped" by this
+// gate despite having real, unmerged work and no PR ever opened. This test
+// sets LastCommitSha to the shipped mainSHA (the stale-but-plausible value
+// spawn seeding actually produces) while the work session's real worktree
+// HEAD sits on an unshipped "feature" commit, and asserts the item is still
+// correctly blocked from reaching done.
+func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed(t *testing.T) {
+	originDir, repoPath := setupPRFixSyncRepo(t)
+	mainSHA := strings.TrimSpace(runGitTestCmd(t, originDir, "rev-parse", "HEAD"))
+
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a stale shipped-looking LastCommitSha",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// A PASS review verdict, so the failure below is unambiguously the
+	// code-on-main gate, not the separate verdict-required gate.
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	// repoPath is checked out on "feature" right now (the unshipped commit) —
+	// use it as the work session's own worktree path.
+	attachPRFixWorkSession(t, storage, repo, item, "stale-base-seed-work-session", repoPath, repoPath, "feature")
+
+	// Exactly what real spawn-time seeding writes: the base SHA (here,
+	// mainSHA itself — always shipped), not the agent's actual latest commit.
+	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, err)
+	var workSessionID string
+	for _, is := range sessions {
+		if is.Role == string(session.SessionRoleWork) {
+			workSessionID = is.ID
+		}
+	}
+	require.NotEmpty(t, workSessionID, "expected a work-role session to exist")
+	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), workSessionID, mainSHA, "", time.Now(), 0))
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "done",
+	}))
+	require.Error(t, err, "a stale base-seeded LastCommitSha that happens to be on main must NOT be trusted as proof of shipped work")
+	assert.Contains(t, err.Error(), "must actually be on main")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+		"the item must stay in review based on the worktree's real HEAD, not the stale LastCommitSha")
 }
 
 // ─── work-session archival on terminal transition (backlog session accumulation bug) ──
@@ -424,7 +492,6 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
 	runGitTestCmd(t, repoPath, "add", "feature.txt")
 	runGitTestCmd(t, repoPath, "commit", "-m", "work that never actually merged")
-	unshippedSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -436,13 +503,10 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 	})
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "work-session-uuid",
-		SessionRole: session.SessionRoleWork,
-	})
-	require.NoError(t, err)
-	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), workIS.ID, unshippedSHA, "work that never actually merged", time.Now(), 1))
+	// repoPath is checked out on "feature" right now (the unshipped commit) —
+	// use it as the work session's own worktree path so isCodeShippedToMain
+	// resolves the commit from its live HEAD, not a stale LastCommitSha field.
+	attachPRFixWorkSession(t, storage, repo, item, "work-session-uuid", repoPath, repoPath, "feature")
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,

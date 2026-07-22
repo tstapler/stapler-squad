@@ -17,6 +17,7 @@ const (
 	BacklogStatusIdea       = domain.BacklogStatusIdea
 	BacklogStatusRefining   = domain.BacklogStatusRefining
 	BacklogStatusReady      = domain.BacklogStatusReady
+	BacklogStatusQueued     = domain.BacklogStatusQueued
 	BacklogStatusInProgress = domain.BacklogStatusInProgress
 	BacklogStatusReview     = domain.BacklogStatusReview
 	BacklogStatusPRPending  = domain.BacklogStatusPRPending
