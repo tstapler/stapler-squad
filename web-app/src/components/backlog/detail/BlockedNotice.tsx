@@ -48,9 +48,26 @@ export interface BlockedNoticeProps {
  * not a scrolling transcript — no raw transcript exists for these DB-only
  * rows (plan.md's "Structured Diagnostic" glossary entry).
  *
- * Text is rendered verbatim from the backend, per Story 4.1.1's confirmed
- * security review of RunPreGateSecurityCheck's error string (plan.md's
- * Unresolved Question #1).
+ * Text is rendered verbatim from the backend. `session.reviewVerdict.summary`
+ * for a "blocked_guardrail" kind comes from exactly two backend code paths
+ * (see classifySessionKind in sessionKind.ts, and session/review_gate.go):
+ *
+ *  - "review-blocked-*": built from RunPreGateSecurityCheck's error string
+ *    (session/review_gate.go ~line 228). Confirmed safe by Story 4.1.1's
+ *    security review (plan.md's Unresolved Question #1) and covered by
+ *    TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff
+ *    in session/backlog_review_test.go — the error string only ever contains
+ *    a fixed pattern name, never the matched secret or diff content.
+ *  - "diff-error-*": built from GetGitDiffRef's wrapped command error
+ *    (session/review_gate.go ~line 191, session/backlog_review.go's
+ *    GetGitDiffRef). Currently benign — the wrapped error is `exec.Cmd`'s
+ *    own Error() string (e.g. "exit status 128") plus the range arg and
+ *    directory path, never command stderr or diff content, per
+ *    TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails
+ *    in session/backlog_review_test.go. This path has NOT had the same
+ *    security review as RunPreGateSecurityCheck — if GetGitDiffRef's error
+ *    wrapping is ever changed to include cmd.Stderr, that regression test
+ *    is what would catch it before it reaches this UI surface.
  */
 export function BlockedNotice({ kind, session }: BlockedNoticeProps) {
   const config = KIND_CONFIG[kind];

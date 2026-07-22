@@ -596,6 +596,52 @@ func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 	assert.Contains(t, diff, "feature.txt", "GetGitDiffRef with an explicit branch name must find commits on that branch regardless of what's checked out")
 }
 
+// TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails
+// is the automated proof backing backlog-item-detail-ux's PR #208 review
+// finding: BlockedNotice.tsx renders session.reviewVerdict.summary for BOTH
+// "review-blocked-*" sessions (summary built from RunPreGateSecurityCheck,
+// covered by TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff
+// above) AND "diff-error-*" sessions (summary built from GetGitDiffRef's
+// wrapped command error, review_gate.go ~line 191) — but only the former had
+// an explicit regression test. This proves GetGitDiffRef's error
+// (fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)) never embeds
+// the failed git command's stderr or diff content: cmd.Output()'s returned
+// *exec.ExitError.Error() is just the process exit status ("exit status N"),
+// never the process's stderr, even though the stderr text itself (asserted
+// below) does contain revision/path detail that must never reach the UI.
+func TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644))
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	// deadbeef..nonexistent-branch is guaranteed to fail to resolve, producing
+	// a real git stderr message ("fatal: ambiguous argument ... unknown
+	// revision or path not in the working tree ...") that must not leak into
+	// the wrapped error returned to callers.
+	_, _, err := GetGitDiffRef(context.Background(), repo, "deadbeef", "nonexistent-branch")
+	require.Error(t, err)
+
+	errText := fmt.Sprintf("%v", err)
+	assert.Contains(t, errText, "git diff deadbeef..nonexistent-branch in "+repo,
+		"wrapped error must contain only the range arg and directory — no command output")
+	assert.NotContains(t, errText, "fatal:",
+		"wrapped error must never embed the underlying git command's stderr")
+	assert.NotContains(t, errText, "ambiguous argument",
+		"wrapped error must never embed the underlying git command's stderr text")
+
+	// Reproduces review_gate.go:189-190's exact Sprintf call that surfaces
+	// this text to the UI as a diff-error-* session's reviewVerdict.summary,
+	// to prove the leak-check holds at the actual consuming call site too.
+	summary := fmt.Sprintf("Review blocked: could not compute a diff for this session (%v). "+
+		"The recorded base commit may be missing or corrupted — this needs investigation, not rework.", err)
+	assert.NotContains(t, summary, "fatal:")
+	assert.NotContains(t, summary, "ambiguous argument")
+}
+
 // ─── BuildReviewCallOptions ─────────────────────────────────────────────────
 
 // TestBuildReviewCallOptions_EmptyDiff_ReturnsCodebaseAccessOptionsAndShortTimeout
