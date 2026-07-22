@@ -57,16 +57,8 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	}
 
 	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.Error("failed to commit changes", "err", err)
-			return fmt.Errorf("failed to commit changes: %w", err)
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
@@ -118,21 +110,77 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	}
 
 	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit (local only)
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.Error("failed to commit changes", "err", err)
-			return fmt.Errorf("failed to commit changes: %w", err)
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
 
 	return nil
+}
+
+// stageAndCommit stages all changes (minus scaffolding), then commits — unless
+// the only staged change was a scaffolding file that staging just untracked, in
+// which case it skips the commit gracefully instead of failing on git's
+// "nothing to commit". Shared by CommitChanges and PushChanges, whose stage/
+// commit sequence is otherwise identical.
+func (g *GitWorktree) stageAndCommit(commitMessage string) error {
+	if err := g.StageAllExceptScaffolding(); err != nil {
+		log.Error("failed to stage changes", "err", err)
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	hasStaged, err := g.HasStagedChanges()
+	if err != nil {
+		log.Error("failed to check staged changes", "err", err)
+		return fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	if !hasStaged {
+		return nil
+	}
+
+	if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+		log.Error("failed to commit changes", "err", err)
+		return fmt.Errorf("failed to commit changes: %w", err)
+	}
+	return nil
+}
+
+// StageAllExceptScaffolding stages all worktree changes (`git add .`) and then
+// untracks any staged path matching ScaffoldingExcludePatterns, so backlog
+// automation scaffolding files (.backlog-context.md, .claude/commands/backlog/*)
+// don't get (re)committed even if they were already tracked in this branch's
+// history — gitignore/info-exclude rules only stop a NEW path from being
+// staged, not one that's already in the index (see UntrackScaffolding's doc
+// comment). Deliberately fails open on the untrack step (logs and continues
+// rather than blocking a real commit) — the CI backstop workflow
+// (.github/workflows/backlog-scaffolding-guard.yml) is the second, independent
+// layer for the rare case where the untrack step itself errors.
+func (g *GitWorktree) StageAllExceptScaffolding() error {
+	if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	removed, err := UntrackScaffolding(g.worktreePath, ScaffoldingExcludePatterns)
+	if err != nil {
+		log.Error("failed to untrack scaffolding files before commit", "worktree", g.worktreePath, "err", err)
+	} else if len(removed) > 0 {
+		log.Info("untracked scaffolding file(s) before commit", "worktree", g.worktreePath, "files", removed)
+	}
+	return nil
+}
+
+// HasStagedChanges reports whether the git index differs from HEAD — i.e.
+// whether a commit right now would actually record anything. Used after
+// StageAllExceptScaffolding so a commit whose only staged change was a
+// just-untracked scaffolding file is skipped gracefully instead of failing on
+// "nothing to commit".
+func (g *GitWorktree) HasStagedChanges() (bool, error) {
+	out, err := g.runGitCommand(g.worktreePath, "diff", "--cached", "--name-only")
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.

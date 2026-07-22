@@ -2686,3 +2686,57 @@ func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_
 	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
 	assert.Equal(t, 1, fetched.ShippedApprovedCount)
 }
+
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged is the call-site
+// regression test for wiring CleanupBacklogContextFile/CleanupSlashCommands into
+// production: previously these functions had zero call sites. Once an item's
+// last work session's worktree is known and its PR merges, ReconcilePRPending
+// must remove the leftover .backlog-context.md and .claude/commands/backlog/
+// scaffolding from that worktree — ship.md's "must still exist" constraint
+// (see CleanupSlashCommands' doc comment) no longer applies once the PR is
+// merged and the item has reached done.
+func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9010)
+
+	worktreePath := t.TempDir()
+	contextPath := filepath.Join(worktreePath, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+
+	inst := newTestInstance("pr-pending-worktree")
+	inst.UUID = uuid.New().String()
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: true,
+		status: &git.PRStatus{ApprovedCount: 1},
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+
+	_, statErr := os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up once the item reaches done")
+	_, statErr = os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command files must be cleaned up once the item reaches done")
+}

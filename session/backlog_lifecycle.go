@@ -3157,6 +3157,21 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				// immediately (Task 2.1.5a) rather than waiting for the
 				// self-heal sweep's next tick.
 				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
+				// The PR is merged, so ship.md's "must still exist for a
+				// possible one-shot /backlog/ship re-invocation" constraint
+				// (see CleanupSlashCommands' doc comment) no longer applies —
+				// this is the first point in the lifecycle where scaffolding
+				// cleanup is safe. Best-effort: the worktree directory is
+				// often already gone by now (Instance.Kill/Pause deletes it
+				// independently), in which case these are no-ops.
+				if wt != nil && wt.WorktreePath != "" {
+					if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)
+					}
+					if cleanupErr := CleanupSlashCommands(wt.WorktreePath); cleanupErr != nil {
+						log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending CleanupSlashCommands item=%s: %v", item.ID, cleanupErr)
+					}
+				}
 			}
 			continue
 		}
