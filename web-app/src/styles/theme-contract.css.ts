@@ -67,6 +67,10 @@ export const vars = createThemeContract({
     terminalTextMuted: null,
     terminalHoverBg: null,
 
+    // Header (always dark backdrop — same value in every theme, mirrors Terminal above)
+    headerTextPrimary: null,
+    headerTextSecondary: null,
+
     // Log level badge colors (semantic colors for log-level chips/rows)
     logError: null,   // ERROR badge background
     logWarn: null,    // WARN badge background

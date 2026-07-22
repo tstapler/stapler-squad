@@ -247,6 +247,13 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.PipelineMode != nil {
 		update.PipelineMode = req.Msg.PipelineMode
 	}
+	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
+	// only set when the client explicitly sent it, so an omitted field never
+	// clobbers the item's existing override back to "unlimited" (0).
+	if req.Msg.ReworkCapOverride != nil {
+		override := int(*req.Msg.ReworkCapOverride)
+		update.ReworkCapOverride = &override
+	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes
 		update.Notes = &notes
@@ -472,10 +479,15 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 
-	// Best-effort: clean up git worktrees for work sessions on terminal transitions.
+	// Best-effort: clean up git worktrees and archive work sessions on terminal
+	// transitions, so they stop accumulating in the default session list once
+	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
+	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
+	// sessions which it originally excluded).
 	if to == session.BacklogStatusDone || to == session.BacklogStatusArchived {
 		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 			s.cleanupItemWorktrees(ctx, sessions)
+			s.archiveItemWorkSessions(ctx, sessions)
 		}
 	}
 

@@ -27,6 +27,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     acCriteria: [{ text: "Do the thing", status: "todo" } as never],
     linkedSessions: [],
     statusEvents: [],
+    progressNotes: [],
     totalEstimatedCostUsd: 0,
     ...overrides,
   };

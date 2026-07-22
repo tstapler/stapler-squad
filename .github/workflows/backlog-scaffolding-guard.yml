@@ -1,0 +1,64 @@
+name: Backlog Scaffolding Guard
+
+# Hard CI backstop for the chronic ".backlog-context.md / .claude/commands/backlog/ keeps
+# getting committed" bug. session/backlog_commands.go writes these files into every backlog
+# work-session worktree and self-heals (untracks) them on every spawn/reattach — but that
+# self-heal only runs when stapler-squad itself spawns a session. This workflow is the
+# structural, can't-be-skipped backstop for stapler-squad's OWN repo: it fails any PR whose
+# diff adds or modifies a file matching backlogExcludePatterns
+# (session/backlog_commands.go), regardless of how it got there (manual commit, a stray
+# `git add -A`/`git commit -a` in a session, a merge, etc).
+#
+# Scope note: this protects stapler-squad's own repo only. It intentionally does NOT (and
+# structurally cannot, from here) protect the arbitrary *target* repos backlog items point
+# at — stapler-squad has no mechanism to impose new CI checks on repos it doesn't own. The
+# self-healing untrack in WriteBacklogContextFile/WriteSlashCommands is the primary defense
+# for those; this workflow is a second, independent layer for this repo specifically.
+#
+# Keep the grep pattern below in sync with backlogExcludePatterns in
+# session/backlog_commands.go if that list ever changes.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  guard:
+    name: no-backlog-scaffolding-in-diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check PR diff for backlog scaffolding files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No changed files detected"
+            exit 0
+          fi
+
+          # Mirrors backlogExcludePatterns in session/backlog_commands.go.
+          MATCHES=$(echo "$CHANGED" | grep -E '(^|/)\.backlog-context\.md$|^\.claude/commands/backlog/|^web-app/\.next/' || true)
+
+          if [ -n "$MATCHES" ]; then
+            echo "::error::This PR commits backlog scaffolding file(s) that must never be tracked:"
+            echo "$MATCHES"
+            echo ""
+            echo "These files are written into work-session worktrees at runtime by"
+            echo "session/backlog_commands.go (WriteBacklogContextFile / WriteSlashCommands)"
+            echo "and must stay untracked — see backlogExcludePatterns in that file."
+            echo ""
+            echo "Fix: git rm --cached <file> for each path above, commit, and re-push."
+            echo "If this keeps recurring, the self-heal in WriteBacklogContextFile/"
+            echo "WriteSlashCommands (session/backlog_commands.go) should already have"
+            echo "prevented it on the next session spawn — file a bug if it didn't."
+            exit 1
+          fi
+
+          echo "No backlog scaffolding files in diff — OK"

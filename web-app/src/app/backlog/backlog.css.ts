@@ -130,6 +130,36 @@ export const searchInput = style({
   },
 });
 
+export const groupByLabel = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  marginLeft: "auto",
+});
+
+export const showArchivedLabel = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
+export const groupBySelect = style({
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontFamily: vars.font.sans,
+  cursor: "pointer",
+});
+
 export const filterChipGroup = style({
   display: "flex",
   gap: vars.space["1"],
@@ -255,6 +285,29 @@ export const acProgressCell = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   whiteSpace: "nowrap",
+});
+
+export const repoPathCell = style({
+  maxWidth: "240px",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: vars.color.textSecondary,
+  fontFamily: vars.font.mono,
+  fontSize: vars.fontSize.xs,
+});
+
+export const groupHeaderCell = style({
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  fontFamily: vars.font.mono,
+  background: vars.color.surfaceMuted,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  borderTop: `1px solid ${vars.color.borderColor}`,
 });
 
 export const emptyState = style({

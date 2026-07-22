@@ -363,6 +363,17 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 		assertWarnLogContainsUnresolved(t, buf.String(), item.ID, "deleted-mode")
 	})
 
+	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
+		buf := swapWarningLog(t)
+
+		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
+		want := BuildReviewPrompt(item, nil, "diff content", false, "review-session-id", "notes")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		assertWarnLogContainsUnresolved(t, buf.String(), item.ID, "deleted-mode")
+	})
+
 	t.Run("InitialPromptFor", func(t *testing.T) {
 		buf := swapWarningLog(t)
 
@@ -522,6 +533,45 @@ func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_M
 	wantHelp := "help for abc-123, 2 criteria, unknown={{made_up_placeholder}}"
 	if got["help.md"] != wantHelp {
 		t.Errorf("help.md = %q, want %q", got["help.md"], wantHelp)
+	}
+}
+
+// TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTemplate_When_ModeResolves
+// is the regression guard for the "custom PipelineMode's ReviewPromptTemplate
+// silently does nothing for the automatic review gate" gap: it proves a
+// resolved custom mode's ReviewPromptTemplate is rendered (with the same
+// placeholders + criteria_count ReviewPromptFor uses), not the hardcoded
+// BuildReviewPrompt content.
+func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTemplate_When_ModeResolves(t *testing.T) {
+	repo := &fakePipelineModeRepository{
+		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+			return []*ent.PipelineMode{{
+				Slug:                 "quick",
+				Name:                 "Quick Fix",
+				ReviewPromptTemplate: "custom review for {{item_id}}: {{item_title}} ({{criteria_count}} criteria)",
+			}}, nil
+		},
+	}
+	cache := &pipelineModeCache{}
+	if err := cache.Load(context.Background(), repo); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	engine := &CachingPipelineEngine{repo: repo, cache: cache}
+
+	item := &BacklogItemData{
+		ID:           "abc-123",
+		Title:        "Fix bug",
+		PipelineMode: "quick",
+	}
+	acSnapshot := []AcCriterion{{Index: 0, Text: "first"}, {Index: 1, Text: "second"}}
+
+	got := engine.InteractiveReviewPromptFor(item, acSnapshot, "diff content", false, "review-session-id", "notes")
+	want := "custom review for abc-123: Fix bug (2 criteria)"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "submit_review_verdict") {
+		t.Fatalf("resolved custom mode must render ReviewPromptTemplate verbatim, not fall back to BuildReviewPrompt's tool-call instructions: %q", got)
 	}
 }
 

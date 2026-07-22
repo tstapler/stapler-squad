@@ -110,3 +110,26 @@ export const errorText = style({
   color: vars.color.errorText,
   fontSize: vars.fontSize.sm,
 });
+
+export const suggestions = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space[1],
+  marginTop: vars.space[1],
+});
+
+export const suggestionChip = style({
+  backgroundColor: vars.color.hoverBackground,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.full,
+  padding: `${vars.space[1]} ${vars.space[3]}`,
+  fontSize: vars.fontSize.sm,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      backgroundColor: vars.color.primary,
+      color: vars.color.primaryText,
+    },
+  },
+});

@@ -136,6 +136,7 @@ var (
 		{Name: "shipped_snapshot_at", Type: field.TypeTime, Nullable: true},
 		{Name: "shipped_file_stats", Type: field.TypeString, Nullable: true},
 		{Name: "shipped_snapshot_capture_failed", Type: field.TypeBool, Nullable: true, Default: false},
+		{Name: "rework_cap_override", Type: field.TypeInt, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 		{Name: "item_source_backlog_items", Type: field.TypeUUID, Nullable: true},
@@ -148,7 +149,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[32]},
+				Columns:    []*schema.Column{BacklogItemsColumns[33]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -162,7 +163,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[31]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[32]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -252,6 +253,9 @@ var (
 		{Name: "resolved_at", Type: field.TypeTime, Nullable: true},
 		{Name: "snoozed_until", Type: field.TypeTime, Nullable: true},
 		{Name: "context", Type: field.TypeString, Nullable: true},
+		{Name: "remediation_attempts", Type: field.TypeInt32, Default: 0},
+		{Name: "next_remediation_at", Type: field.TypeTime, Nullable: true},
+		{Name: "grace_boot_time", Type: field.TypeTime, Nullable: true},
 		{Name: "item_id", Type: field.TypeUUID},
 	}
 	// BacklogStuckStatesTable holds the schema information for the "backlog_stuck_states" table.
@@ -262,7 +266,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_stuck_states_backlog_items_stuck_states",
-				Columns:    []*schema.Column{BacklogStuckStatesColumns[8]},
+				Columns:    []*schema.Column{BacklogStuckStatesColumns[11]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -271,7 +275,7 @@ var (
 			{
 				Name:    "backlogstuckstate_item_id_reason",
 				Unique:  true,
-				Columns: []*schema.Column{BacklogStuckStatesColumns[8], BacklogStuckStatesColumns[1]},
+				Columns: []*schema.Column{BacklogStuckStatesColumns[11], BacklogStuckStatesColumns[1]},
 			},
 		},
 	}

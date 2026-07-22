@@ -52,6 +52,29 @@ func TestBuildSessionInitialPrompt_ContainsTaskProtocolBlock(t *testing.T) {
 	}
 }
 
+// TestBuildSessionInitialPrompt_ContainsShipEscapeHatch verifies the task
+// protocol block gives the agent an explicit, bounded instruction to run
+// /backlog/ship both on a PASS verdict and after MaxSameSessionReviewAttempts
+// review cycles without one — closing the gap where the original protocol told
+// agents to loop on /backlog/review forever with no escape hatch and never
+// mentioned /backlog/ship (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20).
+func TestBuildSessionInitialPrompt_ContainsShipEscapeHatch(t *testing.T) {
+	ac := `[{"index":0,"text":"Write unit tests","status":"pending"}]`
+	item := makeTestBacklogItem("My Feature", "Do the thing", ac, "ready", 1, "")
+
+	out := BuildSessionInitialPrompt(item, nil)
+
+	cases := []string{
+		"/backlog/ship",
+		fmt.Sprintf("%d review cycles", MaxSameSessionReviewAttempts),
+	}
+	for _, want := range cases {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected output to contain %q, but it did not.\nOutput:\n%s", want, out)
+		}
+	}
+}
+
 // UT-038b: prior sessions with ended_at → "Prior Attempts" section; without → absent.
 func TestBuildSessionInitialPrompt_WithPriorAttempts_ContainsHandoffSection(t *testing.T) {
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`

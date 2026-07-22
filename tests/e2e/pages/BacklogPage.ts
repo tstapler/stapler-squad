@@ -60,6 +60,30 @@ export class BacklogPage {
     return this.page.locator('[data-testid="backlog-table-row"]');
   }
 
+  // ---------------------------------------------------------------------------
+  // Sort / group by repository
+  // ---------------------------------------------------------------------------
+
+  getRepositoryColumnHeader(): Locator {
+    return this.page.locator('[data-testid="backlog-col-repo-path"]');
+  }
+
+  getGroupBySelect(): Locator {
+    return this.page.locator('[data-testid="backlog-group-by-select"]');
+  }
+
+  async selectGroupBy(value: 'none' | 'repoPath') {
+    await this.getGroupBySelect().selectOption(value);
+  }
+
+  getGroupHeaders(): Locator {
+    return this.page.locator('[data-testid="backlog-group-header"]');
+  }
+
+  async getRowRepoPaths(): Promise<string[]> {
+    return this.getTableRows().locator('[data-testid="backlog-repo-path-cell"]').allTextContents();
+  }
+
   async openEmptyStateForm() {
     await this.emptyCtaButton.click();
     await this.page.waitForSelector('[data-testid="backlog-empty-form"]', { timeout: 5000 });

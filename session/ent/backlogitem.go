@@ -77,6 +77,8 @@ type BacklogItem struct {
 	ShippedFileStats string `json:"shipped_file_stats,omitempty"`
 	// true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values
 	ShippedSnapshotCaptureFailed bool `json:"shipped_snapshot_capture_failed,omitempty"`
+	// Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value.
+	ReworkCapOverride *int `json:"rework_cap_override,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -170,7 +172,7 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed:
 			values[i] = new(sql.NullBool)
-		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount:
+		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
 			values[i] = new(sql.NullInt64)
 		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
@@ -380,6 +382,13 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ShippedSnapshotCaptureFailed = value.Bool
 			}
+		case backlogitem.FieldReworkCapOverride:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field rework_cap_override", values[i])
+			} else if value.Valid {
+				_m.ReworkCapOverride = new(int)
+				*_m.ReworkCapOverride = int(value.Int64)
+			}
 		case backlogitem.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -561,6 +570,11 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("shipped_snapshot_capture_failed=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ShippedSnapshotCaptureFailed))
+	builder.WriteString(", ")
+	if v := _m.ReworkCapOverride; v != nil {
+		builder.WriteString("rework_cap_override=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

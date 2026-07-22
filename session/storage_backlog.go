@@ -560,6 +560,51 @@ func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogI
 	return items, nil
 }
 
+// FindDriftedPRItems returns backlog items with a live PR reference (a
+// non-zero pr_number and non-empty pr_url) whose status is neither
+// "pr_pending" nor a terminal state (done/archived) — i.e. items that
+// ReconcilePRPending's FindPRPendingItems can never see because it anchors
+// purely on status=="pr_pending", even though the item demonstrably has a
+// real PR that needs the same merge/CI polling. This happens when
+// pushAndCreatePR/shipViaAgentOrFallback persist prNumber/prUrl (which they
+// do unconditionally, before attempting the status transition) but the
+// follow-up CAS transition to pr_pending then loses a race to some other
+// legitimate concurrent event — e.g. markAbandonedReview's grace period
+// firing and respawning a review pass while an agent-driven ship is still
+// mid-flight, or a rework/bounce cycle that exhausts its cap before ever
+// re-shipping. Confirmed live 2026-07-20 on two items (c2ad7bf3-91bf-4d47-
+// 8654-0f2f20869080, PR #251; 6700a3f2-8c0d-4a98-8bbd-39515d5391b1, PR #172)
+// stuck at status="review" with real, still-open PRs neither
+// ReconcilePRPending nor any other reconciler was polling.
+//
+// Excludes items with an active (EndedAt still nil) work or review session:
+// recovery must never steal an item out from under a live, still-legitimately
+// -running session — mirrors AutoReopenForPRFix's/AutoRespawnReview's
+// identical hasActiveWorkSession/hasActiveReviewSession guard. An item with a
+// genuinely active session will naturally reappear in this query once that
+// session ends without making further progress.
+func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(
+			backlogitem.PrNumberGT(0),
+			backlogitem.PrURLNEQ(""),
+			backlogitem.StatusNotIn(
+				string(BacklogStatusPRPending),
+				string(BacklogStatusDone),
+				string(BacklogStatusArchived),
+			),
+			backlogitem.Not(backlogitem.HasItemSessionsWith(
+				itemsession.EndedAtIsNil(),
+				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
+			)),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query drifted PR items: %w", err)
+	}
+	return items, nil
+}
+
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
 // e.g. "https://github.com/owner/repo/pull/148" -> 148.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
@@ -611,17 +656,20 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // boundary — callers never need to re-check ResolvedAt/SnoozedUntil
 // nullability themselves (parse-don't-validate at the repository boundary).
 type OpenStuckStateData struct {
-	ID              string
-	ItemID          string
-	Reason          domain.StuckReason
-	FirstDetectedAt time.Time
-	LastCheckedAt   time.Time
-	NotifiedAt      *time.Time
-	Context         string
-	ItemTitle       string
-	ItemStatus      BacklogStatus
-	PrNumber        int
-	PrURL           string
+	ID                  string
+	ItemID              string
+	Reason              domain.StuckReason
+	FirstDetectedAt     time.Time
+	LastCheckedAt       time.Time
+	NotifiedAt          *time.Time
+	Context             string
+	ItemTitle           string
+	ItemStatus          BacklogStatus
+	PrNumber            int
+	PrURL               string
+	RemediationAttempts int32
+	NextRemediationAt   *time.Time
+	GraceBootTime       *time.Time
 }
 
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
@@ -648,13 +696,16 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	result := make([]OpenStuckStateData, 0, len(rows))
 	for _, row := range rows {
 		data := OpenStuckStateData{
-			ID:              row.ID.String(),
-			ItemID:          row.ItemID.String(),
-			Reason:          domain.StuckReason(row.Reason),
-			FirstDetectedAt: row.FirstDetectedAt,
-			LastCheckedAt:   row.LastCheckedAt,
-			NotifiedAt:      row.NotifiedAt,
-			Context:         row.Context,
+			ID:                  row.ID.String(),
+			ItemID:              row.ItemID.String(),
+			Reason:              domain.StuckReason(row.Reason),
+			FirstDetectedAt:     row.FirstDetectedAt,
+			LastCheckedAt:       row.LastCheckedAt,
+			NotifiedAt:          row.NotifiedAt,
+			Context:             row.Context,
+			RemediationAttempts: row.RemediationAttempts,
+			NextRemediationAt:   row.NextRemediationAt,
+			GraceBootTime:       row.GraceBootTime,
 		}
 		if item := row.Edges.Item; item != nil {
 			data.ItemTitle = item.Title
@@ -698,6 +749,44 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 		return "", nil
 	}
 	return ReviewOutcome(is.Edges.ReviewVerdict.OverallOutcome), nil
+}
+
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
+// given BacklogItem UUID, most recent first. Reuses the existing
+// ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome and
+// Summary are populated, since that's all callers (IsRepeatedFailure in
+// stuck_decisions.go) need.
+func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	sessions, err := r.client.ItemSession.Query().
+		Where(
+			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
+			itemsession.HasReviewVerdict(),
+		).
+		WithReviewVerdict().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		Limit(limit).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query review verdicts for item %s: %w", itemID, err)
+	}
+
+	result := make([]ReviewVerdictSummary, 0, len(sessions))
+	for _, is := range sessions {
+		if is.Edges.ReviewVerdict == nil {
+			continue
+		}
+		result = append(result, ReviewVerdictSummary{
+			ID:             is.Edges.ReviewVerdict.ID.String(),
+			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
+			Summary:        is.Edges.ReviewVerdict.Summary,
+		})
+	}
+	return result, nil
 }
 
 // --- AC criterion update ---
@@ -771,6 +860,40 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query zombie-candidate review items: %w", err)
+	}
+	return items, nil
+}
+
+// FindReviewItemsWithUnprocessedVerdict returns backlog items in "review" status
+// whose most recent review-role ItemSession already has a terminal ReviewVerdict
+// recorded. Distinct from FindZombieReviewItems: that detector requires EVERY open
+// review-or-work session on the item to be confirmed dead before acting, but
+// AutoReopenAfterFailedReview's live-session-reuse (a work session intentionally
+// stays open polling for the verdict once the item is back in "review" — see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live
+// sessions" finding) means the item never looks like a full zombie even when the
+// review session itself died with its verdict never actioned (handleReviewSessionExited
+// never fired — a server restart or crash mid-exit, the same class of gap as the
+// crash-resilience fixes elsewhere in this package). Each returned item eager-loads
+// its review-role sessions (most recent first) with their ReviewVerdict, so the
+// caller can act on the newest one without a second round-trip.
+func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := r.client.BacklogItem.Query().
+		Where(
+			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.HasItemSessionsWith(
+				itemsession.SessionRole(SessionRoleReview),
+				itemsession.HasReviewVerdict(),
+			),
+		).
+		WithItemSessions(func(q *ent.ItemSessionQuery) {
+			q.Where(itemsession.SessionRole(SessionRoleReview)).
+				WithReviewVerdict().
+				Order(ent.Desc(itemsession.FieldCreatedAt))
+		}).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query review items with unprocessed verdict: %w", err)
 	}
 	return items, nil
 }

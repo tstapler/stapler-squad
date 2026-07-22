@@ -65,6 +65,10 @@ type ServerDependencies struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag. See RuntimeDeps.BacklogEnabledCheck.
+	BacklogEnabledCheck func() bool
+
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
@@ -118,6 +122,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
 		SyncLoop:                rt.SyncLoop,
+		BacklogEnabledCheck:     rt.BacklogEnabledCheck,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
 		VNCDeps:                 rt.VNCDeps,
 		CDPDeps:                 rt.CDPDeps,
@@ -393,6 +398,11 @@ type RuntimeDeps struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 	Config         *config.Config // Used for encryption of sensitive data
+
+	// BacklogEnabledCheck reports the live runtime state of the "backlog" feature
+	// flag (backlogCtrl.IsEnabled). Threaded into the MCP server so backlog/goal
+	// tool calls are gated by the same source of truth as the ConnectRPC interceptor.
+	BacklogEnabledCheck func() bool
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
@@ -823,6 +833,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
+			if err := unfinished.RegisterMetrics(); err != nil {
+				log.Warn("failed to register unfinished OTel metrics", "err", err)
+			}
 
 			// WorktreePRPoller enriches worktrees-without-sessions with GitHub PR data.
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
@@ -944,21 +957,61 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			log.Error("backlog dequeue after global defaults update failed", "err", err)
 		}
 	})
+	// Wire the stale_work remediator so an in_progress item whose work session
+	// has gone quiet (agent finished and is idle at an interactive prompt,
+	// rather than crashed — TmuxAlive/PaneProcessDead both report healthy, so
+	// the generic tmux health check never catches this) gets its stale session
+	// closed out and a fresh one respawned instead of sitting stuck forever
+	// (see StaleWorkRemediator's doc comment in session/backlog_lifecycle.go).
+	backlogLifecycleListener.SetStaleWorkRemediator(backlogSvc)
+	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so
+	// it can soft-archive work sessions for items already done/archived — reuses
+	// sessionService's ArchiveSessionByUUID, the same method BacklogService's
+	// SessionStopper uses for the transition-hook/rework-respawn archival paths.
+	backlogLifecycleListener.SetSessionArchiver(sessionService)
+	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
+	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
+	// already exited ships via a headless one-shot /backlog/ship run (CI
+	// reaction, merge-conflict resolution) instead of going straight to the
+	// mechanical pushAndCreatePR backstop. sessionService already satisfies
+	// OneShotShipRunner via RunOneShotForSession — same method
+	// services.PRRunner requires for TriggerShipPR's manual "Ship PR" button
+	// just above.
+	backlogLifecycleListener.SetOneShotShipRunner(sessionService)
+	// Wire the autonomous-stuck respawner so a work session that hits its turn
+	// cap without a DONE signal gets a fresh turn budget directly instead of
+	// being forced into a doomed review cycle (see AutonomousStuckRespawner's
+	// doc comment in autonomous_orchestration_service.go).
+	sessionService.SetAutonomousStuckRespawner(backlogSvc)
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
 	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not
 	// tracked live) is treated as "not alive" — the whole point of this check
 	// is to catch sessions whose DB row looks active but whose process is gone.
+	//
+	// Prefer the already-live in-memory instance (tracked by ReviewQueuePoller,
+	// which every backlog-spawned session — review-gate and work/rework alike —
+	// registers with via CreateDirectorySession/CreateWorktreeSession) over
+	// registry.WithInstance. Backlog-spawned sessions are never Registry.Register()'d
+	// (only the main CreateSession RPC path does that), so registry.WithInstance's
+	// Acquire falls through to its "construct fresh" branch on every call:
+	// newLiveInstance -> FromInstanceData synchronously calls instance.Start(false)
+	// as a side effect of merely constructing an Active-status Instance (see
+	// fromInstanceData's Active branch), and WithInstance's deferred release() tears
+	// the throwaway instance back down the moment this closure returns. Because this
+	// checker runs on every 60s ReconcileStuck tick for every review-status item's
+	// linked sessions, that reconstruct-Start-teardown cycle repeated forever,
+	// spawning and killing a redundant tmux attach-session PTY client against the
+	// SAME tmux pane the real, already-wired review session's own controller was
+	// using — confirmed live 2026-07-20 (item 93565fa1) as the actual cause of a
+	// review-gate session whose controller never made progress. TmuxSessionExists()
+	// is a pure tmux-existence probe that works on the real, already-started
+	// instance with no reconstruction needed, so checking it there avoids the churn
+	// entirely. Fall back to the heavier Registry path only when no live instance is
+	// tracked (e.g. immediately after a restart, before the poller reloads it).
 	if svc.Registry != nil {
-		registry := svc.Registry
-		backlogLifecycleListener.SetSessionLivenessChecker(func(sessionUUID string) bool {
-			alive := false
-			_ = registry.WithInstance(context.Background(), sessionUUID, func(li *session.LiveInstance) error {
-				alive = li.TmuxSessionExists()
-				return nil
-			})
-			return alive
-		})
+		backlogLifecycleListener.SetSessionLivenessChecker(
+			newSessionLivenessChecker(sessionService.FindLiveInstance, svc.Registry))
 	}
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
 	sessionService.SetReviewGateTrigger(backlogLifecycleListener)
@@ -1100,6 +1153,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
 		SyncLoop:                nil, // managed by BacklogController
+		BacklogEnabledCheck:     backlogCtrl.IsEnabled,
 		Config:                  cfg,
 		AnalyticsEntClient:      analyticsClient,
 		VNCDeps:                 vncDeps,
@@ -1108,6 +1162,55 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		WorkflowScheduler:       workflowScheduler,
 		Registry:                svc.Registry,
 	}, nil
+}
+
+// registryInstanceChecker is the narrow slice of *session.Registry that
+// newSessionLivenessChecker's fallback path needs — defined here (the consuming
+// package) rather than in session, per this repo's interface-pollution convention,
+// so a fake with no real *session.Storage can stand in for tests.
+type registryInstanceChecker interface {
+	WithInstance(ctx context.Context, sessionID string, fn func(*session.LiveInstance) error) error
+}
+
+// newSessionLivenessChecker builds the func(sessionUUID string) bool wired onto
+// BacklogLifecycleListener.SetSessionLivenessChecker (see the call site in
+// BuildRuntimeDeps for the full history/rationale).
+//
+// findLive should be SessionService.FindLiveInstance: it returns the session's
+// already-live, already-wired *session.Instance when one is tracked by
+// ReviewQueuePoller — which every backlog-spawned session (review-gate, work,
+// rework, triage) registers with at creation via CreateDirectorySession /
+// CreateWorktreeSession. Checking TmuxSessionExists() directly on that instance
+// answers the liveness question with zero side effects.
+//
+// registry is consulted only when findLive returns nil (no live instance is
+// currently tracked — e.g. immediately after a server restart, before the
+// startup reconciliation loop reloads it). That path goes through
+// registry.WithInstance/Acquire, which — for backlog-spawned sessions, never
+// Registry.Register()'d — reconstructs a fresh *session.Instance from storage on
+// every call (session.FromInstanceData synchronously calls Instance.Start() for
+// an Active-status session as a side effect of construction) and tears it back
+// down the moment the callback returns. Left as the unconditional path (as it
+// was before this fix), that reconstruct-Start-teardown cycle ran on every 60s
+// ReconcileStuck tick for every review-status item's linked sessions, spawning
+// and killing a redundant tmux attach-session PTY client against the same pane
+// the real, already-wired session's own controller was using — confirmed live
+// 2026-07-20 (backlog item 93565fa1) as the actual reason a review-gate
+// session's controller never made progress, despite the session having been
+// correctly started and wired (Start + SetStatusManager + StartController) at
+// spawn time in SpawnReviewSession → CreateDirectorySession.
+func newSessionLivenessChecker(findLive func(sessionUUID string) *session.Instance, registry registryInstanceChecker) func(sessionUUID string) bool {
+	return func(sessionUUID string) bool {
+		if live := findLive(sessionUUID); live != nil {
+			return live.TmuxSessionExists()
+		}
+		alive := false
+		_ = registry.WithInstance(context.Background(), sessionUUID, func(li *session.LiveInstance) error {
+			alive = li.TmuxSessionExists()
+			return nil
+		})
+		return alive
+	}
 }
 
 // prNumFromTitle extracts a PR number from a session title following the

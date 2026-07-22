@@ -18,8 +18,16 @@ func (n *EventBusNotifier) Notify(itemID, title, message string, notificationTyp
 	if n == nil || n.Bus == nil {
 		return
 	}
+	// itemID is threaded through as the event's sessionID (not just stuffed into
+	// metadata) so the notification subscriber's coalescing key
+	// (sessionID:notificationType, see server/notifications/subscriber.go) differentiates
+	// between different backlog items. Leaving sessionID empty made every same-type
+	// notification for every item share one coalescing bucket, so two different items'
+	// same-type notifications landing in the same 500ms window silently clobbered each
+	// other in the persisted history (the live toast still fired — only the durable
+	// record was lost).
 	n.Bus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		notificationType, priority,
 		title, message,
 		map[string]string{"item_id": itemID},

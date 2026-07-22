@@ -144,6 +144,15 @@ const (
 	// BacklogServiceSnoozeStuckItemProcedure is the fully-qualified name of the BacklogService's
 	// SnoozeStuckItem RPC.
 	BacklogServiceSnoozeStuckItemProcedure = "/session.v1.BacklogService/SnoozeStuckItem"
+	// BacklogServiceResetStuckRemediationProcedure is the fully-qualified name of the BacklogService's
+	// ResetStuckRemediation RPC.
+	BacklogServiceResetStuckRemediationProcedure = "/session.v1.BacklogService/ResetStuckRemediation"
+	// BacklogServiceBulkResetStuckRemediationProcedure is the fully-qualified name of the
+	// BacklogService's BulkResetStuckRemediation RPC.
+	BacklogServiceBulkResetStuckRemediationProcedure = "/session.v1.BacklogService/BulkResetStuckRemediation"
+	// BacklogServiceTriggerRemediationNowProcedure is the fully-qualified name of the BacklogService's
+	// TriggerRemediationNow RPC.
+	BacklogServiceTriggerRemediationNowProcedure = "/session.v1.BacklogService/TriggerRemediationNow"
 )
 
 // BacklogServiceClient is a client for the session.v1.BacklogService service.
@@ -234,6 +243,27 @@ type BacklogServiceClient interface {
 	// SnoozeStuckItem suppresses a stuck row from the active view and from
 	// re-notification until the given time.
 	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
 }
 
 // NewBacklogServiceClient constructs a client for the session.v1.BacklogService service. By
@@ -469,6 +499,24 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
 			connect.WithClientOptions(opts...),
 		),
+		resetStuckRemediation: connect.NewClient[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		bulkResetStuckRemediation: connect.NewClient[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceBulkResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerRemediationNow: connect.NewClient[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerRemediationNowProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -511,6 +559,9 @@ type backlogServiceClient struct {
 	submitManualReview          *connect.Client[v1.SubmitManualReviewRequest, v1.SubmitManualReviewResponse]
 	listStuckBacklogItems       *connect.Client[v1.ListStuckBacklogItemsRequest, v1.ListStuckBacklogItemsResponse]
 	snoozeStuckItem             *connect.Client[v1.SnoozeStuckItemRequest, v1.SnoozeStuckItemResponse]
+	resetStuckRemediation       *connect.Client[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse]
+	bulkResetStuckRemediation   *connect.Client[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse]
+	triggerRemediationNow       *connect.Client[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse]
 }
 
 // CreateBacklogItem calls session.v1.BacklogService.CreateBacklogItem.
@@ -698,6 +749,21 @@ func (c *backlogServiceClient) SnoozeStuckItem(ctx context.Context, req *connect
 	return c.snoozeStuckItem.CallUnary(ctx, req)
 }
 
+// ResetStuckRemediation calls session.v1.BacklogService.ResetStuckRemediation.
+func (c *backlogServiceClient) ResetStuckRemediation(ctx context.Context, req *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return c.resetStuckRemediation.CallUnary(ctx, req)
+}
+
+// BulkResetStuckRemediation calls session.v1.BacklogService.BulkResetStuckRemediation.
+func (c *backlogServiceClient) BulkResetStuckRemediation(ctx context.Context, req *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return c.bulkResetStuckRemediation.CallUnary(ctx, req)
+}
+
+// TriggerRemediationNow calls session.v1.BacklogService.TriggerRemediationNow.
+func (c *backlogServiceClient) TriggerRemediationNow(ctx context.Context, req *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return c.triggerRemediationNow.CallUnary(ctx, req)
+}
+
 // BacklogServiceHandler is an implementation of the session.v1.BacklogService service.
 type BacklogServiceHandler interface {
 	// CreateBacklogItem adds a new item to the backlog.
@@ -786,6 +852,27 @@ type BacklogServiceHandler interface {
 	// SnoozeStuckItem suppresses a stuck row from the active view and from
 	// re-notification until the given time.
 	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
 }
 
 // NewBacklogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -1017,6 +1104,24 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceResetStuckRemediationProcedure,
+		svc.ResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceBulkResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceBulkResetStuckRemediationProcedure,
+		svc.BulkResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceTriggerRemediationNowHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerRemediationNowProcedure,
+		svc.TriggerRemediationNow,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.BacklogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BacklogServiceCreateBacklogItemProcedure:
@@ -1093,6 +1198,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceListStuckBacklogItemsHandler.ServeHTTP(w, r)
 		case BacklogServiceSnoozeStuckItemProcedure:
 			backlogServiceSnoozeStuckItemHandler.ServeHTTP(w, r)
+		case BacklogServiceResetStuckRemediationProcedure:
+			backlogServiceResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceBulkResetStuckRemediationProcedure:
+			backlogServiceBulkResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerRemediationNowProcedure:
+			backlogServiceTriggerRemediationNowHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1248,4 +1359,16 @@ func (UnimplementedBacklogServiceHandler) ListStuckBacklogItems(context.Context,
 
 func (UnimplementedBacklogServiceHandler) SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.SnoozeStuckItem is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.BulkResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerRemediationNow is not implemented"))
 }

@@ -392,4 +392,59 @@ describe("Omnibar path completion", () => {
       expect(screen.getByRole("listbox")).toBeInTheDocument();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // >shell directory-argument completion
+  // -------------------------------------------------------------------------
+
+  describe(">shell directory completion", () => {
+    it("dropdown renders with live entries while typing the >shell dir argument", async () => {
+      mockUsePathCompletions.mockReturnValue({
+        ...defaultCompletions,
+        entries: [dir("projects"), dir("profile")],
+        baseDirExists: true,
+      });
+      const { input } = renderOmnibar();
+      await typeAndDetect(input, ">shell /home/user/p");
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+      const options = screen.getAllByRole("option");
+      expect(options).toHaveLength(2);
+    });
+
+    it("dropdown does not render once a -- command has been typed", async () => {
+      mockUsePathCompletions.mockReturnValue({
+        ...defaultCompletions,
+        entries: [dir("projects")],
+        baseDirExists: true,
+      });
+      const { input } = renderOmnibar();
+      await typeAndDetect(input, ">shell -- npm run dev");
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+
+    it("selecting a completion entry preserves the >shell prefix", async () => {
+      mockUsePathCompletions.mockReturnValue({
+        ...defaultCompletions,
+        entries: [dir("projects")],
+        baseDirExists: true,
+      });
+      const { input } = renderOmnibar();
+      await typeAndDetect(input, ">shell /home/user/p");
+      fireEvent.keyDown(input, { key: "Tab" });
+      expect((input as HTMLInputElement).value).toBe(">shell /home/user/projects/");
+    });
+
+    it("Tab with multiple entries extends the dir argument while keeping the >shell prefix", async () => {
+      // "projects" and "profile" share "pro"
+      mockUsePathCompletions.mockReturnValue({
+        ...defaultCompletions,
+        entries: [dir("projects"), dir("profile")],
+        baseDirExists: true,
+      });
+      const { input } = renderOmnibar();
+      await typeAndDetect(input, ">shell /home/user/p");
+      fireEvent.keyDown(input, { key: "Tab" });
+      expect((input as HTMLInputElement).value).toBe(">shell /home/user/pro");
+    });
+  });
 });

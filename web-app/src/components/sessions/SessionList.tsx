@@ -75,6 +75,13 @@ interface SessionListProps {
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
   onResumeHibernatedSession?: (sessionId: string) => void;
+  /**
+   * Called when the "Show archived" toggle changes to true, so the parent can
+   * re-fetch sessions with includeArchived via the session service. Turning the
+   * toggle off does not call this — archived sessions are filtered client-side
+   * instead, since the server-side default already excludes them going forward.
+   */
+  onFetchArchivedSessions?: (includeArchived: boolean) => void;
   /** When true, renders the loading skeleton instead of the session list. */
   isLoading?: boolean;
   /** Prefix for localStorage keys, used when multiple instances are rendered (e.g. split view). */
@@ -185,6 +192,7 @@ const BASE_STORAGE_KEYS = {
   SELECTED_CATEGORY: 'stapler-squad-selected-category',
   SELECTED_TAG: 'stapler-squad-selected-tag',
   HIDE_PAUSED: 'stapler-squad-hide-paused',
+  SHOW_ARCHIVED: 'stapler-squad-show-archived',
   FILTER_NEEDS_APPROVAL: 'stapler-squad-filter-needs-approval',
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
   SORT_FIELD: 'stapler-squad-sort-field',
@@ -249,6 +257,7 @@ export function SessionList({
   onClearConversationState,
   onHibernateSession,
   onResumeHibernatedSession,
+  onFetchArchivedSessions,
   isLoading = false,
   storageKeyPrefix,
   extraHeaderActions,
@@ -282,6 +291,11 @@ export function SessionList({
   );
   const [hidePaused, setHidePaused] = useState(() =>
     loadFromStorage(STORAGE_KEYS.HIDE_PAUSED, false)
+  );
+  // showArchived: when true, re-fetches sessions with includeArchived=true (server-side
+  // default excludes archived sessions) and stops client-side filtering them out below.
+  const [showArchived, setShowArchived] = useState(() =>
+    loadFromStorage(STORAGE_KEYS.SHOW_ARCHIVED, false)
   );
   // filterNeedsApproval: when true, show only Active sessions with subStatus === NEEDS_APPROVAL.
   // Replaces the old lifecycle-status NEEDS_APPROVAL filter (which was status===5).
@@ -412,6 +426,21 @@ export function SessionList({
   }, [STORAGE_KEYS, hidePaused]);
 
   useEffect(() => {
+    saveToStorage(STORAGE_KEYS.SHOW_ARCHIVED, showArchived);
+  }, [STORAGE_KEYS, showArchived]);
+
+  // Re-fetch with includeArchived whenever the toggle changes (including on mount, so a
+  // persisted "on" preference re-fetches archived sessions rather than showing a stale
+  // client-only filtered view). The server excludes archived sessions by default, so
+  // turning the toggle off does not need a re-fetch — filteredSessions below hides them.
+  useEffect(() => {
+    if (showArchived) {
+      onFetchArchivedSessions?.(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived]);
+
+  useEffect(() => {
     saveToStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, filterNeedsApproval);
   }, [STORAGE_KEYS, filterNeedsApproval]);
 
@@ -500,9 +529,16 @@ export function SessionList({
         return false;
       }
 
+      // Archived filter — hidden by default even if a prior includeArchived fetch
+      // left archived sessions in the Redux store (e.g. toggle turned back off
+      // without a fresh non-archived fetch).
+      if (!showArchived && session.archivedAt) {
+        return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, pendingDeleteIds]);
+  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
 
   // Sort filtered sessions
   const sortedSessions = useMemo(() => {
@@ -971,6 +1007,19 @@ export function SessionList({
                 aria-label="Hide paused sessions"
               />
               <span>Hide Paused</span>
+            </label>
+
+            {/* Show archived toggle — archived sessions are excluded server-side by
+                default; enabling this re-fetches with includeArchived. */}
+            <label className={checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+                aria-label="Show archived sessions"
+                data-testid="show-archived-toggle"
+              />
+              <span>Show Archived</span>
             </label>
 
             {/* Needs-approval quick filter */}

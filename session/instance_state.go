@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -190,7 +191,13 @@ func (i *Instance) MarkUserResponded() time.Time {
 func (i *Instance) MarkAcknowledged() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.LastAcknowledged = time.Now()
+	now := time.Now()
+	i.LastAcknowledged = now
+	// Keep the lock-free shadow in sync so IsAcknowledgedAfterOutput() can be called safely
+	// from goroutines outside the actor pattern (e.g. ReviewQueuePoller's own goroutine via
+	// review_queue_determiner.go's Determine()) — same discipline as UpdateTimestamps()
+	// storing lastMeaningfulOutputNs alongside LastMeaningfulOutput.
+	atomic.StoreInt64(&i.lastAcknowledgedNs, now.UnixNano())
 	i.snapshot.Store(buildSnapshot(i))
 }
 

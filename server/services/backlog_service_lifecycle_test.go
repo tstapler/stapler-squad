@@ -192,6 +192,173 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
 }
 
+// TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflictedPR
+// is the regression test for the live incident this guard was extended to catch:
+// TransitionGuard previously only matched from==review, so a pr_pending item
+// (already past review, sitting on an open, unmerged, conflicted PR) could be
+// marked done via a bare TransitionBacklogItemStatus("done") call — e.g. a
+// human clicking "Approve" without noticing the PR had a merge conflict — with
+// no verdict/shipped-code check at all. Once done, the item became permanently
+// invisible to ReconcilePRPending (which only polls pr_pending-status items),
+// orphaning the real GitHub PR from any further conflict/CI monitoring. The
+// fix widens the guard to `to == done` regardless of from, reusing the exact
+// git-ancestry fixture pattern from
+// TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotOnMain.
+func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflictedPR(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+
+	// A commit that exists only on a feature branch — mirroring a PR that's
+	// still open (and, in the real incident, conflicted) rather than merged.
+	runGitTestCmd(t, repoPath, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("unshipped work\n"), 0o644))
+	runGitTestCmd(t, repoPath, "add", "feature.txt")
+	runGitTestCmd(t, repoPath, "commit", "-m", "work behind an open, conflicted PR")
+	unshippedSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with an open, conflicted PR",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrURL:    "https://github.com/example/repo/pull/172",
+		PrNumber: 172,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session",
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictPass,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "unmerged-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, unshippedSHA, "work behind an open, conflicted PR", time.Now(), 1))
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "done",
+	}))
+	require.Error(t, err, "a pr_pending item whose PR was never merged must not reach done")
+	assert.Contains(t, err.Error(), "must actually be on main")
+
+	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
+}
+
+// ─── work-session archival on terminal transition (backlog session accumulation bug) ──
+
+// TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReachesDone is
+// the regression test for the bug where backlog work sessions accumulated forever in
+// the session list even after their item finished — the session archival mechanism
+// (see docs/tasks/workflow-history-and-archiving.md) was built exclusively for the
+// Workflow feature and was never wired to backlog work sessions. A transition into
+// "done" must now archive every work-role session for the item via the injected
+// SessionStopper (mirrors cleanupItemWorktrees, which already runs at this call site).
+func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReachesDone(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item reaching done",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "work-session-to-archive",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:         item.ID,
+		TargetStatus:   "done",
+		OverrideReason: "test: bypass verdict gate",
+	}))
+	require.NoError(t, err)
+
+	assert.Contains(t, stopper.archivedUUIDs, "work-session-to-archive",
+		"reaching done must archive the item's work session so it stops accumulating in the session list")
+}
+
+// TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived mirrors
+// the done case above for the "archived" terminal status.
+func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchived(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:  "item being archived",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "idea-work-session-to-archive",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "archived",
+	}))
+	require.NoError(t, err)
+
+	assert.Contains(t, stopper.archivedUUIDs, "idea-work-session-to-archive",
+		"archiving an item must archive its work session(s) too")
+}
+
+// TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal
+// guards against over-eager archival: a non-terminal transition (e.g. ready->in_progress)
+// must not touch any work session.
+func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}}
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "item mid-flight",
+		Status:       string(session.BacklogStatusReady),
+		SkipPlanning: true,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "in-flight-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       item.ID,
+		TargetStatus: "in_progress",
+	}))
+	require.NoError(t, err)
+
+	assert.Empty(t, stopper.archivedUUIDs, "a non-terminal transition must not archive any work session")
+}
+
 // ─── SubmitManualReview PASS→done guard (2026-07-18 finding) ──────────────────
 //
 // docs/tasks/backlog-feature-improvement.md's 2026-07-18 update: SubmitManualReview

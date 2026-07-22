@@ -103,6 +103,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Default(false).
 			Comment("true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values"),
+		field.Int("rework_cap_override").
+			Optional().
+			Nillable().
+			Comment("Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),

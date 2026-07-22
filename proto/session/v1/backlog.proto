@@ -90,6 +90,23 @@ message BacklogStatusEvent {
   string to_status = 3;
   string triggered_by = 4; // "user" or "system"
   google.protobuf.Timestamp created_at = 5;
+  // note is the human-readable reason for this transition, e.g. "auto-reopened
+  // after FAIL verdict" or "PASS verdict — pushed branch and opened PR". Already
+  // captured durably (session.BacklogStatusEventData.Note) but previously never
+  // surfaced over the wire — the "why" behind reviewer/system decisions.
+  optional string note = 6;
+}
+
+// BacklogProgressNote records a single report_progress call against one of a
+// backlog item's acceptance criteria — the implementer's audit trail. Unlike
+// AcCriterion.status (current status per criterion, overwritten on each call),
+// this is an append-only history: every call is preserved.
+message BacklogProgressNote {
+  string id = 1;
+  int32 criterion_index = 2;
+  string note = 3;
+  string status = 4; // "pending", "in_progress", "done", "fail"
+  google.protobuf.Timestamp created_at = 5;
 }
 
 // BacklogItem represents a unit of work in the backlog.
@@ -120,6 +137,13 @@ message BacklogItem {
   bool auto_spawn_session = 24;
   optional string pipeline_mode = 25;
   bool auto_create_pr = 26;
+  // progress_notes is the implementer's append-only report_progress audit
+  // trail — eagerly loaded alongside status_events (see GetBacklogItem).
+  repeated BacklogProgressNote progress_notes = 27;
+  // rework_cap_override: unset means "use the global default"
+  // (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
+  // >0 = this item's own cap, replacing the global value.
+  optional int32 rework_cap_override = 28;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -292,7 +316,19 @@ message ListBacklogItemsRequest {
   repeated string status = 1;
   repeated int32 priority = 2;
   string sort_by = 3;
+  // include_terminal, when true, includes items with status "done" in the
+  // default (no explicit `status` filter) result set. Independent of
+  // include_archived below — this field no longer also controls "archived"
+  // visibility (see include_archived's doc comment for why that split
+  // exists).
   bool include_terminal = 4;
+  // include_archived, when true, includes items with status "archived" in
+  // the default (no explicit `status` filter) result set. Split out from
+  // include_terminal so a client can show "done" items by default while
+  // still hiding "archived" ones unless the user opts in (mirrors the
+  // session list's "Show Archived" toggle). Ignored when `status` is set
+  // explicitly — an explicit status filter always wins.
+  bool include_archived = 5;
 }
 
 message ListBacklogItemsResponse {
@@ -314,6 +350,10 @@ message UpdateBacklogItemRequest {
   bool auto_spawn_session = 12;
   optional string pipeline_mode = 13;
   bool auto_create_pr = 14;
+  // rework_cap_override is a per-item override for the auto-rework cap.
+  // Unset = leave the item's stored override untouched. 0 = unlimited retries
+  // for this item. >0 = this item's own cap, replacing the global default.
+  optional int32 rework_cap_override = 15;
 }
 
 message UpdateBacklogItemResponse {
@@ -668,6 +708,30 @@ service BacklogService {
   // SnoozeStuckItem suppresses a stuck row from the active view and from
   // re-notification until the given time.
   rpc SnoozeStuckItem(SnoozeStuckItemRequest) returns (SnoozeStuckItemResponse) {}
+
+  // ResetStuckRemediation clears the automated-remediation counters
+  // (remediation_attempts, next_remediation_at, notified_at) on a single open
+  // stuck row, letting a fresh automated attempt/notification cycle fire
+  // immediately instead of waiting on stale backoff/dedup state. Distinct
+  // from TriggerRemediationNow: this never itself invokes a remediation
+  // action, it only un-parks the row.
+  rpc ResetStuckRemediation(ResetStuckRemediationRequest) returns (ResetStuckRemediationResponse) {}
+
+  // BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+  // open stuck row matching the optional reason filter — the "something
+  // upstream broke a batch of these, give them all a fresh shot" admin
+  // action, e.g. after an OOM-restart storm inflated attempt counts across
+  // many items at once.
+  rpc BulkResetStuckRemediation(BulkResetStuckRemediationRequest) returns (BulkResetStuckRemediationResponse) {}
+
+  // TriggerRemediationNow immediately runs the reason-specific remediation
+  // action for a single open stuck row, bypassing only the next_remediation_at
+  // backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+  // action's own circuit breaker) still applies, and this attempt still
+  // counts toward remediation_attempts like any dispatcher-triggered one.
+  // Rejects with an error (rather than silently un-parking) when the row has
+  // already exhausted its attempt budget — use ResetStuckRemediation first.
+  rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
 }
 
 message ImportGitHubIssueRequest {
@@ -804,6 +868,7 @@ enum StuckReason {
   STUCK_REASON_BOUNCING = 5;
   STUCK_REASON_PUSH_FAILED = 6;
   STUCK_REASON_ORPHANED_TRIAGE = 7;
+  STUCK_REASON_AUTONOMOUS_STUCK = 8;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
@@ -830,6 +895,17 @@ message StuckBacklogItem {
   // fetching and populating it. Unset means "not fetched / unknown", not
   // "auto-merge disabled".
   optional bool allow_auto_merge = 11;
+  // remediation_attempts is how many automated (or operator-triggered via
+  // TriggerRemediationNow) remediation attempts have been made for this open
+  // row. remediation_attempts >= 5 means the row is "parked" — automated
+  // remediation has stopped until ResetStuckRemediation is called.
+  int32 remediation_attempts = 12;
+  // next_remediation_at is when this row becomes eligible for the next
+  // automated remediation attempt. Unset means either no attempt has been
+  // made yet (remediation_attempts == 0, eligible immediately) or the row is
+  // parked (remediation_attempts >= 5) — check remediation_attempts to tell
+  // the two apart.
+  optional google.protobuf.Timestamp next_remediation_at = 13;
 }
 
 message ListStuckBacklogItemsRequest {}
@@ -848,4 +924,50 @@ message SnoozeStuckItemResponse {
   // applied is true when an open row matching (item_id, reason) was found
   // and snoozed; false when no such open row exists (not an error).
   bool applied = 1;
+}
+
+message ResetStuckRemediationRequest {
+  string item_id = 1;
+  StuckReason reason = 2;
+}
+
+message ResetStuckRemediationResponse {
+  // applied is true when an open row matching (item_id, reason) was found
+  // and reset; false when no such open row exists (not an error).
+  bool applied = 1;
+}
+
+message BulkResetStuckRemediationRequest {
+  // reason filters to a single stuck reason; unset (STUCK_REASON_UNSPECIFIED)
+  // resets matching rows across every reason.
+  StuckReason reason = 1;
+  // only_parked restricts the reset to rows that actually hit the 5-attempt
+  // cap. Defaults to true at the RPC layer when unset — see
+  // only_parked_explicitly_set.
+  bool only_parked = 2;
+  // only_parked_explicitly_set distinguishes "only_parked=false because the
+  // caller wants every open row regardless of attempt count" from "the field
+  // was left at its zero value" — proto3 bool fields cannot otherwise tell
+  // "explicitly false" apart from "unset". Set true whenever the caller
+  // deliberately supplied only_parked (either value).
+  bool only_parked_explicitly_set = 3;
+}
+
+message BulkResetStuckRemediationResponse {
+  // reset_count is how many rows were reset by this call.
+  int32 reset_count = 1;
+}
+
+message TriggerRemediationNowRequest {
+  string item_id = 1;
+  StuckReason reason = 2;
+}
+
+message TriggerRemediationNowResponse {
+  // triggered is true when the remediation action was invoked. False is
+  // never returned on success — a row that cannot be remediated (no open
+  // row, already parked, no action registered for this reason yet) is
+  // reported as an RPC error instead, so the frontend can show a specific
+  // reason rather than a bare "nothing happened".
+  bool triggered = 1;
 }

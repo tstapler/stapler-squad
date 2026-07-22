@@ -117,7 +117,7 @@ func statusForSeedReason(reason domain.StuckReason) session.BacklogStatus {
 	switch reason {
 	case domain.StuckReasonPRReadyUnmerged:
 		return session.BacklogStatusPRPending
-	case domain.StuckReasonStaleWork, domain.StuckReasonBouncing:
+	case domain.StuckReasonStaleWork, domain.StuckReasonBouncing, domain.StuckReasonAutonomousStuck:
 		return session.BacklogStatusInProgress
 	case domain.StuckReasonOrphanedTriage:
 		return session.BacklogStatusIdea

@@ -189,6 +189,11 @@ func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
 // NewScannerWithReader constructs a Scanner with an explicit VCSReader.
 // Used in tests to inject a fake or alternative implementation.
 func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
+	// Register the real reader for debug introspection (see currentReader's
+	// doc comment) — a no-op for fake/test readers that don't match the type.
+	if gg, ok := reader.(*GoGitVCSReader); ok {
+		currentReader.Store(gg)
+	}
 	s := &Scanner{
 		reader:     reader,
 		scanQueue:  make(chan scanTask, 50),

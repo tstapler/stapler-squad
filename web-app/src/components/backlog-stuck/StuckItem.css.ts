@@ -132,6 +132,58 @@ export const snoozeBtnAlwaysOn = style({
   fontWeight: 700,
 });
 
+// ── Retry now affordance (docs/tasks/backlog-stuck-item-auto-remediation.md
+// addendum) — same hover-reveal treatment as the Snooze button above, kept
+// as its own named class (rather than reusing snoozeBtn directly) since the
+// two controls are conceptually distinct actions that happen to share a
+// visual language.
+
+export const retryBtn = style({
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.sm,
+  padding: `2px ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  lineHeight: 1.5,
+  flexShrink: 0,
+  opacity: 0,
+  transition: "opacity 0.15s, background 0.12s, color 0.12s, border-color 0.12s",
+  "@media": {
+    "(hover: none)": { opacity: 1 },
+  },
+  selectors: {
+    [`${card}:hover &`]: { opacity: 1 },
+    [`${card}:focus-within &`]: { opacity: 1 },
+    "&:focus-visible": {
+      opacity: 1,
+      outline: `2px solid ${vars.color.inputFocusBorder}`,
+      outlineOffset: "1px",
+    },
+    "&:hover": {
+      background: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+      borderColor: vars.color.borderHover,
+    },
+    "&:disabled": {
+      opacity: 0.4,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+export const retryBtnAlwaysOn = style({
+  opacity: 1,
+  minHeight: "28px",
+});
+
+export const retryError = style({
+  fontFamily: vars.font.sans,
+  color: vars.color.errorText,
+  fontSize: vars.fontSize.xs,
+});
+
 export const snoozePicker = style({
   marginTop: vars.space["2"],
   padding: vars.space["3"],
