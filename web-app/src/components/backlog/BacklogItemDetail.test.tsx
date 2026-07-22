@@ -661,3 +661,118 @@ describe("BacklogItemDetail — Story 3.1.4 Task 3.1.4i/3.1.4j: shared Collapsib
     expect(planArtifactsHeader).toHaveFocus();
   });
 });
+
+describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first-render-only", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  it("BacklogItemDetail_should_ExpandVersionControlSectionOnFirstMount_When_ItemStatusIsInProgress", async () => {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    getBacklogItem.mockReset().mockResolvedValue({ ...makeItem([session]), status: "in_progress" });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("BacklogItemDetail_should_KeepSectionCollapsed_When_PollTickReturnsUpdatedItemAfterUserManuallyCollapsedIt", async () => {
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/x", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "work" });
+    let pollCount = 0;
+    getBacklogItem.mockReset().mockImplementation(() => {
+      pollCount += 1;
+      return Promise.resolve({
+        ...makeItem([session]),
+        status: "in_progress",
+        triageStatus: "running", // keeps the poll active
+        updatedAt: `2026-07-01T00:0${pollCount}:00Z`,
+      });
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Default-expanded (per the in_progress rule) — user manually collapses it.
+    const vcsHeader = screen.getByTestId("collapsible-header-version-control");
+    expect(vcsHeader).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(vcsHeader);
+    expect(vcsHeader).toHaveAttribute("aria-expanded", "false");
+
+    // A poll tick resolves a fresh item object for the same itemId/status.
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pollCount).toBeGreaterThan(1);
+    expect(screen.getByTestId("collapsible-header-version-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("BacklogItemDetail_should_NotReapplyDefaultExpand_When_StatusTransitionsMidPollWithoutItemIdChange", async () => {
+    let pollCount = 0;
+    getBacklogItem.mockReset().mockImplementation(() => {
+      pollCount += 1;
+      // First resolution: "idea" (ReviewingSection not relevant yet).
+      // Subsequent resolutions (poll ticks): "review" — ReviewingSection
+      // becomes newly relevant mid-session, without an itemId/key change.
+      const status = pollCount === 1 ? "idea" : "review";
+      return Promise.resolve({
+        ...makeItem([]),
+        status,
+        triageStatus: "running", // keeps the poll active regardless of status
+        gateVerdict: "PENDING",
+        updatedAt: `2026-07-01T00:0${pollCount}:00Z`,
+      });
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("collapsible-header-reviewing")).not.toBeInTheDocument();
+
+    await act(async () => {
+      jest.advanceTimersByTime(5_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pollCount).toBeGreaterThan(1);
+    // ReviewingSection now exists (status is "review"), but its one-shot
+    // mount-time default was already consumed by the *first* load (when
+    // status was "idea") — it must not retroactively open just because it
+    // only became relevant after that.
+    expect(screen.getByTestId("collapsible-header-reviewing")).toHaveAttribute("aria-expanded", "false");
+  });
+});
