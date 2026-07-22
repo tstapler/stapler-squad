@@ -527,7 +527,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
 		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck and /api/debug/backlog/seed-queued (e2e-local only)")
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
 	}
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
