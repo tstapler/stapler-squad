@@ -89,13 +89,25 @@ wire in `ItemSession.review_verdict`/`triage_result`, `proto/session/v1/backlog.
 
 ## Unresolved Questions
 
-1. **Is `RunPreGateSecurityCheck`'s error string 100% safe to render verbatim in a now more-
-   discoverable UI surface?** (`session/backlog_review.go:45`, consumed at
-   `session/review_gate.go:220-236`.) Must be resolved by Story 4.1 (Task 4.1.1a) *before* Story
-   4.3 (Blocked-Before-Start Notice) ships that summary string to the UI. If the review finds any
-   path where a raw secret substring could leak into the formatted error, Task 4.1.1a's follow-up
-   is to redact at the source (`session/backlog_review.go`) before this project's frontend work
-   renders it, not to patch it only in the frontend.
+1. **RESOLVED (Story 4.1.1, 2026-07-21): `RunPreGateSecurityCheck`'s error string is confirmed
+   safe to render verbatim.** Read end-to-end: `RunPreGateSecurityCheck` (`session/backlog_review.go:45-52`)
+   loops over the package-level `secretPatterns` table (`session/backlog_review.go:22-38`) and,
+   on a match, returns `fmt.Errorf("secret pattern detected: %s", p.name)` — `p.name` is a fixed,
+   hardcoded label from that table (e.g. `"aws_access_key_id"`, `"github_pat"`, `"database_url"`),
+   never the `diff` argument or any substring matched within it. The comment directly above the
+   table (`session/backlog_review.go:20-21`) states this explicitly: "The pattern name is used in
+   the error message (not the matched value)." The only consumer,
+   `session/review_gate.go:228` (`summary := fmt.Sprintf("Review blocked by security check: %v.
+   Override required to proceed.", secErr)`), formats that same error with `%v` and does no
+   further string surgery that could reintroduce raw diff content. So the guardrail summary text
+   that reaches the UI can only ever read "Review blocked by security check: secret pattern
+   detected: <fixed-pattern-name>. Override required to proceed." — never a raw secret substring.
+   Automated proof: `TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff`
+   (`session/backlog_review_test.go`) feeds a diff containing a real, distinctive secret value
+   per pattern through both `RunPreGateSecurityCheck` and `review_gate.go:228`'s exact `Sprintf`
+   call, asserting the matched value never appears in either result. No redaction follow-up is
+   needed at the source; Story 4.1.3 (`BlockedNotice`) may render `reviewVerdict.summary`
+   verbatim as originally planned.
 2. **Does `/backlog`'s non-board list view (`BacklogItemBadge.tsx`) also need the compact
    `BlockerChip`, or is board-only sufficient?** requirements.md's Scope says "board/list card
    summaries (`/backlog`, `/backlog/board`)" (both), but `BacklogItemBadge.tsx` renders inline

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -502,6 +503,48 @@ func TestRunPreGateSecurityCheck_DetectsNewPatterns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := RunPreGateSecurityCheck(tc.input)
 			assert.Error(t, err, "pattern %q should be detected", tc.name)
+		})
+	}
+}
+
+// TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff
+// is the automated proof backing backlog-item-detail-ux's Story 4.1.1 finding
+// (plan.md's Unresolved Question #1): RunPreGateSecurityCheck's error string is
+// built exclusively from secretPatterns[i].name — a fixed, hardcoded label from
+// the pattern table, never the diff text or the substring matched within it — so
+// the %v-formatted error consumed by review_gate.go's guardrail summary can never
+// leak a raw secret. Feeds a diff containing a real, distinctive matched secret
+// value through the check for each pattern and asserts the returned error string
+// contains only "secret pattern detected: <name>", never the matched value.
+func TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff(t *testing.T) {
+	cases := []struct {
+		name          string
+		diff          string
+		matchedSecret string
+	}{
+		{"AKIA_key", "aws credentials: AKIA1234567890ABCDEF", "AKIA1234567890ABCDEF"},
+		{"github_pat", "token=" + "ghp_" + strings.Repeat("a", 36), "ghp_" + strings.Repeat("a", 36)},
+		{"openai_key", "key=" + "sk-" + strings.Repeat("b", 48), "sk-" + strings.Repeat("b", 48)},
+		{"stripe_secret_key", "sk_live_" + strings.Repeat("c", 24), "sk_live_" + strings.Repeat("c", 24)},
+		{"database_url", "postgres://admin:s3cr3t-p4ss@db.internal/prod", "s3cr3t-p4ss"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RunPreGateSecurityCheck(tc.diff)
+			require.Error(t, err, "pattern %q should be detected", tc.name)
+
+			errText := fmt.Sprintf("%v", err)
+			assert.NotContains(t, errText, tc.matchedSecret,
+				"error string must never embed the raw matched secret substring")
+			assert.Contains(t, errText, "secret pattern detected: "+tc.name,
+				"error string must only ever contain the pattern's fixed name")
+
+			// Reproduces review_gate.go:228's exact Sprintf call that surfaces this
+			// text to the UI, to prove the leak-check holds at the actual consuming
+			// call site too, not just at RunPreGateSecurityCheck's own boundary.
+			summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", err)
+			assert.NotContains(t, summary, tc.matchedSecret)
 		})
 	}
 }
