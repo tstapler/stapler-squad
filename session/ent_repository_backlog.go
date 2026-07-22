@@ -23,6 +23,19 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
 
+// SetItemChangePublisher wires an ItemChangePublisher into this repository so
+// its backlog mutation methods (TransitionBacklogItemStatus, UpdateBacklogItem,
+// ArchiveBacklogItem, DeleteBacklogItem, SaveReviewVerdict,
+// CreateItemSessionWithVerdict, CreateItemSession,
+// UpdateItemSessionSessionUUID, UpdateItemSessionTriageResult) can publish a
+// best-effort change notification after each successful mutation. Called via
+// Storage.SetItemChangePublisher's forwarding method (session/storage.go),
+// which is the only entry point server/dependencies.go has since it holds a
+// *Storage, not a concrete *EntRepository.
+func (r *EntRepository) SetItemChangePublisher(p ItemChangePublisher) {
+	r.itemChangePublisher = p
+}
+
 // recordStatusEvent appends an immutable BacklogStatusEvent audit row. Pass
 // r.client.BacklogStatusEvent for a standalone write, or tx.BacklogStatusEvent to
 // write inside an existing transaction — required when called from ReconcileStuckItems
@@ -204,6 +217,22 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
 		for i, n := range item.Edges.ProgressNotes {
 			data.ProgressNotes[i] = progressNoteToData(n)
+		}
+	}
+	// Propagate eagerly-loaded item sessions when present. Note: the
+	// ReviewVerdict sub-edge must ALSO have been loaded on each item.Edges.ItemSessions[i]
+	// (e.g. via .WithItemSessions(func(q) { q.WithReviewVerdict() })) for
+	// gateVerdict/gateVerdictSummary/triageStatus — which the frontend derives
+	// entirely from ItemSessions (web-app/src/lib/hooks/useBacklogService.ts's
+	// mapBacklogItem) — to come through non-empty. Most callers that need this
+	// populated correctly go through attachItemSessionsForPublish instead of
+	// relying on this edge being loaded on the entity passed in here.
+	if item.Edges.ItemSessions != nil {
+		data.ItemSessions = make([]ItemSessionSummary, len(item.Edges.ItemSessions))
+		for i, is := range item.Edges.ItemSessions {
+			s := itemSessionToSummary(is)
+			s.BacklogItemID = data.ID
+			data.ItemSessions[i] = s
 		}
 	}
 	return data
@@ -603,7 +632,101 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		return nil, fmt.Errorf("failed to update backlog item %s: %w", id, err)
 	}
 	result := backlogItemToData(item)
+
+	// Best-effort publish: never blocks or fails the update itself.
+	r.attachItemSessionsForPublish(ctx, &result)
+	r.publishItemChanged(&result, BacklogItemChange{
+		Kind:          ChangeItemUpdated,
+		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
+	})
+
 	return &result, nil
+}
+
+// updatedFieldsFromBacklogItemUpdate computes which fields a BacklogItemUpdate
+// actually sets (non-nil pointer params), for the ChangeItemUpdated publish
+// hook (Story 2.2.1). Field names use lowerCamelCase to match the JSON/proto
+// naming convention used elsewhere on the wire. A call with every field left
+// nil (a no-op update) returns an empty, non-nil slice rather than fabricating
+// any field name.
+func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
+	fields := make([]string, 0, 24)
+	if update.Title != nil {
+		fields = append(fields, "title")
+	}
+	if update.Description != nil {
+		fields = append(fields, "description")
+	}
+	if update.AcceptanceCriteria != nil {
+		fields = append(fields, "acceptanceCriteria")
+	}
+	if update.Priority != nil {
+		fields = append(fields, "priority")
+	}
+	if update.RepoPath != nil {
+		fields = append(fields, "repoPath")
+	}
+	if update.SkipReviewGate != nil {
+		fields = append(fields, "skipReviewGate")
+	}
+	if update.SkipPlanning != nil {
+		fields = append(fields, "skipPlanning")
+	}
+	if update.AutoSpawnSession != nil {
+		fields = append(fields, "autoSpawnSession")
+	}
+	if update.AutoCreatePR != nil {
+		fields = append(fields, "autoCreatePR")
+	}
+	if update.PipelineMode != nil {
+		fields = append(fields, "pipelineMode")
+	}
+	if update.Notes != nil {
+		fields = append(fields, "notes")
+	}
+	if update.PlanApproved != nil {
+		fields = append(fields, "planApproved")
+	}
+	if update.PlanApprovedAt != nil {
+		fields = append(fields, "planApprovedAt")
+	}
+	if update.QueuedAt != nil {
+		fields = append(fields, "queuedAt")
+	}
+	if update.QueuedAutonomous != nil {
+		fields = append(fields, "queuedAutonomous")
+	}
+	if update.PlanArtifactsPath != nil {
+		fields = append(fields, "planArtifactsPath")
+	}
+	if update.PrURL != nil {
+		fields = append(fields, "prUrl")
+	}
+	if update.PrNumber != nil {
+		fields = append(fields, "prNumber")
+	}
+	if update.ShippedCheckConclusion != nil {
+		fields = append(fields, "shippedCheckConclusion")
+	}
+	if update.ShippedApprovedCount != nil {
+		fields = append(fields, "shippedApprovedCount")
+	}
+	if update.ShippedChangesReqCount != nil {
+		fields = append(fields, "shippedChangesReqCount")
+	}
+	if update.ShippedSnapshotAt != nil {
+		fields = append(fields, "shippedSnapshotAt")
+	}
+	if update.ShippedFileStats != nil {
+		fields = append(fields, "shippedFileStats")
+	}
+	if update.ShippedSnapshotCaptureFailed != nil {
+		fields = append(fields, "shippedSnapshotCaptureFailed")
+	}
+	if update.ReworkCapOverride != nil {
+		fields = append(fields, "reworkCapOverride")
+	}
+	return fields
 }
 
 // ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
@@ -637,6 +760,14 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, current.Status, string(BacklogStatusArchived), TriggeredByUser, "")
 
 	result := backlogItemToData(item)
+
+	// Best-effort publish: never blocks or fails the archive itself.
+	r.attachItemSessionsForPublish(ctx, &result)
+	r.publishItemChanged(&result, BacklogItemChange{
+		Kind:       ChangeItemArchived,
+		ArchivedAt: result.ArchivedAt,
+	})
+
 	return &result, nil
 }
 
@@ -646,6 +777,23 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
+
+	// Fetch the item before deleting so a ChangeItemRemoved event can carry a
+	// snapshot of it — once DeleteOneID succeeds below, the row is gone and
+	// can no longer be read back.
+	existing, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("failed to get backlog item %s: %w", id, err)
+	}
+
+	// Build the publish snapshot (including ItemSessions) now, before this
+	// item's sessions are deleted below — attachItemSessionsForPublish's
+	// ListItemSessions query would return nothing once they're gone.
+	result := backlogItemToData(existing)
+	r.attachItemSessionsForPublish(ctx, &result)
 
 	// Resolve item_session IDs first so we can delete their review_verdicts.
 	itemSessionIDs, err := r.client.ItemSession.Query().
@@ -678,6 +826,13 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		}
 		return fmt.Errorf("failed to delete backlog item %s: %w", id, err)
 	}
+
+	// Best-effort publish: never blocks or fails the delete itself. result was
+	// built above, before the item's sessions were deleted.
+	r.publishItemChanged(&result, BacklogItemChange{
+		Kind: ChangeItemRemoved,
+	})
+
 	return nil
 }
 
@@ -775,7 +930,74 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, fromStatus, string(toStatus), triggeredBy, note)
 
 	result := backlogItemToData(item)
+
+	// Best-effort publish: never blocks or fails the transition itself.
+	r.attachItemSessionsForPublish(ctx, &result)
+	r.publishItemChanged(&result, BacklogItemChange{
+		Kind:      ChangeStatusTransition,
+		OldStatus: fromStatus,
+		NewStatus: string(toStatus),
+	})
+
 	return &result, nil
+}
+
+// publishItemChanged is a defense-in-depth wrapper around
+// r.itemChangePublisher.PublishItemChanged: nil-checked (a publisher may not
+// be wired, e.g. in tests or before server/dependencies.go calls
+// SetItemChangePublisher) and recover()-guarded at the call site itself, so a
+// panic can never propagate into a hooked repository method's return path —
+// regardless of whether itemChangePublisher is the real adapter
+// (server/services.BacklogItemEventPublisher, which already recovers inside
+// its own body per Task 1.3.2b) or some other ItemChangePublisher
+// implementation that doesn't. Task 2.1.1d's regression test proves this
+// holds end-to-end even when a raw, unwrapped test double panics.
+func (r *EntRepository) publishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+	if r.itemChangePublisher == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.WarningLog.Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
+		}
+	}()
+	r.itemChangePublisher.PublishItemChanged(item, change)
+}
+
+// attachItemSessionsForPublish best-effort loads and attaches this item's
+// ItemSessions (with ReviewVerdict) onto data before it's handed to
+// publishItemChanged.
+//
+// Every publish-hook call site builds its BacklogItemData from a query or
+// mutation (Get/UpdateOneID().Save()) that does NOT eager-load the
+// item_sessions edge — unlike the REST list/detail read paths
+// (ListBacklogItemSummaries, GetBacklogItem's sibling patterns), which do.
+// backlogItemToProto (server/services/backlog_service.go) only populates the
+// wire ItemSessions field "when eagerly loaded", and the frontend derives
+// gateVerdict/gateVerdictSummary/triageStatus entirely from itemSessions
+// (web-app/src/lib/hooks/useBacklogService.ts's mapBacklogItem) — so without
+// this, every live BacklogItemEvent would silently blank those fields in the
+// Redux store (backlogItemsSlice's upsertItem does a wholesale replace, not a
+// field merge) even though the initial REST snapshot always carries them
+// correctly. This was a confirmed regression found by a Phase 5
+// spec-compliance sweep (docs/tasks/backlog-feature-improvement.md) — actively
+// worse than the pre-event-driven shouldPoll baseline.
+//
+// Reuses ListItemSessions (the same tested query the REST list/detail paths
+// already run) so the live-event snapshot and the REST snapshot are always
+// built from identical data, rather than duplicating the edge-loading query
+// at each of the ~10 call sites. Best-effort: a lookup failure is logged and
+// skipped, never fails the mutation that already succeeded.
+func (r *EntRepository) attachItemSessionsForPublish(ctx context.Context, data *BacklogItemData) {
+	if data == nil || data.ID == "" {
+		return
+	}
+	sessions, err := r.ListItemSessions(ctx, data.ID)
+	if err != nil {
+		log.WarningLog.Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
+		return
+	}
+	data.ItemSessions = sessions
 }
 
 // --- BacklogStuckState (durable stuck-state bookkeeping) ---

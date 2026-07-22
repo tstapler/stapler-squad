@@ -523,6 +523,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
 	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine)
 	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+	// Wires the ItemChangePublisher adapter into the concrete *EntRepository
+	// (via Storage's forwarding setter, session/storage.go) so its 9 hooked
+	// backlog mutation methods (Phase 2) can publish BacklogItemChanged
+	// events. This is a different struct than backlogLifecycleListener.SetNotifier
+	// above — placed here for readability only, not because it mirrors that call.
+	storage.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: eventBus})
 	// Review now always spawns a real, hidden session.Instance (via
 	// SessionService.SpawnReviewSession) instead of an in-process headless LLM
 	// call, so review-queue visibility (idle/error/approval detection) works the

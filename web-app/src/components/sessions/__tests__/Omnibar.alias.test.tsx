@@ -14,8 +14,23 @@ import { Omnibar } from "../Omnibar";
 import type { AliasEntry } from "@/lib/hooks/useAliases";
 import type { PathHistoryEntry } from "@/lib/hooks/usePathHistory";
 import { SessionType } from "@/gen/session/v1/types_pb";
-import { getDefaultRegistry, resetDefaultRegistry } from "@/lib/omnibar/detector";
+import { getDefaultRegistry, resetDefaultRegistry, detect as realDetect } from "@/lib/omnibar";
 import { AliasDetector } from "@/lib/omnibar/detectors/AliasDetector";
+
+// Omnibar.tsx imports `detect` from the "@/lib/omnibar" barrel. Mock just that
+// export (passing through to the real implementation by default) so a single
+// test can make detection throw for a specific input and exercise the
+// detection debounce effect's try/catch in Omnibar.tsx — DetectorRegistry.detect()
+// already swallows individual detector exceptions internally, so a throwing
+// Detector class registered into the registry never reaches Omnibar.tsx's own
+// catch; mocking `detect` itself is the only way to simulate that failure mode.
+jest.mock("@/lib/omnibar", () => {
+  const actual = jest.requireActual("@/lib/omnibar");
+  return {
+    ...actual,
+    detect: jest.fn((input: string) => actual.detect(input)),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -292,5 +307,166 @@ describe("Omnibar alias namePrefix population", () => {
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ title: "my-custom-name" })
     );
+  });
+});
+
+describe("Omnibar detection re-run on async alias load (AC0)", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockUsePathCompletions.mockReturnValue(defaultCompletions);
+    mockUsePathHistory.mockReturnValue(defaultHistory);
+    // Simulate the alias list not having resolved yet — same as OmnibarContext.tsx
+    // before its useAliases() fetch completes and registers AliasDetector.
+    mockUseAliases.mockReturnValue({
+      aliases: [],
+      loading: true,
+      error: null,
+      refetch: jest.fn(),
+    });
+    // No AliasDetector registered yet — mirrors production before OmnibarContext's
+    // effect has registered it. Reset to the plain default set (no dynamic detectors).
+    resetDefaultRegistry();
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+    jest.useRealTimers();
+    jest.clearAllMocks();
+    resetDefaultRegistry();
+  });
+
+  it("re-evaluates and unblocks submission once aliases finish loading, without an extra keystroke", async () => {
+    const onCreateSession = jest.fn().mockResolvedValue(undefined);
+    const { input, rerender, getByRole } = renderOmnibar({ onCreateSession });
+
+    // Type "@ssq my-feature" before the alias list has resolved — AliasDetector
+    // isn't registered yet, so this currently mis-detects as a bare SessionSearch
+    // (not submittable).
+    await typeAndDetect(input, "@ssq my-feature");
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    });
+    expect(onCreateSession).not.toHaveBeenCalled();
+
+    // Alias list resolves: OmnibarContext would register AliasDetector at this point.
+    getDefaultRegistry().register(new AliasDetector([SSQ_ALIAS]));
+    mockUseAliases.mockReturnValue({
+      aliases: [SSQ_ALIAS],
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    // Re-render with unchanged props so Omnibar re-invokes useAliases() and picks
+    // up the resolved list — no additional typing/keystroke from the user.
+    rerender(
+      <Omnibar
+        isOpen={true}
+        onClose={jest.fn()}
+        onCreateSession={onCreateSession}
+        onNavigateToSession={jest.fn()}
+      />
+    );
+
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(getByRole("combobox", { name: /session source input/i }), {
+        key: "Enter",
+        ctrlKey: true,
+      });
+    });
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "ssq-my-feature" })
+    );
+  });
+});
+
+// The detection debounce effect (Omnibar.tsx) wraps its whole body in try/catch,
+// with the catch calling setError(...). This exercises that path — previously
+// untested — by making the mocked `detect` (imported from the "@/lib/omnibar"
+// barrel, see jest.mock above) throw for a specific input.
+describe("Omnibar detection effect error handling", () => {
+  const THROW_TRIGGER = "/trigger-detector-throw";
+  const THROW_MESSAGE = "Detector exploded";
+
+  const mockedDetect = realDetect as jest.MockedFunction<typeof realDetect>;
+
+  let consoleErrorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockUsePathCompletions.mockReturnValue(defaultCompletions);
+    mockUsePathHistory.mockReturnValue(defaultHistory);
+    mockUseAliases.mockReturnValue({
+      aliases: [],
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    resetDefaultRegistry();
+    // Only throws for THROW_TRIGGER — normal inputs (e.g. a plain local path)
+    // still detect correctly (delegates to the real implementation) so we can
+    // first reach creation mode before forcing the throw.
+    mockedDetect.mockImplementation((input: string) => {
+      if (input === THROW_TRIGGER) {
+        throw new Error(THROW_MESSAGE);
+      }
+      return jest.requireActual("@/lib/omnibar").detect(input);
+    });
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+    jest.useRealTimers();
+    consoleErrorSpy.mockRestore();
+    mockedDetect.mockReset();
+    jest.clearAllMocks();
+    resetDefaultRegistry();
+  });
+
+  it("shows an error and keeps the Create button in a sane state instead of crashing when detection throws", async () => {
+    const onCreateSession = jest.fn().mockResolvedValue(undefined);
+    const { input } = renderOmnibar({ onCreateSession });
+
+    // First reach creation mode with a normal, non-throwing input.
+    await typeAndDetect(input, "/home/user/projects");
+
+    // Omnibar renders two "Create Session" buttons that both key off canSubmit —
+    // the footer button (OmnibarCreationPanel) and the shortcuts-bar button
+    // (Omnibar.tsx). Both must stay in sync before and after the throw.
+    const disabledBeforeThrow = screen
+      .getAllByRole("button", { name: /create session/i })
+      .map((btn) => btn.hasAttribute("disabled"));
+
+    // Now type an input that makes the registered detector throw during the
+    // debounced detection effect.
+    await typeAndDetect(input, THROW_TRIGGER);
+
+    // The component must not crash/unmount — the input and Create button(s) are
+    // still present and interactive.
+    expect(screen.getByRole("combobox", { name: /session source input/i })).toBeInTheDocument();
+    const createButtonsAfterThrow = screen.getAllByRole("button", { name: /create session/i });
+    expect(createButtonsAfterThrow.length).toBeGreaterThan(0);
+
+    // An error message surfaced to the user.
+    expect(screen.getByText(THROW_MESSAGE)).toBeInTheDocument();
+    expect(consoleErrorSpy).toHaveBeenCalled();
+
+    // canSubmit/Create button state is left as it was prior to the throw (the
+    // stale-but-valid detection from before), not stuck in some undefined/broken
+    // state — clicking it should not throw and should not silently no-op into
+    // calling onCreateSession with garbage data.
+    const disabledAfterThrow = createButtonsAfterThrow.map((btn) => btn.hasAttribute("disabled"));
+    expect(disabledAfterThrow).toEqual(disabledBeforeThrow);
   });
 });

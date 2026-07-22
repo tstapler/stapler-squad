@@ -259,4 +259,34 @@ export class BacklogPage {
     // Wait for status to update in the detail pane
     await expect(this.getDetailStatusBadge()).toContainText('Ready', { timeout: 10000 });
   }
+
+  // ---------------------------------------------------------------------------
+  // backlog-event-driven-updates: live-update surfaces (list row, connection
+  // indicator, board columns)
+  // ---------------------------------------------------------------------------
+
+  getConnectionIndicator(): Locator {
+    return this.page.getByTestId('connection-indicator');
+  }
+
+  getRowById(itemId: string): Locator {
+    return this.page.locator(`[data-testid="backlog-table-row"][data-item-id="${itemId}"]`);
+  }
+
+  async gotoBoard() {
+    await this.page.goto('/backlog/board');
+    await this.page.waitForSelector('[data-testid="backlog-board"]', { timeout: 15000 });
+  }
+
+  getColumn(status: string): Locator {
+    return this.page.locator(`[data-testid="backlog-column-${status}"]`);
+  }
+
+  getCardInColumn(status: string, itemId: string): Locator {
+    return this.getColumn(status).locator(`[data-item-id="${itemId}"]`);
+  }
+
+  getExitingCards(): Locator {
+    return this.page.getByTestId('backlog-card-exiting');
+  }
 }

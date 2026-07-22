@@ -32,6 +32,13 @@ type EntRepository struct {
 	client        *ent.Client
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
+
+	// itemChangePublisher is nil-safe — every hooked backlog mutation method
+	// nil-checks before calling it (publish is best-effort and never blocks
+	// or fails the underlying mutation). Wired via SetItemChangePublisher,
+	// typically by Storage.SetItemChangePublisher's forwarding call in
+	// server/dependencies.go.
+	itemChangePublisher ItemChangePublisher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.

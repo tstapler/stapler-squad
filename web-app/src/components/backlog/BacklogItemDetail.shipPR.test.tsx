@@ -35,6 +35,35 @@ jest.mock("@/lib/analytics", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
+// Epic 5.3 (backlog-event-driven-updates): BacklogItemDetail now also
+// subscribes via useWatchBacklogItems + a Redux selector, and opens its own
+// lightweight raw watch stream for archive/removal terminal-state detection
+// (Task 5.3.1b/5.3.1c). None of these tests exercise that live-update path,
+// so everything is stubbed inert: no live item ever arrives, and the raw
+// terminal stream yields no events.
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
+  useWatchBacklogItems: () => ({ items: [], connectionState: "live" }),
+}));
+jest.mock("@/lib/store", () => ({
+  useAppSelector: () => undefined,
+}));
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({
+    watchBacklogItems: () => (async function* () {})(),
+  }),
+}));
+jest.mock("@connectrpc/connect-web", () => ({
+  createConnectTransport: jest.fn().mockReturnValue({}),
+}));
+
+// BacklogItemDetail calls useStuckBacklogItems() once and passes the
+// resolved StuckBacklogItem down to LifecycleSummary as a prop — stub it so
+// this suite never attempts a real ConnectRPC call.
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
+  useStuckBacklogItems: () => ({ items: [], isLoading: false, error: null }),
+}));
+
+
 const getBacklogItem = jest.fn();
 const listPipelineModes = jest.fn().mockResolvedValue([]);
 const triggerShipPR = jest.fn().mockResolvedValue({ prUrl: "https://github.com/example/repo/pull/42" });
@@ -112,6 +141,10 @@ function makeReviewItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
 async function renderItem(item: BacklogItem) {
   getBacklogItem.mockReset().mockResolvedValue(item);
   triggerShipPR.mockClear();
+  // Story 3.1.4's useSectionExpandState persists collapse state to
+  // localStorage keyed by itemId — clear so one test's expand/collapse
+  // interactions never leak into the next test reusing the same itemId.
+  localStorage.clear();
 
   render(<BacklogItemDetail itemId={item.id} />);
 

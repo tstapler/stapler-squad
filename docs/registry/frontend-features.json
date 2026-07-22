@@ -35,6 +35,24 @@
       "lastModified": "2026-07-19T00:00:00Z"
     },
     {
+      "id": "backlog-sort-group-repo-path",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogPage",
+        "path": "web-app/src/app/backlog/page.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "tests/e2e/backlog.spec.ts",
+        "e2e:backlog-sort-by-repository-path-toggles-direction",
+        "e2e:backlog-group-by-repository-buckets-items",
+        "compareByRepoPath",
+        "groupByRepoPath"
+      ],
+      "lastModified": "2026-07-17T00:00:00Z"
+    },
+    {
       "id": "backlog-stuck-items",
       "type": "frontend",
       "frontend": {
@@ -187,9 +205,14 @@
         "path": "web-app/src/components/backlog/BacklogBoard.tsx",
         "markerLine": 0
       },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-05-12T00:00:00Z"
+      "tested": true,
+      "testIds": [
+        "BacklogBoard_should_FadeCardOutOfOriginAndFlashIntoDestination_When_StatusChangesViaGenuineLiveUpdate",
+        "BacklogBoard_should_MoveCardInstantly_When_ColumnChangeIsFromBulkResnapshotNotLiveEvent",
+        "BacklogBoard_should_CollapseToInstantMove_When_ReducedMotionIsPreferred",
+        "BacklogBoard_should_SettleInDestinationColumn_When_ItemFlapsBackToOriginDuringExitTransition"
+      ],
+      "lastModified": "2026-07-22T00:00:00Z"
     },
     {
       "id": "backlog-item-card",
@@ -197,11 +220,55 @@
       "frontend": {
         "component": "BacklogItemCard",
         "path": "web-app/src/components/backlog/BacklogItemCard.tsx",
-        "markerLine": 0
+        "markerLine": 2
       },
-      "tested": false,
-      "testIds": [],
-      "lastModified": "2026-05-12T00:00:00Z"
+      "tested": true,
+      "testIds": [
+        "BacklogItemCard_should_RenderStatusLabelFromGetStatusLabel_When_ItemStatusIsReview",
+        "BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetActionSpecFallsThroughToDefaultBranch",
+        "BacklogItemCard_should_RenderCompactBlockerChip_When_StuckItemPropProvided",
+        "BacklogItemCard_should_OmitBlockerChipAndKeepFooterUnchanged_When_StuckItemPropUndefined"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-detail-diagnostic-panel",
+      "type": "frontend",
+      "frontend": {
+        "component": "SessionDiagnosticPanel",
+        "path": "web-app/src/components/backlog/detail/SessionDiagnosticPanel.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "routes to TriageReviewPanel readOnly, not GateVerdictBox, when triageResult is populated",
+        "routes to GateVerdictBox readOnly when reviewVerdict is populated and triageResult is absent",
+        "routes a manual-review-* session to BlockedNotice with the identical treatment as blocked_guardrail",
+        "routes a review-blocked-* session to BlockedNotice too",
+        "uses role=status for the one-line summary and never role=log",
+        "never renders nothing for malformed/partial headless_diagnostic data"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
+    },
+    {
+      "id": "backlog-item-detail-lifecycle-summary",
+      "type": "frontend",
+      "frontend": {
+        "component": "LifecycleSummary",
+        "path": "web-app/src/components/backlog/detail/LifecycleSummary.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "LifecycleSummary_should_RenderBlockerChip_When_UseStuckBacklogItemsReturnsMatchingItemId",
+        "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsReturnsNoMatchingItemId",
+        "LifecycleSummary_should_RenderNoChip_When_UseStuckBacklogItemsIsStillLoading",
+        "LifecycleSummary_should_RetainLastKnownBlockerChip_When_UseStuckBacklogItemsReturnsError",
+        "LifecycleSummary_should_RenderDataTestIdWithStageTrackerActive_When_ComposedFromAllThreeChildren",
+        "LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault",
+        "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault"
+      ],
+      "lastModified": "2026-07-21T00:00:00Z"
     },
     {
       "id": "backlog-item-detail",
@@ -216,9 +283,17 @@
         "BacklogItemDetail \u2014 background refresh must not unmount the view",
         "BacklogItemDetail \u2014 description markdown rendering",
         "BacklogItemDetail \u2014 Ship PR action",
-        "e2e:plan-gate-blocks-spawn-until-approved-or-skipped"
+        "e2e:plan-gate-blocks-spawn-until-approved-or-skipped",
+        "BacklogItemDetail \u2014 Story 5.3.1: shouldPoll removal / live updates \u2014 does not re-fetch on an interval for a triage-running item \u2014 the deleted shouldPoll timer never fires",
+        "BacklogItemDetail \u2014 Story 5.3.1: shouldPoll removal / live updates \u2014 applies a live update from the shared store to the displayed item when not editing",
+        "BacklogItemDetail \u2014 Story 5.3.2: edit-mode buffering \u2014 does not apply a buffered event to visible form fields while editMode is true, and applies it on Reload",
+        "BacklogItemDetail \u2014 Story 5.3.2: edit-mode buffering \u2014 warns before overwriting when Save is clicked while a live update is buffered \u2014 Save Anyway proceeds with the original save",
+        "BacklogItemDetail \u2014 Story 5.3.2: edit-mode buffering \u2014 warns before overwriting when Save is clicked while a live update is buffered \u2014 Reload discards the edit and returns to view mode",
+        "BacklogItemDetail \u2014 Task 5.3.1c: terminal-state banner \u2014 shows an archived banner and hides action buttons when BacklogItemArchivedEvent arrives for the open item",
+        "BacklogItemDetail \u2014 Task 5.3.1c: terminal-state banner \u2014 shows a removed banner when BacklogItemRemovedEvent arrives for the open item",
+        "BacklogItemDetail \u2014 Task 5.3.1c: terminal-state banner \u2014 ignores a terminal event for a different item id"
       ],
-      "lastModified": "2026-07-19T00:00:00Z"
+      "lastModified": "2026-07-22T00:00:00Z"
     },
     {
       "id": "backlog-item-form",
@@ -243,6 +318,23 @@
       "lastModified": "2026-07-18T00:00:00Z"
     },
     {
+      "id": "backlog-item-panel",
+      "type": "frontend",
+      "frontend": {
+        "component": "BacklogItemPanel",
+        "path": "web-app/src/components/backlog/BacklogItemPanel.tsx",
+        "markerLine": 2
+      },
+      "tested": true,
+      "testIds": [
+        "BacklogItemPanel \u2014 live updates (Task 5.4.1b) \u2014 reflects a status change applied to the store without re-fetching",
+        "BacklogItemPanel \u2014 terminal state (Task 5.4.1c) \u2014 replaces the View full item action with an InlineNotice when the linked item is archived",
+        "BacklogItemPanel \u2014 terminal state (Task 5.4.1c) \u2014 replaces the View full item action with an InlineNotice when the linked item is removed",
+        "BacklogItemPanel \u2014 terminal state (Task 5.4.1c) \u2014 ignores archive/removed events for a different item"
+      ],
+      "lastModified": "2026-07-22T00:00:00Z"
+    },
+    {
       "id": "backlog-list-page",
       "type": "frontend",
       "frontend": {
@@ -254,9 +346,14 @@
       "testIds": [
         "e2e:backlog-tour-first-visit",
         "e2e:backlog-tour-reopen-button",
-        "e2e:backlog-dev-mode-should-display-a-seeded-backlog-item"
+        "e2e:backlog-dev-mode-should-display-a-seeded-backlog-item",
+        "BacklogPage_should_FadeRowOutThenRemove_When_ItemLeavesFilterViaGenuineLiveUpdate",
+        "BacklogPage_should_RemoveRowInstantly_When_DepartureIsFromBulkResnapshotNotLiveEvent",
+        "BacklogPage_should_SettleInPlace_When_ItemFlapsBackIntoFilterDuringExitTransition",
+        "BacklogPage_should_HideArchivedItems_When_LoadedByDefault",
+        "BacklogPage_should_ShowArchivedItems_When_ShowArchivedToggled"
       ],
-      "lastModified": "2026-07-06T00:00:00Z"
+      "lastModified": "2026-07-22T00:00:00Z"
     },
     {
       "id": "backlog-tour",
@@ -906,6 +1003,30 @@
       "tested": false,
       "testIds": [],
       "lastModified": "2026-05-12T00:00:00Z"
+    },
+    {
+      "id": "use-watch-backlog-items",
+      "type": "frontend",
+      "frontend": {
+        "component": "useWatchBacklogItems",
+        "path": "web-app/src/lib/hooks/useWatchBacklogItems.ts",
+        "markerLine": 0
+      },
+      "tested": true,
+      "testIds": [
+        "useWatchBacklogItems \u2014 fires a listBacklogItems REST call on mount alongside opening the stream",
+        "useWatchBacklogItems \u2014 retries with exponential backoff capped at 30s on stream error",
+        "useWatchBacklogItems \u2014 falls back to REST polling after retries exhaust and attempts one reconnect on next successful poll",
+        "useWatchBacklogItems \u2014 passes lastSeq as after_seq on reconnect",
+        "useWatchBacklogItems \u2014 triggers full resync when a fresh connection's first seq is behind lastSeqRef (server restart)",
+        "useWatchBacklogItems \u2014 triggers full resync and advances lastSeqRef when a forward gap is detected",
+        "useWatchBacklogItems \u2014 does not apply an item_archived event to backlogItemsSlice",
+        "useWatchBacklogItems \u2014 30s idle backstop forces a reconnect and a full refetch after simulated silence past the timeout",
+        "useWatchBacklogItems \u2014 15s visibility staleness check forces a reconnect when the tab regains focus after prolonged silence",
+        "useWatchBacklogItems \u2014 keeps an unrelated item's mapped object referentially stable across another item's live update, and only bumps the changed item's liveVersion",
+        "useWatchBacklogItems \u2014 does not bump liveVersion for an is_snapshot event, only for a genuine live one"
+      ],
+      "lastModified": "2026-07-22T00:00:00Z"
     },
     {
       "id": "vcs-widget",

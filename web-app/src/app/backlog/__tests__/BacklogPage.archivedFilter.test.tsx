@@ -1,11 +1,21 @@
 /**
  * Regression test for the backlog default-view archived-item leak: the page
- * used to call listBacklogItems with `includeTerminal: true` unconditionally,
+ * used to fetch server-side with `includeTerminal: true` unconditionally,
  * which (before the ExcludeDone/ExcludeArchived split in
  * session.BacklogItemFilter) also pulled in "archived" items by default with
- * no way to hide them. This verifies the frontend side of the fix — the
- * default fetch excludes archived items, and the "Show Archived" toggle
- * explicitly opts back in.
+ * no way to hide them. This verifies the frontend side of the fix — archived
+ * items are hidden by default and the "Show Archived" toggle explicitly opts
+ * back in.
+ *
+ * Updated for Epic 5.1 (backlog-event-driven-updates, project_plans/
+ * backlog-event-driven-updates): the page no longer fetches via
+ * useBacklogService().listBacklogItems on mount — it reads live from
+ * useWatchBacklogItems and applies the same archived/status/priority/search
+ * filtering client-side instead of via server-side request params (see
+ * design/ux.md Surface 1's "subscribes ... unfiltered ... then filters
+ * client-side same as today"). This test now asserts the client-side
+ * filtering behavior directly rather than the request params sent to a
+ * one-time REST fetch.
  */
 
 import React from "react";
@@ -48,14 +58,29 @@ jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
   GitHubIssuePicker: () => null,
 }));
 
-const listBacklogItems = jest.fn().mockResolvedValue([]);
+// The page's own raw-client hydration path (used only after item creation)
+// — never exercised in this test, but its module-level client construction
+// still runs on mount, so stub the transport layer to keep it inert.
+jest.mock("@connectrpc/connect", () => ({
+  createClient: () => ({ getBacklogItem: jest.fn() }),
+}));
+jest.mock("@connectrpc/connect-web", () => ({
+  createConnectTransport: jest.fn().mockReturnValue({}),
+}));
+jest.mock("@/lib/config", () => ({
+  getApiBaseUrl: () => "http://localhost:8543",
+  createAuthInterceptor: () => jest.fn(),
+}));
+
+jest.mock("@/lib/store", () => ({
+  useAppDispatch: () => jest.fn(),
+}));
 
 jest.mock("@/lib/hooks/useBacklogService", () => {
   const actual = jest.requireActual("@/lib/hooks/useBacklogService");
   return {
     ...actual,
     useBacklogService: () => ({
-      listBacklogItems,
       createBacklogItem: jest.fn(),
       importGitHubIssue: jest.fn(),
       triggerTriage: jest.fn(),
@@ -63,42 +88,60 @@ jest.mock("@/lib/hooks/useBacklogService", () => {
   };
 });
 
+// useWatchBacklogItems (mocked below) now returns domain-shaped BacklogItem
+// objects directly (Epic 5.2 fix — mapping happens inside the hook), so
+// these fixtures mirror useBacklogService.ts's mapped BacklogItem shape, not
+// the raw proto message.
+const activeItem = {
+  id: "item-active",
+  title: "Active item",
+  status: "in_progress",
+  priority: 3,
+  acCriteria: [],
+} as any;
+
+const archivedItem = {
+  id: "item-archived",
+  title: "Archived item",
+  status: "archived",
+  priority: 3,
+  acCriteria: [],
+} as any;
+
+const mockUseWatchBacklogItems = jest.fn();
+jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
+  useWatchBacklogItems: () => mockUseWatchBacklogItems(),
+}));
+
 describe("BacklogPage archived-item default filtering", () => {
   beforeEach(() => {
-    listBacklogItems.mockClear();
-    listBacklogItems.mockResolvedValue([]);
+    mockUseWatchBacklogItems.mockReturnValue({
+      items: [activeItem, archivedItem],
+      connectionState: "live",
+    });
   });
 
-  it("BacklogPage_should_FetchWithIncludeArchivedFalse_When_LoadedByDefault", async () => {
+  it("BacklogPage_should_HideArchivedItems_When_LoadedByDefault", async () => {
     render(<BacklogPage />);
 
-    await waitFor(() => expect(listBacklogItems).toHaveBeenCalled());
-
-    expect(listBacklogItems).toHaveBeenCalledWith(
-      expect.objectContaining({ includeTerminal: true, includeArchived: false })
-    );
+    await waitFor(() => expect(screen.getByText("Active item")).toBeInTheDocument());
+    expect(screen.queryByText("Archived item")).not.toBeInTheDocument();
   });
 
-  it("BacklogPage_should_RefetchWithIncludeArchivedTrue_When_ShowArchivedToggled", async () => {
+  it("BacklogPage_should_ShowArchivedItems_When_ShowArchivedToggled", async () => {
     render(<BacklogPage />);
 
-    await waitFor(() => expect(listBacklogItems).toHaveBeenCalled());
-    listBacklogItems.mockClear();
+    await waitFor(() => expect(screen.getByText("Active item")).toBeInTheDocument());
 
     const toggle = screen.getByTestId("backlog-show-archived-toggle");
     fireEvent.click(toggle);
 
-    await waitFor(() =>
-      expect(listBacklogItems).toHaveBeenCalledWith(
-        expect.objectContaining({ includeArchived: true })
-      )
-    );
+    await waitFor(() => expect(screen.getByText("Archived item")).toBeInTheDocument());
+    expect(screen.getByText("Active item")).toBeInTheDocument();
   });
 
   it("BacklogPage_should_RenderShowArchivedToggle_UncheckedByDefault", async () => {
     render(<BacklogPage />);
-
-    await waitFor(() => expect(listBacklogItems).toHaveBeenCalled());
 
     const toggle = screen.getByTestId("backlog-show-archived-toggle") as HTMLInputElement;
     expect(toggle.checked).toBe(false);

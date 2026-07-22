@@ -66,4 +66,54 @@ test.describe('directory session creation', () => {
     expect(body.oneOff).toBeFalsy();
     expect(body.path).toBeTruthy();
   });
+
+  // AC2: CreateSession must carry a bounded client-side timeout so a stalled
+  // backend can't leave the Create button grayed out forever. ConnectRPC
+  // encodes timeoutMs as the "Connect-Timeout-Ms" request header — asserting
+  // on the header lets this test verify the wiring without waiting out a
+  // real multi-minute timeout.
+  test('CreateSession request carries a bounded Connect-Timeout-Ms header', async ({ page }) => {
+    await openInCreationMode(page);
+    await page.getByRole('radio', { name: 'Directory' }).click();
+    await page.locator('input[aria-label="Session source input"]').fill('/tmp');
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
+
+    const requestPromise = page.waitForRequest(
+      (req) => req.url().includes('CreateSession') && req.method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Create Session' }).click();
+
+    const request = await requestPromise;
+    const timeoutHeader = request.headers()['connect-timeout-ms'];
+    expect(timeoutHeader).toBeTruthy();
+    const timeoutMs = Number(timeoutHeader);
+    expect(timeoutMs).toBeGreaterThan(0);
+    // Must not be so large it's effectively unbounded, and must be well above
+    // the debounce/render noise floor.
+    expect(timeoutMs).toBeGreaterThan(60_000);
+    expect(timeoutMs).toBeLessThan(10 * 60_000);
+  });
+
+  // AC2: if CreateSession never responds, the Create button must re-enable
+  // with an error rather than staying grayed out forever. We can't wait out
+  // the real ~160s client timeout in a test, so this simulates the timeout
+  // by aborting the intercepted request quickly — exercising the exact same
+  // rejection→catch→setIsSubmitting(false) path the real timeout triggers.
+  test('Create button recovers when CreateSession fails instead of staying grayed out', async ({ page }) => {
+    await openInCreationMode(page);
+    await page.getByRole('radio', { name: 'Directory' }).click();
+    await page.locator('input[aria-label="Session source input"]').fill('/tmp');
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
+
+    await page.route('**/session.v1.SessionService/CreateSession', async (route) => {
+      await route.abort('timedout');
+    });
+
+    await page.getByRole('button', { name: 'Create Session' }).click();
+    await expect(page.getByText('Creating...')).toBeVisible();
+
+    // Once the (simulated) timeout fires, the button must re-enable — not
+    // stay grayed out indefinitely.
+    await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 10_000 });
+  });
 });

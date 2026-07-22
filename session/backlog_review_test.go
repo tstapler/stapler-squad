@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -506,6 +507,48 @@ func TestRunPreGateSecurityCheck_DetectsNewPatterns(t *testing.T) {
 	}
 }
 
+// TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff
+// is the automated proof backing backlog-item-detail-ux's Story 4.1.1 finding
+// (plan.md's Unresolved Question #1): RunPreGateSecurityCheck's error string is
+// built exclusively from secretPatterns[i].name — a fixed, hardcoded label from
+// the pattern table, never the diff text or the substring matched within it — so
+// the %v-formatted error consumed by review_gate.go's guardrail summary can never
+// leak a raw secret. Feeds a diff containing a real, distinctive matched secret
+// value through the check for each pattern and asserts the returned error string
+// contains only "secret pattern detected: <name>", never the matched value.
+func TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff(t *testing.T) {
+	cases := []struct {
+		name          string
+		diff          string
+		matchedSecret string
+	}{
+		{"AKIA_key", "aws credentials: AKIA1234567890ABCDEF", "AKIA1234567890ABCDEF"},
+		{"github_pat", "token=" + "ghp_" + strings.Repeat("a", 36), "ghp_" + strings.Repeat("a", 36)},
+		{"openai_key", "key=" + "sk-" + strings.Repeat("b", 48), "sk-" + strings.Repeat("b", 48)},
+		{"stripe_secret_key", "sk_live_" + strings.Repeat("c", 24), "sk_live_" + strings.Repeat("c", 24)},
+		{"database_url", "postgres://admin:s3cr3t-p4ss@db.internal/prod", "s3cr3t-p4ss"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RunPreGateSecurityCheck(tc.diff)
+			require.Error(t, err, "pattern %q should be detected", tc.name)
+
+			errText := fmt.Sprintf("%v", err)
+			assert.NotContains(t, errText, tc.matchedSecret,
+				"error string must never embed the raw matched secret substring")
+			assert.Contains(t, errText, "secret pattern detected: "+tc.name,
+				"error string must only ever contain the pattern's fixed name")
+
+			// Reproduces review_gate.go:228's exact Sprintf call that surfaces this
+			// text to the UI, to prove the leak-check holds at the actual consuming
+			// call site too, not just at RunPreGateSecurityCheck's own boundary.
+			summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", err)
+			assert.NotContains(t, summary, tc.matchedSecret)
+		})
+	}
+}
+
 // runGit runs a git command in dir for test setup, failing the test on error.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
@@ -551,6 +594,52 @@ func TestGetGitDiff_ImplicitHEADMissesOtherBranchCommits(t *testing.T) {
 	diff, _, err = GetGitDiffRef(context.Background(), repo, baseSHA, "feature")
 	require.NoError(t, err)
 	assert.Contains(t, diff, "feature.txt", "GetGitDiffRef with an explicit branch name must find commits on that branch regardless of what's checked out")
+}
+
+// TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails
+// is the automated proof backing backlog-item-detail-ux's PR #208 review
+// finding: BlockedNotice.tsx renders session.reviewVerdict.summary for BOTH
+// "review-blocked-*" sessions (summary built from RunPreGateSecurityCheck,
+// covered by TestRunPreGateSecurityCheck_should_NeverEmbedRawSecretSubstringInErrorString_When_SecretDetectedInDiff
+// above) AND "diff-error-*" sessions (summary built from GetGitDiffRef's
+// wrapped command error, review_gate.go ~line 191) — but only the former had
+// an explicit regression test. This proves GetGitDiffRef's error
+// (fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)) never embeds
+// the failed git command's stderr or diff content: cmd.Output()'s returned
+// *exec.ExitError.Error() is just the process exit status ("exit status N"),
+// never the process's stderr, even though the stderr text itself (asserted
+// below) does contain revision/path detail that must never reach the UI.
+func TestGetGitDiffRefError_should_NeverEmbedCommandStderr_When_DiffCommandFails(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644))
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+
+	// deadbeef..nonexistent-branch is guaranteed to fail to resolve, producing
+	// a real git stderr message ("fatal: ambiguous argument ... unknown
+	// revision or path not in the working tree ...") that must not leak into
+	// the wrapped error returned to callers.
+	_, _, err := GetGitDiffRef(context.Background(), repo, "deadbeef", "nonexistent-branch")
+	require.Error(t, err)
+
+	errText := fmt.Sprintf("%v", err)
+	assert.Contains(t, errText, "git diff deadbeef..nonexistent-branch in "+repo,
+		"wrapped error must contain only the range arg and directory — no command output")
+	assert.NotContains(t, errText, "fatal:",
+		"wrapped error must never embed the underlying git command's stderr")
+	assert.NotContains(t, errText, "ambiguous argument",
+		"wrapped error must never embed the underlying git command's stderr text")
+
+	// Reproduces review_gate.go:189-190's exact Sprintf call that surfaces
+	// this text to the UI as a diff-error-* session's reviewVerdict.summary,
+	// to prove the leak-check holds at the actual consuming call site too.
+	summary := fmt.Sprintf("Review blocked: could not compute a diff for this session (%v). "+
+		"The recorded base commit may be missing or corrupted — this needs investigation, not rework.", err)
+	assert.NotContains(t, summary, "fatal:")
+	assert.NotContains(t, summary, "ambiguous argument")
 }
 
 // ─── BuildReviewCallOptions ─────────────────────────────────────────────────

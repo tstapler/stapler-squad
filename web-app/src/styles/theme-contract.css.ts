@@ -51,6 +51,11 @@ export const vars = createThemeContract({
     // Accent tints
     accentBg: null,
     accentHover: null,
+    // Text/icon color for controls rendered on accentBg (e.g. InlineNotice's
+    // icon and "Reload"-style action button) — needs its own tuned value
+    // per theme because `primary` alone doesn't reliably hit 4.5:1 against
+    // accentBg in every theme (see theme.css.ts for per-theme contrast notes).
+    accentText: null,
 
     // Inputs
     inputBackground: null,

@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const pageWrapper = style({
@@ -264,6 +264,62 @@ export const tableRow = style({
 
 export const tableRowActive = style({
   background: vars.color.accentBg,
+});
+
+// Sweep fix (backlog-event-driven-updates Phase 5 compliance sweep,
+// 2026-07-22): ux.md UX AC #6 requires list rows to get "a background flash
+// that fades within ~1 second" on a genuine live update, mirroring
+// BacklogItemCard.css.ts's `justChanged` (used by the Kanban board) — the
+// original list-page implementation wired liveVersion tracking for the exit
+// transition (Epic 6.3, tableRowExiting below) but never added the in-place
+// flash treatment itself for rows that stay visible.
+const rowFlashKeyframes = keyframes({
+  "0%": { backgroundColor: vars.color.accentHover },
+  "100%": { backgroundColor: "transparent" },
+});
+
+export const tableRowJustChanged = style({
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: rowFlashKeyframes,
+      animationDuration: "250ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: no animation — flat instant tint, cleared by the same
+    // timeout that removes the class (mirrors BacklogItemCard.css.ts).
+    "(prefers-reduced-motion: reduce)": {
+      backgroundColor: vars.color.accentHover,
+    },
+  },
+});
+
+// Epic 6.3 (backlog-event-driven-updates): brief fade-out for a row whose
+// item just stopped matching the active filter due to a genuine live status
+// change (ux.md §7 — "reads as moved, not vanished"), instead of an instant
+// disappearance. Composed with `tableRow`, same pattern as
+// BacklogItemCard.css.ts's `justChanged`.
+const rowExitKeyframes = keyframes({
+  "0%": { opacity: 1 },
+  "100%": { opacity: 0 },
+});
+
+export const tableRowExiting = style({
+  pointerEvents: "none",
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: rowExitKeyframes,
+      animationDuration: "200ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: removal is already instant (driven by JS, see
+    // page.tsx), so no transition/animation is applied here — just avoid a
+    // stray opaque flash of the row before it's removed from the DOM.
+    "(prefers-reduced-motion: reduce)": {
+      opacity: 1,
+    },
+  },
 });
 
 export const tableCell = style({

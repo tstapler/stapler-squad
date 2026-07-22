@@ -153,6 +153,9 @@ const (
 	// BacklogServiceTriggerRemediationNowProcedure is the fully-qualified name of the BacklogService's
 	// TriggerRemediationNow RPC.
 	BacklogServiceTriggerRemediationNowProcedure = "/session.v1.BacklogService/TriggerRemediationNow"
+	// BacklogServiceWatchBacklogItemsProcedure is the fully-qualified name of the BacklogService's
+	// WatchBacklogItems RPC.
+	BacklogServiceWatchBacklogItemsProcedure = "/session.v1.BacklogService/WatchBacklogItems"
 )
 
 // BacklogServiceClient is a client for the session.v1.BacklogService service.
@@ -264,6 +267,10 @@ type BacklogServiceClient interface {
 	// Rejects with an error (rather than silently un-parking) when the row has
 	// already exhausted its attempt budget — use ResetStuckRemediation first.
 	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error)
 }
 
 // NewBacklogServiceClient constructs a client for the session.v1.BacklogService service. By
@@ -517,6 +524,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
 			connect.WithClientOptions(opts...),
 		),
+		watchBacklogItems: connect.NewClient[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent](
+			httpClient,
+			baseURL+BacklogServiceWatchBacklogItemsProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -562,6 +575,7 @@ type backlogServiceClient struct {
 	resetStuckRemediation       *connect.Client[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse]
 	bulkResetStuckRemediation   *connect.Client[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse]
 	triggerRemediationNow       *connect.Client[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse]
+	watchBacklogItems           *connect.Client[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent]
 }
 
 // CreateBacklogItem calls session.v1.BacklogService.CreateBacklogItem.
@@ -764,6 +778,11 @@ func (c *backlogServiceClient) TriggerRemediationNow(ctx context.Context, req *c
 	return c.triggerRemediationNow.CallUnary(ctx, req)
 }
 
+// WatchBacklogItems calls session.v1.BacklogService.WatchBacklogItems.
+func (c *backlogServiceClient) WatchBacklogItems(ctx context.Context, req *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error) {
+	return c.watchBacklogItems.CallServerStream(ctx, req)
+}
+
 // BacklogServiceHandler is an implementation of the session.v1.BacklogService service.
 type BacklogServiceHandler interface {
 	// CreateBacklogItem adds a new item to the backlog.
@@ -873,6 +892,10 @@ type BacklogServiceHandler interface {
 	// Rejects with an error (rather than silently un-parking) when the row has
 	// already exhausted its attempt budget — use ResetStuckRemediation first.
 	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error
 }
 
 // NewBacklogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -1122,6 +1145,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceWatchBacklogItemsHandler := connect.NewServerStreamHandler(
+		BacklogServiceWatchBacklogItemsProcedure,
+		svc.WatchBacklogItems,
+		connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.BacklogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BacklogServiceCreateBacklogItemProcedure:
@@ -1204,6 +1233,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceBulkResetStuckRemediationHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerRemediationNowProcedure:
 			backlogServiceTriggerRemediationNowHandler.ServeHTTP(w, r)
+		case BacklogServiceWatchBacklogItemsProcedure:
+			backlogServiceWatchBacklogItemsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1371,4 +1402,8 @@ func (UnimplementedBacklogServiceHandler) BulkResetStuckRemediation(context.Cont
 
 func (UnimplementedBacklogServiceHandler) TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerRemediationNow is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.WatchBacklogItems is not implemented"))
 }

@@ -2,47 +2,55 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
 import type { BacklogItem, AcCriterion, BacklogItemInput, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useBacklogService, mapBacklogItem } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
-import { getStatusLabel } from "@/lib/backlog/status";
+import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
+import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { classifySessionKind } from "@/lib/backlog/sessionKind";
+import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
+import { formatDate } from "@/lib/backlog/formatDate";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
 import { useBacklogItemShipStatus } from "@/lib/hooks/useBacklogItemShipStatus";
-import { getApiBaseUrl } from "@/lib/config";
-import { VcsWidget } from "@/components/shared/VcsWidget";
+import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { useAppSelector } from "@/lib/store";
+import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
+import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
+import { CollapsibleGroup } from "@/components/ui/Collapsible";
+import { InlineNotice } from "@/components/common/InlineNotice";
+import { ConnectionIndicator } from "./ConnectionIndicator";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
-import { SessionMonitor } from "./SessionMonitor";
-import { GateVerdictBox } from "./GateVerdictBox";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
+import { LifecycleSummary } from "./detail/LifecycleSummary";
+import { PlanningSection } from "./detail/PlanningSection";
+import { ReviewingSection } from "./detail/ReviewingSection";
+import { PullRequestSection } from "./detail/PullRequestSection";
+import { DescriptionSection } from "./detail/DescriptionSection";
+import { ActionsSection } from "./detail/ActionsSection";
+import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
+import { VersionControlSection } from "./detail/VersionControlSection";
+import { SessionsSection } from "./detail/SessionsSection";
+import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
+import { ProgressHistorySection } from "./detail/ProgressHistorySection";
+import { NotesSection } from "./detail/NotesSection";
 import * as styles from "./BacklogItemDetail.css";
-import * as markdownStyles from "./markdownBody.css";
 
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
 }
-
-const STATUS_CLASS: Record<string, string> = {
-  idea: styles.statusIdea,
-  refining: styles.statusRefining,
-  ready: styles.statusReady,
-  in_progress: styles.statusInProgress,
-  review: styles.statusReview,
-  done: styles.statusDone,
-  archived: styles.statusArchived,
-};
-
-const getStatusClass = (s: string): string => STATUS_CLASS[s] ?? styles.statusArchived;
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
 
@@ -63,65 +71,6 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   send_back_refining: "Sent back to refining.",
   send_back_ready: "Sent back to ready.",
 };
-
-/** Renders a button's label, swapping in a spinner + "Running…" while `pending`. */
-function ActionButtonLabel({ pending, label }: { pending: boolean; label: string }) {
-  if (!pending) return <>{label}</>;
-  return (
-    <>
-      <span className={styles.buttonSpinner} aria-hidden="true" />
-      Running…
-    </>
-  );
-}
-
-function formatDate(iso?: string): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-/**
- * Epic 3.4 "what ran" surface — resolves an ItemSession's frozen
- * pipelineModeSnapshot against the currently-fetched mode list, purely for
- * display (looking up the human-readable name). The underlying stored
- * value is never re-resolved live. Case priority (see plan.md Story 3.4.1):
- *   1. Snapshot slug not found in the current mode list → "unrecognized"
- *      (checked first — there's no live mode to compare a hash against).
- *   2. Snapshot slug found, but its content hash has since changed →
- *      "resolved" with drifted: true.
- *   3. Snapshot slug found and unchanged (or snapshot hash is empty,
- *      meaning default mode / a pre-feature session) → "resolved" with
- *      drifted: false. Empty pipelineModeSnapshot always short-circuits to
- *      the "default" case before any lookup is attempted.
- */
-type PipelineModeDisplay =
-  | { kind: "resolved"; name: string; drifted: boolean }
-  | { kind: "unrecognized"; slug: string };
-
-function resolvePipelineModeDisplay(
-  session: LinkedSession,
-  modes: PipelineMode[]
-): PipelineModeDisplay {
-  const snapshot = session.pipelineModeSnapshot ?? "";
-  if (snapshot === "") {
-    return { kind: "resolved", name: "default", drifted: false };
-  }
-
-  const match = modes.find((m) => m.slug === snapshot);
-  if (!match) {
-    return { kind: "unrecognized", slug: snapshot };
-  }
-
-  const snapshotHash = session.pipelineModeSnapshotHash ?? "";
-  const drifted = snapshotHash !== "" && snapshotHash !== match.contentHash;
-  return { kind: "resolved", name: match.name, drifted };
-}
 
 export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const { track } = useAnalytics();
@@ -186,8 +135,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // Triage progress tracking
   const [triageElapsedSeconds, setTriageElapsedSeconds] = useState(0);
 
+  // Called once here (not inside LifecycleSummary) so this component owns the
+  // single fetch/poll — mirrors board/page.tsx calling it once at the page
+  // level and passing the resolved StuckBacklogItem down as a prop, rather
+  // than LifecycleSummary standing up its own transport/client and 60s poll
+  // on every remount (this component remounts via `key={selectedItemId}` on
+  // every backlog item click — see stapler-squad PR #208 review).
+  const { items: stuckItems } = useStuckBacklogItems();
+  const stuckItem = item ? stuckItems.find((i) => i.itemId === item.id) : undefined;
+
   // Version control state for the most recent work session's worktree.
-  const latestWorkSession = [...(item?.linkedSessions ?? [])].reverse().find((s) => s.role === "work");
+  const latestWorkSession = useCurrentWorkSession(item);
   // Surfaces the "most recent work session" heuristic's ambiguity when more than
   // one work session is currently active — the heuristic above is unchanged, this
   // only makes it visible via VcsWidgetHeader's "N active sessions" indicator.
@@ -197,6 +155,209 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   // state for a done item) — vcsStatus above comes back null in that case since
   // useVcsStatus needs a live in-memory Instance to query.
   const { data: shipStatus } = useBacklogItemShipStatus(!vcsStatus && item ? item.id : "");
+  const vcsWidgetData = vcsStatus ? fromSessionVcs(vcsStatus) : shipStatus ? fromShipStatus(shipStatus) : null;
+
+  // D6 fix: the current work session's resolved pipeline mode, surfaced as
+  // a compact badge in LifecycleSummary (Task 3.1.4g) — same value the
+  // Sessions section resolves per-row, just also glanceable at the top.
+  const pipelineDisplay = latestWorkSession
+    ? resolvePipelineModeDisplay(latestWorkSession, pipelineModes)
+    : undefined;
+
+  // Epic 5.3 (Story 5.3.1, backlog-event-driven-updates): live updates
+  // replace the old 5s poll entirely. Subscribed unfiltered (no status/
+  // category filter) so this panel keeps showing the item's current state
+  // even if a list/board filter elsewhere would have excluded it (design/
+  // ux.md §3). The hook's own `items` return value is unused here — it
+  // exists only to keep the shared store hydrated/connected; this panel
+  // reads the single item it cares about straight off the store below so
+  // unrelated item updates elsewhere never cause this component to re-run
+  // (selectBacklogItemById only changes reference when THIS item's store
+  // entry changes, unlike the hook's fully-remapped `items` array).
+  // Task 6.2.1c: connectionState is captured here to mount the
+  // ConnectionIndicator in this panel's header (ux.md §3 wireframe, UX AC #20).
+  const { connectionState } = useWatchBacklogItems();
+  const liveRawItem = useAppSelector((state) => selectBacklogItemById(state, itemId));
+
+  // Buffered-update state (Story 5.3.2): while editMode is true, an incoming
+  // live update is NOT applied to the visible item/form — it's stashed here
+  // and offered via an InlineNotice "Reload" action instead, so it can't
+  // silently clobber an in-progress edit.
+  const [bufferedItem, setBufferedItem] = useState<BacklogItem | null>(null);
+  // A Save was attempted while a buffered update was pending — show the
+  // warn-before-overwrite confirmation instead of calling the save RPC.
+  const [saveConfirmPending, setSaveConfirmPending] = useState(false);
+  const [pendingSaveData, setPendingSaveData] = useState<BacklogItemInput | null>(null);
+
+  // Terminal-state (Task 5.3.1c): set when an ArchivedEvent/RemovedEvent
+  // arrives for this item from the separate raw watch below.
+  const [terminalState, setTerminalState] = useState<"archived" | "removed" | null>(null);
+
+  useEffect(() => {
+    if (!liveRawItem) return;
+    const mapped = mapBacklogItem(liveRawItem);
+    if (editMode) {
+      setBufferedItem(mapped);
+      return;
+    }
+    setItem(mapped);
+    setNotesValue(mapped.notes ?? "");
+    // editMode is read from the closure at the time this effect actually
+    // fires (i.e. whenever liveRawItem changes) — it deliberately does NOT
+    // belong in the dependency array. Depending on it would re-run this
+    // effect on every editMode toggle even when no new live item arrived,
+    // which would re-apply a possibly-stale `liveRawItem` right as edit mode
+    // closes and momentarily stomp a just-completed save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRawItem]);
+
+  // Once editMode flips back to false (Cancel, or a completed Save), apply
+  // any update that was buffered while editing — design/ux.md §6's "or exits
+  // edit mode" path.
+  const prevEditModeRef = useRef(editMode);
+  useEffect(() => {
+    if (prevEditModeRef.current && !editMode && bufferedItem) {
+      setItem(bufferedItem);
+      setNotesValue(bufferedItem.notes ?? "");
+      setBufferedItem(null);
+    }
+    prevEditModeRef.current = editMode;
+  }, [editMode, bufferedItem]);
+
+  // Task 5.3.1c: a separate, item-scoped raw event subscription dedicated to
+  // detecting BacklogItemArchivedEvent/BacklogItemRemovedEvent for this item.
+  // useWatchBacklogItems.ts intentionally does NOT dispatch itemArchived into
+  // backlogItemsSlice (see that hook's file header, note 1) — item_archived
+  // carries no full BacklogItem payload, so there is nothing meaningful to
+  // upsert, and the design defers this to component-level handling. There is
+  // also no server-side item-id filter on WatchBacklogItemsRequest, so this
+  // watches unfiltered and matches events against `itemId` client-side. This
+  // is a lightweight, single-purpose stream — unlike useWatchBacklogItems.ts
+  // it does not implement exponential-backoff reconnect/afterSeq replay; a
+  // dropped connection simply stops detecting further archive/removal for
+  // this item until the component remounts.
+  useEffect(() => {
+    setTerminalState(null);
+    const abortController = new AbortController();
+
+    const watchTerminal = async () => {
+      try {
+        const transport = createConnectTransport({
+          baseUrl: getApiBaseUrl(),
+          interceptors: [createAuthInterceptor()],
+        });
+        const client = createClient(BacklogService, transport);
+        const stream = client.watchBacklogItems(
+          { statusFilter: [], categoryFilter: [], afterSeq: 0n },
+          { signal: abortController.signal }
+        );
+        for await (const event of stream) {
+          if (event.event.case === "itemArchived" && event.event.value.itemId === itemId) {
+            setTerminalState("archived");
+          } else if (event.event.case === "itemRemoved" && event.event.value.itemId === itemId) {
+            setTerminalState("removed");
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        if (abortController.signal.aborted) return;
+        console.error("[BacklogItemDetail] terminal-state watch stream error:", err);
+      }
+    };
+
+    void watchTerminal();
+    return () => {
+      abortController.abort();
+    };
+  }, [itemId]);
+
+  // Task 3.1.4i: every sibling CollapsibleSection (Reviewing/Pull Request
+  // from Story 3.1.2, Description from 3.1.3, the rest from 3.1.4) shares
+  // one CollapsibleGroup so their headers get Home/End/Arrow roving-
+  // tabindex nav. Persistence (Story 1.1.1's contract) is threaded through
+  // as a controlled `value`/`onValueChange` on the group, backed by
+  // useSectionExpandState per section key — the same
+  // `backlog-detail-section-${itemId}-${sectionKey}` localStorage
+  // convention used everywhere else.
+  //
+  // `item` is still null on this component's very first render (load()
+  // resolves asynchronously), so a status-derived default computed here
+  // would always evaluate against a not-yet-loaded item and get locked in
+  // as false by useSectionExpandState's one-time useState initializer —
+  // every status-dependent section would default to false regardless of
+  // the actual loaded status. Sections with a static default (not
+  // status-dependent) are unaffected and get it directly.
+  const [reviewingExpanded, setReviewingExpanded] = useSectionExpandState(itemId, "reviewing", false);
+  const [pullRequestExpanded, setPullRequestExpanded] = useSectionExpandState(itemId, "pull-request", true);
+  const [planArtifactsExpanded, setPlanArtifactsExpanded] = useSectionExpandState(itemId, "plan-artifacts", false);
+  const [versionControlExpanded, setVersionControlExpanded] = useSectionExpandState(itemId, "version-control", false);
+  const [sessionsExpanded, setSessionsExpanded] = useSectionExpandState(itemId, "sessions", true);
+  const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
+  const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
+  const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
+  const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", false);
+
+  // Story 3.1.5: applies each status-dependent section's real default
+  // exactly once, the first time `item` becomes available after this
+  // instance's initial load — never again afterward (guarded by the ref),
+  // so a later live update's status change can never retroactively re-open a
+  // section the user has since collapsed. Combined with Story 3.1.1's
+  // `key={itemId}` remount at the call site, this ref naturally resets per
+  // item with no extra plumbing. Only opens a section when the user has no
+  // existing persisted preference for it (a direct localStorage read,
+  // bypassing useSectionExpandState's own already-applied fallback) — it
+  // must never clobber a preference from a previous visit to this same
+  // item.
+  const initialExpandAppliedRef = useRef(false);
+  useEffect(() => {
+    if (initialExpandAppliedRef.current || !item) return;
+    initialExpandAppliedRef.current = true;
+
+    const hasStoredPreference = (sectionKey: string): boolean => {
+      try {
+        return localStorage.getItem(`backlog-detail-section-${itemId}-${sectionKey}`) !== null;
+      } catch {
+        return false;
+      }
+    };
+
+    if (item.status === "review" && !hasStoredPreference("reviewing")) {
+      setReviewingExpanded(true);
+    }
+    if (
+      ["in_progress", "review", "pr_pending"].includes(item.status) &&
+      !hasStoredPreference("version-control")
+    ) {
+      setVersionControlExpanded(true);
+    }
+    if (item.notes && !hasStoredPreference("notes")) {
+      setNotesExpanded(true);
+    }
+    // Deliberately omits setExpanded functions from deps — they're stable
+    // (useCallback in useSectionExpandState) and including them would
+    // invite a lint-driven "fix" that reintroduces a re-run per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item, itemId]);
+
+  const sectionExpandEntries: Array<[string, boolean, (next: boolean) => void]> = [
+    ["reviewing", reviewingExpanded, setReviewingExpanded],
+    ["pull-request", pullRequestExpanded, setPullRequestExpanded],
+    ["description", descriptionExpanded, setDescriptionExpanded],
+    ["plan-artifacts", planArtifactsExpanded, setPlanArtifactsExpanded],
+    ["version-control", versionControlExpanded, setVersionControlExpanded],
+    ["sessions", sessionsExpanded, setSessionsExpanded],
+    ["workflow", workflowExpanded, setWorkflowExpanded],
+    ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
+    ["notes", notesExpanded, setNotesExpanded],
+  ];
+  const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
+  const handleGroupValueChange = (next: string[]) => {
+    const nextSet = new Set(next);
+    for (const [key, expanded, setExpanded] of sectionExpandEntries) {
+      const shouldBeExpanded = nextSet.has(key);
+      if (shouldBeExpanded !== expanded) setExpanded(shouldBeExpanded);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,6 +382,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     void load();
   }, [load]);
 
+  // Extracted verbatim from the inline session-delete onClick handler
+  // (Story 3.1.4, Task 3.1.4c) so SessionsSection stays a props-down/
+  // callbacks-up presentational component.
+  const handleDeleteSession = useCallback(
+    async (s: LinkedSession) => {
+      if (!item) return;
+      if (!confirm("Delete this session? This cannot be undone.")) return;
+      const toastKey = `${item.id}:delete_session:${s.sessionId}`;
+      setDeletingSessionId(s.sessionId);
+      try {
+        if (s.role === "triage") {
+          await cancelTriage(item.id);
+        } else {
+          track({
+            name: "backlog_delete_session",
+            category: "user_action",
+            component: "BacklogItemDetail",
+            labels: { role: s.role },
+          });
+          await deleteSession(s.sessionId, true);
+        }
+        showActionToast("Session deleted.", "success", toastKey);
+        await load();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to delete session.";
+        if (mountedRef.current) setError(msg);
+        showActionToast(msg, "error", toastKey);
+      } finally {
+        if (mountedRef.current) setDeletingSessionId(null);
+      }
+    },
+    [item, cancelTriage, track, deleteSession, showActionToast, load]
+  );
+
   // Epic 3.4: fetch the current mode list once, for resolving each linked
   // session's frozen pipelineModeSnapshot to a name/drift state. Not
   // filtered by `enabled` — a since-disabled (but not deleted) mode is
@@ -238,15 +433,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       cancelled = true;
     };
   }, [listPipelineModes]);
-
-  // Poll for updated item data while triage is running or while in review (waiting for gate verdict).
-  // Suspend polling while the edit form is open so a background refresh can't clobber unsaved edits.
-  useEffect(() => {
-    const shouldPoll = (item?.triageStatus === "running" || (item?.status === "review" && (!item?.gateVerdict || item.gateVerdict === "PENDING")) || item?.status === "pr_pending") && !editMode;
-    if (!shouldPoll) return;
-    const interval = setInterval(() => { void load(); }, 5_000);
-    return () => clearInterval(interval);
-  }, [item?.triageStatus, item?.status, item?.gateVerdict, editMode, load]); // item.status covers pr_pending polling
 
   // Track triage progress: increment elapsed time while triageStatus === "running"
   useEffect(() => {
@@ -356,6 +542,29 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
+  // Extracted verbatim from the inline manual-review-submit onClick handler
+  // (Story 3.1.3, Task 3.1.3b) so ActionsSection stays a props-down/
+  // callbacks-up presentational component.
+  const handleManualReviewSubmit = useCallback(async () => {
+    if (!item) return;
+    const toastKey = `${item.id}:manual_review_submit`;
+    setActionLoading("manual_review_submit");
+    try {
+      await submitManualReview(item.id, manualReviewOutcome, manualReviewSummary.trim());
+      showActionToast("Review submitted.", "success", toastKey);
+      setShowManualReview(false);
+      setManualReviewSummary("");
+      setManualReviewOutcome("PASS");
+      await load();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Submit failed.";
+      if (mountedRef.current) setError(msg);
+      showActionToast(msg, "error", toastKey);
+    } finally {
+      if (mountedRef.current) setActionLoading(null);
+    }
+  }, [item, manualReviewOutcome, manualReviewSummary, submitManualReview, showActionToast, load]);
+
   // The backend writes skipPlanning/skipReviewGate/autoSpawnSession/autoCreatePR
   // unconditionally on every UpdateBacklogItem call (they're plain proto bools, not
   // optional — no "unset" wire representation), so any partial update that omits them
@@ -396,6 +605,53 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     },
     [item, updateBacklogItem]
   );
+
+  // Task 5.3.2c: the form's Save button submits through this wrapper instead
+  // of calling handleUpdateItem directly. If a live update landed while
+  // editing (bufferedItem is set), the save is intercepted — the real save
+  // RPC is not called until the user explicitly picks "Save Anyway" or
+  // "Reload" on the warn-before-overwrite banner below.
+  const handleFormSubmit = useCallback(
+    async (data: BacklogItemInput) => {
+      if (bufferedItem) {
+        setPendingSaveData(data);
+        setSaveConfirmPending(true);
+        return;
+      }
+      await handleUpdateItem(data);
+    },
+    [bufferedItem, handleUpdateItem]
+  );
+
+  /** "Save Anyway" on the warn-before-overwrite banner: proceeds with the original save, discarding the buffered server-side change. */
+  const handleSaveAnyway = useCallback(async () => {
+    if (!pendingSaveData) return;
+    const data = pendingSaveData;
+    setPendingSaveData(null);
+    setSaveConfirmPending(false);
+    setBufferedItem(null);
+    await handleUpdateItem(data);
+  }, [pendingSaveData, handleUpdateItem]);
+
+  /** Plain "Reload" on the buffered-update banner (Task 5.3.2b) — applies the buffered update but stays in edit mode with the refreshed values. */
+  const handleReloadBuffered = useCallback(() => {
+    if (!bufferedItem) return;
+    setItem(bufferedItem);
+    setNotesValue(bufferedItem.notes ?? "");
+    setBufferedItem(null);
+  }, [bufferedItem]);
+
+  /** "Reload" on the warn-before-overwrite banner (Task 5.3.2c) — discards the in-progress edit, applies the buffered update, and returns to view mode without saving. */
+  const handleConfirmReload = useCallback(() => {
+    if (bufferedItem) {
+      setItem(bufferedItem);
+      setNotesValue(bufferedItem.notes ?? "");
+    }
+    setBufferedItem(null);
+    setPendingSaveData(null);
+    setSaveConfirmPending(false);
+    setEditMode(false);
+  }, [bufferedItem]);
 
   const handleCancelTriage = useCallback(async () => {
     if (!item) return;
@@ -600,9 +856,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   }, [item, overrideVerdict, transitionStatus, lastError, load, showActionToast]);
 
   // Only show the full-screen loader on the INITIAL load (no item yet). Background
-  // refreshes (the triage poll re-runs load() every 5s and toggles `loading`) must
-  // NOT unmount the detail view / edit form, or in-progress edits like unsaved
-  // acceptance criteria get discarded when the form remounts. See stapler-squad#146.
+  // refreshes must NOT unmount the detail view / edit form, or in-progress edits
+  // like unsaved acceptance criteria get discarded when the form remounts.
+  // See stapler-squad#146.
   if (loading && !item) {
     return (
       <article className={styles.container} data-testid="backlog-item-detail">
@@ -643,22 +899,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     );
   }
 
-  const canSpawnSession =
-    item.status === "ready" &&
-    (item.skipPlanning || item.planApproved);
-  // Autonomous mode does its own planning — no plan-approval gate needed.
-  const canRunAutonomously = item.status === "ready";
-
-  // Self-service "Ship PR" action: only makes sense for an item sitting in
-  // review with no PR yet — the exact gap this closes (see
-  // docs/tasks/backlog-feature-improvement.md, 2026-07-18 update). All AC
-  // criteria must be complete before shipping; a gate verdict of PASS is
-  // encouraged (via the button's title) but not required — same
-  // human-override philosophy as the existing "Override → Done" action.
-  const acAllComplete =
-    item.acCriteria.length > 0 && item.acCriteria.every((c) => c.status === "done");
-  const canShipPR = item.status === "review" && !item.prUrl;
-
   if (editMode) {
     return (
       <article
@@ -683,10 +923,36 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             </div>
           </div>
         </div>
+        {/* Epic 6.4: pinned outside scrollArea so the notice can't scroll out
+            of view while editing a long form (ux.md §6 copy/placement pass —
+            non-blocking, informational styling, matches InlineError's
+            informational variant rather than its assertive/error one). */}
+        {saveConfirmPending ? (
+          <div className={styles.bannerBar}>
+            <InlineNotice
+              message="Saving will overwrite a change made elsewhere — Reload first?"
+              actions={[
+                { label: "Save Anyway", onClick: () => void handleSaveAnyway(), variant: "primary" },
+                { label: "Reload", onClick: handleConfirmReload },
+              ]}
+              data-testid="backlog-detail-save-conflict-notice"
+            />
+          </div>
+        ) : bufferedItem ? (
+          <div className={styles.bannerBar}>
+            <InlineNotice
+              message="This item changed elsewhere."
+              actions={[{ label: "Reload", onClick: handleReloadBuffered }]}
+              onDismiss={() => setBufferedItem(null)}
+              data-testid="backlog-detail-buffered-update-notice"
+            />
+          </div>
+        ) : null}
         <div className={styles.scrollArea}>
           <BacklogItemForm
+            key={`${item.id}:${item.updatedAt ?? ""}`}
             initialValues={item}
-            onSubmit={handleUpdateItem}
+            onSubmit={handleFormSubmit}
             onCancel={() => setEditMode(false)}
           />
         </div>
@@ -707,12 +973,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <h2 className={styles.itemTitle}>{item.title}</h2>
             <div className={styles.metaRow}>
               <span
-                className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
-                aria-label={`Status: ${getStatusLabel(item.status)}`}
-              >
-                {getStatusLabel(item.status)}
-              </span>
-              <span
                 className={styles.priorityBadge}
                 aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
               >
@@ -731,14 +991,17 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             </div>
           </div>
           <div className={styles.headerActions}>
-            <button
-              className={styles.editButton}
-              onClick={() => setEditMode(true)}
-              aria-label="Edit item"
-              data-testid="backlog-detail-edit"
-            >
-              Edit
-            </button>
+            <ConnectionIndicator connectionState={connectionState} />
+            {!terminalState && (
+              <button
+                className={styles.editButton}
+                onClick={() => setEditMode(true)}
+                aria-label="Edit item"
+                data-testid="backlog-detail-edit"
+              >
+                Edit
+              </button>
+            )}
             {onClose && (
               <button
                 className={styles.closeButton}
@@ -751,6 +1014,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             )}
           </div>
         </div>
+        {/* Always-visible lifecycle summary — the single authoritative
+            status display, replacing the old standalone status badge (D1). */}
+        <LifecycleSummary item={item} pipelineDisplay={pipelineDisplay} stuckItem={stuckItem} />
       </div>
 
       <div className={styles.scrollArea}>
@@ -797,25 +1063,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           )}
 
         {/* Planning record — read-only triage result for items past idea status */}
-        {item.triageResult && item.status !== "idea" && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Planning</h3>
-            <p className={styles.planSummary}>{item.triageResult.summary}</p>
-            {item.triageResult.tasks && item.triageResult.tasks.length > 0 && (
-              <div className={styles.planTaskList}>
-                {item.triageResult.tasks.map((t, i) => (
-                  <div key={i} className={styles.planTask}>
-                    <span className={styles.planTaskText}>{t.text}</span>
-                    <span className={styles.planTaskMeta}>
-                      {t.estimate && <span className={styles.planTaskBadge}>{t.estimate}</span>}
-                      {t.category && <span className={styles.planTaskBadge}>{t.category}</span>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <PlanningSection item={item} />
 
         {/* Triage failed banner */}
         {item.triageStatus === "failed" && item.status === "idea" && (
@@ -823,79 +1071,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <InlineError type="permanent" onRetry={handleRetriggerTriage} />
           </div>
         )}
-
-        {/* Gate Verdict + review context */}
-        {item.status === "review" && (() => {
-          const workSession = [...item.linkedSessions].reverse().find((s) => s.role === "work");
-          const activeReviewSession = [...item.linkedSessions].reverse().find((s) => s.role === "review" && !s.endedAt && !s.sessionId.startsWith("headless-") && !s.sessionId.startsWith("review-blocked-"));
-          return (
-            <>
-              <div className={styles.section}>
-                <h3 className={styles.sectionTitle}>Reviewing</h3>
-                <div className={styles.reviewContextBox}>
-                  <div className={styles.reviewContextInfo}>
-                    {workSession ? (
-                      <>
-                        <span className={styles.reviewContextLabel}>Work session</span>
-                        <a
-                          className={styles.reviewContextSessionId}
-                          href={`/?session=${workSession.sessionId}`}
-                          title="Open in terminal"
-                        >
-                          {workSession.sessionId}
-                        </a>
-                        {workSession.endedAt && (
-                          <span className={styles.reviewContextDate}>
-                            Completed {new Date(workSession.endedAt).toLocaleString()}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className={styles.reviewContextLabel}>No work session found</span>
-                    )}
-                    {activeReviewSession && (
-                      <>
-                        <span className={styles.reviewContextLabel}>Review session</span>
-                        <a
-                          className={styles.reviewContextSessionId}
-                          href={`/?session=${activeReviewSession.sessionId}`}
-                          title="Open review session in terminal"
-                        >
-                          {activeReviewSession.sessionId}
-                        </a>
-                      </>
-                    )}
-                  </div>
-                  {workSession && (
-                    <button
-                      className={styles.viewChangesButton}
-                      onClick={() => setShowChangesModal(true)}
-                      data-testid="backlog-review-view-changes"
-                    >
-                      View Changes ↗
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className={styles.section}>
-                <GateVerdictBox
-                  verdict={item.gateVerdict ?? "PENDING"}
-                  summary={item.gateVerdictSummary || "Review in progress"}
-                  criteria={item.gateCriteria}
-                  elapsedSeconds={undefined}
-                  onApprove={handleGateApprove}
-                  onReopen={handleGateReopen}
-                  onOverride={handleGateOverride}
-                  onSkipGate={handleGateSkip}
-                  onReReview={() => triggerReReview(item.id).then(() => load())}
-                  actionPending={actionLoading !== null}
-                />
-              </div>
-
-            </>
-          );
-        })()}
 
         {/* Diff modal — reused by the review-flow "View Changes" button above and
             the Version Control section's "View Diff" button below; works for any
@@ -918,59 +1093,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           />
         )}
 
-        {/* PR Pending */}
-        {item.status === "pr_pending" && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Pull Request</h3>
-            <div className={styles.reviewContextBox}>
-              <div className={styles.reviewContextInfo}>
-                {item.prUrl ? (
-                  <>
-                    <span className={styles.reviewContextLabel}>
-                      PR #{item.prNumber} — waiting for merge
-                    </span>
-                    <a
-                      className={styles.reviewContextSessionId}
-                      href={item.prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open pull request on GitHub"
-                    >
-                      {item.prUrl}
-                    </a>
-                  </>
-                ) : (
-                  <span className={styles.reviewContextLabel}>
-                    PR pending — no URL recorded yet
-                  </span>
-                )}
-              </div>
-              <button
-                className={styles.actionButton}
-                onClick={() => handleAction("mark_done")}
-                disabled={actionLoading !== null}
-                aria-busy={actionLoading === "mark_done"}
-                title="Mark done manually (if PR already merged)"
-                data-testid="backlog-action-mark-done"
-              >
-                <ActionButtonLabel pending={actionLoading === "mark_done"} label="Mark Done" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Description */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Description</h3>
-          {item.description ? (
-            <div className={markdownStyles.markdownBody} data-testid="backlog-description-rendered">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.description}</ReactMarkdown>
-            </div>
-          ) : (
-            <p className={styles.emptyText}>No description.</p>
-          )}
-        </div>
-
         {/* Acceptance Criteria */}
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>
@@ -980,598 +1102,106 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
 
         {/* Actions */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Actions</h3>
-          <div className={styles.actionsPanel} role="group" aria-label="Item actions">
-            {item.status === "idea" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("mark_ready")}
-                  disabled={actionLoading !== null || item.acCriteria.length === 0}
-                  aria-disabled={item.acCriteria.length === 0}
-                  aria-busy={actionLoading === "mark_ready"}
-                  title={item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined}
-                  data-testid="backlog-action-mark-ready"
-                >
-                  <ActionButtonLabel pending={actionLoading === "mark_ready"} label="Mark Ready" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading !== null || !item.repoPath}
-                  aria-disabled={!item.repoPath}
-                  aria-busy={actionLoading === "trigger_triage"}
-                  title={!item.repoPath ? "Set repository path first" : undefined}
-                  data-testid="backlog-action-trigger-triage"
-                >
-                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-                </button>
-              </>
-            )}
+        <ActionsSection
+          item={item}
+          actionLoading={actionLoading}
+          latestWorkSession={latestWorkSession}
+          showManualReview={showManualReview}
+          manualReviewOutcome={manualReviewOutcome}
+          manualReviewSummary={manualReviewSummary}
+          onAction={handleAction}
+          onManualReviewOutcomeChange={setManualReviewOutcome}
+          onManualReviewSummaryChange={setManualReviewSummary}
+          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
+          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
+          terminalState={terminalState}
+        />
 
-            {item.status === "ready" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("trigger_triage")}
-                  disabled={actionLoading !== null || !item.repoPath}
-                  aria-disabled={!item.repoPath}
-                  aria-busy={actionLoading === "trigger_triage"}
-                  title={!item.repoPath ? "Set repository path first" : undefined}
-                  data-testid="backlog-action-trigger-triage"
-                >
-                  <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("spawn_session")}
-                  disabled={actionLoading !== null || !canSpawnSession}
-                  aria-disabled={!canSpawnSession}
-                  aria-busy={actionLoading === "spawn_session"}
-                  title={
-                    !canSpawnSession
-                      ? "Approve the plan or enable skip_planning to spawn a session"
-                      : undefined
-                  }
-                  data-testid="backlog-action-spawn-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "spawn_session"} label="Spawn Session" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("spawn_session_autonomous")}
-                  disabled={actionLoading !== null || !canRunAutonomously}
-                  aria-disabled={!canRunAutonomously}
-                  aria-busy={actionLoading === "spawn_session_autonomous"}
-                  title={
-                    !canRunAutonomously
-                      ? "Item must be in Ready status to run autonomously"
-                      : "Run the agent without human approval for tool calls"
-                  }
-                  data-testid="backlog-action-run-autonomously"
-                >
-                  <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
-                </button>
-                {item.planArtifactsPath && (
-                  <button
-                    className={styles.actionButton}
-                    onClick={() => handleAction("approve_plan")}
-                    disabled={actionLoading !== null}
-                    aria-busy={actionLoading === "approve_plan"}
-                    data-testid="backlog-action-approve-plan"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
-                  </button>
-                )}
-              </>
-            )}
-
-            {item.status === "in_progress" && item.linkedSessions.length > 0 && (
-              <>
-                <a
-                  className={styles.actionButton}
-                  href={`/?session=${([...item.linkedSessions].reverse().find(s => s.role === "work") ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
-                  data-testid="backlog-action-view-session"
-                >
-                  View Session
-                </a>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "restart_session"}
-                  title="Stop the current session and re-spawn it in a fresh git worktree"
-                  data-testid="backlog-action-restart-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-                </button>
-              </>
-            )}
-
-            {item.status === "review" && (
-              <>
-                {canShipPR && (
-                  <button
-                    className={styles.actionButton}
-                    onClick={() => handleAction("ship_pr")}
-                    disabled={actionLoading !== null || !acAllComplete}
-                    aria-disabled={!acAllComplete}
-                    aria-busy={actionLoading === "ship_pr"}
-                    title={
-                      !acAllComplete
-                        ? "All acceptance criteria must be complete before shipping a PR."
-                        : "Ask the agent to push the branch and open a pull request for this item."
-                    }
-                    data-testid="backlog-action-ship-pr"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "ship_pr"} label="🚀 Ship PR" />
-                  </button>
-                )}
-                <button
-                  className={`${styles.actionButton} ${styles.actionButtonDanger}`}
-                  onClick={() => handleAction("override_done")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "override_done"}
-                  data-testid="backlog-action-override-done"
-                >
-                  <ActionButtonLabel pending={actionLoading === "override_done"} label="Override → Done" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("re_review")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "re_review"}
-                  data-testid="backlog-action-re-review"
-                >
-                  <ActionButtonLabel pending={actionLoading === "re_review"} label="Re-review" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("manual_review")}
-                  disabled={actionLoading !== null}
-                  data-testid="backlog-action-manual-review"
-                >
-                  Submit Review
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("restart_session")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "restart_session"}
-                  title="Stop the review session and restart work from scratch in a fresh git worktree"
-                  data-testid="backlog-action-restart-session"
-                >
-                  <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-                </button>
-              </>
-            )}
-
-            {showManualReview && item.status === "review" && (
-              <div className={styles.manualReviewForm} data-testid="manual-review-form">
-                <h4 className={styles.manualReviewTitle}>Submit Review</h4>
-                <div className={styles.manualReviewRow}>
-                  <label className={styles.manualReviewLabel}>Verdict</label>
-                  <select
-                    className={styles.manualReviewSelect}
-                    value={manualReviewOutcome}
-                    onChange={(e) => setManualReviewOutcome(e.target.value)}
-                    data-testid="manual-review-outcome"
-                  >
-                    <option value="PASS">PASS — meets all criteria</option>
-                    <option value="FAIL">FAIL — does not meet criteria</option>
-                    <option value="PARTIAL">PARTIAL — partially meets criteria</option>
-                    <option value="UNVERIFIABLE">UNVERIFIABLE — cannot verify</option>
-                  </select>
-                </div>
-                <div className={styles.manualReviewRow}>
-                  <label className={styles.manualReviewLabel}>Summary</label>
-                  <textarea
-                    className={styles.manualReviewTextarea}
-                    placeholder="Describe your findings…"
-                    value={manualReviewSummary}
-                    onChange={(e) => setManualReviewSummary(e.target.value)}
-                    rows={4}
-                    data-testid="manual-review-summary"
-                  />
-                </div>
-                <div className={styles.manualReviewActions}>
-                  <button
-                    className={styles.actionButton}
-                    disabled={!manualReviewSummary.trim() || actionLoading !== null}
-                    aria-busy={actionLoading === "manual_review_submit"}
-                    onClick={async () => {
-                      const toastKey = `${item.id}:manual_review_submit`;
-                      setActionLoading("manual_review_submit");
-                      try {
-                        await submitManualReview(item.id, manualReviewOutcome, manualReviewSummary.trim());
-                        showActionToast("Review submitted.", "success", toastKey);
-                        setShowManualReview(false);
-                        setManualReviewSummary("");
-                        setManualReviewOutcome("PASS");
-                        await load();
-                      } catch (e) {
-                        const msg = e instanceof Error ? e.message : "Submit failed.";
-                        if (mountedRef.current) setError(msg);
-                        showActionToast(msg, "error", toastKey);
-                      } finally {
-                        if (mountedRef.current) setActionLoading(null);
-                      }
-                    }}
-                    data-testid="manual-review-submit"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "manual_review_submit"} label="Submit" />
-                  </button>
-                  <button
-                    className={styles.actionButtonSecondary}
-                    onClick={() => { setShowManualReview(false); setManualReviewSummary(""); }}
-                    data-testid="manual-review-cancel"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {item.status === "done" && (
-              <>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("archive")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "archive"}
-                  data-testid="backlog-action-archive"
-                >
-                  <ActionButtonLabel pending={actionLoading === "archive"} label="Archive" />
-                </button>
-                <button
-                  className={styles.actionButton}
-                  onClick={() => handleAction("reopen")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "reopen"}
-                  data-testid="backlog-action-reopen"
-                >
-                  <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
-                </button>
-              </>
-            )}
-
-            {/* Backward transitions — visible whenever there's an earlier stage to return to */}
-            {["refining", "ready", "in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-              <>
-                <button
-                  className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-                  onClick={() => handleAction("send_back_idea")}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "send_back_idea"}
-                  title="Reset to Idea and clear plan approval so triage can re-run"
-                  data-testid="backlog-action-send-back-idea"
-                >
-                  <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
-                </button>
-                {["in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-                  <button
-                    className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-                    onClick={() => handleAction("send_back_ready")}
-                    disabled={actionLoading !== null}
-                    aria-busy={actionLoading === "send_back_ready"}
-                    title="Move back to Ready to re-spawn without full re-triage"
-                    data-testid="backlog-action-send-back-ready"
-                  >
-                    <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
-                  </button>
-                )}
-              </>
-            )}
-
-            <button
-              className={styles.actionButtonDanger}
-              onClick={() => handleAction("delete")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "delete"}
-              data-testid="backlog-action-delete"
-            >
-              <ActionButtonLabel pending={actionLoading === "delete"} label="Delete" />
-            </button>
-          </div>
-        </div>
-
-        {/* Plan Artifacts Path */}
-        {item.planArtifactsPath && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Plan Artifacts</h3>
-            <code className={styles.artifactsPath}>{item.planArtifactsPath}</code>
-          </div>
-        )}
-
-        {/* Version Control — live VCS state for the most recent work session, falling
-            back to the durable ship-status check once the live worktree is gone (the
-            normal state for a done item — see useBacklogItemShipStatus). The
-            fallback-by-data-presence rule (vcsStatus wins when both resolve non-null)
-            is preserved exactly from the pre-VcsWidget implementation. */}
-        {(() => {
-          const widgetData = vcsStatus ? fromSessionVcs(vcsStatus) : shipStatus ? fromShipStatus(shipStatus) : null;
-          return (
-            widgetData && (
-              <div className={styles.section}>
-                <h3 className={styles.sectionTitle}>Version Control</h3>
-                <VcsWidget
-                  data={widgetData}
-                  mode="full"
-                  onViewDiff={() => setShowChangesModal(true)}
-                  activeSessionCount={activeWorkSessionCount}
-                  worktreePath={latestWorkSession?.worktreePath}
-                  onBrowseFiles={() => setShowFileBrowser(true)}
-                />
-              </div>
-            )
-          );
-        })()}
-
-        {/* Linked Sessions */}
-        {item.linkedSessions.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Sessions ({item.linkedSessions.length})</h3>
-            <div className={styles.sessionList} role="list" aria-label="Linked sessions">
-              {item.linkedSessions.map((s) => {
-                // A session without endedAt that isn't in the active phase for this
-                // item's current status is a stale/orphaned record — label it ended.
-                const statusToRole: Record<string, string> = {
-                  idea: "triage",
-                  in_progress: "work",
-                  review: "review",
-                };
-                const isOrphan = !s.endedAt && s.role !== statusToRole[item.status];
-                const pipelineDisplay = resolvePipelineModeDisplay(s, pipelineModes);
-                return (
-                  <div
-                    key={s.entityId ?? s.sessionId}
-                    className={styles.sessionRow}
-                    role="listitem"
-                  >
-                    <div className={styles.sessionRowMain}>
-                    {s.role === "triage" || s.sessionId.startsWith("headless-") || s.sessionId.startsWith("review-blocked-") ? (
-                      <span className={styles.sessionLink}>
-                        <span className={styles.sessionId} title={s.sessionId}>
-                          {s.sessionId.startsWith("headless-review-") ? "headless review" : s.sessionId.startsWith("review-blocked-") ? "review blocked" : s.sessionId}
-                        </span>
-                        <span className={styles.sessionRole}>{s.role}</span>
-                        {s.worktreeBranch && (
-                          <span className={styles.branchBadge} title="Git branch for this work session">{s.worktreeBranch}</span>
-                        )}
-                        {s.startedAt && (
-                          <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>
-                        )}
-                        {s.estimatedCostUsd > 0 && (
-                          <span className={styles.sessionCost} title="Estimated session cost">${s.estimatedCostUsd.toFixed(4)}</span>
-                        )}
-                        {isOrphan && (
-                          <span className={styles.sessionEndedBadge}>ended</span>
-                        )}
-                      </span>
-                    ) : (
-                      <a
-                        className={styles.sessionLink}
-                        href={`/?session=${s.sessionId}`}
-                        title="Open in terminal"
-                      >
-                        <span className={styles.sessionId} title={s.sessionId}>
-                          {s.sessionId}
-                        </span>
-                        <span className={styles.sessionRole}>{s.role}</span>
-                        {s.worktreeBranch && (
-                          <span className={styles.branchBadge} title="Git branch for this work session">{s.worktreeBranch}</span>
-                        )}
-                        {s.startedAt && (
-                          <span className={styles.sessionDate}>{formatDate(s.startedAt)}</span>
-                        )}
-                        {s.estimatedCostUsd > 0 && (
-                          <span className={styles.sessionCost} title="Estimated session cost">${s.estimatedCostUsd.toFixed(4)}</span>
-                        )}
-                        {isOrphan && (
-                          <span className={styles.sessionEndedBadge}>ended</span>
-                        )}
-                      </a>
-                    )}
-                    <button
-                      className={styles.sessionDeleteBtn}
-                      disabled={deletingSessionId === s.sessionId}
-                      aria-label="Delete session"
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        if (!confirm("Delete this session? This cannot be undone.")) return;
-                        const toastKey = `${item.id}:delete_session:${s.sessionId}`;
-                        setDeletingSessionId(s.sessionId);
-                        try {
-                          if (s.role === "triage") {
-                            await cancelTriage(item.id);
-                          } else {
-                            track({ name: "backlog_delete_session", category: "user_action", component: "BacklogItemDetail", labels: { role: s.role } });
-                            await deleteSession(s.sessionId, true);
-                          }
-                          showActionToast("Session deleted.", "success", toastKey);
-                          await load();
-                        } catch (err) {
-                          const msg = err instanceof Error ? err.message : "Failed to delete session.";
-                          if (mountedRef.current) setError(msg);
-                          showActionToast(msg, "error", toastKey);
-                        } finally {
-                          if (mountedRef.current) setDeletingSessionId(null);
-                        }
-                      }}
-                    >
-                      {deletingSessionId === s.sessionId ? "…" : "Delete"}
-                    </button>
-                  </div>
-                  <div className={styles.pipelineGroup} role="group" aria-label="Pipeline">
-                    <span className={styles.pipelineLabel}>Pipeline:</span>{" "}
-                    {pipelineDisplay.kind === "unrecognized" ? (
-                      <span className={styles.pipelineValue}>
-                        {`custom (unrecognized mode: '${pipelineDisplay.slug}')`}
-                      </span>
-                    ) : (
-                      <>
-                        <span className={styles.pipelineValue}>{pipelineDisplay.name}</span>
-                        {pipelineDisplay.drifted && (
-                          <>
-                            {" "}
-                            <span className={styles.pipelineDriftBadge}>(content since changed)</span>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {s.reviewVerdict && (s.reviewVerdict.summary || (s.reviewVerdict.perCriterion?.length ?? 0) > 0) && (
-                    <div className={styles.verdictDetail} aria-label="Review verdict detail">
-                      {s.reviewVerdict.summary && (
-                        <span className={styles.verdictSummary}>
-                          <strong>{s.reviewVerdict.overallOutcome}:</strong> {s.reviewVerdict.summary}
-                        </span>
-                      )}
-                      {s.reviewVerdict.perCriterion?.map((c) => (
-                        <div key={c.criterionIndex} className={styles.verdictCriterion}>
-                          <span>#{c.criterionIndex} {c.outcome}</span>
-                          {c.evidence && <span>— {c.evidence}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  </div>
-                );
-              })}
-            </div>
-            {item.totalEstimatedCostUsd > 0 && (
-              <p className={styles.sessionTotalCost}>
-                Total estimated cost: <strong>${item.totalEstimatedCostUsd.toFixed(4)}</strong>
-              </p>
-            )}
-
-            {/* Session monitor for the most recent active session.
-                A session is only considered active if the item is in the
-                matching lifecycle phase — prevents ghost "RUNNING" tiles for
-                sessions that died without setting endedAt. */}
-            {(() => {
-              const statusToRole: Record<string, string> = {
-                idea: "triage",
-                in_progress: "work",
-                review: "review",
-              };
-              const expectedRole = statusToRole[item.status];
-              const active = [...item.linkedSessions]
-                .reverse()
-                .find((s) => !s.endedAt && s.role === expectedRole && !s.sessionId.startsWith("headless-") && !s.sessionId.startsWith("review-blocked-"));
-              if (!active) return null;
-              return (
-                <SessionMonitor
-                  sessionId={active.sessionId}
-                  sessionRole={active.role}
-                  isRunning={true}
-                />
-              );
-            })()}
-          </div>
-        )}
-
-        {/* Workflow / Status History */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Workflow</h3>
-          {item.statusEvents.length > 0 ? (
-            <div className={styles.workflowTimeline} role="list" aria-label="Status history">
-              {item.statusEvents.map((ev) => (
-                <div key={ev.id} className={styles.workflowEvent} role="listitem">
-                  <div className={styles.workflowEventRow}>
-                    <span className={styles.workflowEventFrom}>{ev.fromStatus.replace("_", " ")}</span>
-                    <span className={styles.workflowEventArrow}>→</span>
-                    <span className={styles.workflowEventTo}>{ev.toStatus.replace("_", " ")}</span>
-                    <span className={styles.workflowEventMeta}>
-                      {ev.createdAt ? formatDate(ev.createdAt) : ""}
-                      {" · "}{ev.triggeredBy}
-                    </span>
-                  </div>
-                  {ev.note && <span className={styles.workflowEventNote}>{ev.note}</span>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className={styles.emptyText}>No status history recorded.</p>
+        {/* Secondary sections — sibling CollapsibleSections sharing one
+            CollapsibleGroup so their headers get Home/End/Arrow roving-
+            tabindex keyboard nav across all of them (Task 3.1.4i; the
+            concrete justification ADR-027 gives for Radix Accordion over
+            @radix-ui/react-collapsible). Expand state is persisted per
+            item/section via useSectionExpandState and threaded through the
+            group as a controlled value (Story 1.1.1's persistence
+            contract). PlanningSection/ActionsSection are primary,
+            always-visible content and intentionally sit outside the
+            group — since Actions needs to stay reachable without
+            expanding anything, it is positioned before the group rather
+            than in its original position between Description and Plan
+            Artifacts, so every Collapsible-wrapped section (including
+            Reviewing/Pull Request, extracted in Story 3.1.2) can share one
+            contiguous Radix Root. */}
+        <CollapsibleGroup value={openSectionKeys} onValueChange={handleGroupValueChange}>
+          {item.status === "review" && (
+            <ReviewingSection
+              item={item}
+              workSession={latestWorkSession}
+              actionLoading={actionLoading}
+              defaultExpanded={reviewingExpanded}
+              onViewChanges={() => setShowChangesModal(true)}
+              onGateApprove={handleGateApprove}
+              onGateReopen={handleGateReopen}
+              onGateOverride={handleGateOverride}
+              onGateSkip={handleGateSkip}
+              onReReview={() => triggerReReview(item.id).then(() => load())}
+              readOnly={terminalState !== null}
+            />
           )}
-        </div>
 
-        {/* Progress History — the implementer's report_progress audit trail */}
-        {item.progressNotes.length > 0 && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Progress History</h3>
-            <div className={styles.progressNoteList} role="list" aria-label="Implementer progress history">
-              {item.progressNotes.map((n) => (
-                <div key={n.id} className={styles.progressNoteItem} role="listitem">
-                  <div className={styles.progressNoteMeta}>
-                    <span>Criterion #{n.criterionIndex}</span>
-                    <span>·</span>
-                    <span>{n.status}</span>
-                    {n.createdAt && (
-                      <>
-                        <span>·</span>
-                        <span>{formatDate(n.createdAt)}</span>
-                      </>
-                    )}
-                  </div>
-                  {n.note && <span>{n.note}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Notes */}
-        <div className={styles.section}>
-          <h3 className={styles.sectionTitle}>Notes</h3>
-          {editingNotes ? (
-            <>
-              <textarea
-                className={styles.notesTextarea}
-                value={notesValue}
-                onChange={(e) => setNotesValue(e.target.value)}
-                aria-label="Notes"
-                data-testid="backlog-notes-textarea"
-              />
-              <div className={styles.inlineEditActions}>
-                <button
-                  className={styles.saveNotesButton}
-                  onClick={handleSaveNotes}
-                  disabled={actionLoading !== null}
-                  aria-busy={actionLoading === "save_notes"}
-                  data-testid="backlog-notes-save"
-                >
-                  <ActionButtonLabel pending={actionLoading === "save_notes"} label="Save" />
-                </button>
-                <button
-                  className={styles.cancelNotesButton}
-                  onClick={() => {
-                    setNotesValue(item.notes ?? "");
-                    setEditingNotes(false);
-                  }}
-                  data-testid="backlog-notes-cancel"
-                >
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <p
-              className={item.notes ? styles.description : styles.emptyText}
-              onClick={() => setEditingNotes(true)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") setEditingNotes(true);
-              }}
-              aria-label="Click to edit notes"
-              data-testid="backlog-notes-display"
-            >
-              {item.notes ?? "Click to add notes…"}
-            </p>
+          {item.status === "pr_pending" && (
+            <PullRequestSection
+              item={item}
+              actionLoading={actionLoading}
+              onMarkDone={() => handleAction("mark_done")}
+              readOnly={terminalState !== null}
+            />
           )}
-        </div>
+
+          <DescriptionSection item={item} />
+
+          {item.planArtifactsPath && (
+            <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />
+          )}
+
+          <VersionControlSection
+            item={item}
+            widgetData={vcsWidgetData}
+            activeSessionCount={activeWorkSessionCount}
+            worktreePath={latestWorkSession?.worktreePath}
+            defaultExpanded={versionControlExpanded}
+            onViewDiff={() => setShowChangesModal(true)}
+            onBrowseFiles={() => setShowFileBrowser(true)}
+          />
+
+          <SessionsSection
+            item={item}
+            pipelineModes={pipelineModes}
+            latestWorkSession={latestWorkSession}
+            deletingSessionId={deletingSessionId}
+            defaultExpanded={sessionsExpanded}
+            onDeleteSession={handleDeleteSession}
+          />
+
+          <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
+
+          <ProgressHistorySection item={item} defaultExpanded={progressHistoryExpanded} />
+
+          <NotesSection
+            item={item}
+            actionLoading={actionLoading}
+            editingNotes={editingNotes}
+            notesValue={notesValue}
+            defaultExpanded={notesExpanded}
+            onNotesValueChange={setNotesValue}
+            onStartEditing={() => setEditingNotes(true)}
+            onSave={handleSaveNotes}
+            onCancel={() => {
+              setNotesValue(item.notes ?? "");
+              setEditingNotes(false);
+            }}
+          />
+        </CollapsibleGroup>
       </div>
 
     </article>

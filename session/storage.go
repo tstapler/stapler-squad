@@ -238,6 +238,21 @@ func (s *Storage) GetEntClient() *ent.Client {
 	return nil
 }
 
+// SetItemChangePublisher wires p into the underlying repository when it is
+// ent-backed, following the same type-assertion-forwarding precedent as
+// GetEntClient above. server/dependencies.go only has a *Storage value in
+// scope (Storage.repo is a Repository interface field, not a concrete
+// *EntRepository), so this forwarding method is the entry point it uses to
+// reach ItemChangePublisher wiring. When the repository is not ent-backed
+// (e.g. an in-memory test double), the type assertion fails gracefully and
+// the publisher is simply never wired — no panic, matching GetEntClient's
+// nil-on-mismatch behavior.
+func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetItemChangePublisher(p)
+	}
+}
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.saveInstancesToRepo(instances)

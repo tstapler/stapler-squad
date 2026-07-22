@@ -136,6 +136,16 @@ export interface BacklogItem {
    * this item's own cap, replacing the global value.
    */
   reworkCapOverride?: number;
+  /**
+   * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
+   * Populated only by `useWatchBacklogItems` — incremented once per genuine
+   * live (non-snapshot) `BacklogItemEvent` for this item, so
+   * `BacklogItemCard` can flash on a real change without ever flashing on
+   * the initial snapshot or a reconnect/poll resync. Undefined for items
+   * obtained via a one-shot RPC call (`listBacklogItems`, `getBacklogItem`,
+   * etc.) rather than the watch stream.
+   */
+  liveVersion?: number;
 }
 
 /**
@@ -352,7 +362,14 @@ function mapPipelineMode(p: PipelineModeProto): PipelineMode {
   };
 }
 
-function mapBacklogItem(p: BacklogItemProto): BacklogItem {
+// Exported so other real-time consumers (useWatchBacklogItems) can convert
+// the raw proto BacklogItem their stream/store deals in to this file's mapped
+// domain BacklogItem — the shape BacklogItemCard/BacklogBoard/BacklogItemDetail
+// actually render (acCriteria, gateVerdict, triageStatus, ISO date strings,
+// etc., none of which exist on the raw proto message). Also exported for
+// direct unit testing of triageStatus derivation — see
+// useBacklogService.test.ts.
+export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
   const linkedSessions = (p.itemSessions ?? []).map(mapItemSession);
 
   // Extract gate verdict from the most recent session (for review status)

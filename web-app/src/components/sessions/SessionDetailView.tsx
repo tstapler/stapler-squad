@@ -724,7 +724,6 @@ export function SessionDetailView({
             <BacklogItemPanel
               backlogItemId={backlogItemId}
               sessionId={session.id}
-              isSessionActive={session.status === SessionStatus.RUNNING}
             />
           )}
         </div>

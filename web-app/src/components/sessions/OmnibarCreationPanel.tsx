@@ -119,6 +119,8 @@ export interface OmnibarCreationPanelProps {
   onCancel: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
+  /** Set when the worktree list request failed or timed out — shown as a hint. */
+  worktreesError?: string | null;
   isSubmitting: boolean;
   canSubmit: boolean;
   error: string | null;
@@ -154,6 +156,7 @@ export function OmnibarCreationPanel({
   onCancel,
   worktrees,
   isWorktreesLoading = false,
+  worktreesError = null,
   isSubmitting,
   canSubmit,
   error,
@@ -658,6 +661,8 @@ export function OmnibarCreationPanel({
             <span className={hint}>
               {isWorktreesLoading
                 ? "Scanning for git worktrees…"
+                : worktreesError
+                ? `${worktreesError} — enter the path manually below`
                 : worktrees.length > 0
                 ? "Select an existing git worktree for this repository"
                 : "Absolute path to an existing git worktree"}

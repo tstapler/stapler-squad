@@ -229,6 +229,8 @@ var methodToID = map[string]string{
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
 	// Backlog item lifecycle RPCs
 	"DeleteBacklogItem": "backlog:delete-item",
+	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
+	"WatchBacklogItems": "backlog:watch",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

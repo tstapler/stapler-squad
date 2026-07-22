@@ -106,6 +106,11 @@ export const lightTheme = createTheme(vars, {
 
     accentBg: "rgba(0, 112, 243, 0.08)",
     accentHover: "rgba(0, 112, 243, 0.16)",
+    /* accentText: primary (#0070f3) on accentBg (~#ebf4fe) measures 4.09:1 —
+     * fails WCAG AA (needs >=4.5:1), caught by InlineNotice's Reload button
+     * (tests/e2e/accessibility.spec.ts). primaryDark (#003d99) on the same
+     * background measures ~9.2:1. */
+    accentText: "#003d99",
 
     inputBackground: "#ffffff",
     inputText: "#0a0a0a",
@@ -204,6 +209,9 @@ export const darkTheme = createTheme(vars, {
 
     accentBg: "rgba(45, 156, 219, 0.1)",
     accentHover: "rgba(45, 156, 219, 0.2)",
+    /* accentText: primary (#2d9cdb) already measures ~5:1 against accentBg
+     * blended over cardBackground — unchanged from pre-fix behavior. */
+    accentText: "#2d9cdb",
 
     inputBackground: "#2a2a2a",
     inputText: "#ededed",
@@ -305,6 +313,8 @@ export const matrixTheme = createTheme(vars, {
 
     accentBg: "rgba(0,255,65,0.1)",
     accentHover: "rgba(0,255,65,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#00ff41",
 
     inputBackground: "#050505",
     inputText: "#00ff41",
@@ -414,6 +424,8 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     accentBg: "rgba(255,45,120,0.1)",
     accentHover: "rgba(255,45,120,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#cc245f",
 
     inputBackground: "#0f0f22",
     inputText: "#fcee09",
@@ -523,6 +535,8 @@ export const wh40kTheme = createTheme(vars, {
 
     accentBg: "rgba(192,160,32,0.1)",
     accentHover: "rgba(192,160,32,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#c0a020",
 
     inputBackground: "#120e0a",
     inputText: "#c8b89a",
@@ -632,6 +646,8 @@ export const cleanTheme = createTheme(vars, {
 
     accentBg: "rgba(99,102,241,0.1)",
     accentHover: "rgba(99,102,241,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#6366f1",
 
     inputBackground: "#161b22",
     inputText: "#e2e8f0",

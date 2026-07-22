@@ -20,6 +20,12 @@ interface VcsWidgetProps {
   activeSessionCount?: number;
   worktreePath?: string;
   onBrowseFiles?: () => void;
+  /**
+   * Threaded through to `VcsWidgetGithubRow` (D4 opt-out prop). Default
+   * `true` — every existing call site keeps its current PR-link text
+   * unchanged. See `VcsWidgetGithubRow`'s prop doc for the full rationale.
+   */
+  showPrLink?: boolean;
 }
 
 export function VcsWidget({
@@ -31,6 +37,7 @@ export function VcsWidget({
   activeSessionCount,
   worktreePath,
   onBrowseFiles,
+  showPrLink = true,
 }: VcsWidgetProps) {
   const mergeabilityState = deriveMergeabilityState(data);
   const showRefresh = data.kind === "live" && !!onRefresh;
@@ -91,7 +98,7 @@ export function VcsWidget({
 
       {mode === "full" && (
         <div role="status" aria-live="polite" className={styles.liveRegion}>
-          <VcsWidgetGithubRow data={data} />
+          <VcsWidgetGithubRow data={data} showPrLink={showPrLink} />
         </div>
       )}
 

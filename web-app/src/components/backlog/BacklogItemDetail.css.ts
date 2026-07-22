@@ -35,6 +35,17 @@ export const scrollArea = style({
   gap: vars.space["4"],
 });
 
+// Epic 6.4: houses the edit-mode buffered-update/save-conflict InlineNotice.
+// Deliberately a sibling of `scrollArea` (flexShrink: 0), not a child of it —
+// a long form can scroll the banner's original position out of view, which
+// would defeat the point of a non-blocking-but-still-visible notice about a
+// concurrent server-side change (design/ux.md §6). Pinning it here keeps it
+// visible the same way `header` above it is, without making it a modal/toast.
+export const bannerBar = style({
+  flexShrink: 0,
+  padding: `${vars.space["3"]} ${vars.space["4"]} 0`,
+});
+
 export const errorBanner = style({
   display: "flex",
   alignItems: "flex-start",
