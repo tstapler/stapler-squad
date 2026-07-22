@@ -8,10 +8,19 @@
 
 This document is the wireframe/flow/acceptance-criteria layer between the research (`research/ux.md`)
 and the implementation plan (`implementation/plan.md`). It uses the plan's exact component names —
-`LifecycleSummary`, `StageTracker`, `BlockerChip`, `LivenessLine`, `Collapsible`,
-`SessionDiagnosticPanel`, `BlockedNotice` — so a reviewer can trace every box in a wireframe to the
-component that renders it. Where a wireframe implies a rendering rule not literally spelled out in
-plan.md, the rule is footnoted back to the exact plan.md acceptance criterion it derives from.
+`LifecycleSummary`, `StageTracker`, `BlockerChip`, `LivenessLine`, `CollapsibleGroup`,
+`CollapsibleSection`, `useShowMore`, `SessionDiagnosticPanel`, `BlockedNotice` — so a reviewer can
+trace every box in a wireframe to the component that renders it. Where a wireframe implies a
+rendering rule not literally spelled out in plan.md, the rule is footnoted back to the exact
+plan.md acceptance criterion it derives from.
+
+Note on naming: the shared disclosure primitive is **two** components, not one —
+`CollapsibleSection` wraps a single section's header/body; `CollapsibleGroup` wraps a set of
+sibling `CollapsibleSection`s in one shared Radix `Accordion.Root` so Home/End/Arrow keyboard
+navigation works across their headers (ADR-027, plan.md Task 1.1.1c). Any reference below to a
+section being "a Collapsible" means it renders as a `CollapsibleSection`; where multiple sibling
+sections are wired together (as they are in the main detail panel, per Task 3.1.4i), they share one
+`CollapsibleGroup`.
 
 ---
 
@@ -19,7 +28,7 @@ plan.md, the rule is footnoted back to the exact plan.md acceptance criterion it
 
 | # | Surface | Component(s) | States covered |
 |---|---|---|---|
-| 1 | Redesigned detail panel — desktop | `LifecycleSummary`, `Collapsible`-wrapped sections, `SessionsSection` | loading, loaded, load error, item-not-found |
+| 1 | Redesigned detail panel — desktop | `LifecycleSummary`, `CollapsibleSection`-wrapped sections sharing one `CollapsibleGroup`, `SessionsSection` | loading, loaded, load error, item-not-found |
 | 2 | Redesigned detail panel — mobile | Same components, `detailPane`'s `@media (max-width: 768px)` overlay | loading, loaded, load error, item-not-found |
 | 3 | `SessionDiagnosticPanel` — Headless Diagnostic sub-state | `TriageReviewPanel readOnly` / `GateVerdictBox readOnly` | has-output (2 variants: triage vs re-review) |
 | 4 | `SessionDiagnosticPanel` — Blocked Guardrail sub-state | `BlockedNotice` | blocked-before-start, with/without recorded summary |
@@ -27,6 +36,7 @@ plan.md, the rule is footnoted back to the exact plan.md acceptance criterion it
 | 6 | `SessionsSection` zero-sessions state | `SessionsSection` | empty, status-appropriate copy |
 | 7 | Board card blocker chip | `BacklogItemCard`, `BlockerChip` (compact) | present, absent, stale-data banner |
 | 8 | Board-wide stuck-data fetch failure | `useStuckBacklogItems()` consumers (`LifecycleSummary`, `BacklogItemCard`) | error, retained-stale-data |
+| 9 | "Show N more" expansion (Sessions / Workflow History / Progress History) | `useShowMore`, `SessionsSection`, `WorkflowHistorySection`, `ProgressHistorySection` | capped (default), expanded, expanded-and-persisted-across-reopen |
 
 ---
 
@@ -50,7 +60,7 @@ plan.md, the rule is footnoted back to the exact plan.md acceptance criterion it
 ├──────────────────────────────────────────────────────────┤
 │ ▸ Description                                    [collapsed]
 ├──────────────────────────────────────────────────────────┤
-│  ACTIONS                                    (always visible, not a Collapsible)
+│  ACTIONS                                    (always visible, not a CollapsibleSection)
 │  [ Start Session ]  [ Archive ]  [ Edit ]                 │
 ├──────────────────────────────────────────────────────────┤
 │ ▸ Plan Artifacts                                 [collapsed]
@@ -61,8 +71,10 @@ plan.md, the rule is footnoted back to the exact plan.md acceptance criterion it
 ├──────────────────────────────────────────────────────────┤
 │ ▾ Sessions (3)                                    [expanded — default true]
 │    🖥  work · a1b2c3d4          started 2m ago      →      │ ◄ real session → <a href="/?session=...">
-│    ▸ 🩺 headless-triage-7f2a…   3 suggestions              │ ◄ synthetic → Collapsible → SessionDiagnosticPanel
-│    ▸ 🚫 review-blocked-9c1d…   blocked pre-flight          │ ◄ synthetic → Collapsible → SessionDiagnosticPanel
+│    ▸ 🩺 headless-triage-7f2a…   3 suggestions              │ ◄ synthetic → CollapsibleSection → SessionDiagnosticPanel
+│    ▸ 🚫 review-blocked-9c1d…   blocked pre-flight          │ ◄ synthetic → CollapsibleSection → SessionDiagnosticPanel
+│    (only 3 sessions here — under the cap of 5, so no      │ ◄ see Surface 9 for the "Show N more" state
+│     "Show N more" button; see Surface 9 for that case)    │
 ├──────────────────────────────────────────────────────────┤
 │ ▸ Workflow History                               [collapsed]
 ├──────────────────────────────────────────────────────────┤
@@ -79,7 +91,10 @@ Notes on this wireframe:
   `review` / `pr_pending` respectively. See the "status-gated sections" note in the interaction
   flow below.
 - Every `▸`/`▾` glyph is decorative only — the real state is `aria-expanded` on the header
-  `<button>`, per Collapsible's contract (Story 1.1.1).
+  `<button>`, per `CollapsibleSection`'s contract (Story 1.1.1). All sibling sections shown here
+  (`Plan Artifacts` through `Notes`) share one `CollapsibleGroup`, so a keyboard user can move
+  directly between their headers with Arrow/Home/End without tabbing through collapsed bodies —
+  see Accessibility AC 25.
 - The chevron + section title is a single full-width `<button>` (not a chevron-only click target),
   satisfying the ≥44×44px touch-target requirement even though this is the desktop layout — one
   component serves both breakpoints.
@@ -138,7 +153,7 @@ Mobile-specific rules:
 
 ### Interaction Flow
 
-**A. Expand/collapse a section (Collapsible header click/tap)**
+**A. Expand/collapse a section (`CollapsibleSection` header click/tap)**
 1. User clicks/taps a section header button (e.g. "Version Control").
 2. System: Radix Accordion toggles `data-state`; the header's `aria-expanded` flips
    `"false"→"true"` (or reverse); the panel body mounts/unmounts (not `display:none` — actually
@@ -151,6 +166,13 @@ Mobile-specific rules:
    it.
 5. Reloading the page or reopening the same item later restores this exact expand state from
    `localStorage` (Story 1.1.1's second acceptance criterion).
+6. **Keyboard nav between sibling headers**: because every `CollapsibleSection` on this panel
+   (`Plan Artifacts` through `Notes`, plus `Reviewing`/`Pull Request` where rendered) shares one
+   `CollapsibleGroup` (Task 3.1.4i), a user with focus on any section header can press Down/Right
+   Arrow to move to the next header, Up/Left Arrow to the previous, Home to jump to the first
+   header, and End to jump to the last — all without Tab-ing through intervening (possibly
+   DOM-absent) section bodies. This is the concrete, testable form of ADR-027's justification for
+   choosing Radix Accordion over `@radix-ui/react-collapsible` — see Accessibility AC 25.
 
 **B. Click a real session row (work or review, `classifySessionKind` = `"work"`/`"review"`)**
 1. User clicks the row, rendered as `<a href="/?session=<id>">` — unchanged from today.
@@ -159,8 +181,8 @@ Mobile-specific rules:
 
 **C. Click a synthetic session row (`headless_diagnostic` / `blocked_guardrail` /
 `manual_review_marker`)**
-1. User clicks/taps the row — now a `Collapsible` header button (`defaultExpanded={false}`), not a
-   dead `<span>` and not a broken `<a>`.
+1. User clicks/taps the row — now a `CollapsibleSection` header button (`defaultExpanded={false}`),
+   not a dead `<span>` and not a broken `<a>`.
 2. System expands **inline**, within the Sessions list — no navigation away from the panel.
    `SessionDiagnosticPanel` dispatches by kind:
    - `headless_diagnostic` with `triageResult` populated → `TriageReviewPanel readOnly`
@@ -177,7 +199,16 @@ redesign)**
 2. System re-renders `LifecycleSummary` with fresh `StageTracker`/`BlockerChip`/`LivenessLine`
    values — this element is *always* live, on every tick, with no persisted "user closed it" state
    (there's nothing to collapse).
-3. Every `Collapsible` section's expand/collapse state is **untouched** by the poll tick.
+   - **`LivenessLine` is deliberately plain, non-`aria-live` text.** Unlike `SessionDiagnosticPanel`
+     (Surface 3), which legitimately wraps itself in `role="status"` because expanding it reveals
+     genuinely new content the user just asked for, `LivenessLine`'s "Last activity Nm ago" string
+     re-renders on every 5-second poll tick as a normal, silent DOM update — it must **not** be
+     wrapped in its own `aria-live`/`role="status"` region. A screen reader that announced "Last
+     activity 2m ago" → "Last activity 7m ago" → "Last activity 12m ago" every 5 seconds while the
+     panel merely sits open would be noise, not help — the user didn't ask for a running commentary.
+     `LivenessLine` should only ever be encountered by assistive tech when the user actively
+     navigates focus to it, exactly like any other static text on the page. See Accessibility AC 20.
+3. Every `CollapsibleSection`'s expand/collapse state is **untouched** by the poll tick.
    `defaultExpanded` is computed once via `useMemo` keyed only on `itemId` (Task 3.1.5a) — a poll
    tick that returns a new `item` object for the *same* `itemId` cannot re-trigger the default,
    whether or not the user manually collapsed/expanded a section in the meantime.
@@ -186,14 +217,14 @@ redesign)**
    "pr_pending"`) fully unmount when a poll tick reports the item has left that status, even if the
    user had the section open. This is *preserved-verbatim legacy behavior* (Story 3.1.2's explicit
    "original status guards are preserved verbatim during extraction" AC), distinct from a
-   `Collapsible` being force-collapsed while its content is still relevant. It is not a violation of
-   "never re-collapse a section the user opened" — the content genuinely no longer exists for this
-   item's current state, the same way a "Sessions (3)" list wouldn't keep showing a session that
-   was deleted. Flagged here so a future maintainer doesn't mistake it for a regression of the
-   Story 3.1.5 guarantee.
+   `CollapsibleSection` being force-collapsed while its content is still relevant. It is not a
+   violation of "never re-collapse a section the user opened" — the content genuinely no longer
+   exists for this item's current state, the same way a "Sessions (3)" list wouldn't keep showing a
+   session that was deleted. Flagged here so a future maintainer doesn't mistake it for a
+   regression of the Story 3.1.5 guarantee.
 5. The one legitimate auto-expand case in this codebase's implementation is **mount-time only**:
-   each `Collapsible`'s `defaultExpanded` is evaluated once against the item's state *as of first
-   render for that `itemId`* (e.g. opening an item that is already in `review` opens
+   each `CollapsibleSection`'s `defaultExpanded` is evaluated once against the item's state *as of
+   first render for that `itemId`* (e.g. opening an item that is already in `review` opens
    `ReviewingSection` immediately). It does not re-fire later in the same viewing session if the
    item transitions into `review` after the panel was already open — this is a deliberate
    simplification versus `research/ux.md §4`'s more elaborate "one-shot nudge on a genuine
@@ -218,6 +249,20 @@ redesign)**
   wondering whether it's a transient network blip worth retrying — same close/back exit path
   applies.
 
+**Blocker Chip during the `useStuckBacklogItems()` loading race** (extends AC 2's "0-click,
+absence=not-blocked" contract)
+- While `useStuckBacklogItems()`'s own `isLoading` is `true` — the brief window before that hook's
+  first fetch resolves, distinct from `LifecycleSummary`'s own `loading`/`item` state for the
+  `GetBacklogItem` call — the `BlockerChip` renders **nothing**: not a loading spinner, not a
+  neutral "OK"/"not blocked" placeholder. This is the same visual contract as the "not flagged"
+  case (absence = not blocked), applied to the "don't know yet" case too.
+- Rationale: the difference between "definitely not blocked" and "haven't checked yet" is real,
+  but not worth a dedicated visible loading state — this is a local, single-user tool where
+  `useStuckBacklogItems()` resolves in well under a second, so a skeleton/spinner for that window
+  would be pure visual noise for a case a user will essentially never see mid-render. If this
+  assumption stops holding (e.g. the hook's data source becomes slow or unreliable), revisit before
+  adding a distinct loading treatment.
+
 **Zero linked sessions** (Surface 6)
 - `SessionsSection` remains visible (default-expanded, per Story 3.1.4c) even when
   `item.linkedSessions.length === 0` — it is never omitted. Renders one status-appropriate line
@@ -233,8 +278,8 @@ redesign)**
 **Synthetic session sub-states** (Surfaces 3–5 — see dedicated wireframes below for full detail)
 - The UI does **not** uniformly make every synthetic row clickable-to-a-transcript. Only rows
   classified `headless_diagnostic` show structured output (Story 4.1.2); `blocked_guardrail` and
-  `manual_review_marker` rows show `BlockedNotice`'s plain explanation (Story 4.1.3) — never an
-  affordance implying a transcript exists when it doesn't.
+  `manual_review_marker` rows show `BlockedNotice`'s plain explanation (Story 4.1.3) via a
+  `CollapsibleSection` — never an affordance implying a transcript exists when it doesn't.
 
 ---
 
@@ -364,28 +409,40 @@ copy, section never omitted).
 
 ## Surface 7: Board Card Blocker Chip (`BacklogItemCard.tsx`)
 
-### Wireframe — before/after, card footer only
+### Wireframe — before/after, full card (header status label + footer)
 
 ```
 BEFORE (today)                          AFTER (this project)
 ┌───────────────────────┐               ┌───────────────────────┐
 │ Fix flaky WIP-cap test │               │ Fix flaky WIP-cap test │
-│ ...card body...        │               │ ...card body...        │
-├───────────────────────┤               ├───────────────────────┤
-│ 3/5 AC     [Resume →]  │               │ 3/5 AC     [Resume →]  │
-└───────────────────────┘               │ 🟠 Stale work session   │ ◄ BlockerChip(compact)
+│                         │               │ Review                 │ ◄ status label (Story 5.1.0) —
+│ ...card body...        │               │ ...card body...        │   getStatusLabel(item.status),
+├───────────────────────┤               ├───────────────────────┤   header region, new element
+│ 3/5 AC     [Resume →]  │               │ 3/5 AC   [View Review →]│ ◄ action button text (unchanged
+└───────────────────────┘               ├───────────────────────┤   getActionSpec() — footer)
+                                         │ 🟠 Stale work session   │ ◄ BlockerChip(compact) — footer
                                          └───────────────────────┘
-                                          (only rendered for items in
-                                           useStuckBacklogItems()'s
-                                           open list — footer layout
-                                           is otherwise byte-identical
-                                           to today when absent)
+                                          (status label only rendered
+                                           header-side; BlockerChip only
+                                           rendered for items in
+                                           useStuckBacklogItems()'s open
+                                           list — otherwise byte-identical
+                                           to today's footer when absent)
 ```
 
-- Compact variant = icon + label only (no duration, per Story 1.1.4's distinction from the full
-  variant used in `LifecycleSummary`) — a card is scanned in a grid, not read line by line, so the
-  duration ("3d") is opt-in detail available one click away in the detail panel, not needed at
-  a-glance on the card.
+- **Three independent status-bearing elements now coexist on one card** — `BacklogItemCard`'s new
+  canonical status label (header, Story 5.1.0, sourced from `getStatusLabel(item.status)` — the
+  same vocabulary `BacklogItemBadge.tsx` and the Stage Tracker's active-node label use), the
+  existing action-button text (footer, `getActionSpec()`, unchanged), and the compact `BlockerChip`
+  (footer, Story 5.1.1, only when stuck). None may read as contradictory (see Consistency AC 28).
+  They *can* read as somewhat redundant in specific cases — e.g. status label `"Review"` sitting
+  near an action button reading `"View Review"` — which is a **known, flagged risk** (pre-mortem
+  finding #5) to watch during implementation, not something this document mandates a specific
+  layout/copy fix for; see Task 5.1.0's own framing of the same trade-off.
+- Compact `BlockerChip` variant = icon + label only (no duration, per Story 1.1.4's distinction
+  from the full variant used in `LifecycleSummary`) — a card is scanned in a grid, not read line by
+  line, so the duration ("3d") is opt-in detail available one click away in the detail panel, not
+  needed at a-glance on the card.
 - `cardFooter` gains `flex-wrap` (Task 5.1.1c) so the chip drops to its own line on narrow/mobile
   card widths rather than overflowing or clipping the AC fraction / action button.
 - `useStuckBacklogItems()` is called **once** at `board/page.tsx` level and the resolved
@@ -437,6 +494,72 @@ underneath — never a false "all clear" caused by a fetch error being misread a
 
 ---
 
+## Surface 9: "Show N More" Expansion (Sessions / Workflow History / Progress History)
+
+Blocker C fix + pre-mortem finding #2 (`useShowMore`, Task 3.1.4c2/d2/e2). Three sections —
+`SessionsSection`, `WorkflowHistorySection`, `ProgressHistorySection` — cap their default rendering
+to the most recent N entries (5 sessions, 8 workflow events, 8 progress notes respectively) and
+reveal the rest via a "Show N more" button, so a single already-expanded section can't itself
+reproduce the "everything visible, nothing prioritized" problem this whole project exists to fix,
+one level down, for the heavily-cycled items that most need this.
+
+### Capped view (default — `SessionsSection`, `df0d5872`-shaped item, 11 total linked sessions)
+
+```
+Sessions (11)                                        [expanded — default true]
+  🖥  work · a1b2c3d4          started 4d ago      →
+  ▸ 🩺 headless-re-review-9f0a  FAIL — 2/5 criteria
+  ▸ 🚫 review-blocked-7c2e     blocked pre-flight
+  ▸ 🩺 headless-triage-4b1d    3 suggestions
+  ▸ ✍️ manual-review-e8d3      verified fix locally
+  ┌──────────────────────────────────────────────┐
+  │         Show 6 more                           │ ◄ data-testid="sessions-show-more"
+  └──────────────────────────────────────────────┘   real <button>, ≥44×44px, Enter/Space activates
+     (5 most recent shown; 6 older entries hidden — nothing summarized or truncated, just deferred)
+```
+
+### Expanded view (after clicking "Show N more")
+
+```
+Sessions (11)                                        [expanded — default true]
+  🖥  work · a1b2c3d4          started 4d ago      →
+  ▸ 🩺 headless-re-review-9f0a  FAIL — 2/5 criteria
+  ▸ 🚫 review-blocked-7c2e     blocked pre-flight
+  ▸ 🩺 headless-triage-4b1d    3 suggestions
+  ▸ ✍️ manual-review-e8d3      verified fix locally
+  ▸ 🩺 headless-triage-2a9c    1 suggestion
+  ▸ 🩺 headless-triage-1f7b    2 suggestions
+  ▸ 🚫 diff-error-6d4a         blocked pre-flight
+  🖥  work · b3c4d5e6          started 4d ago      →
+  ▸ 🩺 headless-re-review-3e8f  FAIL — 1/5 criteria
+  ▸ ✍️ manual-review-9a2b      verified fix locally
+     (all 11 shown inline, in the same list — no pagination, no route change, no "Show more"
+      button remains once fully expanded)
+```
+
+### Persistence — the one detail that distinguishes this from a plain toggle
+
+- The "show all" state is **not** a plain `useState` that resets to the capped view on every mount.
+  It is `localStorage`-backed via the shared `useShowMore` hook (same pattern/key convention as
+  `useSectionExpandState`, key `backlog-detail-showmore-${itemId}-${sectionKey}`), per pre-mortem
+  finding #2.
+- **Given** the user clicks "Show 6 more" on `SessionsSection` for `itemId="itm_df0d5872"`, **when**
+  the user later navigates away and re-opens the same item (a fresh mount), **then**
+  `SessionsSection` renders already expanded to all 11 sessions — the button does not need to be
+  clicked again, and `localStorage["backlog-detail-showmore-itm_df0d5872-sessions"]` reads `"true"`.
+- This matters most for exactly the chronically-stuck, heavily-cycled items this project exists to
+  make inspectable: those are the items the user re-opens most often to check status, so a
+  plain-`useState` cap would make them re-pay the same click every single visit — a direct
+  regression against the project's own success metric for its hardest cases.
+- Items with fewer entries than the cap never show a "Show N more" button at all — the cap only
+  ever adds a control, never removes information a short list would otherwise show outright.
+- `WorkflowHistorySection` (cap 8, `data-testid="workflow-show-more"`) and `ProgressHistorySection`
+  (cap 8, `data-testid="progress-history-show-more"`) follow the identical capped/expanded/
+  persisted-on-reopen pattern shown above for `SessionsSection` — same button semantics, same
+  `useShowMore` hook, different `sectionKey`/cap/testid.
+
+---
+
 ## UX Acceptance Criteria
 
 Each item below is independently testable by a human exercising the running app.
@@ -449,7 +572,9 @@ Each item below is independently testable by a human exercising the running app.
 2. **Identify current blocker** — from first render, if the item is flagged by
    `useStuckBacklogItems()`, the user can read the blocker reason (icon + label + duration) without
    expanding anything. **0 clicks.** If not flagged, the absence of a chip is itself legible as
-   "nothing blocking" (no neutral placeholder chip to misread).
+   "nothing blocking" (no neutral placeholder chip to misread). This same absence-is-legible
+   contract also covers the brief window before `useStuckBacklogItems()` itself has resolved — see
+   Error and edge-case coverage AC 14.
 3. **Judge liveness ("is this actually still working or silently dead")** — from first render, the
    user can read "Last activity Nm/h/d ago" without expanding anything or cross-referencing
    Progress History. **0 clicks.**
@@ -457,85 +582,122 @@ Each item below is independently testable by a human exercising the running app.
    manual-override) — the user can see meaningful content for every row in the Sessions list.
    **≤2 clicks**: 1 to expand "Sessions" if collapsed (it defaults to expanded, so typically 0), + 1
    to expand the specific synthetic row (real sessions: 1 click total, straight to the terminal
-   view).
+   view). For items with more than 5 linked sessions, add ≤1 click for "Show N more" (AC 7) before
+   the specific row is reachable at all.
 5. **Find why an item is stuck without inferring it from Progress History text** — the
    `BlockerChip`'s label is sufficient on its own; Progress History is never the only place this
    information exists. **0 clicks** beyond metric #2.
 6. **Cross-reference two sections simultaneously** (e.g. "which session produced this PR" —
    Sessions vs. Version Control) — both can be expanded at once; expanding one never force-collapses
    the other (multiple-open accordion, not single-open).
+7. **Inspect a long-running/heavily-cycled item's full Sessions, Workflow History, or Progress
+   History without re-paying a "Show more" click on every visit** (Surface 9) — for a section whose
+   entry count exceeds its cap (5 sessions / 8 workflow events / 8 progress notes), revealing the
+   rest costs **≤1 click** ("Show N more"), the same as metric #4's cost model. Because
+   `useShowMore`'s expanded state is `localStorage`-persisted per item/section (not a plain
+   in-memory toggle), re-opening the *same* item on a later visit shows the section already
+   expanded — **0 clicks** on every visit after the first. This matters specifically for the
+   chronically-stuck items this project exists to make inspectable, since those are exactly the
+   items a user re-opens most often to check status.
 
 ### Error and edge-case coverage
 
-7. Item load failure shows a specific message (`"Item not found."` for a missing item, or the
+8. Item load failure shows a specific message (`"Item not found."` for a missing item, or the
    RPC's own error text / `"Failed to load item."` fallback for other failures) — never a blank
    pane, never a silent no-op.
-8. Every error state has a working exit path: the close/back control in the panel header remains
+9. Every error state has a working exit path: the close/back control in the panel header remains
    clickable regardless of load error state; `InlineError`'s retry affordance re-attempts the
    failed operation. **No dead ends.**
-9. An item with zero linked sessions shows an explicit, status-appropriate one-line explanation
-   ("No sessions yet — triage hasn't started." etc.) — the Sessions section is never silently
-   omitted or left blank in a way indistinguishable from a fetch failure.
-10. A `blocked_guardrail`/`manual_review_marker` row never presents a clickable "view session"
-    affordance that leads to an empty or broken screen — the row's Collapsible reveals
+10. An item with zero linked sessions shows an explicit, status-appropriate one-line explanation
+    ("No sessions yet — triage hasn't started." etc.) — the Sessions section is never silently
+    omitted or left blank in a way indistinguishable from a fetch failure.
+11. A `blocked_guardrail`/`manual_review_marker` row never presents a clickable "view session"
+    affordance that leads to an empty or broken screen — the row's `CollapsibleSection` reveals
     `BlockedNotice`'s explanation text directly, with no intermediate dead click.
-11. A `headless_diagnostic` row always resolves to exactly one of `TriageReviewPanel readOnly` /
+12. A `headless_diagnostic` row always resolves to exactly one of `TriageReviewPanel readOnly` /
     `GateVerdictBox readOnly` based on which field (`triageResult` vs. `reviewVerdict`) is
     populated — never both, never neither with a blank panel.
-12. Stuck-item data fetch failure never presents as "nothing is stuck" — the UI shows a visible
+13. Stuck-item data fetch failure never presents as "nothing is stuck" — the UI shows a visible
     "may be out of date" signal and continues showing the last-known `BlockerChip` state rather
     than silently clearing it.
-13. A manual expand/collapse choice on any `Collapsible` section survives at least one 5-second
+14. While `useStuckBacklogItems()`'s own `isLoading` is `true` (the brief window before that hook's
+    first fetch resolves — distinct from the item's own `GetBacklogItem` load state), the
+    `BlockerChip` renders **nothing**: no loading spinner, no neutral "OK" placeholder — the same
+    "absence = not (yet known to be) blocked" contract as AC 2, deliberately not distinguished with
+    a dedicated loading state because the hook resolves in well under a second on this local
+    single-user tool.
+15. A manual expand/collapse choice on any `CollapsibleSection` survives at least one 5-second
     poll refresh unchanged — verified by: expand a section, wait 5+ seconds (or trigger a manual
     refresh), confirm `aria-expanded` is unchanged from what the user last set.
-14. Switching from item A to item B (clicking a different item in the list) fully resets per-item
+16. Switching from item A to item B (clicking a different item in the list) fully resets per-item
     UI state — no leftover open manual-review form, no leftover section-expand override from item
     A bleeding into item B's *first-render* defaults (item B's own persisted `localStorage` state,
     if any, applies instead).
 
 ### Accessibility
 
-15. Every `Collapsible` section header is a real `<button aria-expanded="true"|"false">` — never a
+17. Every `CollapsibleSection` header is a real `<button aria-expanded="true"|"false">` — never a
     `<div onClick>` — verifiable via the browser accessibility tree or `axe-core` (this repo's CI
     already runs Axe Core on PRs touching `web-app/src/`, blocking on WCAG AA violations).
-16. Collapsed section content is absent from the accessibility tree and the Tab sequence (verified:
+18. Collapsed section content is absent from the accessibility tree and the Tab sequence (verified:
     `Tab` from the header of a collapsed section moves to the *next* section's header, not into
     hidden interactive content) — not merely visually hidden via `display:none` on a still-focusable
     subtree.
-17. `SessionDiagnosticPanel`'s one-line state summary uses `role="status"`; it does not additionally
+19. `SessionDiagnosticPanel`'s one-line state summary uses `role="status"`; it does not additionally
     wrap itself in `role="log"` (no raw transcript exists for these rows, so `role="log"`'s
     implicit-`aria-live` scrolling-content semantics do not apply here — confirmed against
     plan.md's Critical Reconciliation).
-18. Every status/blocker/session-kind indicator pairs an icon with a text label — verified by:
+20. `LivenessLine` is **not** wrapped in its own `aria-live`/`role="status"` region — verified by:
+    inspecting `LivenessLine`'s rendered DOM (and its container within `LifecycleSummary`) and
+    confirming no explicit or inherited `aria-live` attribute is present. This is the deliberate
+    inverse of AC 19: `SessionDiagnosticPanel` legitimately announces content the user just asked
+    to reveal (a one-time expand), while `LivenessLine` re-renders silently on every 5-second poll
+    tick — wrapping it in `aria-live` would re-announce "Last activity Nm ago" to screen reader
+    users every single tick while the panel merely sits open, which is noise, not help. A screen
+    reader must only encounter this text when the user actively navigates focus to it.
+21. Every status/blocker/session-kind indicator pairs an icon with a text label — verified by:
     disabling color (e.g. via a grayscale browser filter or forced-colors mode) and confirming the
     meaning is still legible from text/icon shape alone. Applies to: `StageTracker` node labels,
     `BlockerChip` (both variants), `SessionDiagnosticPanel`'s dispatch icons (🩺/🚫/✍️), and
     `BlockedNotice`'s kind label.
-19. Text contrast for all new/changed UI elements (`StageTracker` node labels, `BlockerChip` text,
-    `LivenessLine`, `BlockedNotice` body text, Collapsible header text) meets WCAG AA — ≥4.5:1 for
-    normal text, ≥3:1 for large text (≥18pt/24px or ≥14pt/19px bold) — against both the light and
-    dark theme backgrounds this codebase supports.
-20. Every interactive header/button/link introduced or changed by this project (`Collapsible`
-    headers, session row links, `Actions` buttons) has a touch target ≥44×44px on the mobile
-    layout — verified by inspecting computed `min-height`/`min-width` or padding box on the
-    rendered element at ≤768px viewport width.
-21. Keyboard-only navigation can reach and operate every new affordance — every `Collapsible`
-    header is reachable via `Tab` and operable via `Enter`/`Space`; no new affordance is
-    mouse/touch-only.
-22. Focus is never programmatically moved into newly-revealed `Collapsible` content on expand — the
-    header retains focus after activation, matching standard toggle-button behavior and avoiding a
-    jarring jump for a scanning-oriented task.
+22. Text contrast for all new/changed UI elements (`StageTracker` node labels, `BlockerChip` text,
+    `LivenessLine`, `BlockedNotice` body text, `CollapsibleSection` header text) meets WCAG AA —
+    ≥4.5:1 for normal text, ≥3:1 for large text (≥18pt/24px or ≥14pt/19px bold) — against both the
+    light and dark theme backgrounds this codebase supports.
+23. Every interactive header/button/link introduced or changed by this project (`CollapsibleSection`
+    headers, session row links, `Actions` buttons, and the `useShowMore` "Show N more" buttons in
+    Sessions/Workflow History/Progress History) has a touch target ≥44×44px on the mobile layout —
+    verified by inspecting computed `min-height`/`min-width` or padding box on the rendered element
+    at ≤768px viewport width.
+24. Keyboard-only navigation can reach and operate every new affordance — every `CollapsibleSection`
+    header and every `useShowMore` "Show N more" button is reachable via `Tab` and operable via
+    `Enter`/`Space`; no new affordance is mouse/touch-only.
+25. Arrow-key navigation moves focus directly between `CollapsibleSection` headers within a shared
+    `CollapsibleGroup`; `Home`/`End` jump to the first/last header — without needing to `Tab`
+    through any intervening (possibly DOM-absent) section body content. This is the concrete,
+    testable form of ADR-027's justification for choosing Radix Accordion over
+    `@radix-ui/react-collapsible` (Task 1.1.1c) — verified by placing focus on any section header
+    inside `BacklogItemDetail`'s shared `CollapsibleGroup` (Task 3.1.4i) and pressing Down Arrow /
+    Up Arrow / Home / End.
+26. Focus is never programmatically moved into newly-revealed `CollapsibleSection` content on
+    expand — the header retains focus after activation, matching standard toggle-button behavior
+    and avoiding a jarring jump for a scanning-oriented task.
 
 ### Consistency (board ↔ detail)
 
-23. An item flagged by `useStuckBacklogItems()` shows the *same* `StuckReason` label/icon in both
+27. An item flagged by `useStuckBacklogItems()` shows the *same* `StuckReason` label/icon in both
     the board card's compact `BlockerChip` and the detail panel's full `BlockerChip` — verified by
     opening the same item's card and detail view side by side (or in sequence) and confirming the
     label text is character-for-character identical (duration is the only difference, per the
     full/compact variant contract).
-24. No status text appears in more than one place within the redesigned detail panel that could
+28. No status text appears in more than one place within the redesigned detail panel that could
     contradict itself — verified by confirming the old standalone status badge markup
     (`BacklogItemDetail.tsx:710-714`, pre-redesign) no longer exists anywhere in the render tree,
     and `AcCriteriaList` vs. `GateVerdictBox`'s criteria list are visually distinguished by heading
     text as two different questions ("checklist" vs. "review outcome"), not two copies of the same
-    list.
+    list. This extends to the board card (Surface 7): `BacklogItemCard`'s canonical status label
+    (Story 5.1.0, header), its existing action-button text (footer, `getActionSpec()`), and its
+    compact `BlockerChip` (footer, when stuck) must not read as contradictory. They may read as
+    somewhat redundant in specific cases — e.g. a `"Review"` status label next to a `"View Review"`
+    action button — which is a **known risk to watch during implementation** (pre-mortem finding
+    #5), not a specific layout/copy fix this document mandates.

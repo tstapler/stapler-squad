@@ -56,7 +56,7 @@ it reuses a pattern this codebase has already validated twice (`GateVerdictBox`,
 | Component | Pattern Chosen | Source | Alternative Rejected | Reason |
 |-----------|---------------|--------|---------------------|--------|
 | Overall redesign strategy | Incremental section-by-section extraction (Approach A) | Step 0.5 analysis | (B) Full parallel rewrite; (C) Tab-based reorg via `@radix-ui/react-tabs` | (B) risks weeks of drift with no second reviewer; (C)'s single-visible-panel model conflicts with "several sections relevant simultaneously" (Sessions ↔ Version Control ↔ Progress History cross-referencing) |
-| Collapsible primitive | `@radix-ui/react-accordion` wrapped as `Collapsible` | ADR-027 | Promoted `RecentFilesSection.tsx` `useState`+`aria-expanded` pattern | 8+ sections, several with nested interactive bodies (forms, delete buttons, nested diagnostic panels) — Radix's ARIA/keyboard-group correctness is the differentiator over a single-toggle pattern; `WorkflowsPanel.tsx`'s hand-rolled toggle is the concrete counter-example already in this codebase (no `aria-expanded`) |
+| Collapsible primitive | `@radix-ui/react-accordion` (`type="multiple"`) wrapped as `Collapsible` | ADR-027 (revised) | Promoted `RecentFilesSection.tsx` pattern; **extracting `StuckItem.tsx`/`UnfinishedItem.tsx`'s already-shipped `isExpanded`/`wasExpandedRef` pattern** (the precedent `research/pitfalls.md` §2 explicitly recommends reusing); `@radix-ui/react-collapsible` (single-panel, no cross-header nav) | 8+ sections, several with nested interactive bodies — Radix Accordion's `type="multiple"` mode gives independently-open panels (no forced exclusivity, matching this plan's actual need) *plus* Home/End/Arrow roving-tabindex navigation across all headers, which `-collapsible` lacks; `WorkflowsPanel.tsx`'s hand-rolled toggle is the concrete in-codebase counter-example of getting this wrong (no `aria-expanded`). `StuckItem.tsx`'s pattern was evaluated directly (not omitted) and rejected only because reusing it verbatim would inherit its `<div role="button">` header — which itself fails this plan's own Story 1.1.1 bar — and extracting it into a shared primitive first is nontrivial refactor work with no correctness gain over Radix; see ADR-027's Alternatives Considered for the full comparison. |
 | Section splitting | Extract Component (props down, callbacks up) | `GateVerdictBox.tsx`/`TriageReviewPanel.tsx` precedent | A shared React Context provider for detail-panel state | `.claude/rules/interface-pollution-checklist.md` explicitly discourages a context provider for a single-consumer-tree feature; narrow explicit props keep each new section independently testable |
 | Current work session | Single memoized selector `useCurrentWorkSession(item)` | D3 finding | Status quo: 4 independent inline re-derivations | A single source of truth prevents the 4 call sites drifting out of sync as new logic is added; trivial to unit test in isolation |
 | Read-only session viewer | `readOnly` prop on existing `TriageReviewPanel`/`GateVerdictBox` | Critical Reconciliation (architecture.md, pitfalls.md) | Adapt `VirtualLogList`/`logParser.ts` (`logs/` suite); adapt `XtermTerminal` in read-only mode | Confirmed: no raw transcript exists for synthetic sessions — the diagnostic content is already-fetched structured JSON (`TriageResult`/`ReviewVerdict`), not scrollback text. Building/adapting a log or terminal viewer would solve a problem that doesn't exist here. |
@@ -69,8 +69,9 @@ it reuses a pattern this codebase has already validated twice (`GateVerdictBox`,
 ## Migration Plan
 
 Omitted — confirmed no schema or backend data-model changes are required for this project (see
-requirements.md's "RESEARCH FINDINGS" section: the diagnostic content already travels over the
-wire in `ItemSession.review_verdict`/`triage_result`, `proto/session/v1/backlog.proto:77-78`).
+`research/architecture.md` §1-2: the diagnostic content already travels over the
+wire in `ItemSession.review_verdict`/`triage_result`, `proto/session/v1/backlog.proto` fields
+11-12).
 
 ## Observability Plan
 - **Logs**: no new observability needed — pure UI/display feature. Standard request logging
@@ -155,9 +156,9 @@ new collapsible section in the redesign gets keyboard/focus/ARIA correctness for
 re-deriving it per section.
 
 **Acceptance Criteria**:
-- A `Collapsible` section renders a real `<button aria-expanded="true|false">` header, never a
+- A `CollapsibleSection` renders a real `<button aria-expanded="true|false">` header, never a
   `<div onClick>`.
-  - *Given* a `Collapsible` with `sectionKey="plan-artifacts"` and `defaultExpanded={false}`,
+  - *Given* a `CollapsibleSection` with `sectionKey="plan-artifacts"` and `defaultExpanded={false}`,
     *When* it first renders, *Then* its header button has `aria-expanded="false"` and its body
     content is not present in the DOM (not just visually hidden).
 - Expand state persists per item and per section across a page reload.
@@ -166,6 +167,15 @@ re-deriving it per section.
     `backlog-detail-section-itm_a1b2c3-version-control` is `"true"` and the section renders
     expanded on the next mount.
 - Every header button meets the ≥44×44px touch target requirement.
+- Sibling `CollapsibleSection`s sharing one `CollapsibleGroup` support Home/End/Arrow keyboard
+  navigation directly between their headers (the concrete justification ADR-027 gives for
+  Accordion over `-collapsible`, which only holds if sections actually share one Radix `Root` —
+  see Task 1.1.1c).
+  - *Given* two `CollapsibleSection`s (`sectionKey="plan-artifacts"` and
+    `sectionKey="version-control"`) rendered as children of the same `CollapsibleGroup`, *When*
+    keyboard focus is on the first section's header button and the down-arrow key is pressed,
+    *Then* focus moves directly to the second section's header button without needing to Tab
+    through the first section's body content.
 
 **Files**: `web-app/package.json`, `web-app/src/components/ui/Collapsible.tsx`,
 `web-app/src/components/ui/Collapsible.css.ts`, `web-app/src/components/ui/Collapsible.test.tsx`,
@@ -181,10 +191,26 @@ re-deriving it per section.
   tokens from `web-app/src/styles/theme.css.ts` (no hardcoded values).
 - Files: `web-app/src/components/ui/Collapsible.css.ts`
 
-##### Task 1.1.1c: Build `Collapsible.tsx` (~5 min)
-- Wrap `@radix-ui/react-accordion`'s `Root`/`Item`/`Trigger`/`Content` into a single
-  `CollapsibleSection({ sectionKey, title, defaultExpanded, children })` export; header button
-  includes a chevron and reads `aria-expanded` from Radix's own state.
+##### Task 1.1.1c: Build `Collapsible.tsx` — `CollapsibleGroup` + `CollapsibleSection` (~6 min)
+- Export **two** components, not one, so ADR-027's Home/End/Arrow keyboard-nav justification for
+  choosing Accordion over `-collapsible` actually holds in practice (that benefit only exists
+  when sibling sections share a single Radix `Root` — Radix's roving tabindex is scoped per
+  `Root`, not global):
+  - `CollapsibleGroup({ children })` — a thin wrapper around a single `Accordion.Root
+    type="multiple"`, rendered **once** by the parent composing multiple sibling sections (see
+    Task 3.1.4i). `type="multiple"` means sections open independently — no forced exclusivity —
+    matching this plan's actual need (Sessions/Version Control/Progress History are frequently
+    relevant simultaneously, per Step 0.5's rejection of tabs).
+  - `CollapsibleSection({ sectionKey, title, defaultExpanded, children })` — wraps
+    `Accordion.Item`/`Trigger`/`Content` only (no `Root` of its own); must be rendered as a
+    descendant of a `CollapsibleGroup`'s `Accordion.Root` to pick up Radix's Accordion context.
+    Header button includes a chevron and reads `aria-expanded` from Radix's own state.
+  - A single `CollapsibleSection` used standalone (not inside an explicit `CollapsibleGroup`)
+    remains valid — `CollapsibleSection` also accepts being mounted directly under its own
+    implicit single-item `Accordion.Root` internally when no ancestor `CollapsibleGroup` context
+    is present, so existing single-section use cases don't require call-site changes; the shared
+    `Root` (and therefore the cross-header keyboard nav) only applies where a `CollapsibleGroup`
+    explicitly wraps multiple sections, per Task 3.1.4i.
 - Files: `web-app/src/components/ui/Collapsible.tsx`
 
 ##### Task 1.1.1d: Add `useSectionExpandState(itemId, sectionKey, defaultExpanded)` (~4 min)
@@ -193,9 +219,13 @@ re-deriving it per section.
   `localStorage` access).
 - Files: `web-app/src/lib/hooks/useSectionExpandState.ts`
 
-##### Task 1.1.1e: Write `Collapsible.test.tsx` (~5 min)
+##### Task 1.1.1e: Write `Collapsible.test.tsx` (~6 min)
 - RTL tests: initial `aria-expanded` state, toggling on click, collapsed content absent from DOM
-  (`queryByText` returns `null`, not just non-visible), touch target size via computed style.
+  (`queryByText` returns `null`, not just non-visible), touch target size via computed style; plus
+  a `CollapsibleGroup` case rendering two sibling `CollapsibleSection`s and asserting arrow-key
+  navigation moves focus directly between their header buttons (Story 1.1.1's keyboard-nav
+  acceptance criterion) — this is the unit-level proof, Task 3.1.4j is the integration-level proof
+  once real sections are wired in.
 - Files: `web-app/src/components/ui/Collapsible.test.tsx`
 
 ---
@@ -561,10 +591,27 @@ section is independently testable.
 - PR info has exactly one data source (D4): `PullRequestSection` reads `item.prUrl`/`item.prNumber`
   directly; `VersionControlSection`'s `VcsWidget` no longer independently surfaces PR URL text —
   it links back to `PullRequestSection`'s data instead of re-deriving it.
+- D4's fix is scoped to this project's own call site only, via an opt-out prop, and does not change
+  `/unfinished` or the session view's VCS widget (Blocker A fix).
+  - *Given* `VcsWidgetGithubRow`/`VcsWidget` gain a new `showPrLink?: boolean` prop (default `true`),
+    *When* `BacklogItemDetail`'s new `VersionControlSection` renders its `VcsWidget` in `mode="full"`,
+    *Then* it is the only call site in the codebase passing `showPrLink={false}` — `VcsPanel.tsx`
+    (`web-app/src/components/sessions/VcsPanel.tsx`) and `UnfinishedItemDetail.tsx`
+    (`web-app/src/components/unfinished/UnfinishedItemDetail.tsx`) are left unmodified and keep
+    getting the default `true`, so their PR link text renders exactly as it does today.
+  - *Given* the regression test added in Task 3.1.2d, *When* `UnfinishedItemDetail.test.tsx` runs
+    after this task ships, *Then* it asserts the rendered `VcsWidget` still shows its `PR #<n>` link
+    text — proving the default-`true` behavior for the out-of-scope `/unfinished` page was not
+    silently changed.
 
 **Files**: `web-app/src/components/backlog/detail/PlanningSection.tsx`,
 `web-app/src/components/backlog/detail/ReviewingSection.tsx`,
 `web-app/src/components/backlog/detail/PullRequestSection.tsx`,
+`web-app/src/components/shared/VcsWidget.tsx`,
+`web-app/src/components/shared/vcs-widget/VcsWidgetGithubRow.tsx`,
+`web-app/src/components/unfinished/UnfinishedItemDetail.test.tsx` (regression test only — the
+component itself is NOT modified; same for `web-app/src/components/sessions/VcsPanel.tsx`, verified
+via existing `VcsPanel.test.tsx` continuing to pass unmodified),
 `web-app/src/components/backlog/BacklogItemDetail.tsx`,
 `web-app/src/components/backlog/BacklogItemDetail.test.tsx`,
 `web-app/src/components/backlog/BacklogItemDetail.shipPR.test.tsx`
@@ -587,14 +634,36 @@ section is independently testable.
   `defaultExpanded={true}` (only rendered when relevant, so default-expanded is correct here).
 - Files: `web-app/src/components/backlog/detail/PullRequestSection.tsx`
 
-##### Task 3.1.2d: Consolidate D4 — single PR data source (~4 min)
-- In `VersionControlSection` (extracted in Story 3.4), pass `onViewPr={() =>
-  scrollToSection("pull-request")}` or simply omit the independent PR-URL text `VcsWidget` shows
-  in `mode="full"` when `item.prUrl` is already shown by `PullRequestSection` for the current
-  status; keep `VcsWidget`'s own PR *state* (e.g. CI/mergeability) since that's not duplicated —
-  only the raw URL text is (D4 is about the URL being shown twice, not about removing VCS status).
-- Files: `web-app/src/components/backlog/detail/PullRequestSection.tsx`,
-  `web-app/src/components/backlog/detail/VersionControlSection.tsx`
+##### Task 3.1.2d: Consolidate D4 — single PR data source, scoped via opt-out prop (~7 min)
+- **Add a `showPrLink?: boolean` prop (default `true`) to `VcsWidgetGithubRow`**
+  (`web-app/src/components/shared/vcs-widget/VcsWidgetGithubRow.tsx`) that, when `false`, omits
+  only the `<a href={github.prUrl}>PR #<n></a>` identity line (and its adjacent draft badge) —
+  the review-count and CI-conclusion spans stay, since those aren't duplicated by
+  `PullRequestSection`, only the raw URL text is (D4 is about the URL being shown twice, not
+  about removing VCS status). Thread the same `showPrLink?: boolean` prop through
+  `VcsWidget.tsx` (`web-app/src/components/shared/VcsWidget.tsx`) down to
+  `VcsWidgetGithubRow`, defaulting to `true` there too so every existing call site
+  (`VcsPanel.tsx`, `UnfinishedItemDetail.tsx`) is unaffected by omission.
+- **In `VersionControlSection`** (extracted in Story 3.4) only, pass `showPrLink={false}` when
+  `item.prUrl` is already shown by `PullRequestSection` for the current status (i.e. when
+  `PullRequestSection` is rendered — `status === "pr_pending"`); otherwise leave it at the
+  default `true` so the PR link is still visible via `VersionControlSection` alone for statuses
+  where `PullRequestSection` doesn't render.
+- **Do not touch** `web-app/src/components/sessions/VcsPanel.tsx` or
+  `web-app/src/components/unfinished/UnfinishedItemDetail.tsx` — both call `<VcsWidget mode="full"
+  .../>` today without a `showPrLink` prop, and must keep doing so unchanged, so they continue
+  getting the default `true` and their PR link renders exactly as it does today (Blocker A fix —
+  without this opt-out, a naive "make `VcsWidgetGithubRow` stop rendering the PR link in full
+  mode" change would silently also affect the out-of-scope `/unfinished` page and the session
+  view's VCS panel, neither of which this project is allowed to change).
+- Add a regression assertion to `UnfinishedItemDetail.test.tsx` (existing file, new test case)
+  confirming its rendered `VcsWidget` still shows the `PR #<n>` link text after this task ships;
+  no changes needed to `VcsPanel.test.tsx` beyond confirming it still passes unmodified.
+- Files: `web-app/src/components/shared/VcsWidget.tsx`,
+  `web-app/src/components/shared/vcs-widget/VcsWidgetGithubRow.tsx`,
+  `web-app/src/components/backlog/detail/PullRequestSection.tsx`,
+  `web-app/src/components/backlog/detail/VersionControlSection.tsx`,
+  `web-app/src/components/unfinished/UnfinishedItemDetail.test.tsx`
 
 ##### Task 3.1.2e: Update tests + wire into `BacklogItemDetail.tsx` (~5 min)
 - Replace the moved JSX blocks in `BacklogItemDetail.tsx` with the 3 new component calls; run
@@ -624,6 +693,16 @@ out, **so that** the giant status-conditional Actions block becomes independentl
     elapse, *Then* no poll-triggered `load()` call fires (matching the existing `editMode`
     suspend pattern at `BacklogItemDetail.tsx:245`), so the in-progress form text is never
     clobbered by a refresh.
+- Polling also suspends while any action is in flight (`actionLoading !== null`), not only during
+  `editMode`/`showManualReview` (pre-mortem P1 #4) — `ReviewingSection` (from Task 3.1.4i onward,
+  wired into the shared `CollapsibleGroup`) contains `GateVerdictBox`'s live Approve/Reopen/
+  Override/Skip Gate/Re-review buttons, and a poll-triggered re-render that recomputes
+  `defaultExpanded` mid-request could otherwise unmount the section while a request with real
+  backend side effects (rework-cap consumption) is in flight, risking a double-submit.
+  - *Given* `actionLoading !== null` for a `ReviewingSection` action (e.g. an in-flight
+    `"approve_plan"` or `"override_done"` request), *When* a 5-second poll tick fires, *Then* no
+    poll-triggered `load()` call fires, `ReviewingSection` stays mounted/expanded, and the pending
+    button's `aria-busy`/`disabled` state is preserved — no unmount, no double-submit.
 - D2 resolved: `AcCriteriaList`/`item.acCriteria` remains the sole "acceptance criteria status"
   display; `GateVerdictBox`'s `criteria` prop (backed by `item.gateCriteria`) is relabeled in its
   own UI to read as "review outcome per criterion" rather than a second, competing AC list.
@@ -636,7 +715,8 @@ out, **so that** the giant status-conditional Actions block becomes independentl
 **Files**: `web-app/src/components/backlog/detail/DescriptionSection.tsx`,
 `web-app/src/components/backlog/detail/ActionsSection.tsx`,
 `web-app/src/components/backlog/GateVerdictBox.tsx`, `web-app/src/components/backlog/GateVerdictBox.css.ts`,
-`web-app/src/components/backlog/BacklogItemDetail.tsx`
+`web-app/src/components/backlog/BacklogItemDetail.tsx`,
+`web-app/src/components/backlog/BacklogItemDetail.test.tsx`
 
 ##### Task 3.1.3a: Extract `DescriptionSection.tsx` wrapped in `Collapsible` (~3 min)
 - Move `BacklogItemDetail.tsx:962-970` verbatim; `defaultExpanded={false}`.
@@ -648,11 +728,30 @@ out, **so that** the giant status-conditional Actions block becomes independentl
   props; no `Collapsible` wrapper (primary/always-visible).
 - Files: `web-app/src/components/backlog/detail/ActionsSection.tsx`
 
-##### Task 3.1.3c: Extend polling-suspend to `showManualReview` (~3 min)
+##### Task 3.1.3c: Extend polling-suspend to `showManualReview` and `actionLoading` (~5 min)
 - In the polling `useEffect` (`BacklogItemDetail.tsx:243-249`), change `&& !editMode` to `&&
-  !editMode && !showManualReview`; update the effect's dependency array to include
-  `showManualReview`.
-- Files: `web-app/src/components/backlog/BacklogItemDetail.tsx`
+  !editMode && !showManualReview && actionLoading === null`; update the effect's dependency array
+  to include `showManualReview` and `actionLoading`.
+- **Pre-mortem P1 #4**: `actionLoading` (`useState<string | null>(null)` at
+  `BacklogItemDetail.tsx:151`) already gates every `GateVerdictBox`/`ActionsSection` button's
+  disabled/pending state (`actionPending={actionLoading !== null}` at line 892,
+  `disabled={actionLoading !== null}` throughout the Actions block), including the Approve/
+  Reopen/Override/Skip Gate/Re-review buttons inside `ReviewingSection` — which, from Task
+  3.1.4i onward, sits inside the shared `CollapsibleGroup` alongside `defaultExpanded`
+  recomputation triggered by a poll-driven re-render. Without this fix, an Approve/Override
+  request in flight when a poll tick fires could have its containing section unmount mid-request
+  (per Task 1.1.1c's collapsed-content-removed-from-DOM behavior), risking a double-submit with
+  real backend side effects (rework-cap consumption). Suspending polling on
+  `actionLoading !== null` closes this gap at the same site the `showManualReview` suspend fix
+  lands in, and lands in Story 3.1.3 — well before `ReviewingSection` is ever wired into a shared
+  `CollapsibleGroup` (Task 3.1.4i, Story 3.1.4).
+- Add a regression test: render with `item.status === "review"`, trigger an Approve/Override
+  click against a mocked pending (not-yet-resolved) promise so `actionLoading` is non-null,
+  simulate a poll tick (advance the 5s timer), and assert `ReviewingSection`'s `Collapsible`
+  remains mounted/expanded and the pending button is still present with its pending
+  `aria-busy`/`disabled` state (no unmount, no second click reaching the handler).
+- Files: `web-app/src/components/backlog/BacklogItemDetail.tsx`,
+  `web-app/src/components/backlog/BacklogItemDetail.test.tsx`
 
 ##### Task 3.1.3d: Relabel `GateVerdictBox`'s criteria heading (D2) (~3 min)
 - Add a small heading/label above the per-criterion outcomes inside `GateVerdictBox.tsx` reading
@@ -673,6 +772,9 @@ out, **so that** the giant status-conditional Actions block becomes independentl
 History, and Notes each pulled into their own collapsible siblings, **so that** the detail view
 matches the "collapsed-by-default secondary sections" requirement end to end.
 
+Note: the `useShowMore` hook's "show all" state is `localStorage`-persisted per item/section
+(not plain `useState`), per pre-mortem finding #2 — see Task 3.1.4c2.
+
 **Acceptance Criteria**:
 - All 6 sections render as independent `Collapsible` siblings; default-expanded state matches
   each section's relevance to current status.
@@ -692,6 +794,37 @@ matches the "collapsed-by-default secondary sections" requirement end to end.
     the Stage Tracker — the per-session-row pipeline display in `SessionsSection` remains (D6
     doesn't require removing the detailed per-session breakdown, only adding the glanceable
     summary).
+- `SessionsSection`, `WorkflowHistorySection`, and `ProgressHistorySection` each cap their default
+  rendering to the most recent N entries with a "Show N more" expansion — collapsing the section
+  itself is not sufficient for these three (Blocker C fix; `research/features.md` finding #5):
+  a single already-expanded section can itself be arbitrarily long for a long-stuck item, which
+  reproduces the "everything visible, nothing prioritized" problem this project exists to fix,
+  just one level down.
+  - *Given* a backlog item shaped like the real `df0d5872` case from
+    `research/features.md` finding #5 (6 triage + 3 review + 2 work sessions — 11 total linked
+    sessions — over 4 days), *When* `SessionsSection` renders (default-expanded per its own rule),
+    *Then* it shows only the 5 most recent sessions plus a `"Show 6 more"` button
+    (`data-testid="sessions-show-more"`); clicking it reveals the remaining 6 inline, in the same
+    list, with no pagination/route change.
+  - *Given* the same item has 9 `statusEvents` entries accumulated from its `in_progress ↔ review`
+    bouncing, *When* `WorkflowHistorySection` is expanded, *Then* it shows only the 8 most recent
+    events plus a `"Show 1 more"` button; clicking it reveals the remaining entry inline.
+  - *Given* the same item has 12 `progressNotes` entries, *When* `ProgressHistorySection` is
+    expanded, *Then* it shows only the 8 most recent notes plus a `"Show 4 more"` button; clicking
+    it reveals the rest inline.
+  - *Given* an item with fewer entries than the cap (e.g. 3 linked sessions), *When* the relevant
+    section renders, *Then* no "Show N more" button appears at all — the cap only ever adds a
+    control, never removes information a short list would otherwise show.
+- The "show all" state persists per item and per section across a page reload/re-open, the same
+  way `useSectionExpandState` persists collapse state (pre-mortem finding #2) — this matters most
+  for exactly the heavily-cycled items this project exists to make inspectable, since those are
+  the items where the user re-opens the detail view most often to check status.
+  - *Given* the user clicks `"Show 6 more"` on `SessionsSection` for the `df0d5872`-shaped item
+    (`itemId="itm_df0d5872"`), *When* the user later navigates away and re-opens the same item
+    (a fresh mount, not merely a poll refresh), *Then* `SessionsSection` renders already expanded
+    to show all 11 sessions on that fresh mount — `localStorage` key
+    `backlog-detail-showmore-itm_df0d5872-sessions` is `"true"` and the "Show N more" button does
+    not need to be clicked again.
 
 **Files**: `web-app/src/components/backlog/detail/PlanArtifactsSection.tsx`,
 `web-app/src/components/backlog/detail/VersionControlSection.tsx`,
@@ -700,6 +833,9 @@ matches the "collapsed-by-default secondary sections" requirement end to end.
 `web-app/src/components/backlog/detail/ProgressHistorySection.tsx`,
 `web-app/src/components/backlog/detail/NotesSection.tsx`,
 `web-app/src/components/backlog/detail/LifecycleSummary.tsx`,
+`web-app/src/lib/hooks/useShowMore.ts` (shared, `localStorage`-persisted cap/expand helper —
+Blocker C fix + pre-mortem finding #2),
+`web-app/src/lib/hooks/useShowMore.test.ts`,
 `web-app/src/components/backlog/BacklogItemDetail.tsx`,
 `web-app/src/components/backlog/BacklogItemDetail.css.ts`
 
@@ -718,13 +854,53 @@ matches the "collapsed-by-default secondary sections" requirement end to end.
   emphasis on session inspectability).
 - Files: `web-app/src/components/backlog/detail/SessionsSection.tsx`
 
+##### Task 3.1.4c2: Build shared `useShowMore` cap/expand hook, apply to `SessionsSection` (~6 min)
+- Blocker C fix (`research/features.md` finding #5) **and pre-mortem finding #2**: section-level
+  collapsing alone is not enough for long-stuck items — the `df0d5872` case (6 triage + 3 review +
+  2 work sessions = 11 linked sessions over 4 days) would render 11 full session rows, each with
+  its own pipeline/verdict sub-block, inside an already-expanded `SessionsSection`. Pre-mortem
+  finding #2 flagged that a plain `useState`-backed cap re-collapses to the capped view on every
+  mount — exactly the wrong behavior for the chronically-stuck, heavily-cycled items this project
+  exists to make inspectable, since the user would re-pay the "Show N more" click every single
+  time they re-open the item to check on it, a direct regression against the project's own success
+  metric for its hardest cases. Build `useShowMore<T>(itemId: string, sectionKey: string, items:
+  T[], cap: number): { visible: T[]; hasMore: boolean; remaining: number; showAll: () => void }` —
+  `localStorage`-backed, reusing `useSectionExpandState`'s exact pattern/key convention (Story
+  1.1.1): key `backlog-detail-showmore-${itemId}-${sectionKey}`, reads/writes wrapped in
+  `try/catch`. Once `showAll()` is called (or the persisted key already reads `"true"` on mount),
+  the section renders all items uncapped on every subsequent mount for that item, not just the
+  current one. Use it in `SessionsSection` with `sectionKey="sessions"`, `cap={5}` (most recent 5
+  sessions, sorted the same way the existing list already is) plus a `"Show N more"` button
+  (`data-testid="sessions-show-more"`) that calls `showAll()`. No virtualization/pagination infra —
+  a simple show-more toggle matches this plan's own ladder-style calibration (see ADR-027's
+  reasoning against over-building for a personal tool).
+- Files: `web-app/src/lib/hooks/useShowMore.ts`, `web-app/src/lib/hooks/useShowMore.test.ts`,
+  `web-app/src/components/backlog/detail/SessionsSection.tsx`,
+  `web-app/src/components/backlog/detail/SessionsSection.css.ts`
+
 ##### Task 3.1.4d: Extract `WorkflowHistorySection.tsx` (~3 min)
 - Move `BacklogItemDetail.tsx:1476-1496`; `defaultExpanded={false}`.
 - Files: `web-app/src/components/backlog/detail/WorkflowHistorySection.tsx`
 
+##### Task 3.1.4d2: Apply `useShowMore` cap to `WorkflowHistorySection` (~3 min)
+- Blocker C fix (and pre-mortem finding #2's persisted show-all state): same rationale as Task
+  3.1.4c2, applied to `item.statusEvents`. Use the shared `useShowMore` hook (built in Task
+  3.1.4c2) with `sectionKey="workflow"`, `cap={8}` (most recent 8 events) plus a `"Show N more"`
+  button (`data-testid="workflow-show-more"`).
+- Files: `web-app/src/components/backlog/detail/WorkflowHistorySection.tsx`,
+  `web-app/src/components/backlog/detail/WorkflowHistorySection.css.ts`
+
 ##### Task 3.1.4e: Extract `ProgressHistorySection.tsx` (~3 min)
 - Move `BacklogItemDetail.tsx:1499-1520`; `defaultExpanded={false}`.
 - Files: `web-app/src/components/backlog/detail/ProgressHistorySection.tsx`
+
+##### Task 3.1.4e2: Apply `useShowMore` cap to `ProgressHistorySection` (~3 min)
+- Blocker C fix (and pre-mortem finding #2's persisted show-all state): same rationale as Task
+  3.1.4c2, applied to `item.progressNotes`. Use the shared `useShowMore` hook with
+  `sectionKey="progress-history"`, `cap={8}` (most recent 8 notes) plus a `"Show N more"` button
+  (`data-testid="progress-history-show-more"`).
+- Files: `web-app/src/components/backlog/detail/ProgressHistorySection.tsx`,
+  `web-app/src/components/backlog/detail/ProgressHistorySection.css.ts`
 
 ##### Task 3.1.4f: Extract `NotesSection.tsx` (~4 min)
 - Move `BacklogItemDetail.tsx:1522-1571`; `defaultExpanded={Boolean(item.notes)}`.
@@ -744,6 +920,27 @@ matches the "collapsed-by-default secondary sections" requirement end to end.
   changes content height dynamically — collapsing/expanding sections must never clip content
   without a scrollbar.
 - Files: `web-app/src/components/backlog/BacklogItemDetail.css.ts`
+
+##### Task 3.1.4i: Wrap all sibling `CollapsibleSection`s in one shared `CollapsibleGroup` (~4 min)
+- By this point every `Collapsible`-wrapped section exists as a sibling in `BacklogItemDetail.tsx`
+  (`ReviewingSection`, `PullRequestSection` from 3.1.2; `DescriptionSection` from 3.1.3;
+  `PlanArtifactsSection`, `VersionControlSection`, `SessionsSection`, `WorkflowHistorySection`,
+  `ProgressHistorySection`, `NotesSection` from 3.1.4). Wrap the block containing these sibling
+  sections in a single `<CollapsibleGroup>` (Task 1.1.1c) so their headers share one Radix
+  `Accordion.Root` and get Home/End/Arrow roving-tabindex navigation between them — without this
+  task, ADR-027's justification for choosing Accordion over `@radix-ui/react-collapsible` (the
+  cross-header keyboard-nav argument) would not actually be realized, since each
+  `CollapsibleSection` falls back to its own implicit single-item `Root` when no ancestor
+  `CollapsibleGroup` is present. `ActionsSection`/`PlanningSection` (never wrapped in a
+  `Collapsible` — always-expanded, primary content) are unaffected and sit outside the group.
+- Files: `web-app/src/components/backlog/BacklogItemDetail.tsx`
+
+##### Task 3.1.4j: Add keyboard-nav test for the shared group (~4 min)
+- RTL/jsdom test asserting arrow-key navigation moves focus between two sibling section headers
+  within `BacklogItemDetail`'s rendered `CollapsibleGroup`, per Story 1.1.1's keyboard-nav
+  acceptance criterion — this is the integration-level proof that Task 3.1.4i's wiring actually
+  delivers the benefit ADR-027 cites, not just a unit test of `Collapsible.tsx` in isolation.
+- Files: `web-app/src/components/backlog/BacklogItemDetail.test.tsx`
 
 ---
 
@@ -950,9 +1147,78 @@ no row in the Sessions list is inert text or a broken link.
 ## Phase 5: Board Card Consistency
 
 ### Epic 5.1: Board Card Consistency
-**Goal**: Give `BacklogItemCard.tsx` the same "waiting on X" signal the detail view now has,
-using the shared `BlockerChip`, closing the gap the earlier `backlog-ux` project's US-3 left open
-(session cards only, not backlog item cards).
+**Goal**: Give `BacklogItemCard.tsx` both the same "waiting on X" signal the detail view now has
+(via `BlockerChip`, closing the gap the earlier `backlog-ux` project's US-3 left open — session
+cards only, not backlog item cards) **and** the same status vocabulary the new Stage Tracker uses
+(Story 5.1.0), so requirements.md's success metric — "Board/list card summaries show status
+consistent with the detail view's lifecycle model" — is actually met, not just the blocker-signal
+half of it. `BacklogItemCard.tsx` today has no status label at all distinct from its
+action-oriented button text (`getActionSpec()` — "View Review", "Done ✓"); Story 5.1.0 closes that
+gap with a small, additive status label sourced from `lib/backlog/status.ts`'s
+`getStatusLabel()` — the same canonical vocabulary `BacklogItemBadge.tsx` already uses and the
+Stage Tracker (Epic 2) is bound to — without redesigning the card's existing action-button system.
+
+#### Story 5.1.0: Canonical status label on `BacklogItemCard`
+**As a** user scanning `/backlog/board`, **I want** the card to show the same status word the
+detail view's Stage Tracker uses, **so that** the board and the detail view never disagree about
+what state an item is in, closing the gap between `BacklogItemCard.tsx`'s independent
+action-oriented button text (`getActionSpec()`) and the canonical status vocabulary
+`BacklogItemBadge.tsx`/the Stage Tracker already use.
+
+**Decision (resolves Blocker B)**: Option (a) — make the card's status *label* (not its action
+button) derive from `getStatusLabel()`. This is a small, additive change: `getActionSpec()`'s
+action-oriented button text (`"View Review"`, `"Done ✓"`) stays exactly as-is (it serves a
+different purpose — "what can I click" — than a status label, and redesigning the action-button
+system itself is out of proportion to this project's appetite). What's missing today is that the
+card has *no* status-vocabulary text at all distinct from the button — this story adds one, it
+does not replace the button. This is judged to be small enough to implement (one new span, one
+shared import, already-existing `getStatusLabel()` helper — no new component, no CSS token
+work beyond a single class) rather than deferring to a documented-scope-limitation per option (b).
+
+**Acceptance Criteria**:
+- Every `BacklogItemCard` shows a status label using `getStatusLabel(item.status)` verbatim — the
+  same text `BacklogItemBadge.tsx` and the Stage Tracker's active-node label would show for that
+  status — positioned in the card header, distinct from and in addition to the existing action
+  button.
+  - *Given* `item.status === "review"`, *When* `<BacklogItemCard item={item} .../>` renders,
+    *Then* it shows a status label reading `"Review"` (from `getStatusLabel("review")`) somewhere
+    in `styles.cardHeader`, and the existing action button still reads `"View Review"` unchanged.
+  - *Given* `item.status === "queued"`, *When* the card renders, *Then* the status label reads
+    `"Queued"` — matching what `StageTracker`'s "Queued" modifier badge shows for the same status
+    on the detail view — even though `getActionSpec()` has no explicit `"queued"` case today (it
+    falls through to the `default` branch, showing `item.status` raw as the button label; the new
+    status label is unaffected by that fallback since it sources from `getStatusLabel()`
+    independently).
+- No existing action-button behavior, testid, or click handling changes.
+  - *Given* the full existing `BacklogItemCard.test.tsx` suite, *When* it runs after this story
+    ships, *Then* every pre-existing assertion on `data-testid="backlog-action-*"` still passes
+    unmodified — this story only adds a new element, it does not touch `getActionSpec()` or the
+    button's `data-testid`.
+
+**Files**: `web-app/src/components/backlog/BacklogItemCard.tsx`,
+`web-app/src/components/backlog/BacklogItemCard.css.ts`,
+`web-app/src/components/backlog/BacklogItemCard.test.tsx`
+
+##### Task 5.1.0a: Add status label to `BacklogItemCard.tsx` (~3 min)
+- Import `getStatusLabel` from `@/lib/backlog/status` (the same module `BacklogItemBadge.tsx`
+  already uses); render `<span className={styles.statusLabel}
+  data-testid="backlog-item-card-status">{getStatusLabel(item.status)}</span>` inside
+  `styles.cardHeader`, alongside the existing title/priority badge — do not modify
+  `getActionSpec()` or the action button.
+- Files: `web-app/src/components/backlog/BacklogItemCard.tsx`
+
+##### Task 5.1.0b: Add `statusLabel` style to `BacklogItemCard.css.ts` (~2 min)
+- A small muted-text class consistent with `BacklogItemBadge.css.ts`'s existing status-chip
+  styling conventions (reuse the same token references — no new colors invented for this story).
+- Files: `web-app/src/components/backlog/BacklogItemCard.css.ts`
+
+##### Task 5.1.0c: Write `BacklogItemCard.test.tsx` status-label cases (~4 min)
+- Cases: at least 2 statuses (e.g. `"review"`, `"queued"`) asserting `backlog-item-card-status`
+  text matches `getStatusLabel()`'s output exactly, and that the action button's own label/testid
+  is unaffected.
+- Files: `web-app/src/components/backlog/BacklogItemCard.test.tsx`
+
+---
 
 #### Story 5.1.1: `BlockerChip` on `BacklogItemCard`
 **As a** user scanning `/backlog/board`, **I want** stuck items to show the same blocker
