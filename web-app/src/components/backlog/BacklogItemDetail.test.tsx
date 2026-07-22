@@ -776,3 +776,61 @@ describe("BacklogItemDetail — Story 3.1.5: auto-expand-on-status-change, first
     expect(screen.getByTestId("collapsible-header-reviewing")).toHaveAttribute("aria-expanded", "false");
   });
 });
+
+describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-group dev warning", () => {
+  it("BacklogItemDetail_should_NotWarn_When_AllGroupedSectionsRenderWithTheirOwnDefaultExpanded", async () => {
+    // 1d8b6cd1 added a dev-mode console.warn in Collapsible.tsx for any
+    // CollapsibleSection inside a CollapsibleGroup that receives a truthy
+    // defaultExpanded — but every one of this component's 8 grouped
+    // sections legitimately passes defaultExpanded={<sectionKey>Expanded},
+    // the same state that also feeds the group's own `value` prop via
+    // sectionExpandEntries/openSectionKeys. That's redundant, not
+    // misuse — Collapsible.tsx must only warn on a genuine divergence
+    // between defaultExpanded and the group's actual state for that
+    // section, never on this component's own correct, consistent usage.
+    // Use "review" status so every optional section (Reviewing,
+    // Plan Artifacts, Version Control) also mounts, maximizing the
+    // number of grouped sections rendered in one pass. VersionControlSection
+    // additionally requires non-null VCS/ship-status data to render at all.
+    useVcsStatusMock.mockReturnValue({
+      data: create(VCSStatusSchema, { branch: "feat/live-branch", isClean: true }),
+      loading: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    const session = makeSession({ entityId: "s1", sessionId: "session-1", role: "review" });
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([session]),
+      status: "review",
+      planArtifactsPath: "/tmp/plans/item-1.md",
+      notes: "some notes",
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Sanity check: the grouped sections this test cares about actually
+    // mounted, so a passing assertion below isn't just "nothing rendered".
+    expect(screen.getByTestId("collapsible-header-reviewing")).toBeInTheDocument();
+    expect(screen.getByTestId("collapsible-header-plan-artifacts")).toBeInTheDocument();
+    expect(screen.getByTestId("collapsible-header-version-control")).toBeInTheDocument();
+    expect(screen.getByTestId("collapsible-header-sessions")).toBeInTheDocument();
+    expect(screen.getByTestId("collapsible-header-notes")).toBeInTheDocument();
+
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Toggling a section keeps defaultExpanded and the group's value in
+    // lockstep (both driven by the same useSectionExpandState setter via
+    // handleGroupValueChange) — must still not warn after a re-render.
+    fireEvent.click(screen.getByTestId("collapsible-header-notes"));
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+});
