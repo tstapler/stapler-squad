@@ -119,4 +119,54 @@ describe("CollapsibleGroup", () => {
     expect(screen.getByText("Plan body")).toBeInTheDocument();
     expect(screen.getByText("VCS body")).toBeInTheDocument();
   });
+
+  it("CollapsibleGroup_should_WarnAndIgnoreDefaultExpanded_When_NestedSectionSetsDefaultExpandedTrue", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(
+      <CollapsibleGroup defaultValue={["version-control"]}>
+        <CollapsibleSection sectionKey="plan-artifacts" title="Plan artifacts" defaultExpanded={true}>
+          <p>Plan body</p>
+        </CollapsibleSection>
+        <CollapsibleSection sectionKey="version-control" title="Version control">
+          <p>VCS body</p>
+        </CollapsibleSection>
+      </CollapsibleGroup>
+    );
+
+    // Warned once for the section that set defaultExpanded inside a group.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("plan-artifacts"));
+
+    // The ignored prop does NOT control initial open state — the group's
+    // defaultValue does. "plan-artifacts" set defaultExpanded={true} but is
+    // NOT in the group's defaultValue, so it stays collapsed.
+    expect(
+      screen.getByTestId("collapsible-header-plan-artifacts")
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Plan body")).not.toBeInTheDocument();
+
+    // "version-control" never set defaultExpanded but IS in the group's
+    // defaultValue, so it starts open.
+    expect(
+      screen.getByTestId("collapsible-header-version-control")
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("VCS body")).toBeInTheDocument();
+
+    warnSpy.mockRestore();
+  });
+
+  it("CollapsibleGroup_should_NotWarn_When_StandaloneSectionSetsDefaultExpanded", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(
+      <CollapsibleSection sectionKey="standalone" title="Standalone" defaultExpanded={true}>
+        <p>Standalone body</p>
+      </CollapsibleSection>
+    );
+
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
 });

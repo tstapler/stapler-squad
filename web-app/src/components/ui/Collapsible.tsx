@@ -62,6 +62,7 @@ interface CollapsibleSectionProps {
   /** Unique key within the section's CollapsibleGroup (or item, when standalone); also the localStorage suffix (see useSectionExpandState). */
   sectionKey: string;
   title: ReactNode;
+  /** Initial open state. Only used for standalone (non-grouped) usage — inside a CollapsibleGroup, initial open state is controlled by the group's defaultValue. */
   defaultExpanded?: boolean;
   /** Fires with the section's new open state. Only used for standalone (non-grouped) usage. */
   onExpandedChange?: (expanded: boolean) => void;
@@ -116,6 +117,11 @@ export function CollapsibleSection({
   const insideGroup = useContext(CollapsibleGroupContext);
 
   if (insideGroup) {
+    if (process.env.NODE_ENV !== "production" && (defaultExpanded || onExpandedChange)) {
+      console.warn(
+        `CollapsibleSection "${sectionKey}": defaultExpanded/onExpandedChange are ignored inside a CollapsibleGroup; use the group's defaultValue/onValueChange instead.`,
+      );
+    }
     return (
       <CollapsibleItem sectionKey={sectionKey} title={title} className={className}>
         {children}
