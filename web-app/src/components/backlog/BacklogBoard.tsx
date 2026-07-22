@@ -2,6 +2,7 @@
 // +feature: backlog:board
 
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { BacklogItemCard } from "./BacklogItemCard";
 import * as styles from "./BacklogBoard.css";
 
@@ -12,6 +13,11 @@ interface BacklogBoardProps {
   isLoading?: boolean;
   /** itemId -> action key currently in flight for that card. */
   pending?: Record<string, string>;
+  /**
+   * Resolved once (useStuckBacklogItems()) by the page-level caller and
+   * distributed per card by itemId here — not re-fetched per card.
+   */
+  stuckItems?: StuckBacklogItem[];
 }
 
 const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
@@ -38,6 +44,7 @@ function BoardColumn({
   onItemClick,
   isLoading,
   pending,
+  stuckItemsById,
 }: {
   column: { status: BacklogItemStatus; label: string };
   items: BacklogItem[];
@@ -45,6 +52,7 @@ function BoardColumn({
   onItemClick: (itemId: string) => void;
   isLoading: boolean;
   pending: Record<string, string>;
+  stuckItemsById: Map<string, StuckBacklogItem>;
 }) {
   return (
     <section
@@ -75,6 +83,7 @@ function BoardColumn({
                 onAction={onAction}
                 onClick={onItemClick}
                 pendingAction={pending[item.id] ?? null}
+                stuckItem={stuckItemsById.get(item.id)}
               />
             </div>
           ))
@@ -90,7 +99,10 @@ export function BacklogBoard({
   onItemClick,
   isLoading = false,
   pending = {},
+  stuckItems = [],
 }: BacklogBoardProps) {
+  const stuckItemsById = new Map(stuckItems.map((s) => [s.itemId, s]));
+
   return (
     <div
       className={styles.board}
@@ -107,6 +119,7 @@ export function BacklogBoard({
           onItemClick={onItemClick}
           isLoading={isLoading}
           pending={pending}
+          stuckItemsById={stuckItemsById}
         />
       ))}
     </div>

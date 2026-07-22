@@ -33,6 +33,20 @@ export function BacklogItemBadge({
   acTotal,
   acDone,
 }: BacklogItemBadgeProps) {
+  // Story 5.1.2 decision (plan.md Task 5.1.2a): DEFERRED — no compact
+  // BlockerChip added here. This badge's container is capped at 260px
+  // (BacklogItemBadge.css.ts's `badge` style), single-line (`whiteSpace:
+  // "nowrap"`, `overflow: "hidden"`), and already renders 3 inline elements
+  // (status chip, AC count, title truncated to 40 chars). A 4th element —
+  // even the compact icon+label-only BlockerChip variant, whose longest
+  // label ("Autonomous mode stopped without finishing") is ~40 chars — would
+  // either force wrapping (breaking this badge's intentional single-line
+  // design) or truncate the title further, with no free width budget to
+  // absorb it. Per design/ux.md Surface 7's explicit fallback for the
+  // deferred branch: the stuck reason is not hidden entirely — it's one
+  // click away via the detail panel's full-variant BlockerChip
+  // (LifecycleSummary), and /unfinished remains the primary stuck-item
+  // triage surface, not this list badge.
   return (
     <span className={styles.badge} data-testid="backlog-item-badge">
       <span

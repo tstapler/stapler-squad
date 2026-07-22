@@ -8,6 +8,7 @@ import { BacklogBoard } from "@/components/backlog/BacklogBoard";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 
 const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   mark_ready: "Marked ready.",
@@ -25,6 +26,9 @@ export default function BacklogBoardPage() {
   const [loading, setLoading] = useState(true);
   /** itemId -> action key currently in flight for that card. */
   const [pending, setPending] = useState<Record<string, string>>({});
+  // Called once here (not per-card) so every card shares one poll instead of
+  // N independent 60s polls — see plan.md Task 5.1.1a.
+  const { items: stuckItems } = useStuckBacklogItems();
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -108,6 +112,7 @@ export default function BacklogBoardPage() {
       onItemClick={handleItemClick}
       isLoading={loading}
       pending={pending}
+      stuckItems={stuckItems}
     />
   );
 }

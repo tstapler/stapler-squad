@@ -74,10 +74,20 @@ export const priorityBadge = style({
   border: `1px solid ${vars.color.borderMuted}`,
 });
 
+export const statusLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  color: vars.color.textMuted,
+  flexShrink: 0,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+});
+
 export const cardFooter = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
+  flexWrap: "wrap",
   gap: vars.space["2"],
 });
 
