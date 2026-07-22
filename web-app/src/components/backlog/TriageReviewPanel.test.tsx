@@ -353,6 +353,61 @@ describe("TriageReviewPanel_refine_with_feedback", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Story 4.1.2: readOnly mode (Structured Diagnostic for Headless Diagnostic
+// Sessions)
+// ---------------------------------------------------------------------------
+
+describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySuggestionsTasks_When_ReadOnlyIsTrue", () => {
+  it("omits Apply/Skip/Refine/dismiss buttons but keeps summary, suggestions, and task list", () => {
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={{
+          ...TRIAGE_RESULT_WITH_SUGGESTIONS,
+          tasks: [{ text: "Reworded AC #2", estimate: "", category: "" }],
+        }}
+        readOnly
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+      />
+    );
+
+    // Panel and its informational content are present.
+    expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
+    expect(screen.getByText(TRIAGE_RESULT_WITH_SUGGESTIONS.summary)).toBeInTheDocument();
+    expect(screen.getByText("User sees confirmation on submit")).toBeInTheDocument();
+    expect(screen.getByTestId("triage-task-list")).toBeInTheDocument();
+    expect(screen.getByText("Reworded AC #2")).toBeInTheDocument();
+
+    // Action buttons absent from the DOM (not merely disabled).
+    expect(screen.queryByTestId("triage-apply-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-mark-ready-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-skip-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-refine-toggle-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-dismiss-button")).not.toBeInTheDocument();
+  });
+
+  it("ignores a pre-existing localStorage dismissal for the same item.id — a historical record is never dismissible", () => {
+    // Simulates the user having dismissed the live interactive triage panel
+    // for this item — the readOnly historical-record render must not
+    // inherit that dismissed state (they share the same localStorage key).
+    localStorage.setItem("triage-panel-dismissed-item-001", "1");
+
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        readOnly
+        onApply={jest.fn()}
+        onSkip={jest.fn()}
+      />
+    );
+
+    expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests 12–13: mapBacklogItem triageStatus logic
 // These test the domain mapping rules in useBacklogService via the BacklogItem type.
 // We construct BacklogItem objects directly using the same rules as mapBacklogItem

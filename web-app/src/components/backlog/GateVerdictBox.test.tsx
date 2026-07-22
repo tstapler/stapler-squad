@@ -352,3 +352,46 @@ describe("GateVerdictBox — criteria list", () => {
     expect(screen.getByRole("list", { name: /Criteria results/i })).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Story 4.1.2: readOnly mode (Structured Diagnostic for Headless Diagnostic
+// Sessions)
+// ---------------------------------------------------------------------------
+
+describe("GateVerdictBox_should_HideActionButtonRowButShowPerCriterionOutcomes_When_ReadOnlyIsTrueAndVerdictIsFail", () => {
+  it("hides the entire action-button row but keeps verdict/summary/per-criterion outcomes", () => {
+    const criteria = [
+      { label: "AC1 — Passed", passed: true },
+      { label: "AC2 — Failed: error not surfaced to user", passed: false },
+    ];
+    render(
+      <GateVerdictBox
+        {...makeProps({ verdict: "FAIL", criteria, summary: "2 of 5 criteria still not met." })}
+        readOnly
+      />
+    );
+
+    // Verdict card + per-criterion detail still present.
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
+    expect(screen.getByText("2 of 5 criteria still not met.")).toBeInTheDocument();
+    expect(screen.getByText("AC1 — Passed")).toBeInTheDocument();
+    expect(screen.getByText("AC2 — Failed: error not surfaced to user")).toBeInTheDocument();
+
+    // Approve/Reopen/Override/Skip Gate/Re-review row entirely absent.
+    expect(screen.queryByRole("button", { name: /Approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reopen for Revision/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Override: Mark done anyway/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Skip gate and mark done without review/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Re-run Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("does not fire onApprove when Ctrl+Enter is pressed in readOnly mode", () => {
+    const onApprove = jest.fn().mockResolvedValue(undefined);
+    render(<GateVerdictBox {...makeProps({ verdict: "PASS", onApprove })} readOnly />);
+
+    const section = screen.getByRole("status", { name: /Gate verdict/i });
+    fireEvent.keyDown(section, { key: "Enter", ctrlKey: true });
+
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+});

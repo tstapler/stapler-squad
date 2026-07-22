@@ -16,6 +16,17 @@ interface GateVerdictBoxProps {
   onSkipGate: () => Promise<void>;
   onReReview?: () => Promise<void>;
   actionPending?: boolean;
+  /**
+   * Story 4.1.2 (Structured Diagnostic): renders this box as a read-only
+   * historical record for a Headless Diagnostic Session (a
+   * `headless-re-review-*` row) — the entire action-button row
+   * (Approve/Reopen/Override/Skip Gate/Re-review), the Reopen and Override
+   * forms, and the Skip Gate confirmation are all omitted from the DOM. The
+   * verdict card and per-criterion outcome list still render.
+   * `onApprove`/`onReopen`/`onOverride`/`onSkipGate`/`onReReview` remain
+   * typed per their normal contract but are never invoked in this mode.
+   */
+  readOnly?: boolean;
 }
 
 const MIN_OVERRIDE_REASON_LENGTH = 5;
@@ -69,6 +80,7 @@ export function GateVerdictBox({
   onSkipGate,
   onReReview,
   actionPending = false,
+  readOnly = false,
 }: GateVerdictBoxProps) {
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
@@ -114,6 +126,7 @@ export function GateVerdictBox({
   }, [showSkipConfirm]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (readOnly) return;
     if (e.key === "Enter" && e.ctrlKey) {
       if (verdict === "PASS") {
         void handleApprove();
@@ -274,79 +287,81 @@ export function GateVerdictBox({
         )}
       </div>
 
-      <div className={styles.actions}>
-        {verdict === "PASS" && (
-          <>
-            <button
-              className={styles.primaryButton}
-              onClick={() => void handleApprove()}
-              disabled={isPending}
-            >
-              Approve — Mark Done
-            </button>
-            <button
-              className={styles.secondaryButton}
-              onClick={() => setShowReopen(true)}
-              disabled={isPending}
-            >
-              Reopen for Revision
-            </button>
-          </>
-        )}
-
-        {(verdict === "PARTIAL" || verdict === "FAIL") && (
-          <button
-            className={styles.primaryButton}
-            onClick={() => setShowReopen(true)}
-            disabled={isPending}
-          >
-            Reopen for Revision
-          </button>
-        )}
-
-        {verdict === "PENDING" && (
-          <>
-            <button
-              className={styles.primaryButton}
-              aria-disabled="true"
-              disabled
-              title="Wait for gate result or use Skip Gate below"
-            >
-              Approve — Mark Done
-            </button>
-            <button
-              className={styles.secondaryButton}
-              onClick={() => setShowReopen(true)}
-              disabled={isPending}
-            >
-              Reopen for Revision
-            </button>
-          </>
-        )}
-
-        {verdict === "UNVERIFIABLE" && (
-          <>
-            {onReReview && (
+      {!readOnly && (
+        <div className={styles.actions}>
+          {verdict === "PASS" && (
+            <>
               <button
                 className={styles.primaryButton}
-                onClick={() => void handleReReview()}
+                onClick={() => void handleApprove()}
                 disabled={isPending}
               >
-                Re-run Gate
+                Approve — Mark Done
               </button>
-            )}
+              <button
+                className={styles.secondaryButton}
+                onClick={() => setShowReopen(true)}
+                disabled={isPending}
+              >
+                Reopen for Revision
+              </button>
+            </>
+          )}
+
+          {(verdict === "PARTIAL" || verdict === "FAIL") && (
             <button
-              className={styles.secondaryButton}
+              className={styles.primaryButton}
               onClick={() => setShowReopen(true)}
               disabled={isPending}
             >
               Reopen for Revision
             </button>
-          </>
-        )}
-      </div>
+          )}
 
-      {showReopen && (
+          {verdict === "PENDING" && (
+            <>
+              <button
+                className={styles.primaryButton}
+                aria-disabled="true"
+                disabled
+                title="Wait for gate result or use Skip Gate below"
+              >
+                Approve — Mark Done
+              </button>
+              <button
+                className={styles.secondaryButton}
+                onClick={() => setShowReopen(true)}
+                disabled={isPending}
+              >
+                Reopen for Revision
+              </button>
+            </>
+          )}
+
+          {verdict === "UNVERIFIABLE" && (
+            <>
+              {onReReview && (
+                <button
+                  className={styles.primaryButton}
+                  onClick={() => void handleReReview()}
+                  disabled={isPending}
+                >
+                  Re-run Gate
+                </button>
+              )}
+              <button
+                className={styles.secondaryButton}
+                onClick={() => setShowReopen(true)}
+                disabled={isPending}
+              >
+                Reopen for Revision
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {!readOnly && showReopen && (
         <div
           role="form"
           aria-label="Reopen for revision"
@@ -393,7 +408,7 @@ export function GateVerdictBox({
         />
       )}
 
-      {(verdict === "PARTIAL" || verdict === "FAIL" || verdict === "UNVERIFIABLE") && (
+      {!readOnly && (verdict === "PARTIAL" || verdict === "FAIL" || verdict === "UNVERIFIABLE") && (
         <div className={styles.overrideSection}>
           <button
             ref={overrideToggleRef}
@@ -451,46 +466,47 @@ export function GateVerdictBox({
         </div>
       )}
 
-      {showSkipConfirm ? (
-        <div
-          role="alertdialog"
-          aria-labelledby="skip-gate-warning"
-          aria-modal="true"
-          className={styles.skipGateConfirmation}
-          onKeyDown={handleSkipConfirmKeyDown}
-        >
-          <span id="skip-gate-warning" className={styles.skipGateWarning}>
-            Skip gate and mark done without review
-          </span>
-          <p className={styles.skipGateBody}>
-            The acceptance criteria will not be evaluated. This cannot be undone.
-          </p>
-          <div className={styles.formActions}>
-            <button
-              ref={cancelRef}
-              className={styles.secondaryButton}
-              onClick={() => setShowSkipConfirm(false)}
-            >
-              Cancel
-            </button>
-            <button
-              ref={confirmRef}
-              className={styles.dangerButton}
-              onClick={() => void handleSkipGateConfirm()}
-            >
-              Confirm — Skip Gate
-            </button>
+      {!readOnly &&
+        (showSkipConfirm ? (
+          <div
+            role="alertdialog"
+            aria-labelledby="skip-gate-warning"
+            aria-modal="true"
+            className={styles.skipGateConfirmation}
+            onKeyDown={handleSkipConfirmKeyDown}
+          >
+            <span id="skip-gate-warning" className={styles.skipGateWarning}>
+              Skip gate and mark done without review
+            </span>
+            <p className={styles.skipGateBody}>
+              The acceptance criteria will not be evaluated. This cannot be undone.
+            </p>
+            <div className={styles.formActions}>
+              <button
+                ref={cancelRef}
+                className={styles.secondaryButton}
+                onClick={() => setShowSkipConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                ref={confirmRef}
+                className={styles.dangerButton}
+                onClick={() => void handleSkipGateConfirm()}
+              >
+                Confirm — Skip Gate
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        <button
-          ref={skipLinkRef}
-          className={styles.skipLink}
-          onClick={() => setShowSkipConfirm(true)}
-        >
-          Skip gate and mark done without review
-        </button>
-      )}
+        ) : (
+          <button
+            ref={skipLinkRef}
+            className={styles.skipLink}
+            onClick={() => setShowSkipConfirm(true)}
+          >
+            Skip gate and mark done without review
+          </button>
+        ))}
     </section>
   );
 }
