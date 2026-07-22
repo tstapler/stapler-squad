@@ -43,6 +43,12 @@ jest.mock("@/lib/analytics", () => ({
   useAnalytics: () => ({ track: jest.fn() }),
 }));
 
+// LifecycleSummary (Story 2.1.4) calls useStuckBacklogItems() internally —
+// stub it so this suite never attempts a real ConnectRPC call.
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
+  useStuckBacklogItems: () => ({ items: [], isLoading: false, error: null }),
+}));
+
 const getBacklogItem = jest.fn();
 // Epic 3.4: BacklogItemDetail now fetches the mode list on mount for the
 // "what ran" surface, via a `useEffect` keyed on `listPipelineModes`. This

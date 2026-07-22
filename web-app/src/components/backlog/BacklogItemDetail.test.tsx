@@ -52,6 +52,15 @@ jest.mock("@/lib/hooks/useBacklogItemShipStatus", () => ({
   useBacklogItemShipStatus: (...args: unknown[]) => useBacklogItemShipStatusMock(...args),
 }));
 
+// LifecycleSummary (Story 2.1.4) calls useStuckBacklogItems() internally —
+// stub it so this suite never attempts a real ConnectRPC call. Individual
+// tests that care about BlockerChip behavior override this per-case;
+// everything else gets a stable "nothing stuck" default.
+const useStuckBacklogItemsMock = jest.fn();
+jest.mock("@/lib/hooks/useStuckBacklogItems", () => ({
+  useStuckBacklogItems: (...args: unknown[]) => useStuckBacklogItemsMock(...args),
+}));
+
 // The edit-mode branch renders BacklogItemForm -> RepoPathInput, which uses
 // useSessionRepoPaths (Redux) and usePathCompletions (RPC). Stub both so this
 // test doesn't need a Redux store or ConnectRPC transport. Not exercised by
@@ -114,6 +123,7 @@ afterAll(() => {
 beforeEach(() => {
   useVcsStatusMock.mockReturnValue({ data: null, loading: false, error: null, refetch: jest.fn() });
   useBacklogItemShipStatusMock.mockReturnValue({ data: null, loading: false, refetch: jest.fn() });
+  useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
 });
 
 function makeMode(overrides: Partial<PipelineMode> & Pick<PipelineMode, "slug" | "name">): PipelineMode {
@@ -455,5 +465,40 @@ describe("BacklogItemDetail — Story 1.1.3: session kind classifier wired into 
     expect(
       screen.getByRole("link", { name: /a1b2c3d4-e5f6-7890-abcd-1234567890ab/ })
     ).toHaveAttribute("href", "/?session=a1b2c3d4-e5f6-7890-abcd-1234567890ab");
+  });
+});
+
+describe("BacklogItemDetail — Story 2.1.4: LifecycleSummary replaces the old status badge", () => {
+  it("BacklogItemDetail_should_NotRenderLegacyStatusBadgeMarkup_When_LifecycleSummaryReplacesIt", async () => {
+    getBacklogItem.mockReset().mockResolvedValue(makeItem([]));
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The old standalone status badge (`styles.statusBadge`, previously at
+    // BacklogItemDetail.tsx:700-716) is gone entirely — LifecycleSummary is
+    // the sole authoritative status display (D1 duplication regression guard).
+    expect(screen.queryByLabelText(/^Status: /)).not.toBeInTheDocument();
+    expect(screen.getByTestId("lifecycle-summary")).toBeInTheDocument();
+  });
+
+  it("BacklogItemDetail_should_RenderLifecycleSummaryFromLoadedItem_When_GetBacklogItemResolves", async () => {
+    const item = makeItem([]);
+    getBacklogItem.mockReset().mockResolvedValue({ ...item, status: "review" });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const summary = screen.getByTestId("lifecycle-summary");
+    expect(summary).toBeInTheDocument();
+    expect(screen.getByTestId("stage-node-review")).toHaveAttribute("aria-current", "step");
   });
 });

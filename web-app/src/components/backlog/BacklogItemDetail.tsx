@@ -9,7 +9,6 @@ import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
-import { getStatusLabel } from "@/lib/backlog/status";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { useVcsStatus } from "@/lib/hooks/useVcsStatus";
@@ -26,6 +25,7 @@ import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
+import { LifecycleSummary } from "./detail/LifecycleSummary";
 import * as styles from "./BacklogItemDetail.css";
 import * as markdownStyles from "./markdownBody.css";
 
@@ -33,18 +33,6 @@ interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
 }
-
-const STATUS_CLASS: Record<string, string> = {
-  idea: styles.statusIdea,
-  refining: styles.statusRefining,
-  ready: styles.statusReady,
-  in_progress: styles.statusInProgress,
-  review: styles.statusReview,
-  done: styles.statusDone,
-  archived: styles.statusArchived,
-};
-
-const getStatusClass = (s: string): string => STATUS_CLASS[s] ?? styles.statusArchived;
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
 
@@ -709,12 +697,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <h2 className={styles.itemTitle}>{item.title}</h2>
             <div className={styles.metaRow}>
               <span
-                className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
-                aria-label={`Status: ${getStatusLabel(item.status)}`}
-              >
-                {getStatusLabel(item.status)}
-              </span>
-              <span
                 className={styles.priorityBadge}
                 aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
               >
@@ -753,6 +735,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             )}
           </div>
         </div>
+        {/* Always-visible lifecycle summary — the single authoritative
+            status display, replacing the old standalone status badge (D1). */}
+        <LifecycleSummary item={item} />
       </div>
 
       <div className={styles.scrollArea}>
