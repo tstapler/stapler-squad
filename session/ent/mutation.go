@@ -23037,6 +23037,7 @@ type SessionGoalMutation struct {
 	status        *string
 	tasks         *string
 	set_by        *string
+	workspace_key *string
 	created_at    *time.Time
 	updated_at    *time.Time
 	clearedFields map[string]struct{}
@@ -23355,6 +23356,55 @@ func (m *SessionGoalMutation) ResetSetBy() {
 	delete(m.clearedFields, sessiongoal.FieldSetBy)
 }
 
+// SetWorkspaceKey sets the "workspace_key" field.
+func (m *SessionGoalMutation) SetWorkspaceKey(s string) {
+	m.workspace_key = &s
+}
+
+// WorkspaceKey returns the value of the "workspace_key" field in the mutation.
+func (m *SessionGoalMutation) WorkspaceKey() (r string, exists bool) {
+	v := m.workspace_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkspaceKey returns the old "workspace_key" field's value of the SessionGoal entity.
+// If the SessionGoal object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionGoalMutation) OldWorkspaceKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkspaceKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkspaceKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkspaceKey: %w", err)
+	}
+	return oldValue.WorkspaceKey, nil
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (m *SessionGoalMutation) ClearWorkspaceKey() {
+	m.workspace_key = nil
+	m.clearedFields[sessiongoal.FieldWorkspaceKey] = struct{}{}
+}
+
+// WorkspaceKeyCleared returns if the "workspace_key" field was cleared in this mutation.
+func (m *SessionGoalMutation) WorkspaceKeyCleared() bool {
+	_, ok := m.clearedFields[sessiongoal.FieldWorkspaceKey]
+	return ok
+}
+
+// ResetWorkspaceKey resets all changes to the "workspace_key" field.
+func (m *SessionGoalMutation) ResetWorkspaceKey() {
+	m.workspace_key = nil
+	delete(m.clearedFields, sessiongoal.FieldWorkspaceKey)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *SessionGoalMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -23461,7 +23511,7 @@ func (m *SessionGoalMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionGoalMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 8)
 	if m.session_uuid != nil {
 		fields = append(fields, sessiongoal.FieldSessionUUID)
 	}
@@ -23476,6 +23526,9 @@ func (m *SessionGoalMutation) Fields() []string {
 	}
 	if m.set_by != nil {
 		fields = append(fields, sessiongoal.FieldSetBy)
+	}
+	if m.workspace_key != nil {
+		fields = append(fields, sessiongoal.FieldWorkspaceKey)
 	}
 	if m.created_at != nil {
 		fields = append(fields, sessiongoal.FieldCreatedAt)
@@ -23501,6 +23554,8 @@ func (m *SessionGoalMutation) Field(name string) (ent.Value, bool) {
 		return m.Tasks()
 	case sessiongoal.FieldSetBy:
 		return m.SetBy()
+	case sessiongoal.FieldWorkspaceKey:
+		return m.WorkspaceKey()
 	case sessiongoal.FieldCreatedAt:
 		return m.CreatedAt()
 	case sessiongoal.FieldUpdatedAt:
@@ -23524,6 +23579,8 @@ func (m *SessionGoalMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldTasks(ctx)
 	case sessiongoal.FieldSetBy:
 		return m.OldSetBy(ctx)
+	case sessiongoal.FieldWorkspaceKey:
+		return m.OldWorkspaceKey(ctx)
 	case sessiongoal.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case sessiongoal.FieldUpdatedAt:
@@ -23571,6 +23628,13 @@ func (m *SessionGoalMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSetBy(v)
+		return nil
+	case sessiongoal.FieldWorkspaceKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkspaceKey(v)
 		return nil
 	case sessiongoal.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -23622,6 +23686,9 @@ func (m *SessionGoalMutation) ClearedFields() []string {
 	if m.FieldCleared(sessiongoal.FieldSetBy) {
 		fields = append(fields, sessiongoal.FieldSetBy)
 	}
+	if m.FieldCleared(sessiongoal.FieldWorkspaceKey) {
+		fields = append(fields, sessiongoal.FieldWorkspaceKey)
+	}
 	return fields
 }
 
@@ -23641,6 +23708,9 @@ func (m *SessionGoalMutation) ClearField(name string) error {
 		return nil
 	case sessiongoal.FieldSetBy:
 		m.ClearSetBy()
+		return nil
+	case sessiongoal.FieldWorkspaceKey:
+		m.ClearWorkspaceKey()
 		return nil
 	}
 	return fmt.Errorf("unknown SessionGoal nullable field %s", name)
@@ -23664,6 +23734,9 @@ func (m *SessionGoalMutation) ResetField(name string) error {
 		return nil
 	case sessiongoal.FieldSetBy:
 		m.ResetSetBy()
+		return nil
+	case sessiongoal.FieldWorkspaceKey:
+		m.ResetWorkspaceKey()
 		return nil
 	case sessiongoal.FieldCreatedAt:
 		m.ResetCreatedAt()

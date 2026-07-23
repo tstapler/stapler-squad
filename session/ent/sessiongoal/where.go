@@ -80,6 +80,11 @@ func SetBy(v string) predicate.SessionGoal {
 	return predicate.SessionGoal(sql.FieldEQ(FieldSetBy, v))
 }
 
+// WorkspaceKey applies equality check predicate on the "workspace_key" field. It's identical to WorkspaceKeyEQ.
+func WorkspaceKey(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldEQ(FieldWorkspaceKey, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.SessionGoal {
 	return predicate.SessionGoal(sql.FieldEQ(FieldCreatedAt, v))
@@ -433,6 +438,81 @@ func SetByEqualFold(v string) predicate.SessionGoal {
 // SetByContainsFold applies the ContainsFold predicate on the "set_by" field.
 func SetByContainsFold(v string) predicate.SessionGoal {
 	return predicate.SessionGoal(sql.FieldContainsFold(FieldSetBy, v))
+}
+
+// WorkspaceKeyEQ applies the EQ predicate on the "workspace_key" field.
+func WorkspaceKeyEQ(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldEQ(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyNEQ applies the NEQ predicate on the "workspace_key" field.
+func WorkspaceKeyNEQ(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldNEQ(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyIn applies the In predicate on the "workspace_key" field.
+func WorkspaceKeyIn(vs ...string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldIn(FieldWorkspaceKey, vs...))
+}
+
+// WorkspaceKeyNotIn applies the NotIn predicate on the "workspace_key" field.
+func WorkspaceKeyNotIn(vs ...string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldNotIn(FieldWorkspaceKey, vs...))
+}
+
+// WorkspaceKeyGT applies the GT predicate on the "workspace_key" field.
+func WorkspaceKeyGT(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldGT(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyGTE applies the GTE predicate on the "workspace_key" field.
+func WorkspaceKeyGTE(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldGTE(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyLT applies the LT predicate on the "workspace_key" field.
+func WorkspaceKeyLT(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldLT(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyLTE applies the LTE predicate on the "workspace_key" field.
+func WorkspaceKeyLTE(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldLTE(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyContains applies the Contains predicate on the "workspace_key" field.
+func WorkspaceKeyContains(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldContains(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyHasPrefix applies the HasPrefix predicate on the "workspace_key" field.
+func WorkspaceKeyHasPrefix(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldHasPrefix(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyHasSuffix applies the HasSuffix predicate on the "workspace_key" field.
+func WorkspaceKeyHasSuffix(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldHasSuffix(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyIsNil applies the IsNil predicate on the "workspace_key" field.
+func WorkspaceKeyIsNil() predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldIsNull(FieldWorkspaceKey))
+}
+
+// WorkspaceKeyNotNil applies the NotNil predicate on the "workspace_key" field.
+func WorkspaceKeyNotNil() predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldNotNull(FieldWorkspaceKey))
+}
+
+// WorkspaceKeyEqualFold applies the EqualFold predicate on the "workspace_key" field.
+func WorkspaceKeyEqualFold(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldEqualFold(FieldWorkspaceKey, v))
+}
+
+// WorkspaceKeyContainsFold applies the ContainsFold predicate on the "workspace_key" field.
+func WorkspaceKeyContainsFold(v string) predicate.SessionGoal {
+	return predicate.SessionGoal(sql.FieldContainsFold(FieldWorkspaceKey, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

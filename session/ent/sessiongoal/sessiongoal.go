@@ -24,6 +24,8 @@ const (
 	FieldTasks = "tasks"
 	// FieldSetBy holds the string denoting the set_by field in the database.
 	FieldSetBy = "set_by"
+	// FieldWorkspaceKey holds the string denoting the workspace_key field in the database.
+	FieldWorkspaceKey = "workspace_key"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -40,6 +42,7 @@ var Columns = []string{
 	FieldStatus,
 	FieldTasks,
 	FieldSetBy,
+	FieldWorkspaceKey,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -102,6 +105,11 @@ func ByTasks(opts ...sql.OrderTermOption) OrderOption {
 // BySetBy orders the results by the set_by field.
 func BySetBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSetBy, opts...).ToFunc()
+}
+
+// ByWorkspaceKey orders the results by the workspace_key field.
+func ByWorkspaceKey(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkspaceKey, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

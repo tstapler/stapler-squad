@@ -1,0 +1,15 @@
+{
+  "id": "workspace-peers-panel",
+  "type": "frontend",
+  "name": "Workspace peers panel",
+  "component": "WorkspacePeersPanel",
+  "path": "web-app/src/components/sessions/WorkspacePeersPanel.tsx",
+  "filePath": "web-app/src/components/sessions/WorkspacePeersPanel.tsx",
+  "markerLine": 3,
+  "tested": true,
+  "testIds": [
+    "web-app/src/components/sessions/WorkspacePeersPanel.test.tsx",
+    "peerLifecycle"
+  ],
+  "lastModified": "2026-07-22T00:00:00Z"
+}

@@ -22,6 +22,8 @@ func (SessionGoal) Fields() []ent.Field {
 		field.String("status").Default("idle"),
 		field.String("tasks").Optional().Comment("JSON []TaskNode"),
 		field.String("set_by").Optional(),
+		field.String("workspace_key").Optional().
+			Comment("Canonical repo/workspace identity (gh:owner/repo or path:<main repo path>); used to group peer sessions"),
 		field.Time("created_at").Default(time.Now).Immutable(),
 		field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now),
 	}
@@ -35,5 +37,6 @@ func (SessionGoal) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("session_uuid").Unique(), // 1:1 per session
 		index.Fields("status"),
+		index.Fields("workspace_key"),
 	}
 }

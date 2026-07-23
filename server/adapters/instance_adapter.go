@@ -68,6 +68,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
+		WorkspaceKey:          inst.WorkspaceKey(),
 		LaunchCommand:         inst.LaunchCommand,
 	}
 
@@ -192,6 +193,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			TasksTotal: int32(g.TasksTotal()),
 			TasksDone:  int32(g.TasksDone()),
 			TasksJson:  tasksJSON,
+			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
 	}
 

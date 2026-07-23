@@ -546,11 +546,11 @@ func init() {
 	// sessiongoal.DefaultStatus holds the default value on creation for the status field.
 	sessiongoal.DefaultStatus = sessiongoalDescStatus.Default.(string)
 	// sessiongoalDescCreatedAt is the schema descriptor for created_at field.
-	sessiongoalDescCreatedAt := sessiongoalFields[6].Descriptor()
+	sessiongoalDescCreatedAt := sessiongoalFields[7].Descriptor()
 	// sessiongoal.DefaultCreatedAt holds the default value on creation for the created_at field.
 	sessiongoal.DefaultCreatedAt = sessiongoalDescCreatedAt.Default.(func() time.Time)
 	// sessiongoalDescUpdatedAt is the schema descriptor for updated_at field.
-	sessiongoalDescUpdatedAt := sessiongoalFields[7].Descriptor()
+	sessiongoalDescUpdatedAt := sessiongoalFields[8].Descriptor()
 	// sessiongoal.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	sessiongoal.DefaultUpdatedAt = sessiongoalDescUpdatedAt.Default.(func() time.Time)
 	// sessiongoal.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

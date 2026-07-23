@@ -32,11 +32,45 @@ import (
 // session.CachingPipelineEngine's own default-mode fallback for the nil-engine case
 // (many tests construct a BacklogService without one). Used by SpawnSessionFromItem
 // (Epic 1.5, Story 1.5.5) to build the prompt handed to inst.Prompt / AutonomousDriver.
+//
+// Appends a one-time "other active sessions in this workspace" nudge (AC5) when peers
+// exist — best-effort: detection/lookup failures are logged and swallowed rather than
+// blocking session creation, since this is a convenience nudge, not required context.
 func (s *BacklogService) initialPromptFor(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
+	var prompt string
 	if s.pipelineEngine == nil {
-		return session.BuildTokenBudgetedPrompt(item, priorSessions)
+		prompt = session.BuildTokenBudgetedPrompt(item, priorSessions)
+	} else {
+		prompt = s.pipelineEngine.InitialPromptFor(item, priorSessions)
 	}
-	return s.pipelineEngine.InitialPromptFor(item, priorSessions)
+	return prompt + s.workspacePeersBlockFor(item.RepoPath)
+}
+
+// workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
+// on any detection/lookup failure or when repoPath is empty.
+func (s *BacklogService) workspacePeersBlockFor(repoPath string) string {
+	if repoPath == "" || s.storage == nil {
+		return ""
+	}
+	info, err := session.DetectWorktree(repoPath)
+	if err != nil {
+		log.Warn("initialPromptFor: failed to detect worktree info for workspace peers nudge", "repo_path", repoPath, "err", err)
+		return ""
+	}
+	mainRepoPath := repoPath
+	if info.IsWorktree && info.MainRepoRoot != "" {
+		mainRepoPath = info.MainRepoRoot
+	}
+	workspaceKey := session.WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
+	if workspaceKey == "" {
+		return ""
+	}
+	peers, err := s.storage.ListWorkspacePeers(context.Background(), workspaceKey, "")
+	if err != nil {
+		log.Warn("initialPromptFor: failed to list workspace peers", "workspace_key", workspaceKey, "err", err)
+		return ""
+	}
+	return session.BuildWorkspacePeersBlock(peers)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is

@@ -783,6 +783,7 @@ var (
 		{Name: "status", Type: field.TypeString, Default: "idle"},
 		{Name: "tasks", Type: field.TypeString, Nullable: true},
 		{Name: "set_by", Type: field.TypeString, Nullable: true},
+		{Name: "workspace_key", Type: field.TypeString, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 	}
@@ -801,6 +802,11 @@ var (
 				Name:    "sessiongoal_status",
 				Unique:  false,
 				Columns: []*schema.Column{SessionGoalsColumns[3]},
+			},
+			{
+				Name:    "sessiongoal_workspace_key",
+				Unique:  false,
+				Columns: []*schema.Column{SessionGoalsColumns[6]},
 			},
 		},
 	}

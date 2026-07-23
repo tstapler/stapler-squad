@@ -246,7 +246,8 @@
         "routes a manual-review-* session to BlockedNotice with the identical treatment as blocked_guardrail",
         "routes a review-blocked-* session to BlockedNotice too",
         "uses role=status for the one-line summary and never role=log",
-        "never renders nothing for malformed/partial headless_diagnostic data"
+        "never renders nothing for malformed/partial headless_diagnostic data",
+        "backlog item detail redesign > reveals the synthetic session row's TriageReviewPanel readOnly summary when expanded"
       ],
       "lastModified": "2026-07-21T00:00:00Z"
     },
@@ -266,7 +267,8 @@
         "LifecycleSummary_should_RetainLastKnownBlockerChip_When_UseStuckBacklogItemsReturnsError",
         "LifecycleSummary_should_RenderDataTestIdWithStageTrackerActive_When_ComposedFromAllThreeChildren",
         "LifecycleSummary_should_RenderPipelineBadge_When_PipelineModeResolvedAndNotDefault",
-        "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault"
+        "LifecycleSummary_should_OmitPipelineBadge_When_PipelineModeIsDefault",
+        "backlog item detail redesign > shows the Lifecycle Summary with zero prior clicks"
       ],
       "lastModified": "2026-07-21T00:00:00Z"
     },
@@ -1069,6 +1071,21 @@
         "VcsWidget_should_RenderAggregateStatsAndCommitsWithNoPerFileRows_When_CompactModeExpanded"
       ],
       "lastModified": "2026-07-18T00:00:00Z"
+    },
+    {
+      "id": "workspace-peers-panel",
+      "type": "frontend",
+      "frontend": {
+        "component": "WorkspacePeersPanel",
+        "path": "web-app/src/components/sessions/WorkspacePeersPanel.tsx",
+        "markerLine": 3
+      },
+      "tested": true,
+      "testIds": [
+        "web-app/src/components/sessions/WorkspacePeersPanel.test.tsx",
+        "peerLifecycle"
+      ],
+      "lastModified": "2026-07-22T00:00:00Z"
     }
   ]
 }
