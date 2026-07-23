@@ -23,11 +23,12 @@ const UNFINISHED_URL = `${BASE_URL}/unfinished`;
 // including "Reattach Session" — runs against actual data.
 
 let testRepoDir: string;
+let testSeedDir: string;
 let testWorktreeDir: string;
 let testSessionId: string; // UUID returned by CreateSession
 
 async function rpc(service: string, method: string, body: object): Promise<Response> {
-  return fetch(`${BASE_URL}/${service}/${method}`, {
+  return fetch(`${BASE_URL}/api/${service}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -43,7 +44,10 @@ async function addPinnedRepoViaApi(repoPath: string): Promise<void> {
 
 async function createSessionViaApi(worktreePath: string, branch: string): Promise<string> {
   const res = await rpc('session.v1.SessionService', 'CreateSession', {
-    title: 'e2e-unfinished-test',
+    // Unique per beforeAll invocation so a hook retry (new worktree/session
+    // fixtures, same long-lived test server) doesn't collide with the title
+    // from the prior failed attempt.
+    title: `e2e-unfinished-test-${crypto.randomUUID()}`,
     path: worktreePath,
     branch,
     program: 'echo',          // harmless no-op program; won't block the test
@@ -76,30 +80,33 @@ test.beforeAll(async () => {
 
   execSync(`git init --bare "${testRepoDir}"`);
 
-  const seedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-'));
-  execSync(`git clone "${testRepoDir}" "${seedDir}"`);
-  execSync('git config user.email "test@example.com"', { cwd: seedDir });
-  execSync('git config user.name "Test"', { cwd: seedDir });
-  fs.writeFileSync(path.join(seedDir, 'README.md'), 'init\n');
-  execSync('git add . && git commit -m "init"', { cwd: seedDir });
-  execSync('git push origin main', { cwd: seedDir });
+  testSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-'));
+  execSync(`git clone "${testRepoDir}" "${testSeedDir}"`);
+  execSync('git config user.email "test@example.com"', { cwd: testSeedDir });
+  execSync('git config user.name "Test"', { cwd: testSeedDir });
+  fs.writeFileSync(path.join(testSeedDir, 'README.md'), 'init\n');
+  execSync('git add . && git commit -m "init"', { cwd: testSeedDir });
+  execSync('git push origin main', { cwd: testSeedDir });
 
   // Add a worktree on a feature branch — the scanner will detect it
-  execSync(`git worktree add -b e2e-feature-branch "${testWorktreeDir}"`, { cwd: seedDir });
+  execSync(`git worktree add -b e2e-feature-branch "${testWorktreeDir}"`, { cwd: testSeedDir });
   fs.writeFileSync(path.join(testWorktreeDir, 'work-in-progress.ts'), 'export const wip = true;\n');
 
   // 2. Create a stapler-squad session whose path matches the worktree
   //    The backend sessionPathIndex will match inst.Path == WorktreePath
   testSessionId = await createSessionViaApi(testWorktreeDir, 'e2e-feature-branch');
 
-  // 3. Register the repo as pinned and wait for it to appear in the scan results
-  await addPinnedRepoViaApi(testRepoDir);
+  // 3. Register the repo as pinned and wait for it to appear in the scan results.
+  //    Pin the working clone (has a .git dir), not the bare repo — the scanner
+  //    requires a working copy to resolve `git worktree list` against.
+  await addPinnedRepoViaApi(testSeedDir);
   await triggerScanAndWait();
 });
 
 test.afterAll(() => {
   // Best-effort cleanup
   try { fs.rmSync(testRepoDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(testSeedDir, { recursive: true, force: true }); } catch { /* ignore */ }
   try { fs.rmSync(testWorktreeDir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
