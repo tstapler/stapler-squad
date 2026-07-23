@@ -6,7 +6,10 @@ export const unfinishedWorkFeatures = {
     title: 'Up Next',
     description: 'Surfaces pending changes across git worktrees, open PRs, and queued backlog items.',
     rpcIds: ['unfinished:list', 'unfinished:watch'],
-    componentPaths: ['components/unfinished/UnfinishedWorkPanel.tsx'],
+    componentPaths: [
+      'app/unfinished/UnfinishedTab.tsx',
+      'components/unfinished/BacklogQueueSection.tsx',
+    ],
     testIds: ['Unfinished Work > shows unfinished work panel'],
     status: 'stable',
     since: '1.0.0',

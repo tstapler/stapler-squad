@@ -1,7 +1,7 @@
 // +feature: unfinished-backlog-queue
 "use client";
 
-import { useState, useCallback, useEffect, useId } from "react";
+import { useState, useCallback, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useBacklogService, type BacklogItem, type GitHubIssue } from "@/lib/hooks/useBacklogService";
@@ -47,7 +47,7 @@ function QueueCard({ item }: QueueCardProps) {
  * task, mirroring the collapsible-section pattern used by GitHubPRsSection.
  */
 export function BacklogQueueSection() {
-  const { listBacklogItems, importGitHubIssue, lastError } = useBacklogService();
+  const { listBacklogItems, importGitHubIssue } = useBacklogService();
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,16 +55,19 @@ export function BacklogQueueSection() {
   const [showImport, setShowImport] = useState(false);
   const headingId = useId();
 
+  // ponytail: request-id guard, not AbortController — listBacklogItems has no signal param
+  const loadRequestIdRef = useRef(0);
   const load = useCallback(async () => {
+    const requestId = ++loadRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const result = await listBacklogItems({ statuses: [...QUEUED_STATUSES] });
-      setItems(result);
+      if (loadRequestIdRef.current === requestId) setItems(result);
     } catch {
-      setError("Failed to load queued backlog items.");
+      if (loadRequestIdRef.current === requestId) setError("Failed to load queued backlog items.");
     } finally {
-      setLoading(false);
+      if (loadRequestIdRef.current === requestId) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -82,6 +85,9 @@ export function BacklogQueueSection() {
     }
   };
 
+  // ponytail: generic failure message, same pattern as app/backlog/page.tsx's
+  // handlePickerSelect — the hook's `lastError` state updates asynchronously,
+  // so reading it synchronously right after this await would race with it.
   const handlePickerSelect = useCallback(
     async (owner: string, repo: string, issue: GitHubIssue) => {
       setShowImport(false);
@@ -90,10 +96,10 @@ export function BacklogQueueSection() {
       if (result) {
         await load();
       } else {
-        setError(lastError?.message ?? "Failed to import GitHub issue.");
+        setError("Failed to import GitHub issue. Check the URL and try again.");
       }
     },
-    [importGitHubIssue, load, lastError]
+    [importGitHubIssue, load]
   );
 
   return (
