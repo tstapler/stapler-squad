@@ -1238,6 +1238,11 @@ export function SessionList({
                     aria-level={3}
                     className={categoryTitle}
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
+                    onClick={(e) => {
+                      if (groupingStrategy === GroupingStrategy.None) return;
+                      if (e.target !== e.currentTarget) return;
+                      toggleGroupCollapsed(item.groupKey);
+                    }}
                   >
                     {item.isProjectGrouping && item.projectData && renamingProjectId === item.projectData.id ? (
                       <form
@@ -1277,7 +1282,14 @@ export function SessionList({
                             onToggle={toggleGroupCollapsed}
                           />
                         )}
-                        <span>{item.displayName} ({item.groupSessions.length})</span>
+                        <span
+                          onClick={() => {
+                            if (groupingStrategy === GroupingStrategy.None) return;
+                            toggleGroupCollapsed(item.groupKey);
+                          }}
+                        >
+                          {item.displayName} ({item.groupSessions.length})
+                        </span>
                         {item.isProjectGrouping && item.projectData && (
                           <>
                             {item.projectData.runningCount > 0 && (
@@ -1396,7 +1408,17 @@ export function SessionList({
               : undefined;
             const isUngrouped = groupKey === "No Project";
             return (
-              <div role="heading" aria-level={3} className={categoryTitle} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <div
+                role="heading"
+                aria-level={3}
+                className={categoryTitle}
+                style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
+                onClick={(e) => {
+                  if (groupingStrategy === GroupingStrategy.None) return;
+                  if (e.target !== e.currentTarget) return;
+                  toggleGroupCollapsed(groupKey);
+                }}
+              >
                 {isProjectGrouping && projectData && renamingProjectId === projectData.id ? (
                   <form
                     aria-label={`Rename project ${displayName}`}
@@ -1435,7 +1457,14 @@ export function SessionList({
                         onToggle={toggleGroupCollapsed}
                       />
                     )}
-                    <span>{displayName} ({grpSessions.length})</span>
+                    <span
+                      onClick={() => {
+                        if (groupingStrategy === GroupingStrategy.None) return;
+                        toggleGroupCollapsed(groupKey);
+                      }}
+                    >
+                      {displayName} ({grpSessions.length})
+                    </span>
                     {isProjectGrouping && projectData && (
                       <>
                         {projectData.runningCount > 0 && (
