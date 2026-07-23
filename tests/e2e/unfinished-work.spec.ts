@@ -114,6 +114,16 @@ test.describe('unfinished-work', () => {
     await expect(page.getByRole('button', { name: /Refresh/i })).toBeVisible();
   });
 
+  test('unfinished-work > Sources link navigates to /settings/unfinished', async ({ page }) => {
+    await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+    const link = page.getByRole('link', { name: 'Configure scan sources' });
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page).toHaveURL(/\/settings\/unfinished$/, { timeout: 5000 });
+    await expect(page.getByRole('heading', { name: 'Watch Directories' })).toBeVisible();
+  });
+
   test('unfinished-work > shows empty state when no worktrees found', async ({ page }) => {
     await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
