@@ -114,6 +114,11 @@ export const actions = style({
       opacity: 1,
     },
   },
+  "@media": {
+    "(hover: none)": {
+      opacity: 1,
+    },
+  },
 });
 
 export const actionBtn = style({

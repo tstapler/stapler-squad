@@ -1,5 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { zIndex } from "@/styles/theme-contract.css";
 
 export const detail = style({
   background: vars.color.cardBackground,
@@ -154,7 +155,7 @@ export const sessionPicker = style({
   position: "absolute",
   top: "calc(100% + 4px)",
   left: 0,
-  zIndex: 100,
+  zIndex: zIndex.dropdown,
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.sm,

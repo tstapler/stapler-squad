@@ -4,6 +4,7 @@ import { vars } from "@/styles/theme.css";
 export const container = style({
   height: "100%",
   overflowY: "auto",
+  overflowX: "hidden",
   maxWidth: "960px",
   margin: "0 auto",
   padding: `${vars.space["4"]} ${vars.space["4"]}`,
