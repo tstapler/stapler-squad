@@ -43,7 +43,10 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     acCriteria: [],
     linkedSessions: [],
     statusEvents: [],
+    progressNotes: [],
     totalEstimatedCostUsd: 0,
+    autoSpawnSession: false,
+    autoCreatePR: false,
     ...overrides,
   };
 }
@@ -55,6 +58,7 @@ function makeIssue(overrides: Partial<GitHubIssue> = {}): GitHubIssue {
     state: "open",
     url: "",
     labels: [],
+    isPR: false,
     ...overrides,
   };
 }
