@@ -47,7 +47,7 @@ function QueueCard({ item }: QueueCardProps) {
  * task, mirroring the collapsible-section pattern used by GitHubPRsSection.
  */
 export function BacklogQueueSection() {
-  const { listBacklogItems, importGitHubIssue } = useBacklogService();
+  const { listBacklogItems, importGitHubIssue, lastError } = useBacklogService();
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,9 +89,11 @@ export function BacklogQueueSection() {
       const result = await importGitHubIssue(url);
       if (result) {
         await load();
+      } else {
+        setError(lastError?.message ?? "Failed to import GitHub issue.");
       }
     },
-    [importGitHubIssue, load]
+    [importGitHubIssue, load, lastError]
   );
 
   return (
@@ -120,6 +122,7 @@ export function BacklogQueueSection() {
             e.stopPropagation();
             setShowImport(true);
           }}
+          onKeyDown={(e) => e.stopPropagation()}
           data-testid="import-github-issue-button"
         >
           + Import GitHub Issue
