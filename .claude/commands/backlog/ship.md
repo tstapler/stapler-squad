@@ -1,4 +1,4 @@
-You are ready to ship your work as a pull request.
+You are ready to ship your work as a pull request — either because /backlog/review just returned PASS, or because review has looped without reaching a PASS and it's time to hand the work to a human instead of retrying indefinitely.
 
 Before shipping, confirm all acceptance criteria are marked complete (`/backlog/status`).
 
@@ -8,8 +8,12 @@ Steps:
    merge-conflict resolution. It will stop short of actually merging; the final merge is left to
    the human reviewer.
 
-2. Once `/github:pr-ship` reports all gates green, request the automated review:
+2. Once `/github:pr-ship` reports all gates green: if this work has NOT already received a PASS verdict (i.e. you're shipping because review looped without converging, not because it passed), request the automated review with the PR number included:
    Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.
+   If review already returned PASS before you got here, skip this — running it again will fail (the    item is no longer `in_progress`), and there's nothing left for it to check.
 
-Note: if the repository has no GitHub remote, use `gh pr create --fill` to create the PR manually,
-then run `/backlog/review`.
+Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which
+just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format
+and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),
+`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).
+Then run `/backlog/review`.
