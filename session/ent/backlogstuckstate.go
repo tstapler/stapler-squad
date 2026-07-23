@@ -35,6 +35,12 @@ type BacklogStuckState struct {
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 	// Human-readable 'why' string, e.g. 'last verdict: FAIL' or 'PR #148 green & mergeable 3d'.
 	Context string `json:"context,omitempty"`
+	// Count of automated remediation attempts actually made for this open row (incremented per attempt, not per detection-sweep tick). Reset to 0 by ResetStuckRemediation/BulkResetStuckRemediation, and implicitly by MarkStuck's reopen-in-place path. remediation_attempts >= maxRemediationAttempts (5) with next_remediation_at NULL is how a 'parked' row is represented — no separate boolean.
+	RemediationAttempts int32 `json:"remediation_attempts,omitempty"`
+	// When this row becomes eligible for the next automated remediation attempt. NULL while remediation_attempts is 0 means 'eligible immediately'. Set back to NULL once remediation_attempts reaches the cap (parked).
+	NextRemediationAt *time.Time `json:"next_remediation_at,omitempty"`
+	// The server boot time (session.serverStartTime) of the most recent restart-grace pass consumed by this row, if any. A restart-grace pass lets a remediation action run without consuming remediation_attempts/advancing next_remediation_at when the detected failure coincides with a service restart (in-flight AutonomousDriver goroutines are lost on restart, not a real remediation failure) — at most one free pass per boot, tracked by comparing this field to the current boot time.
+	GraceBootTime *time.Time `json:"grace_boot_time,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the BacklogStuckStateQuery when eager-loading is set.
 	Edges        BacklogStuckStateEdges `json:"edges"`
@@ -66,9 +72,11 @@ func (*BacklogStuckState) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case backlogstuckstate.FieldRemediationAttempts:
+			values[i] = new(sql.NullInt64)
 		case backlogstuckstate.FieldReason, backlogstuckstate.FieldContext:
 			values[i] = new(sql.NullString)
-		case backlogstuckstate.FieldFirstDetectedAt, backlogstuckstate.FieldLastCheckedAt, backlogstuckstate.FieldNotifiedAt, backlogstuckstate.FieldResolvedAt, backlogstuckstate.FieldSnoozedUntil:
+		case backlogstuckstate.FieldFirstDetectedAt, backlogstuckstate.FieldLastCheckedAt, backlogstuckstate.FieldNotifiedAt, backlogstuckstate.FieldResolvedAt, backlogstuckstate.FieldSnoozedUntil, backlogstuckstate.FieldNextRemediationAt, backlogstuckstate.FieldGraceBootTime:
 			values[i] = new(sql.NullTime)
 		case backlogstuckstate.FieldID, backlogstuckstate.FieldItemID:
 			values[i] = new(uuid.UUID)
@@ -144,6 +152,26 @@ func (_m *BacklogStuckState) assignValues(columns []string, values []any) error 
 			} else if value.Valid {
 				_m.Context = value.String
 			}
+		case backlogstuckstate.FieldRemediationAttempts:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field remediation_attempts", values[i])
+			} else if value.Valid {
+				_m.RemediationAttempts = int32(value.Int64)
+			}
+		case backlogstuckstate.FieldNextRemediationAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field next_remediation_at", values[i])
+			} else if value.Valid {
+				_m.NextRemediationAt = new(time.Time)
+				*_m.NextRemediationAt = value.Time
+			}
+		case backlogstuckstate.FieldGraceBootTime:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field grace_boot_time", values[i])
+			} else if value.Valid {
+				_m.GraceBootTime = new(time.Time)
+				*_m.GraceBootTime = value.Time
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -214,6 +242,19 @@ func (_m *BacklogStuckState) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("context=")
 	builder.WriteString(_m.Context)
+	builder.WriteString(", ")
+	builder.WriteString("remediation_attempts=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RemediationAttempts))
+	builder.WriteString(", ")
+	if v := _m.NextRemediationAt; v != nil {
+		builder.WriteString("next_remediation_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.GraceBootTime; v != nil {
+		builder.WriteString("grace_boot_time=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

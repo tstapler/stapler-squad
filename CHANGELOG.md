@@ -1,5 +1,85 @@
 # Changelog
 
+## [1.39.0](https://github.com/tstapler/stapler-squad/compare/v1.38.0...v1.39.0) (2026-07-21)
+
+
+### Features
+
+* **backlog:** add durable ship-status widget for done items ([e5d72b2](https://github.com/tstapler/stapler-squad/commit/e5d72b24890beffa2371c866b0abf62b77a46fa0))
+* **backlog:** auto-archive done items after 3 days, fix archived-item leak in default view ([#194](https://github.com/tstapler/stapler-squad/issues/194)) ([3dd9285](https://github.com/tstapler/stapler-squad/commit/3dd9285e58a02bbc2b2e5072762e7868769ad9a0))
+* **backlog:** automated push_failed remediation with backoff gate ([#187](https://github.com/tstapler/stapler-squad/issues/187)) ([7c3508a](https://github.com/tstapler/stapler-squad/commit/7c3508a0dce2c1317f1d426b8eebdebd1e771af8))
+* **backlog:** configurable rework cap + surface review verdicts to running sessions ([d0d2237](https://github.com/tstapler/stapler-squad/commit/d0d22371514f74267f834692ad7869972cfe2491))
+* **backlog:** opt-in auto-create-PR policy for Review Queue ([#159](https://github.com/tstapler/stapler-squad/issues/159)) ([809b8a3](https://github.com/tstapler/stapler-squad/commit/809b8a344e92018e50e30177283b41f9c8e9f314))
+* **backlog:** Phase A stuck-item auto-remediation with exponential backoff ([#185](https://github.com/tstapler/stapler-squad/issues/185)) ([b0f2678](https://github.com/tstapler/stapler-squad/commit/b0f2678567dd81e10848a4742df000cdb1607f48))
+* **backlog:** richer ship-status widget — commit list + working diff view ([2072651](https://github.com/tstapler/stapler-squad/commit/2072651b4451693a7eabbec4ceb55459fba8e65a))
+* **backlog:** route the automatic review gate through PipelineEngine and surface an empty-pipeline-modes hint ([#178](https://github.com/tstapler/stapler-squad/issues/178)) ([ad01a13](https://github.com/tstapler/stapler-squad/commit/ad01a1310d29d3e977381e1e83b02b4c87ba2511))
+* **backlog:** self-service "Ship PR" action on the item detail page ([311228f](https://github.com/tstapler/stapler-squad/commit/311228f421753ba2e3eb9eb711e4fc04a27dbcdd))
+* **backlog:** tell the agent to sync with main via the existing context file ([58ca3f1](https://github.com/tstapler/stapler-squad/commit/58ca3f1cd27147c330b91d42a30e8b35f332d2d0))
+* **file-browser:** line-count badges, sort/filter, diff gutter markers, backlog status badges ([6272b9c](https://github.com/tstapler/stapler-squad/commit/6272b9ce555bfeb5d65ce586b7a23e200ac2c910))
+* **scripts:** add sync-worktrees to merge main into every worktree ([f4395e6](https://github.com/tstapler/stapler-squad/commit/f4395e65c4a0b8738a07bbcb0af45edebaf22a1f))
+* **server:** add actuator-style /actuator/health and /actuator/metrics ([d0baa1c](https://github.com/tstapler/stapler-squad/commit/d0baa1c48fa9860fd10ec57f51de2723d66e9334))
+* **telemetry:** add an OTel MeterProvider alongside the existing tracer ([64eb073](https://github.com/tstapler/stapler-squad/commit/64eb073827be341608cee3815f90114c9bfe7945))
+* **unfinished:** expose blobCache hit/miss stats via /debug/blob-cache ([367af95](https://github.com/tstapler/stapler-squad/commit/367af95e35578e5026e8d4e0c25adcaeb00d56ca))
+* **vcs-widget:** 5 stateless sub-components (Phase 2 Epic 2.1) ([94f4e0b](https://github.com/tstapler/stapler-squad/commit/94f4e0bd932d21f78d164dc462fccbe25ae1e61d))
+* **vcs-widget:** CaptureShipSnapshot + ReconcilePRPending wiring (Phase 3.3) ([2984f3d](https://github.com/tstapler/stapler-squad/commit/2984f3d9dd97149b5839c6085e14a852f21e8d66))
+* **vcs-widget:** feature registry entries + Playwright e2e coverage (Phase 5) ([2a6df86](https://github.com/tstapler/stapler-squad/commit/2a6df86fc26204679f5afd3cfb864bbd15b04a3d))
+* **vcs-widget:** FileStatsBetween go-git diff-stat helper (Phase 3.2) ([af072f2](https://github.com/tstapler/stapler-squad/commit/af072f2b43509136b13ba84e3a238c4ac4af7c87))
+* **vcs-widget:** populate durable snapshot fields in GetBacklogItemShipStatus (Phase 3.4) ([8221b78](https://github.com/tstapler/stapler-squad/commit/8221b789064380af9238370015e7ffe0b37dca04))
+* **vcs-widget:** proto + ent schema for durable ship-snapshot fields (Phase 3.1) ([191e34f](https://github.com/tstapler/stapler-squad/commit/191e34f47a8f9628d6be4be831a5e5a46cfaecc7))
+* **vcs-widget:** render durable snapshot data + capture-failure copy (Phase 4) ([ac1a0d3](https://github.com/tstapler/stapler-squad/commit/ac1a0d3533c22876567114bf0ea41c08a0cffea1))
+* **vcs-widget:** VcsWidget top-level composition (Phase 2 Story 2.2.1) ([cff0e16](https://github.com/tstapler/stapler-squad/commit/cff0e164fdffa78178bbee14748ae15e4198b0f9))
+* **vcs-widget:** VcsWidgetData types, adapters, and mergeability derivation (Phase 1) ([df47728](https://github.com/tstapler/stapler-squad/commit/df477286e7971d2a7d474aa4486fc6ff58d3a22e))
+* **vcs-widget:** wire VcsWidget compact mode into Unfinished item detail (Phase 2 Story 2.2.4) ([b17d72b](https://github.com/tstapler/stapler-squad/commit/b17d72b95bd867d93321ffb6521097b054b91cda))
+* **vcs-widget:** wire VcsWidget into Backlog item detail (Phase 2 Story 2.2.3) ([f752bb6](https://github.com/tstapler/stapler-squad/commit/f752bb6c9d50419f0d5c43725a1331386ae4b1ab))
+* **vcs-widget:** wire VcsWidget into Session detail VCS tab (Phase 2 Story 2.2.2) ([9d67a5a](https://github.com/tstapler/stapler-squad/commit/9d67a5a97fb7db9bba8c3bd2a3aacbbe37c1afbf))
+* **vcs:** rich file status treatment and per-file diff stats in VcsPanel ([#161](https://github.com/tstapler/stapler-squad/issues/161)) ([752c1f7](https://github.com/tstapler/stapler-squad/commit/752c1f75be2b74ece1f004fd2e73edafd2aaafdd))
+
+
+### Bug Fixes
+
+* **backlog,settings:** dedup push-failure toast, fix empty diff modal, add config-tab timeout ([#179](https://github.com/tstapler/stapler-squad/issues/179)) ([7a06815](https://github.com/tstapler/stapler-squad/commit/7a06815fc0d42a875b15445bdf5489f0177ca28c))
+* **backlog:** archive work sessions so they stop accumulating forever ([#191](https://github.com/tstapler/stapler-squad/issues/191)) ([19a0b68](https://github.com/tstapler/stapler-squad/commit/19a0b686ac7ec44b6817c51f93dd7262304b9627))
+* **backlog:** auto-remediate stale work sessions instead of notify-only ([#196](https://github.com/tstapler/stapler-squad/issues/196)) ([410db67](https://github.com/tstapler/stapler-squad/commit/410db67b955bc5b6083be5ba8764a1d828daca9e))
+* **backlog:** auto-resolve autonomous_stuck rows once the item finishes ([#200](https://github.com/tstapler/stapler-squad/issues/200)) ([721e6f9](https://github.com/tstapler/stapler-squad/commit/721e6f9217ef553a6990984a3a86ccb702b14f6d))
+* **backlog:** auto-respawn review for items stuck abandoned in review ([#168](https://github.com/tstapler/stapler-squad/issues/168)) ([fc8c12a](https://github.com/tstapler/stapler-squad/commit/fc8c12ae2fc3ed5cf94666d3cafd9ae776f22213))
+* **backlog:** close TOCTOU race that let a stale reopen clobber an already-shipped item ([#197](https://github.com/tstapler/stapler-squad/issues/197)) ([ce4783c](https://github.com/tstapler/stapler-squad/commit/ce4783c2fba379aa8ae102c99d346373aaf6e719))
+* **backlog:** give agent sessions a bounded escape hatch out of the review loop ([#189](https://github.com/tstapler/stapler-squad/issues/189)) ([4f786f0](https://github.com/tstapler/stapler-squad/commit/4f786f0bb8675ad49638f30513841f039bedff7b))
+* **backlog:** per-action + per-card pending state and toast feedback ([#167](https://github.com/tstapler/stapler-squad/issues/167)) ([68c339f](https://github.com/tstapler/stapler-squad/commit/68c339fff4aca4a42db2787747dae3106df3ebf2))
+* **backlog:** recover PR-lifecycle drift when a real PR outlives its status ([#202](https://github.com/tstapler/stapler-squad/issues/202)) ([01db9b7](https://github.com/tstapler/stapler-squad/commit/01db9b7febad723a11362a42693012424ee32062))
+* **backlog:** require code verified on main, not just PrURL set, before done ([95f23a2](https://github.com/tstapler/stapler-squad/commit/95f23a21ca13b31cd583c910441568dd8ff938ce))
+* **backlog:** resolve autonomous_stuck rows when the pipeline later succeeds ([#177](https://github.com/tstapler/stapler-squad/issues/177)) ([a1c5cfe](https://github.com/tstapler/stapler-squad/commit/a1c5cfefc6f84206e47b63de9a67b8a9611309c8))
+* **backlog:** reuse the same branch across rework/reopen spawns ([3675da9](https://github.com/tstapler/stapler-squad/commit/3675da970cda04ed30d17f992f0d38a810b61e17))
+* **backlog:** self-heal already-tracked scaffolding files, add CI backstop ([#195](https://github.com/tstapler/stapler-squad/issues/195)) ([bd7933c](https://github.com/tstapler/stapler-squad/commit/bd7933c3c55de8f6c2ac02b88c2679fcc0480d17))
+* **backlog:** serialize SpawnSessionFromItem per item to close a duplicate-work-session race ([#182](https://github.com/tstapler/stapler-squad/issues/182)) ([0f7d167](https://github.com/tstapler/stapler-squad/commit/0f7d167a2b1f79380e92fe035dace5113c56bbdb))
+* **backlog:** set SkipTriage on tests that drive explicit status transitions ([#181](https://github.com/tstapler/stapler-squad/issues/181)) ([4574e0e](https://github.com/tstapler/stapler-squad/commit/4574e0eaf985d53c344a6c7400b41e9d5feaff9a))
+* **backlog:** ship PASS-verdict PRs via a headless agent run before the mechanical fallback ([#193](https://github.com/tstapler/stapler-squad/issues/193)) ([1c310eb](https://github.com/tstapler/stapler-squad/commit/1c310eb5138d1c551441ef424fb56aee81a5dd5d))
+* **backlog:** stop deleting a rework's worktree out from under itself ([653d04e](https://github.com/tstapler/stapler-squad/commit/653d04e13e457f712662257f07373a7421a2732f))
+* **backlog:** stop the autonomous-driver bounce loop on turn-cap stops ([#180](https://github.com/tstapler/stapler-squad/issues/180)) ([dd3a287](https://github.com/tstapler/stapler-squad/commit/dd3a287f6a7645348cc9077c3ca1ee21995c6c89))
+* **backlog:** sync PR branch with main before respawning a fix session ([#163](https://github.com/tstapler/stapler-squad/issues/163)) ([eb5c3bd](https://github.com/tstapler/stapler-squad/commit/eb5c3bd657b809f616385003048defed78d82681))
+* **backlog:** tombstone confirmed-dead sessions in the stuck-item sweep ([a6e65dc](https://github.com/tstapler/stapler-squad/commit/a6e65dccd69d63f063a82e994b936e564d925f06))
+* **backlog:** transition item to pr_pending when PR created via RunOneShot ([#160](https://github.com/tstapler/stapler-squad/issues/160)) ([0fd35e7](https://github.com/tstapler/stapler-squad/commit/0fd35e7edfd9b18c7fc38d7b128bafdeec0993cf))
+* **backlog:** use earliest work session's base SHA for item diffs ([#188](https://github.com/tstapler/stapler-squad/issues/188)) ([ff684ee](https://github.com/tstapler/stapler-squad/commit/ff684ee907dc55809d9919d6b39cd4053d7b52ed))
+* **git:** don't reuse a worktree left locked by an interrupted `worktree add` ([1375fee](https://github.com/tstapler/stapler-squad/commit/1375fee7b2984de4d9fbfe348d68e445b262b364))
+* **mcp:** add missing backlogEnabled arg to NewCore call in integration test ([#192](https://github.com/tstapler/stapler-squad/issues/192)) ([468a39a](https://github.com/tstapler/stapler-squad/commit/468a39a94426a394458d80859950216a119d3798))
+* **notifications:** thread backlog item ID as sessionID for coalescing ([#183](https://github.com/tstapler/stapler-squad/issues/183)) ([c8be796](https://github.com/tstapler/stapler-squad/commit/c8be796739f1c185c8922d54567f4414ce6f1843))
+* **perf:** remove per-call logging from ClaudeCommandBuilder.Build ([d74c020](https://github.com/tstapler/stapler-squad/commit/d74c020074dc7d097f3bde69a941a8ffabdd7199))
+* **session:** close ReviewState data race in HibernationSweeper and ReviewQueuePoller ([#186](https://github.com/tstapler/stapler-squad/issues/186)) ([d132bcb](https://github.com/tstapler/stapler-squad/commit/d132bcb03e1e024d4001c95af78bccf89be3ae1f))
+* **session:** fail sessions loudly instead of silently landing in $HOME ([6fc7ce9](https://github.com/tstapler/stapler-squad/commit/6fc7ce960bdc9f7882c98dc0f6a6dd47bfef2994))
+* **sessions:** named instances (e2e/preview/coverage) must not sweep the shared tmux socket ([9e0df51](https://github.com/tstapler/stapler-squad/commit/9e0df515db1343e98b3eb0ddbe2c6a73200cb62e))
+* **test:** close a second git auto-maintenance trigger and harden fixture-rebuild cleanup in gogitstore ([#201](https://github.com/tstapler/stapler-squad/issues/201)) ([5d5ae4d](https://github.com/tstapler/stapler-squad/commit/5d5ae4d0b1fd43482ebaeb95aaf33b0afd6d7c74))
+* **test:** disable gc.auto in gogitstore fixtures to stop concurrent-repack pack-count flakes ([#190](https://github.com/tstapler/stapler-squad/issues/190)) ([79594d8](https://github.com/tstapler/stapler-squad/commit/79594d873acca2f550aaa66d0a9f119311462353))
+* **test:** share one tmux-socket reaper across session, session/mux, session/tmux ([b8b7077](https://github.com/tstapler/stapler-squad/commit/b8b7077d4051d7a9ea28ea84afb73bfb73bbf7b4))
+* **test:** stop DefaultCapabilitySelfCheck singleton from poisoning backlog tests ([e164c2e](https://github.com/tstapler/stapler-squad/commit/e164c2efd4023a5d6efb1f3e4dd82cc3db8739b9))
+* **test:** stop gogitstore heap-benchmark tests flaking under CI load ([#162](https://github.com/tstapler/stapler-squad/issues/162)) ([5908c76](https://github.com/tstapler/stapler-squad/commit/5908c762f983caa7d45ea6eb248834885bdaa95a))
+* **test:** update FallbackBehaviorWhenWorktreePathMissing for the new fail-loud contract ([b70ef33](https://github.com/tstapler/stapler-squad/commit/b70ef3372097084f90356dc125b4d9b046776bd9))
+* **vcs-widget:** close 3 parity gaps — browse-files wiring, deleted-branch copy, last-commit fallback ([ffb4f6c](https://github.com/tstapler/stapler-squad/commit/ffb4f6c5449e2cfa0eb0713220fa26ac470d4ce2))
+* **vcs-widget:** fire neutral no-history copy on missing snapshot alone ([a254aba](https://github.com/tstapler/stapler-squad/commit/a254abaa3864543922f54eae117743dcb3d2983f))
+
+
+### Performance Improvements
+
+* **unfinished:** stop wiping blobCache on HEAD move, bound it with a fair-share LRU ([e5ddfe9](https://github.com/tstapler/stapler-squad/commit/e5ddfe92b56da39de2b382cdc7995211b829e9da))
+
 ## [1.38.0](https://github.com/tstapler/stapler-squad/compare/v1.37.0...v1.38.0) (2026-07-17)
 
 

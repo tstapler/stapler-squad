@@ -139,6 +139,20 @@ export const verdictSummary = style({
   color: vars.color.textSecondary,
 });
 
+/**
+ * D2 fix (Story 3.1.3, Task 3.1.3d): distinguishes this per-criterion
+ * *review outcome* list from AcCriteriaList's "Acceptance Criteria"
+ * checklist, so the two never read as duplicate/competing AC displays.
+ */
+export const criteriaHeading = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  marginTop: vars.space["2"],
+});
+
 export const criteriaList = style({
   display: "flex",
   flexDirection: "column",

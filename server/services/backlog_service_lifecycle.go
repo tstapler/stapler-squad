@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -247,6 +249,13 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.PipelineMode != nil {
 		update.PipelineMode = req.Msg.PipelineMode
 	}
+	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
+	// only set when the client explicitly sent it, so an omitted field never
+	// clobbers the item's existing override back to "unlimited" (0).
+	if req.Msg.ReworkCapOverride != nil {
+		override := int(*req.Msg.ReworkCapOverride)
+		update.ReworkCapOverride = &override
+	}
 	if req.Msg.Notes != "" {
 		notes := req.Msg.Notes
 		update.Notes = &notes
@@ -338,12 +347,60 @@ func (s *BacklogService) DeleteBacklogItem(
 
 // --- TransitionBacklogItemStatus ---
 
-// isCodeShippedToMain reports whether itemID's most recent work-session commit (if
-// any) has actually landed on main — locally or via a merged PR pushed to origin.
-// Returns true when there is nothing to verify (no work session ever committed code)
-// or the commit is confirmed on main; false when there IS a commit that could not be
-// confirmed shipped, or the check itself failed (fails closed — callers must not
-// silently mark an item done just because verification was unavailable).
+// resolveLatestWorkCommit returns the true current tip commit of the work
+// session identified by sessionUUID — never ItemSessionSummary.LastCommitSha,
+// which is only ever seeded once at session spawn with the pre-work base SHA
+// (see the UpdateItemSessionGitActivity calls in backlog_service_triage.go/
+// backlog_service_sync.go, all of which pass baseSHA) and is never updated
+// afterward as the agent commits real work. Treating that field as "the
+// agent's latest commit" made isCodeShippedToMain trivially true for nearly
+// any item, because a branch's own base commit is — by construction — always
+// an ancestor of main. Confirmed live 2026-07-21: archived items 693c2700,
+// 61684863, and 40cf8885 were all approved as "shipped" by this gate despite
+// each having real, unmerged work and no PR ever opened. Mirrors
+// session.BacklogLifecycleListener's identical fix for
+// reconcileBouncingItems' equivalent no-PR fallback
+// (session/backlog_lifecycle.go).
+//
+// Prefers the session's own worktree HEAD; falls back to resolving the
+// branch's tip directly in repoPath if the worktree directory is gone, since
+// worktrees of the same repo share one object store. Returns "" if neither
+// resolves.
+func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUID, repoPath string) string {
+	wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		log.WarningLog.Printf("resolveLatestWorkCommit: no worktree data for session %s: %v", sessionUUID, err)
+		return ""
+	}
+	if wt.WorktreePath != "" {
+		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
+			if sha, headErr := session.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+				return sha
+			}
+		}
+	}
+	if wt.BranchName == "" {
+		return ""
+	}
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--verify", wt.BranchName)
+	cmd.Dir = repoPath
+	out, revErr := cmd.Output()
+	if revErr != nil {
+		log.WarningLog.Printf("resolveLatestWorkCommit: rev-parse %s in %s: %v", wt.BranchName, repoPath, revErr)
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// isCodeShippedToMain reports whether itemID's most recent work session's
+// current tip commit (resolveLatestWorkCommit, NOT the session's stale
+// LastCommitSha field — see that function's doc comment) has actually landed
+// on main — locally or via a merged PR pushed to origin. Returns true when
+// there is nothing to verify (no work session ever ran, or no commit could be
+// resolved for it) or the commit is confirmed on main; false when there IS a
+// commit that could not be confirmed shipped, or the check itself failed
+// (fails closed — callers must not silently mark an item done just because
+// verification was unavailable).
 //
 // This is the single check shared by every path that can transition an item to
 // done — the RPC handler, TriggerReReview's and SubmitManualReview's auto-transition
@@ -356,16 +413,20 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 		log.WarningLog.Printf("[%s] isCodeShippedToMain: failed to load item sessions for item %s: %v", logPrefix, itemID, err)
 		return false
 	}
-	var lastCommitSha string
+	var lastWorkSessionUUID string
 	for _, is := range itemSessions {
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep overwriting
-		// so this ends up holding the *most recent* work session's commit.
-		if is.Role == session.SessionRoleWork && is.LastCommitSha != "" {
-			lastCommitSha = is.LastCommitSha
+		// so this ends up holding the *most recent* work session.
+		if is.Role == session.SessionRoleWork {
+			lastWorkSessionUUID = is.SessionUUID
 		}
 	}
+	if lastWorkSessionUUID == "" {
+		return true // no work session ever ran — nothing to verify
+	}
+	lastCommitSha := s.resolveLatestWorkCommit(ctx, lastWorkSessionUUID, repoPath)
 	if lastCommitSha == "" {
-		return true // nothing was ever committed — nothing to verify
+		return true // nothing resolvable — nothing to verify
 	}
 	onMain, mainErr := git.IsCommitOnMain(repoPath, prFixMainBranch, lastCommitSha)
 	if mainErr != nil {
@@ -463,7 +524,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition)
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, session.TriggeredByUser)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -472,10 +533,15 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 
-	// Best-effort: clean up git worktrees for work sessions on terminal transitions.
+	// Best-effort: clean up git worktrees and archive work sessions on terminal
+	// transitions, so they stop accumulating in the default session list once
+	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
+	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
+	// sessions which it originally excluded).
 	if to == session.BacklogStatusDone || to == session.BacklogStatusArchived {
 		if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 			s.cleanupItemWorktrees(ctx, sessions)
+			s.archiveItemWorkSessions(ctx, sessions)
 		}
 	}
 
@@ -709,7 +775,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, session.TriggeredByUser)
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {
@@ -813,13 +879,16 @@ func (s *BacklogService) SubmitManualReview(
 	// the most recent work commit is verified on main. A PASS verdict says the
 	// code is good, not that it has shipped; a manual review here must not
 	// silently mark an item done for code that's still sitting in an open PR.
+	// The item's "Ship PR" action (backlog_service_ship.go) is the intended
+	// recovery path once left here (docs/tasks/backlog-feature-improvement.md,
+	// 2026-07-18 update).
 	if overall == session.ReviewVerdictPass {
 		if item.Status == string(session.BacklogStatusReview) {
 			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
 				log.InfoLog.Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition); transErr != nil {
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
 					log.WarningLog.Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
 				}
 			}

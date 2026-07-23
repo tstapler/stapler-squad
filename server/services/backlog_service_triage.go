@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,9 +65,41 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 	return s.pipelineEngine.ReviewPromptFor(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 }
 
+// effectiveReworkCap returns item's own per-item rework-cap override if set
+// (BacklogItemData.ReworkCapOverride), otherwise the global default
+// (config.Config.MaxAutoReworkIterationsOrDefault). 0 on the override means
+// "unlimited retries for this item" — represented as math.MaxInt so every
+// count comparison (workCount/reviewCount >= reworkCap) never trips.
+func (s *BacklogService) effectiveReworkCap(item *session.BacklogItemData) int {
+	if item != nil && item.ReworkCapOverride != nil {
+		if *item.ReworkCapOverride == 0 {
+			return math.MaxInt
+		}
+		return *item.ReworkCapOverride
+	}
+	return s.maxAutoReworkIterations()
+}
+
+// recentReviewHadVerdict returns up to n bools, most-recent-first, one per
+// review-role ItemSession in sessions — true if that session ever had a
+// ReviewVerdict row attached. sessions must be ordered oldest-first, as
+// Storage.ListItemSessions returns (and as AutoReopenAfterFailedReview already
+// has in hand for its work-session cap check, so this needs no extra query).
+// Feeds session.IsRepeatedNoVerdictFailure.
+func recentReviewHadVerdict(sessions []session.ItemSessionSummary, n int) []bool {
+	out := make([]bool, 0, n)
+	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
+		if sessions[i].Role != session.SessionRoleReview {
+			continue
+		}
+		out = append(out, sessions[i].ReviewVerdict != nil)
+	}
+	return out
+}
+
 // notifyReworkCapHit publishes an operator-facing notification when the auto-rework
-// loop (review→rework or PR-fix→rework) hits maxAutoReworkIterations and leaves an
-// item stranded for manual action. No-op if no event bus is wired.
+// loop (review→rework or PR-fix→rework) hits reworkCap (see effectiveReworkCap) and
+// leaves an item stranded for manual action. No-op if no event bus is wired.
 //
 // Story 2.1.2: also writes a durable rework_cap BacklogStuckState row (threshold
 // 0 — the cap hit is a discrete, definitive event, marked the moment it's hit)
@@ -73,10 +107,10 @@ func (s *BacklogService) reviewPromptFor(item *session.BacklogItemData, acSnapsh
 // a missed toast. The durable write is additive to the notification, not a
 // gate: a MarkStuck/MarkStuckNotified failure is logged but must never
 // suppress the notification itself.
-func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string) {
+func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string, reworkCap int) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
-			fmt.Sprintf("hit the %d-iteration rework cap %s", maxAutoReworkIterations, capContext))
+			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
 		if err != nil {
 			log.WarningLog.Printf("[notifyReworkCapHit] MarkStuck item=%s: %v", itemID, err)
 		} else if applied {
@@ -89,12 +123,51 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	if s.eventBus == nil {
 		return
 	}
+	// itemID is passed as sessionID (not just metadata) so the notification subscriber's
+	// coalescing key (sessionID:notificationType) differentiates between different backlog
+	// items — see the comment on EventBusNotifier.Notify in backlog_notifier.go for the
+	// full explanation of the bug this avoids.
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		"Auto-rework cap reached",
-		fmt.Sprintf("%s — hit the %d-iteration rework cap %s. Left for manual review.", itemTitle, maxAutoReworkIterations, capContext),
+		fmt.Sprintf("%s — hit the %d-iteration rework cap %s. Left for manual review.", itemTitle, reworkCap, capContext),
+		map[string]string{"item_id": itemID},
+	))
+}
+
+// notifyRepeatedFailure publishes an operator-facing notification and durable
+// BacklogStuckState row (reused StuckReasonBouncing — same "non-converging
+// cycle with no PASS verdict" semantics as the periodic bounce sweep, just
+// tripped immediately on two identical verdicts instead of waiting for
+// bounceThreshold cycles within bounceLookback) when session.IsRepeatedFailure
+// stops the auto-reopen loop. Mirrors notifyReworkCapHit's structure: a
+// MarkStuck/MarkStuckNotified failure is logged but never suppresses the
+// notification itself.
+func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, failureSummary string) {
+	if s.storage != nil {
+		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
+			fmt.Sprintf("stopped auto-rework — the last two attempts failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", failureSummary))
+		if err != nil {
+			log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuck item=%s: %v", itemID, err)
+		} else if applied {
+			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonBouncing); notifyErr != nil {
+				log.WarningLog.Printf("[notifyRepeatedFailure] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			}
+		}
+	}
+
+	if s.eventBus == nil {
+		return
+	}
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Auto-rework stopped — repeated failure",
+		fmt.Sprintf("%s — the last two attempts failed the same way, so auto-rework stopped instead of retrying. Left for manual review.", itemTitle),
 		map[string]string{"item_id": itemID},
 	))
 }
@@ -113,8 +186,9 @@ func (s *BacklogService) notifyTriagePersistFailure(ctx context.Context, itemID,
 	if !statusAdvanced {
 		body += " The item is still at 'idea' — retry manually or re-trigger triage."
 	}
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
 	s.eventBus.Publish(events.NewNotificationEvent(
-		"", "", uuid.New().String(),
+		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
 		title, body,
@@ -131,21 +205,28 @@ const (
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 )
 
-// maxAutoReworkIterations caps how many automated work sessions can be spawned for a single
-// backlog item by the auto-reopen loop. When this ceiling is hit, the item stays in review
-// so a human can inspect it rather than spinning indefinitely on a persistent FAIL verdict.
-const maxAutoReworkIterations = 3
+// The auto-rework iteration cap bounds how many automated work sessions can be
+// spawned for a single backlog item by the auto-reopen loop. When this ceiling
+// is hit, the item stays in review so a human can inspect it rather than
+// spinning indefinitely on a persistent FAIL verdict.
+//
+// Configurable via config.Config.MaxAutoReworkIterationsOrDefault() (Settings →
+// Defaults, default 3) — call sites read s.maxAutoReworkIterations(), not a
+// constant. That helper (not s.cfg directly) is required: cfg is a live,
+// shared *config.Config instance DefaultsService.UpdateGlobalDefaults can
+// write to concurrently (see cfgMu's doc comment on the BacklogService
+// struct), so reads must go through the mutex-guarded accessor.
 
-// maxConcurrentBacklogWorkItems caps how many distinct backlog items may be
-// "in_progress" (i.e. have a live work session) at the same time. Fresh spawns
-// beyond this cap are rejected with CodeResourceExhausted; reopen/revision
-// spawns for an item that's already in_progress don't count against it, since
-// they don't add a new concurrent item. Adjust this constant directly — it's
-// an operational tuning knob, not a correctness invariant.
+// The backlog work-item concurrency cap is configurable via
+// config.Config.MaxConcurrentBacklogWorkItemsOrDefault() (Settings → Defaults,
+// default 2) — call sites read s.maxConcurrentBacklogWorkItems(), not a
+// constant, for the same cfgMu-guarded-accessor reason described above.
+// Fresh spawns beyond the cap are queued (BacklogStatusQueued) instead of
+// rejected; reopen/revision spawns for an item that's already in_progress
+// don't count against it, since they don't add a new concurrent item.
 //
 // Added 2026-07-12 after a kernel OOM caused by too many concurrent agent
 // sessions (backlog-spawned and otherwise) exhausting system memory.
-const maxConcurrentBacklogWorkItems = 2
 
 // defaultTriageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes
 // after its headless LLM call returns (persist result, update plan_artifacts_path,
@@ -205,6 +286,13 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
+	// A spawn is user-initiated unless the caller explicitly marks it Autonomous
+	// (the autonomous driver spawning its own follow-up sessions).
+	triggeredBy := session.TriggeredByUser
+	if req.Msg.Autonomous {
+		triggeredBy = session.TriggeredBySystem
+	}
+
 	// 1. Load item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
@@ -214,6 +302,22 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// 1b. Atomic check-and-set: only one SpawnSessionFromItem call for this item may be
+	// in flight at a time. Without this, two concurrent calls (e.g. AutoReopenAfterFailedReview
+	// / AutoRespawnAutonomousWork / AutoReopenForPRFix all funnel here, and any of them can
+	// race a manual retrigger or a periodic reconciliation sweep) can both pass the
+	// hasActiveWorkSession guard below (step 8b) before either has written its new
+	// ItemSession row, producing two concurrent work sessions for one item — see
+	// spawnInFlight's doc comment on the BacklogService struct for the live incident this
+	// closes. Released via defer so every return path (including early gate failures below)
+	// frees the item for the next attempt.
+	if _, alreadyInFlight := s.spawnInFlight.LoadOrStore(item.ID, struct{}{}); alreadyInFlight {
+		log.InfoLog.Printf("[SpawnSessionFromItem] spawn already in flight for item=%s; rejecting concurrent attempt", item.ID)
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("a session spawn is already in progress for this item; wait for it to finish"))
+	}
+	defer s.spawnInFlight.Delete(item.ID)
+
 	// 2. If force=true, clear any in-flight sessions and reset status so the normal
 	// path below can proceed. Handles both in_progress (stop work session) and review
 	// (stop review session + transition back to in_progress so restart begins from
@@ -221,7 +325,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
 		item.Status == string(session.BacklogStatusReview)) {
 		var forceErr error
-		item, forceErr = s.forceResetItem(ctx, item)
+		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
 			return nil, forceErr
 		}
@@ -236,28 +340,227 @@ func (s *BacklogService) SpawnSessionFromItem(
 				session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status, item.Status))
 	}
 
-	// 3b. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
+	// 3b. Planning gate (only for fresh spawns; on reopen planning is already approved).
+	// Autonomous mode bypasses the gate — the driver handles its own planning loop.
+	// Deliberately runs BEFORE the WIP-cap gate below: an item without an approved
+	// plan must be rejected outright here, never queued — a queued item skips this
+	// RPC entirely on dequeue (DequeueNextQueuedItems calls spawnSessionAfterGates
+	// directly), so queueing an unapproved-plan item would let it reach a real
+	// spawned session with no planning check at all (PR #199 review F2/F3).
+	if !isReopen && !item.SkipPlanning && !item.PlanApproved && !req.Msg.Autonomous {
+		log.InfoLog.Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
+	}
+
+	// 4. WIP limit gate (only for fresh spawns; a reopen doesn't add a new concurrent
 	// item — it's already counted as in_progress). Not bypassed by Autonomous: the
 	// point is to cap total concurrent agent load regardless of how a spawn was
-	// triggered.
+	// triggered. At the cap, the item is queued (BacklogStatusQueued) rather than
+	// rejected — BacklogLifecycleListener.onSessionExited and the periodic
+	// ReconcileStuck sweep dequeue it once a slot frees up (DequeueNextQueuedItems).
 	if !isReopen {
-		inProgress, wipErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-			Statuses: []string{string(session.BacklogStatusInProgress)},
-		})
+		liveCount, wipErr := s.countLiveBacklogWorkSessions(ctx)
 		if wipErr != nil {
 			log.WarningLog.Printf("[SpawnSessionFromItem] WIP count query failed item=%s: %v; allowing spawn", item.ID, wipErr)
-		} else if len(inProgress) >= maxConcurrentBacklogWorkItems {
-			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit blocked spawn item=%s in_progress=%d cap=%d", item.ID, len(inProgress), maxConcurrentBacklogWorkItems)
-			return nil, connect.NewError(connect.CodeResourceExhausted,
-				fmt.Errorf("%d backlog items are already in progress (cap %d) — wait for one to finish or review/ship it first",
-					len(inProgress), maxConcurrentBacklogWorkItems))
+		} else if wipCap := s.maxConcurrentBacklogWorkItems(); liveCount >= wipCap {
+			log.InfoLog.Printf("[SpawnSessionFromItem] WIP limit hit item=%s live=%d cap=%d — queueing", item.ID, liveCount, wipCap)
+			if _, queueErr := s.queueBacklogItem(ctx, item, req.Msg.Autonomous); queueErr != nil {
+				return nil, queueErr
+			}
+			return connect.NewResponse(&sessionv1.SpawnSessionFromItemResponse{Queued: true}), nil
 		}
 	}
 
-	// 4. Planning gate (only for fresh spawns; on reopen planning is already approved).
-	// Autonomous mode bypasses the gate — the driver handles its own planning loop.
-	if !isReopen && !item.SkipPlanning && !item.PlanApproved && !req.Msg.Autonomous {
-		log.InfoLog.Printf("[SpawnSessionFromItem] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
+	return s.spawnSessionAfterGates(ctx, item, isReopen, req.Msg.Autonomous)
+}
+
+// transitionWithGuard runs the domain transition-guard checks — structural
+// CanTransition plus the business-rule ValidateGates (e.g. ErrPlanRequired for
+// queued->in_progress) — before delegating to storage.TransitionBacklogItemStatus.
+// These are the exact two checks TransitionBacklogItemStatus's generic RPC
+// handler (backlog_service_lifecycle.go) always applies; queueBacklogItem and
+// DequeueNextQueuedItems's dequeue claim previously called
+// storage.TransitionBacklogItemStatus directly — a pure CAS with no guard at
+// all — which let an unapproved-plan item reach a real spawned session via
+// ready->queued->in_progress with the planning gate never once evaluated
+// (PR #199 review F3, structural root cause F4). Every status-mutating call
+// site outside the generic RPC handler should route through this helper so a
+// future call site can't reintroduce the same bug class.
+//
+// Returns the same errors storage.TransitionBacklogItemStatus returns
+// (ErrPreconditionFailed, etc.) on success of the guard checks, or the raw
+// domain sentinel error (ErrPlanRequired, ErrACRequired, ...) if a guard
+// fails — un-wrapped in connect terms so each call site keeps doing its own
+// connect.NewError translation, matching this file's existing style.
+func (s *BacklogService) transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string) (*session.BacklogItemData, error) {
+	from := session.BacklogStatus(item.Status)
+	if !s.engine.CanTransition(from, to) {
+		return nil, fmt.Errorf("invalid transition from %q to %q", from, to)
+	}
+	guardInput := session.BacklogItemTransitionInput{
+		Status:            from,
+		AcCriteria:        item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
+	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
+		return nil, guardErr
+	}
+	return s.storage.TransitionBacklogItemStatus(ctx, item.ID, to, precondition, triggeredBy)
+}
+
+// queueBacklogItem transitions item from ready to queued after a fresh spawn hit
+// the concurrency cap. queued_at (FIFO dequeue order) and the autonomous flag the
+// original request carried are written BEFORE the status transition so no reader
+// ever observes status=queued with queue metadata still unset.
+func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.BacklogItemData, autonomous bool) (*session.BacklogItemData, error) {
+	now := time.Now()
+	if _, err := s.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		QueuedAt:         &now,
+		QueuedAutonomous: &autonomous,
+	}, nil); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to record queue metadata: %w", err))
+	}
+	// A spawn is user-initiated unless the caller explicitly marks it Autonomous
+	// (the autonomous driver spawning its own follow-up sessions).
+	triggeredBy := session.TriggeredByUser
+	if autonomous {
+		triggeredBy = session.TriggeredBySystem
+	}
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
+	updated, err := s.transitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy)
+	if err != nil {
+		if errors.Is(err, session.ErrPreconditionFailed) {
+			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to queue item: %w", err))
+	}
+	return updated, nil
+}
+
+// DequeueNextQueuedItems implements session.QueueDequeuer. It claims and spawns as
+// many queued items as there are free WIP slots, oldest-queued (FIFO) first. Called
+// from BacklogLifecycleListener.onSessionExited (immediate dequeue the moment a slot
+// frees up) and the periodic ReconcileStuck sweep (safety net for a missed hook or a
+// concurrency limit raised while items were queued) — see session/backlog_lifecycle.go.
+//
+// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress,
+// ExpectedStatus=queued) before spawning, so concurrent callers (this method running
+// from both the exit hook and the sweep, or multiple server processes sharing one DB)
+// cannot double-claim the SAME item — see TransitionBacklogItemStatus's doc comment.
+// That per-item CAS alone does not prevent two concurrent calls to this method from
+// each computing their own freeSlots from an unsynchronized snapshot and jointly
+// claiming DIFFERENT queued items past the cap, so dequeueMu additionally serializes
+// the whole method body, making this method single-flight system-wide (PR #199
+// review F2 — the exact "uncontrolled concurrency overshoot" class of bug the WIP
+// cap feature exists to prevent).
+//
+// The claim itself now goes through transitionWithGuard (PR #199 review F4), so an
+// item without an approved plan (SkipPlanning=false, PlanApproved=false) cannot be
+// claimed at all — defense-in-depth against F3, on top of SpawnSessionFromItem's own
+// planning gate now running before the WIP-cap queue gate.
+//
+// If the claim succeeds but the spawn itself fails (missing repo_path, stale plan
+// approval, SessionCreator error), the item is rolled back to queued rather than left
+// stranded in_progress with no session.
+func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+	s.dequeueMu.Lock()
+	defer s.dequeueMu.Unlock()
+
+	liveCount, err := s.countLiveBacklogWorkSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("count live work sessions: %w", err)
+	}
+	freeSlots := s.maxConcurrentBacklogWorkItems() - liveCount
+	if freeSlots <= 0 {
+		return nil
+	}
+
+	queued, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: []string{string(session.BacklogStatusQueued)},
+	})
+	if err != nil {
+		return fmt.Errorf("list queued items: %w", err)
+	}
+	sort.Slice(queued, func(i, j int) bool {
+		ai, aj := queued[i].QueuedAt, queued[j].QueuedAt
+		if ai == nil || aj == nil {
+			return aj == nil && ai != nil
+		}
+		return ai.Before(*aj)
+	})
+
+	spawned := 0
+	for _, item := range queued {
+		if spawned >= freeSlots {
+			break
+		}
+		claimed, claimErr := s.transitionWithGuard(ctx, &item,
+			session.BacklogStatusInProgress,
+			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued), Note: "dequeued: WIP slot freed"},
+			session.TriggeredBySystem)
+		if claimErr != nil {
+			switch {
+			case errors.Is(claimErr, session.ErrPreconditionFailed):
+				// Expected under concurrent claims (another process's dequeue
+				// sweep, or a manual un-queue) — not worth logging.
+			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
+				// now that SpawnSessionFromItem's planning gate runs before the
+				// WIP-cap gate that queues an item, but refuse the claim rather
+				// than silently spawning an unapproved item if this is ever hit
+				// (e.g. a future call site regression, or a pre-existing queued
+				// row from before that ordering fix).
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s: %v — leaving queued", item.ID, claimErr)
+			default:
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s: %v", item.ID, claimErr)
+			}
+			continue
+		}
+
+		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
+		if spawnErr != nil {
+			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to queued", item.ID, spawnErr)
+			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued,
+				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
+				session.TriggeredBySystem); rbErr != nil {
+				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to queued failed item=%s: %v", item.ID, rbErr)
+			}
+			continue
+		}
+		spawned++
+		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s session=%s", item.ID, resp.Msg.SessionUuid)
+	}
+	return nil
+}
+
+// spawnSessionAfterGates performs the actual session spawn for item once all gating
+// checks (status, WIP cap, planning approval) have passed. Used by SpawnSessionFromItem
+// (fresh spawn / manual reopen) and by DequeueNextQueuedItems — in the dequeue case
+// isReopen is always true, since the item's status has already been CAS-transitioned to
+// in_progress by the caller before this runs, and step 13 below must not re-transition it.
+func (s *BacklogService) spawnSessionAfterGates(
+	ctx context.Context,
+	item *session.BacklogItemData,
+	isReopen bool,
+	autonomous bool,
+) (*connect.Response[sessionv1.SpawnSessionFromItemResponse], error) {
+	// 4b. Planning-gate defense-in-depth (PR #199 review F2/F3). SpawnSessionFromItem's
+	// own planning gate (step 3b) only runs on that RPC's direct call path;
+	// DequeueNextQueuedItems claims a queued item via transitionWithGuard (which itself
+	// now enforces this — F4) and then calls this method directly, with no other gate in
+	// between. Re-checking here means an unapproved-plan item can never reach a real
+	// spawned session no matter which call site reaches this function, now or in the
+	// future. Skipped when autonomous=true (the driver runs its own planning loop) —
+	// this matches SpawnSessionFromItem's own gate and means it never fires for
+	// AutoReopenAfterFailedReview/AutoReopenForPRFix, which always pass autonomous=true.
+	if !item.SkipPlanning && !item.PlanApproved && !autonomous {
+		log.InfoLog.Printf("[spawnSessionAfterGates] planning gate blocked spawn item=%s status=%s autonomous=false", item.ID, item.Status)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("run TriggerTriage and approve the plan before spawning, or use 'Run Autonomously' to skip the planning gate"))
 	}
@@ -292,6 +595,15 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// hours, bouncing the item in_progress<->pr_pending with no progress (see
 	// docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, item.ID, priorSessions)
+
+	// 8a2. Close the tmux pane of every already-ended work-session round before
+	// spawning the next one. Each rework round gets its own "-rN" title (see
+	// buildRevisionTitle) so the session list stays readable across rounds, but
+	// nothing previously closed a finished round's tmux pane — it sat around
+	// indefinitely as an idle "[exited]" pane, accumulating with every rework
+	// cycle. KillTmuxPaneOnly (not StopSessionByUUID/Instance.Kill) leaves the
+	// worktree alone, since rework rounds share one worktree/branch.
+	s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
 	if hasActiveWorkSession(priorSessions) {
@@ -334,7 +646,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if isReopen {
 		spawnTags = append(spawnTags, session.TagBacklogRevision)
 	}
-	if req.Msg.Autonomous {
+	if autonomous {
 		spawnTags = append(spawnTags, session.TagAutonomous)
 	}
 	var inst *session.Instance
@@ -359,7 +671,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 		log.WarningLog.Printf("[SpawnSessionFromItem] failed to persist instance immediately after spawn item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 	}
 
-	if req.Msg.Autonomous {
+	if autonomous {
 		if s.autonomousStarter != nil {
 			log.InfoLog.Printf("[SpawnSessionFromItem] starting autonomous driver item=%s session=%s", item.ID, inst.UUID)
 			s.autonomousStarter.StartAutonomousDriverForInstance(inst)
@@ -398,13 +710,32 @@ func (s *BacklogService) SpawnSessionFromItem(
 
 	// 12c. On reopen, clean up git worktrees from prior work sessions now that the
 	// new session is safely persisted. Best-effort only — errors are logged, not returned.
+	// worktreePath itself is exempted: step 10 reuses the same "backlog/<item>" worktree
+	// across reopens (same branch slug every revision), so priorSessions still contains a
+	// worktree row pointing at this exact path — cleaning it up here would delete the
+	// directory the session spawned above just started using.
 	if isReopen {
-		s.cleanupItemWorktrees(ctx, priorSessions)
+		s.cleanupItemWorktreesExcept(ctx, priorSessions, worktreePath)
+		// Archive the superseded prior-round work session(s) now that the new
+		// session has replaced them — otherwise every rework round piles up a
+		// fresh work session that's never cleaned up until the item eventually
+		// reaches done/archived (see docs/tasks/workflow-history-and-archiving.md;
+		// this is the fix for items that bounce through many rework rounds while
+		// still open).
+		s.archiveItemWorkSessions(ctx, priorSessions)
 	}
 
-	// 13. Transition item to in_progress (no-op if already in_progress on reopen).
+	// 13. Transition item to in_progress. No-op for isReopen: a manual reopen is
+	// already in_progress, and a dequeue claim already CAS'd the item to in_progress
+	// before calling this helper.
 	if !isReopen {
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
+		// A spawn is user-initiated unless the caller explicitly marks it
+		// Autonomous (the autonomous driver spawning its own follow-up sessions).
+		triggeredBy := session.TriggeredByUser
+		if autonomous {
+			triggeredBy = session.TriggeredBySystem
+		}
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy); transErr != nil {
 			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 		}
 	}
@@ -418,7 +749,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 // forceResetItem stops any in-flight work or review sessions for the item, and — if
 // the item is currently in review — transitions it back to in_progress. Used when
 // SpawnSessionFromItem is called with Force=true so the caller can re-spawn cleanly.
-func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData) (*session.BacklogItemData, error) {
+func (s *BacklogService) forceResetItem(ctx context.Context, item *session.BacklogItemData, triggeredBy string) (*session.BacklogItemData, error) {
 	earlyPrior, _ := s.storage.ListItemSessions(ctx, item.ID)
 	for _, ps := range earlyPrior {
 		if ps.EndedAt != nil {
@@ -433,13 +764,49 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *session.Backl
 		_ = s.storage.UpdateItemSessionEnded(ctx, ps.ID, time.Now())
 	}
 	if item.Status == string(session.BacklogStatusReview) {
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy)
 		if transErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reset item to in_progress for restart: %w", transErr))
 		}
 		return updated, nil
 	}
 	return item, nil
+}
+
+// countLiveBacklogWorkSessions counts backlog items that currently have an active
+// (unended) work-session agent running, across both "in_progress" and "review" status —
+// not just "in_progress". AutoReopenAfterFailedReview intentionally leaves a work session
+// alive (polling for a review verdict) after the item's status flips back to "review", so
+// counting "in_progress" items alone undercounts real concurrent agent load and lets the
+// WIP cap (maxConcurrentBacklogWorkItems) be silently exceeded — see
+// docs/tasks/backlog-feature-improvement.md's "WIP limit now undercounts live sessions"
+// finding, tied to the 2026-07-12 OOM incident the cap exists to prevent.
+func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int, error) {
+	candidates, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
+	})
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, item := range candidates {
+		if item.Status == string(session.BacklogStatusInProgress) {
+			count++
+			continue
+		}
+		// review status only counts toward the cap if a work session is still
+		// actually running (the case AutoReopenAfterFailedReview's live-session
+		// reuse makes invisible to a naive in_progress-only count).
+		sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[countLiveBacklogWorkSessions] list sessions failed item=%s: %v; assuming no active session", item.ID, sessErr)
+			continue
+		}
+		if hasActiveWorkSession(sessions) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // hasActiveWorkSession reports whether any of the provided ItemSessions is an
@@ -451,6 +818,82 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 		}
 	}
 	return false
+}
+
+// notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
+// live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
+// any work session with EndedAt == nil as "in flight" and skips reopening
+// so the live agent can pick up the verdict itself (see the guard's own
+// comment above). That check is purely liveness-based — it says nothing
+// about whether the session is actually making progress. A session can be
+// technically alive (tmux pane exists, DB row open) for hours with zero
+// real output, and this guard has no way to tell the difference, so the
+// item silently sits stuck with nothing surfaced to the operator. Confirmed
+// live 2026-07-20 on backlog item 9264efe7: session
+// stapler-squad-fix-backlog-status-audit-trail-r15 reported Active with a
+// current last_activity_at, while review_queue_determiner.go's own,
+// independently-computed staleness detector flagged the same session
+// "STALENESS DETECTED ... 6h 35m since last meaningful output" on every
+// reconciliation tick.
+//
+// This function does NOT change the reopen decision — a live session is
+// never stopped, killed, or bypassed here, regardless of how stale it is.
+// This repo has a deliberate policy against force-stopping a slow-but-alive
+// agent (see docs/tasks/backlog-feature-improvement.md's StuckReasonStaleWork
+// discussion and the stop_session-deletes-branch incident) — killing the
+// session ourselves would just trade one bug for a worse one. All this adds
+// is a notification once the SAME staleness computation and threshold
+// review_queue_determiner.go already uses (Instance.
+// GetTimeSinceLastMeaningfulOutput vs
+// session.DefaultReviewQueuePollerConfig().StalenessThreshold — reused
+// directly rather than inventing a second definition of "stale") confirms
+// the blocking session isn't just idle-but-thinking.
+//
+// Best-effort and silent by design when it can't observe anything: no
+// sessionStopper/eventBus wired, no active work session found (shouldn't
+// happen — the caller already confirmed hasActiveWorkSession), or the
+// session isn't currently tracked live (ok == false) all skip quietly,
+// leaving the existing reconcileBouncingItems/reconcileStaleWorkSessions
+// sweeps as the fallback signal, same as before this function existed.
+//
+// Naturally rate-limited without extra dedup bookkeeping: this only runs
+// from inside AutoReopenAfterFailedReview, which itself is gated by
+// autoReopenWithBackoffGate's RemediationDue backoff (minimum 30 minutes
+// between attempts) once the item has been marked "bouncing" — the exact
+// state this bug report describes.
+func (s *BacklogService) notifyIfActiveWorkSessionStale(itemID, itemTitle string, sessions []session.ItemSessionSummary) {
+	if s.sessionStopper == nil || s.eventBus == nil {
+		return
+	}
+	var active *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+			active = &sessions[i]
+			break
+		}
+	}
+	if active == nil {
+		return
+	}
+	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
+	if !live {
+		return
+	}
+	threshold := session.DefaultReviewQueuePollerConfig().StalenessThreshold
+	if idle <= threshold {
+		return
+	}
+	log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
+		itemID, active.SessionUUID, idle.Round(time.Second), threshold)
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Rework blocked by a stale-but-alive session",
+		fmt.Sprintf("%s — a failed review can't reopen for another rework attempt because its active work session hasn't produced output in over %s. The session is still running, so it will not be stopped automatically; check it manually, or use \"Reopen for Revision\" once you've confirmed it's actually stuck.", itemTitle, idle.Round(time.Second)),
+		map[string]string{"item_id": itemID},
+	))
 }
 
 // hasActiveReviewSession reports whether any of the provided ItemSessions is an
@@ -534,15 +977,58 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	if sessErr != nil {
 		return fmt.Errorf("list sessions for cap check: %w", sessErr)
 	}
+
+	// The work session for this round may still be alive (it stays running and
+	// polls get_backlog_item after request_review — see taskProtocolBlock step 8).
+	// Spawning a new one would fail on the hasActiveWorkSession guard anyway and
+	// strand the item with only the manual "Reopen for Revision" path; reusing the
+	// live session instead keeps its conversation (and prompt cache) intact.
+	if hasActiveWorkSession(sessions) {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s already has an active work session; leaving it in place to pick up the verdict instead of respawning", itemID)
+		s.notifyIfActiveWorkSessionStale(itemID, item.Title, sessions)
+		return nil
+	}
+
+	// Circuit breaker: if the last two verdicts failed for the identical reason,
+	// another rework attempt won't change anything either — stop before burning
+	// through the (possibly much larger) rework cap and park the item for
+	// automated or human remediation instead. Checked ahead of the cap so a
+	// fast-looping infrastructure fault (e.g. a broken worktree diff) can't spend
+	// the whole cap in minutes.
+	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, 2)
+	if verdictErr != nil {
+		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s GetRecentReviewVerdictSummaries: %v", itemID, verdictErr)
+	} else if session.IsRepeatedFailure(recentVerdicts) {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s failed the same way twice in a row; leaving in review for remediation instead of reopening", itemID)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), recentVerdicts[0].Summary)
+		return nil
+	}
+
+	// Circuit breaker, no-verdict shape: GetRecentReviewVerdictSummaries above
+	// queries itemsession.HasReviewVerdict(), so a review session that crashed,
+	// was killed, or hit its turn cap before ever calling submit_review_verdict
+	// is invisible to the check above — the IsRepeatedFailure comparison above
+	// never even sees it, so it can never trip on this failure shape no matter
+	// how many times it repeats. sessions (already fetched above for the work
+	// session cap check) has the review-role entries with ReviewVerdict
+	// eagerly loaded, so no extra query is needed. See
+	// session.IsRepeatedNoVerdictFailure's doc comment for the live bounce
+	// loop (78 cycles in 24h) this closes.
+	if session.IsRepeatedNoVerdictFailure(recentReviewHadVerdict(sessions, 2)) {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s: the last two review sessions both exited without ever writing a verdict; leaving in review for remediation instead of reopening", itemID)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "review session exited without ever writing a verdict")
+		return nil
+	}
+
 	workCount := 0
 	for _, is := range sessions {
 		if is.Role == session.SessionRoleWork {
 			workCount++
 		}
 	}
-	if workCount >= maxAutoReworkIterations {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, maxAutoReworkIterations)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict")
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s has %d work sessions (cap %d); leaving in review for manual action", itemID, workCount, reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
 		return nil
 	}
 
@@ -554,8 +1040,9 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition); err != nil {
-		return fmt.Errorf("transition to in_progress: %w", err)
+	inProgress, transitionErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
+	if transitionErr != nil {
+		return fmt.Errorf("transition to in_progress: %w", transitionErr)
 	}
 
 	// The item just left review for in_progress — resolve any open rework_cap
@@ -576,12 +1063,172 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		// Roll back: item should stay in review rather than stranded in in_progress
 		// with no active session. ReconcileStuckItems is an eventual fallback, but
 		// an explicit rollback provides faster recovery.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, nil); rollbackErr != nil {
+		//
+		// The rollback precondition is tied to the in_progress row *this call*
+		// just wrote (ExpectedUpdatedAt: inProgress.UpdatedAt), not applied
+		// unconditionally. An unconditional rollback (precondition: nil) would
+		// blindly overwrite whatever status the item is in by the time the
+		// rollback runs — including a "done" reached in the meantime by a
+		// completely different, legitimate path (the live work session shipping
+		// on its own). That is exactly what happened live on 2026-07-20 to
+		// backlog item 0fd4a940 (PR #176): SpawnSessionFromItem failed after the
+		// item had already shipped, and the unconditional rollback silently
+		// dragged an already-done item back to "review" with no audit note,
+		// kicking off a stale-verdict reprocessing cascade. Scoping the
+		// precondition here means the rollback only fires if nothing else has
+		// touched the item since this function's own in_progress write landed.
+		rollbackPrecondition := &session.BacklogItemPrecondition{
+			ExpectedStatus:    string(session.BacklogStatusInProgress),
+			ExpectedUpdatedAt: &inProgress.UpdatedAt,
+		}
+		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
 	return nil
+}
+
+// AutoRespawnAutonomousWork implements the AutonomousStuckRespawner interface
+// consumed by AutonomousOrchestrationService. It gives an in_progress item a
+// fresh autonomous work-session turn budget after a work session hits its
+// turn cap without a DONE signal, instead of forcing the item through a
+// review cycle against known-incomplete work (see onAutonomousDriverComplete's
+// SessionRoleWork case in autonomous_orchestration_service.go, and
+// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update, for the
+// bounce loop this closes). No status transition is needed — the item is
+// already in_progress — so this mirrors AutoReopenAfterFailedReview's guard
+// and cap checks without the review→in_progress transition step.
+func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+		// Already moved on (a human acted manually, or another reconciler beat
+		// us to it) — nothing to do.
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions for cap check: %w", sessErr)
+	}
+
+	// Tombstone any work session confirmed dead before checking liveness,
+	// mirroring AutoReopenForPRFix's identical guard — the driver-complete
+	// callback that triggered this call already ended the session record, but
+	// a race with another respawn attempt is still possible.
+	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
+	if hasActiveWorkSession(sessions) {
+		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s already has an active work session; skipping respawn", itemID)
+		return nil
+	}
+
+	workCount := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork {
+			workCount++
+		}
+	}
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s has %d work sessions (cap %d); leaving in_progress for manual action", itemID, workCount, reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after repeatedly hitting the autonomous turn cap without finishing", reworkCap)
+		return nil
+	}
+
+	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId:     itemID,
+		Autonomous: true,
+	}))
+	if spawnErr != nil {
+		return fmt.Errorf("spawn session: %w", spawnErr)
+	}
+	log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s respawned with a fresh turn budget", itemID)
+	return nil
+}
+
+// RemediateStaleWorkSession implements session.StaleWorkRemediator, consumed
+// by BacklogLifecycleListener's remediateStaleWorkWithBackoffGate
+// (session/backlog_lifecycle.go). It closes out a work session that has gone
+// stale (no progress reported for over session.maxWorkSessionStaleness) even
+// though the underlying tmux session and pane process are still alive
+// (session.Instance.TmuxAlive/PaneProcessDead) — a genuinely stale session is
+// NOT a zombie the generic tmux health check would ever catch: the agent
+// inside finished its own work and is idle at an interactive prompt waiting
+// on a human, rather than crashed or hung (live repro 2026-07-20, item
+// 9264efe7-b4c2-455a-9e2a-ab0196a63ecd, rework suffix -r14 — 14 prior rework
+// rounds with nothing ever unsticking it, since detection existed but no
+// remediation action did). Trusts the caller's staleness signal plus
+// RemediationDue's own backoff gate rather than adding a second, possibly-
+// conflicting liveness heuristic here — see StaleWorkRemediator's doc
+// comment in session/backlog_lifecycle.go.
+//
+// Ends the stale ItemSession and delegates the actual respawn to
+// AutoRespawnAutonomousWork, which already implements exactly the "in_progress
+// item, no active work session, needs a fresh turn budget" case this
+// produces — including the rework-cap check, so a stale-work loop is bounded
+// by whichever of the rework cap or MaxRemediationAttempts (session/
+// backlog_remediation.go) is tighter, never solely by a rework cap an
+// operator may have set to 0 (unlimited) for a different reason.
+func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+		// Already moved on (a human acted manually, or another reconciler beat
+		// us to it) — nothing to remediate.
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, item.ID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions: %w", sessErr)
+	}
+	var active *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+			active = &sessions[i]
+			break
+		}
+	}
+	if active == nil {
+		// The stale session already ended between when the sweep queued this
+		// remediation and now (a concurrent respawn, or the agent finally
+		// wrapped up on its own) — AutoRespawnAutonomousWork's own
+		// hasActiveWorkSession/rework-cap guards decide whether a fresh
+		// session is still warranted.
+		return s.AutoRespawnAutonomousWork(ctx, itemID)
+	}
+
+	// Kill the stale tmux pane only (Instance.KillSession, NOT Instance.Kill),
+	// keeping the worktree intact so any in-progress but uncommitted work
+	// survives for the next work session to pick up. Best-effort: even if the
+	// kill fails (session already gone, tmux server hiccup), still tombstone
+	// the DB row and respawn below rather than leaving the item stranded on a
+	// pure kill failure.
+	if s.sessionStopper != nil {
+		if killErr := s.sessionStopper.KillTmuxPaneOnly(ctx, active.SessionUUID); killErr != nil {
+			log.WarningLog.Printf("[RemediateStaleWorkSession] item=%s session=%s: kill failed (continuing): %v", itemID, active.SessionUUID, killErr)
+		}
+	}
+
+	now := time.Now()
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, active.ID, now); endErr != nil {
+		return fmt.Errorf("end stale work session %s: %w", active.ID, endErr)
+	}
+	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
+
+	return s.AutoRespawnAutonomousWork(ctx, itemID)
 }
 
 // AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
@@ -628,9 +1275,9 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 			workCount++
 		}
 	}
-	if workCount >= maxAutoReworkIterations {
-		log.InfoLog.Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, maxAutoReworkIterations)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber))
+	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
+		log.InfoLog.Printf("[AutoReopenForPRFix] item %s has %d work sessions (cap %d); leaving in pr_pending for manual action", itemID, workCount, reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
 		return nil
 	}
 
@@ -640,7 +1287,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened for PR fix (CI/review)",
 	}
-	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition); err != nil {
+	if _, err := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
 	}
 
@@ -693,7 +1340,7 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 
 	if spawnErr != nil {
 		// Roll back to pr_pending so the reconciler can retry.
-		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil); rollbackErr != nil {
+		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenForPRFix] rollback to pr_pending failed for item %s: %v", itemID, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
@@ -766,9 +1413,9 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 			reviewCount++
 		}
 	}
-	if reviewCount >= maxAutoReworkIterations {
-		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, maxAutoReworkIterations)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session")
+	if reworkCap := s.effectiveReworkCap(item); reviewCount >= reworkCap {
+		log.InfoLog.Printf("[AutoRespawnReview] item %s has %d review sessions (cap %d); leaving in review for manual action", itemID, reviewCount, reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
 		return nil
 	}
 
@@ -880,7 +1527,7 @@ func (s *BacklogService) TriggerTriage(
 	if item.Status == string(session.BacklogStatusReady) {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
-			session.BacklogStatusIdea, precondition); transErr != nil {
+			session.BacklogStatusIdea, precondition, session.TriggeredByUser); transErr != nil {
 			log.WarningLog.Printf("[TriggerTriage] item %s moved past ready before triage reset (race with work-session spawn); aborting re-triage", req.Msg.ItemId)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", req.Msg.ItemId))
@@ -1039,7 +1686,7 @@ func (s *BacklogService) TriggerTriage(
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID,
-			session.BacklogStatusReady, precondition); transErr != nil {
+			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
 			statusAdvanced = false
@@ -1206,7 +1853,39 @@ Do not modify the code. Only write the review verdict.
 	// 9. Headless path — preferred when a headless pool is configured.
 	// This avoids needing tmux and runs the review inline via LLM call.
 	if s.headlessPool != nil {
-		codebaseWorkDir := s.resolveCodebaseWorkDir(ctx, item.RepoPath, mostRecentWorkSession)
+		codebaseWorkDir, codebaseWorkDirExists := s.resolveCodebaseWorkDir(ctx, item.RepoPath, mostRecentWorkSession)
+
+		// codebaseWorkDir only matters on the empty-diff path — BuildReviewCallOptions
+		// never grants directory access when a real diff exists. Block here, before ever
+		// building a prompt or spending a headless call, when that directory doesn't
+		// exist on disk: handing the reviewer Read/Grep/Glob access scoped to a
+		// nonexistent directory produces zero real evidence, which it then (correctly,
+		// given what it was shown) reports as "no diff exists" — a false FAIL that masks
+		// real work sitting on the branch. See resolveCodebaseWorkDir's doc comment for
+		// the confirmed live incident this guards against. Same failure class
+		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
+		if workSessionDiff == "" && !codebaseWorkDirExists {
+			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
+			is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+			if createErr != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
+			}
+			log.ErrorLog.Printf("[TriggerReReview] codebase-read work dir %s does not exist for item %s — review blocked, UNVERIFIABLE verdict recorded (session %s)", codebaseWorkDir, item.ID, is.ID)
+			if s.eventBus != nil {
+				// itemID as sessionID — see comment in notifyReworkCapHit above.
+				s.eventBus.Publish(events.NewNotificationEvent(
+					item.ID, "", uuid.New().String(),
+					int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+					int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+					"Review blocked — codebase directory missing",
+					fmt.Sprintf("%s — no diff could be computed and the fallback review directory is gone. Needs investigation.", item.Title),
+					map[string]string{"item_id": item.ID},
+				))
+			}
+			return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+				ItemSession: itemSessionToProto(is, s.buildCostLookup()),
+			}), nil
+		}
 
 		// Additional context (prior review attempts, full notes history, item goal/status
 		// history, searchable session transcript) is only gathered on the empty-diff
@@ -1367,16 +2046,20 @@ Do not modify the code. Only write the review verdict.
 		// behavior of the tmux-driven submit_review_verdict MCP tool and
 		// SubmitManualReview, both of which already auto-transition on PASS.
 		// Best-effort: verdict is already persisted regardless of transition outcome.
+		//
 		// Gated on isCodeShippedToMain: a PASS verdict says the code is good, not
 		// that it has actually landed on main, and this path (unlike the RPC
 		// handler) has no override_reason escape hatch — if it can't verify, it
-		// must leave the item in review rather than silently mark it done.
+		// must leave the item in review rather than silently mark it done. The
+		// item's "Ship PR" action (backlog_service_ship.go) is the intended
+		// recovery path once left here (docs/tasks/backlog-feature-improvement.md,
+		// 2026-07-18 update).
 		if overall == session.ReviewVerdictPass {
 			if !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, "TriggerReReview") {
 				log.InfoLog.Printf("[TriggerReReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", item.ID)
 			} else {
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, precondition); transErr != nil {
+				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, precondition, session.TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[TriggerReReview] PASS but transition to done failed: %v", transErr)
 				}
 			}
@@ -1462,6 +2145,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	if s.sessionStopper == nil {
 		return
 	}
+	var freed []session.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
 		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
@@ -1477,6 +2161,35 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 		}
 		log.InfoLog.Printf("[tombstoneOrphanWorkSessions] item=%s tombstoned dead work session=%s (created %s)", itemID, is.ID, is.CreatedAt)
 		is.EndedAt = &now
+		freed = append(freed, *is)
+	}
+	// Prune the worktree for every session just tombstoned here, rather than leaving it
+	// on disk until the item is reopened/re-triaged — a dead work session's directory
+	// otherwise lingers indefinitely and can later be found "missing" by a session that
+	// still references it.
+	if len(freed) > 0 {
+		s.cleanupItemWorktrees(ctx, freed)
+	}
+}
+
+// killEndedWorkSessionPanes closes the tmux pane for every already-ended work
+// session in the given list. Best-effort and nil-safe (no-op if sessionStopper
+// isn't wired) — called right before spawning a new rework round so a
+// finished round's pane doesn't linger forever. Uses KillTmuxPaneOnly, not
+// StopSessionByUUID, since rework rounds share one worktree/branch across
+// their "-rN" revisions (see buildRevisionTitle) and StopSessionByUUID's
+// Instance.Kill also runs CleanupWorktree.
+func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions []session.ItemSessionSummary) {
+	if s.sessionStopper == nil {
+		return
+	}
+	for _, is := range sessions {
+		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+			continue
+		}
+		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[killEndedWorkSessionPanes] session=%s: %v", is.SessionUUID, err)
+		}
 	}
 }
 
@@ -1559,16 +2272,31 @@ func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSessio
 
 // resolveCodebaseWorkDir returns the directory the headless codebase-read review call
 // (BuildReviewCallOptions' empty-diff branch) should be granted Read/Grep/Glob access
-// to. Prefers the work session's dedicated worktree path (freshest, matches the
-// session's actual branch); falls back to repoPath when no worktree is recorded or the
-// lookup fails (directory-mode sessions, or a worktree that's since been cleaned up).
-func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) string {
+// to, and whether that directory actually exists on disk. Prefers the work session's
+// dedicated worktree path (freshest, matches the session's actual branch); falls back
+// to repoPath when no worktree is recorded or the lookup fails (directory-mode
+// sessions, or a worktree that's since been cleaned up).
+//
+// The existence check exists because the DB-recorded worktree row can outlive the
+// worktree directory itself (e.g. cleanup deleted the directory without pruning the
+// row) — see the confirmed live incident on the "Backlog History feature Broken" item
+// (PR #173): get_session_diff reported "worktree path does not exist" for a session
+// whose worktree row still resolved successfully. Handing the reviewer Read/Grep/Glob
+// access scoped to a directory that isn't there produces zero real evidence, which the
+// reviewer then (correctly, given what it was shown) reports as "no diff exists" /
+// "codebase shows none of the claimed work" — a false FAIL that masks real, substantial
+// work sitting on the branch. The caller must check exists before proceeding into
+// codebase-read mode, mirroring ReviewGateRunner.Run's (session/review_gate.go) refusal
+// to hand the reviewer a diff it could not positively compute.
+func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) (dir string, exists bool) {
+	dir = repoPath
 	if workSession != nil {
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" {
-			return wt.WorktreePath
+			dir = wt.WorktreePath
 		}
 	}
-	return repoPath
+	info, statErr := os.Stat(dir)
+	return dir, statErr == nil && info.IsDir()
 }
 
 // getWorkSessionDiff returns the git diff for the given work session. It prefers the
@@ -1602,11 +2330,34 @@ func (s *BacklogService) getWorkSessionDiff(ctx context.Context, repoPath string
 		diffBaseSHA = workSession.LastCommitSha
 	}
 	diff, _, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
-	if diffErr != nil {
-		log.WarningLog.Printf("[TriggerReReview] GetGitDiff fallback in %s failed: %v", diffDir, diffErr)
-		return ""
+	if diffErr == nil {
+		return diff
 	}
-	return diff
+	log.WarningLog.Printf("[TriggerReReview] GetGitDiff fallback in %s failed: %v", diffDir, diffErr)
+
+	// Auto-repair: mirror ReviewGateRunner.Run's recovery (session/review_gate.go) for a
+	// stale/corrupted base_commit_sha — the same failure mode found via manual QA on item
+	// ae1e2070 and fixed there first. Only attemptable when a branch ref is known; recompute
+	// the merge-base of repoPath's own checked-out HEAD against the branch and retry once
+	// before giving up on what may just be a recoverable infrastructure hiccup rather than
+	// "no changes were made".
+	if diffHeadRef != "" {
+		if recoveredSHA, recoverErr := session.RecoverBaseCommitSHA(ctx, diffDir, diffHeadRef); recoverErr != nil {
+			log.WarningLog.Printf("[TriggerReReview] RecoverBaseCommitSHA in %s ref=%s failed: %v", diffDir, diffHeadRef, recoverErr)
+		} else if recoveredDiff, _, retryErr := session.GetGitDiffRef(ctx, diffDir, recoveredSHA, diffHeadRef); retryErr != nil {
+			log.WarningLog.Printf("[TriggerReReview] retry with recovered base %s in %s failed: %v", recoveredSHA, diffDir, retryErr)
+		} else if strings.TrimSpace(recoveredDiff) == "" {
+			// A recovered base that produces an empty diff is indistinguishable from
+			// "nothing changed" and just as unsafe to trust as the original failure — see
+			// the identical guard in ReviewGateRunner.Run. Fall through and return "" below
+			// rather than treating this as a successful repair.
+			log.WarningLog.Printf("[TriggerReReview] recovered base %s ref=%s produced an empty diff — not trusting it", recoveredSHA, diffHeadRef)
+		} else {
+			log.InfoLog.Printf("[TriggerReReview] auto-repaired broken base commit ref=%s recovered=%s (recorded=%s)", diffHeadRef, recoveredSHA, diffBaseSHA)
+			return recoveredDiff
+		}
+	}
+	return ""
 }
 
 // resolveACSnapshot returns the acceptance criteria to use for a re-review. It prefers

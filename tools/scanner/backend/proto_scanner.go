@@ -146,6 +146,7 @@ var methodToID = map[string]string{
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerShipPR":               "backlog:trigger-ship-pr",
 	"TriggerSync":                 "backlog:trigger-sync",
 	"CreateItemSource":            "backlog:create-source",
 	"ListItemSources":             "backlog:list-sources",
@@ -159,6 +160,9 @@ var methodToID = map[string]string{
 	"SubmitManualReview":          "backlog:submit-manual-review",
 	"ListStuckBacklogItems":       "backlog:list-stuck",
 	"SnoozeStuckItem":             "backlog:snooze-stuck",
+	"ResetStuckRemediation":       "backlog:reset-stuck-remediation",
+	"BulkResetStuckRemediation":   "backlog:bulk-reset-stuck-remediation",
+	"TriggerRemediationNow":       "backlog:trigger-remediation-now",
 	"CreatePipelineMode":          "backlog:create-pipeline-mode",
 	"UpdatePipelineMode":          "backlog:update-pipeline-mode",
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
@@ -225,6 +229,8 @@ var methodToID = map[string]string{
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
 	// Backlog item lifecycle RPCs
 	"DeleteBacklogItem": "backlog:delete-item",
+	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
+	"WatchBacklogItems": "backlog:watch",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

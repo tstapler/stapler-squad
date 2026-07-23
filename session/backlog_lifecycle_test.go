@@ -3,8 +3,13 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	stdlog "log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -156,6 +161,88 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 	require.NotNil(t, fetchedIS.EndedAt)
+}
+
+// fakeQueueDequeuer is a test double implementing QueueDequeuer, recording every
+// call and signaling on a channel so async callers (onSessionExited invokes it
+// in a goroutine) can be synchronized with in tests.
+type fakeQueueDequeuer struct {
+	called chan struct{}
+}
+
+func newFakeQueueDequeuer() *fakeQueueDequeuer {
+	return &fakeQueueDequeuer{called: make(chan struct{}, 8)}
+}
+
+func (f *fakeQueueDequeuer) DequeueNextQueuedItems(ctx context.Context) error {
+	f.called <- struct{}{}
+	return nil
+}
+
+// TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue
+// verifies that once a work session exit frees a WIP slot (item leaves
+// in_progress), onSessionExited invokes the wired QueueDequeuer immediately
+// rather than waiting for the next ReconcileStuck tick.
+func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	createdItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Test Item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via onSessionExited")
+	}
+}
+
+// TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue verifies the
+// safety-net path: the periodic ReconcileStuck sweep invokes the wired
+// QueueDequeuer on every tick (not just onSessionExited), so a missed exit
+// hook or a concurrency limit raised while items were queued still gets
+// picked up.
+func TestBacklogLifecycleListener_ReconcileStuck_TriggersDequeue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	dequeuer := newFakeQueueDequeuer()
+	listener.SetDequeuer(dequeuer)
+
+	listener.ReconcileStuck(context.Background())
+
+	select {
+	case <-dequeuer.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for DequeueNextQueuedItems to be called via ReconcileStuck")
+	}
 }
 
 // TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_WhenSkipReviewGate
@@ -1168,6 +1255,28 @@ func (f *fakePRCreator) CreatePR(title, body string) (string, int, error) {
 }
 func (f *fakePRCreator) EnablePRAutoMerge(prNumber int) error { return f.autoMergeErr }
 
+// fakeOneShotShipRunnerCall records a single RunOneShotForSession invocation's
+// arguments, so tests can assert shipViaAgentOrFallback called it with the
+// right session UUID and prompt.
+type fakeOneShotShipRunnerCall struct {
+	SessionID string
+	Prompt    string
+}
+
+// fakeOneShotShipRunner is a test double implementing OneShotShipRunner,
+// letting tests inject a canned PR URL or error without a live headless pool
+// or session.Instance registry.
+type fakeOneShotShipRunner struct {
+	calls []fakeOneShotShipRunnerCall
+	prURL string
+	err   error
+}
+
+func (f *fakeOneShotShipRunner) RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error) {
+	f.calls = append(f.calls, fakeOneShotShipRunnerCall{SessionID: sessionID, Prompt: prompt})
+	return f.prURL, f.err
+}
+
 // fakeNotifierCall records a single Notify invocation's title and message body, so
 // tests can assert on interpolated message content (e.g. that a verdict/outcome
 // actually reached the message), not just which notification fired.
@@ -1257,6 +1366,41 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.titles(), "PR creation failed")
+}
+
+// TestPushAndCreatePR_RepeatedPushFailure_DedupsToast verifies the fix for a
+// runaway duplicate "PR creation failed" toast: when the same item's push keeps
+// failing across repeated pushAndCreatePR calls (e.g. a non-fast-forward
+// rejection retried every reconciliation tick), only the FIRST failure fires the
+// ephemeral ERROR toast. Subsequent failures on the same still-open push_failed
+// stuck row must not re-fire it — this is the notify-once dedup used by every
+// other stuck reason (see markAbandonedReview).
+func TestPushAndCreatePR_RepeatedPushFailure_DedupsToast(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("push rejected: non-fast-forward")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	ctx := context.Background()
+	listener.pushAndCreatePR(ctx, item, is)
+	listener.pushAndCreatePR(ctx, item, is)
+	listener.pushAndCreatePR(ctx, item, is)
+
+	toastCount := 0
+	for _, title := range notifier.titles() {
+		if title == "PR creation failed" {
+			toastCount++
+		}
+	}
+	assert.Equal(t, 1, toastCount, "repeated failures on the same open stuck row must not re-fire the toast")
 }
 
 // TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies verifies that a
@@ -1520,6 +1664,274 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 	assert.False(t, stillOpen, "abandoned_review must be resolved once an out-of-band PR moves the item out of review")
 }
 
+// ─── PR-lifecycle status drift (self-heal + immediate recovery) ───────────────
+//
+// Live 2026-07-20 repro: two backlog items (c2ad7bf3-91bf-4d47-8654-
+// 0f2f20869080, PR #251; 6700a3f2-8c0d-4a98-8bbd-39515d5391b1, PR #172) sat at
+// status="review" with a real, open, cached PR reference that ReconcilePRPending
+// could never see, because it anchors purely on status=="pr_pending". The tests
+// below cover the two-part fix: (1) pushAndCreatePR/shipViaAgentOrFallback/
+// RecordPRCreatedOutOfBand now attempt an immediate recovery when their own
+// resolveToPRPending CAS loses a race after PR fields were already persisted,
+// and (2) reconcileDriftedPRItems is the periodic self-heal backstop.
+
+// TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActiveSession
+// reproduces the exact drift mechanism: pushAndCreatePR persists prNumber/prUrl
+// unconditionally, then attempts a CAS transition to pr_pending that requires
+// the item to still be "review". If some other concurrent, legitimate event
+// (simulated here by forcing the item to "in_progress" mid-flight) wins that
+// race, the item would previously be left stranded — real PR fields cached,
+// status not pr_pending, invisible to ReconcilePRPending forever. With the fix,
+// since nothing is actively working the item (no active session), it is
+// recovered back to pr_pending immediately rather than waiting for the next
+// reconcileDriftedPRItems tick.
+func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActiveSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	// The work session has already ended by the time pushAndCreatePR runs — the
+	// real precondition under which handleReviewSessionExited(PASS) calls it
+	// (workEntry.EndedAt != nil), and also what makes this item eligible for
+	// immediate recovery (no active session to defer to).
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	// Simulate the race: something else moves the item off "review" while
+	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
+	// are still in flight, before its resolveToPRPending call runs.
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/251", createNumber: 251}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
+		"item must be recovered to pr_pending immediately, not left stranded at in_progress with a live PR")
+	assert.Equal(t, 251, fetched.PrNumber)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/251", fetched.PrURL)
+	assert.Contains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessionExists
+// verifies the safety guard: if a new session is actively working the item by
+// the time the CAS loses its race, immediate recovery must NOT steal the item
+// out from under it — forcing status back to pr_pending here would fight a
+// legitimate in-flight rework/fix session exactly the way BUG-026 warns
+// against. The item is left at its drifted status; only the periodic
+// reconcileDriftedPRItems sweep (itself guarded identically) may ever recover
+// it, once that session ends.
+func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	_, err := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
+	// legitimately reopened it for rework — and is still active (no EndedAt).
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/252", createNumber: 252}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.pushAndCreatePR(ctx, item, is)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"must not force the item back to pr_pending while a new session is actively working it")
+	assert.Equal(t, 252, fetched.PrNumber, "PR fields are still persisted even though the status transition lost its race")
+	assert.NotContains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession is the
+// direct regression test for the periodic self-heal detector: an item with a
+// real, cached PR reference sitting at status="review" (matching the live
+// 2026-07-20 repro) with no active session must be found and transitioned back
+// to pr_pending.
+func TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	prURL := "https://github.com/tstapler/stelekit/pull/251"
+	prNumber := 251
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Drifted PR item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status,
+		"self-heal must anchor on the real PR reference and recover the item back to pr_pending")
+	assert.Equal(t, prNumber, fetched.PrNumber)
+	assert.Equal(t, prURL, fetched.PrURL)
+	assert.Contains(t, notifier.titles(), "Backlog item recovered from stuck state")
+}
+
+// TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists verifies
+// the safety guard directly against the detector: an item with a real PR
+// cached at status="in_progress" — the exact shape AutoReopenForPRFix produces
+// while a CI-fix session is legitimately in flight, still pushing new commits
+// to the same PR — must be left completely alone while that session is active.
+// Forcing it back to pr_pending mid-fix would reintroduce the pr_pending<->
+// in_progress churn AutoReopenForPRFix's own hasActiveWorkSession guard was
+// added to stop (see its doc comment).
+func TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	prURL := "https://github.com/tstapler/stapler-squad/pull/172"
+	prNumber := 172
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Mid-fix PR item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	// An active (not-yet-ended) work session — AutoReopenForPRFix's fix session
+	// still pushing to the same PR/branch.
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status,
+		"must not touch an item with an active work session mid-fix")
+	assert.Empty(t, notifier.calls, "must not notify about a recovery that never happened")
+}
+
+// TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR verifies the
+// query itself is scoped correctly: a "review"-status item with no PR yet
+// (genuinely mid-review, not drifted) must never be matched or touched by the
+// detector.
+func TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Healthy in-review item, no PR yet",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+		RepoPath:           "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileDriftedPRItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "must not touch a healthy item with no PR")
+	assert.Empty(t, notifier.calls)
+}
+
+// TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses verifies the
+// query's own status filter directly: items already in pr_pending (nothing to
+// recover), done, or archived must never be returned, even though they may
+// still carry PR fields.
+func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	for _, status := range []BacklogStatus{BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
+		prURL := "https://github.com/tstapler/stapler-squad/pull/900"
+		prNumber := 900
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:              "Terminal/pr_pending item " + string(status),
+			AcceptanceCriteria: `[]`,
+			Priority:           1,
+			Status:             string(status),
+			RepoPath:           "/tmp/fake-repo",
+		})
+		require.NoError(t, err)
+		_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+			PrURL:    &prURL,
+			PrNumber: &prNumber,
+		}, nil)
+		require.NoError(t, err)
+	}
+
+	items, err := er.FindDriftedPRItems(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, items, "pr_pending/done/archived items must never be treated as drifted")
+}
+
 // ─── handleReviewSessionExited ────────────────────────────────────────────────
 //
 // Review now always happens in a real, hidden session.Instance rather than a
@@ -1534,7 +1946,7 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 // worktree pushAndCreatePR can push) and a review ItemSession linking
 // reviewSessionUUID to the item. If verdict is non-nil, it is saved onto the
 // review ItemSession via SaveReviewVerdict before returning.
-func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict *ReviewVerdictData) (item *BacklogItemData, reviewIS ItemSessionSummary, workSessionName string) {
+func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict *ReviewVerdictData) (item *BacklogItemData, reviewIS ItemSessionSummary, workSessionName string, workIS ItemSessionSummary) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -1549,12 +1961,13 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict
 
 	workSessionUUID := uuid.New().String()
 	workSessionName = "handle-review-exited-work"
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	createdWorkIS, err := storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: SessionRoleWork,
 	})
 	require.NoError(t, err)
+	workIS = createdWorkIS
 
 	inst := newTestInstance(workSessionName)
 	inst.UUID = workSessionUUID
@@ -1580,24 +1993,34 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *Storage, verdict
 		SessionUUID:   reviewSessionUUID,
 		Role:          SessionRoleReview,
 	}
-	return createdItem, reviewIS, workSessionName
+	return createdItem, reviewIS, workSessionName, workIS
 }
 
-// TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR verifies that a PASS
-// verdict drives pushAndCreatePR using the correct (most recent) work
+// TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR
+// verifies the pushAndCreatePR backstop when no OneShotShipRunner is wired
+// (the shape of every constructor except production's SetOneShotShipRunner
+// call): when the work session that earned the PASS verdict has already
+// exited (EndedAt set — it crashed, was killed, or hit a turn cap before it
+// could poll for the verdict and ship the PR itself via /backlog/ship),
+// handleReviewSessionExited -> shipViaAgentOrFallback falls back to the
+// mechanical push path directly, using the correct (most recent) work
 // ItemSessionSummary — proven here by asserting the PR-creator factory is
 // invoked with that work session's sessionName, and that the item ends up in
-// pr_pending.
-func TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR(t *testing.T) {
+// pr_pending. See TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush
+// below for the now-primary case (an OneShotShipRunner wired and succeeding),
+// and the sibling test after this one for a still-live work session, where
+// this backstop must NOT fire at all.
+func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	item, reviewIS, workSessionName := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	item, reviewIS, workSessionName, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
 
 	listener := NewBacklogLifecycleListener(storage)
 	var capturedSessionName string
@@ -1607,14 +2030,264 @@ func TestHandleReviewSessionExited_Pass_InvokesPushAndCreatePR(t *testing.T) {
 		return fakeCreator
 	})
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
-	assert.True(t, fakeCreator.pushCalled, "PASS verdict must drive a push via pushAndCreatePR")
+	assert.True(t, fakeCreator.pushCalled, "PASS verdict with no live work session must fall back to pushAndCreatePR")
 	assert.Equal(t, workSessionName, capturedSessionName, "pushAndCreatePR must be invoked with the work session's own worktree, not some other session's")
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+}
+
+// TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush
+// verifies the primary new path this fix adds: when an OneShotShipRunner is
+// wired and it successfully produces a PR URL, handleReviewSessionExited's
+// PASS branch (ended work session) ships via the agent-driven one-shot
+// /backlog/ship prompt instead of the mechanical pushAndCreatePR path, and
+// the item transitions to pr_pending with the PR fields recorded.
+func TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/1", createNumber: 1}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{prURL: "https://github.com/tstapler/stapler-squad/pull/42"}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "one-shot ship must be attempted exactly once")
+	assert.Equal(t, workIS.SessionUUID, runner.calls[0].SessionID, "one-shot ship must run against the work session's own worktree")
+	assert.Equal(t, agentShipPrompt, runner.calls[0].Prompt)
+	assert.False(t, fakeCreator.pushCalled, "successful one-shot ship must skip the mechanical push path entirely")
+	assert.False(t, fakeCreator.createCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/42", fetched.PrURL)
+	assert.Equal(t, 42, fetched.PrNumber)
+}
+
+// TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush
+// verifies the documented "try the agent first, fall back to the mechanical
+// path if that fails outright" policy: when the wired OneShotShipRunner
+// returns an error (e.g. the session's Instance is no longer tracked live),
+// shipViaAgentOrFallback still reaches pushAndCreatePR so the PR gets created
+// one way or another rather than leaving the item stranded.
+func TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: instance no longer tracked live")}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "one-shot ship must still be attempted before falling back")
+	assert.True(t, fakeCreator.pushCalled, "a failed one-shot attempt must fall back to the mechanical push path")
+	assert.True(t, fakeCreator.createCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "the mechanical fallback must still successfully ship the PR")
+}
+
+// TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPush
+// covers the case where RunOneShotForSession returns (nil error, empty URL) —
+// the one-shot call ran but the agent's output never included a parseable PR
+// link (see extractPRURL). This must be treated the same as an outright error,
+// not silently accepted as "nothing to do".
+func TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPush(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{prURL: ""}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	assert.True(t, fakeCreator.pushCalled, "an empty PR URL from a successful one-shot call must still fall back to the mechanical path")
+}
+
+// TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone verifies
+// this fix does not regress pushAndCreatePR's pre-existing fallbackToDone
+// behavior: when there is no worktree recorded for the work session at all
+// (not even a storage row — the true "genuinely nothing to ship" case),
+// shipViaAgentOrFallback's one-shot attempt fails fast and falls through to
+// pushAndCreatePR, which still reaches the exact same done transition it
+// always has. See TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive
+// for the forcePush crash-recovery variant of this same scenario.
+func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "No worktree recorded test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+	// Deliberately no storage.SaveInstances call — no Instance/worktree exists
+	// for this session at all, matching newStuckReviewTestItem's fixture shape.
+
+	reviewSessionUUID := uuid.New().String()
+	reviewISData, err := storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: reviewSessionUUID,
+		SessionRole: SessionRoleReview,
+	}, ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, err)
+	reviewIS := ItemSessionSummary{
+		ID:            reviewISData.ID,
+		BacklogItemID: item.ID,
+		SessionUUID:   reviewSessionUUID,
+		Role:          SessionRoleReview,
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: no worktree")}
+	listener.SetOneShotShipRunner(runner)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "genuinely nothing to ship must still resolve via pushAndCreatePR's pre-existing fallbackToDone, unchanged by this fix")
+}
+
+// TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilentlyDrop
+// covers the "true last-resort" case this fix must not regress into a silent
+// drop: a worktree row still exists in storage, but the agent-driven one-shot
+// attempt fails (e.g. the session's Instance is no longer live) AND the
+// mechanical fallback also fails (e.g. the worktree directory itself was
+// cleaned up from disk — simulated here via a PushBranch error, the same
+// failure shape pushAndCreatePR's own push-failure tests use). The PASS
+// verdict must not be silently discarded: the item stays in review (never
+// done) and an operator notification fires via the existing
+// StuckReasonPushFailed / stayInReviewAndNotify machinery.
+func TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilentlyDrop(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{pushErr: errors.New("fatal: '/worktrees/handle-review-exited-work' does not exist")}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+	runner := &fakeOneShotShipRunner{err: errors.New("session not found: instance no longer tracked live")}
+	listener.SetOneShotShipRunner(runner)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	require.Len(t, runner.calls, 1, "the agent-driven path must be attempted first")
+	assert.True(t, fakeCreator.pushCalled, "the mechanical backstop must be attempted after the one-shot attempt fails")
+	assert.False(t, fakeCreator.createCalled, "CreatePR must not be attempted after a push failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "PASS verdict must not be silently dropped — item stays in review, not done, when nothing could actually be shipped")
+	assert.Contains(t, notifier.titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing")
+}
+
+// TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR
+// verifies the new primary path: when the work session that earned the PASS
+// verdict is still alive (EndedAt nil — it stays running and polls
+// get_backlog_item/backlog status per taskProtocolBlock rules 8-9), the
+// mechanical pushAndCreatePR path must NOT fire. The live agent is expected to
+// discover the PASS verdict on its next poll and run /backlog/ship itself,
+// which drives /github:pr-ship — see session/backlog_context.go and
+// server/mcp/tools_backlog.go for the instruction text a live session reads.
+// The item must stay in "review" (not pr_pending) so the agent-driven path has
+// something to act on.
+func TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCreatePR(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+		OverallOutcome: ReviewVerdictPass,
+		PerCriterion:   `[]`,
+		Summary:        "all good",
+	})
+
+	listener := NewBacklogLifecycleListener(storage)
+	fakeCreator := &fakePRCreator{createURL: "https://github.com/tstapler/stapler-squad/pull/9", createNumber: 9}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return fakeCreator
+	})
+
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
+
+	assert.False(t, fakeCreator.pushCalled, "PASS verdict with a live work session must leave PR creation to the agent, not push mechanically")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review so the live agent's /backlog/ship has something to act on")
 }
 
 // TestHandleReviewSessionExited_Fail_InvokesAutoReopener verifies that a FAIL
@@ -1625,7 +2298,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",
@@ -1639,7 +2312,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 		return fakeCreator
 	})
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
 	case gotItemID := <-reopener.called:
@@ -1659,7 +2332,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	defer cleanup()
 	ctx := context.Background()
 
-	_, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
+	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
 	reopener := newFakeAutoReopenSpawner()
@@ -1667,7 +2340,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	notifier := &fakeNotifier{}
 	listener.SetNotifier(notifier)
 
-	listener.handleReviewSessionExited(ctx, reviewIS)
+	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
 	case <-reopener.called:
@@ -1686,7 +2359,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	_, reviewIS, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
+	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &ReviewVerdictData{
 		OverallOutcome: ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",
@@ -1782,4 +2455,288 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	for _, s := range sessions {
 		assert.NotEqual(t, SessionRoleReview, s.Role, "no review ItemSession should be created when only a headless pool (no session creator) is configured")
 	}
+}
+
+// --- Story 3.3.1: CaptureShipSnapshot ---
+
+// runGitTestCmd runs `git <args...>` in dir, failing the test on error. Test-only
+// helper — CaptureShipSnapshot itself never shells out (it calls
+// git.FileStatsBetween, which is go-git-based per
+// .claude/rules/prefer-go-git-over-subshells.md); this just builds fixture repo
+// data for FileStatsBetween to read.
+func runGitTestCmd(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	fullArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.Command("git", fullArgs...) //nolint:norawexec // test helper, blocking CombinedOutput, no zombie risk
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}
+
+// setupShipSnapshotTestRepo creates a minimal two-commit git repository on disk
+// and returns its path plus the base and head commit SHAs, so
+// git.FileStatsBetween(repoPath, baseSHA, headSHA) has real diff data to compute
+// stats from. The second commit adds one new file (feature.txt), giving
+// FileStatsBetween exactly one FileStat entry to report.
+func setupShipSnapshotTestRepo(t *testing.T) (repoPath, baseSHA, headSHA string) {
+	t.Helper()
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	baseSHA = strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("line1\nline2\nline3\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature commit")
+	headSHA = strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	return dir, baseSHA, headSHA
+}
+
+// newShipSnapshotTestItem creates a pr_pending BacklogItem with repoPath and a
+// PR number set, mirroring newPRPendingTestItem but parameterized on repoPath
+// so CaptureShipSnapshot tests can point it at a real fixture git repo (unlike
+// newPRPendingTestItem's placeholder "/tmp/fake-repo", which is fine for tests
+// that never reach FileStatsBetween but not for these).
+func newShipSnapshotTestItem(t *testing.T, storage *Storage, repoPath string, prNumber int) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Ship snapshot test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           repoPath,
+	})
+	require.NoError(t, err)
+
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/9001"
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	return updated
+}
+
+// TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBothGroupsSucceed
+// verifies the happy path (Task 3.3.1a/b/c): when both the GitHub-data group
+// (from prStatus) and the file-stats group (from FileStatsBetween) succeed,
+// CaptureShipSnapshot writes all 6 durable snapshot fields via a single
+// UpdateBacklogItem call, with ShippedSnapshotCaptureFailed left false.
+// "BeforeDoneTransition" ordering itself is covered directly by
+// TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged
+// below; this test locks in CaptureShipSnapshot's own field-writing contract.
+func TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBothGroupsSucceed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	repoPath, baseSHA, headSHA := setupShipSnapshotTestRepo(t)
+	item := newShipSnapshotTestItem(t, storage, repoPath, 9001)
+
+	prStatus := &git.PRStatus{ApprovedCount: 2, ChangesRequestedCount: 0, CIFailing: false}
+	lastWork := &ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
+	wt := &GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
+
+	err := CaptureShipSnapshot(ctx, storage, item, prStatus, lastWork, wt)
+	require.NoError(t, err, "CaptureShipSnapshot must never return an error")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
+	assert.Equal(t, 2, fetched.ShippedApprovedCount)
+	assert.Equal(t, 0, fetched.ShippedChangesReqCount)
+	require.NotNil(t, fetched.ShippedSnapshotAt, "ShippedSnapshotAt must be set when at least one group succeeds")
+	assert.False(t, fetched.ShippedSnapshotCaptureFailed, "both groups succeeded — capture-failed must be false")
+	require.NotEmpty(t, fetched.ShippedFileStats)
+
+	var stats []git.FileStat
+	require.NoError(t, json.Unmarshal([]byte(fetched.ShippedFileStats), &stats))
+	require.Len(t, stats, 1, "only feature.txt changed between base and head")
+	assert.Equal(t, "feature.txt", stats[0].Path)
+}
+
+// TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBetweenFailsIndependently
+// is a table test covering Task 3.3.1e's three independent-failure rows: (1)
+// FileStatsBetween fails but prStatus maps successfully — the GitHub fields must
+// survive; (2) the mirror case, prStatus == nil but FileStatsBetween succeeds —
+// the file-stats field must survive; (3) both groups fail — the done transition
+// (exercised separately by the integration test) is still never blocked, and
+// ShippedSnapshotCaptureFailed is set with no field ever holding the string
+// "failed".
+func TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBetweenFailsIndependently(t *testing.T) {
+	repoPath, baseSHA, headSHA := setupShipSnapshotTestRepo(t)
+	const badSHA = "0000000000000000000000000000000000000000"
+
+	tests := []struct {
+		name                 string
+		prStatus             *git.PRStatus
+		baseSHA              string
+		wantGithubWritten    bool
+		wantFileStatsWritten bool
+	}{
+		{
+			name:                 "FileStatsBetween fails, github group succeeds",
+			prStatus:             &git.PRStatus{ApprovedCount: 3, ChangesRequestedCount: 1, CIFailing: true},
+			baseSHA:              badSHA,
+			wantGithubWritten:    true,
+			wantFileStatsWritten: false,
+		},
+		{
+			name:                 "prStatus nil, file-stats group succeeds",
+			prStatus:             nil,
+			baseSHA:              baseSHA,
+			wantGithubWritten:    false,
+			wantFileStatsWritten: true,
+		},
+		{
+			name:                 "both groups fail",
+			prStatus:             nil,
+			baseSHA:              badSHA,
+			wantGithubWritten:    false,
+			wantFileStatsWritten: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			item := newShipSnapshotTestItem(t, storage, repoPath, 9002)
+			lastWork := &ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
+			wt := &GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
+
+			err := CaptureShipSnapshot(ctx, storage, item, tt.prStatus, lastWork, wt)
+			require.NoError(t, err, "CaptureShipSnapshot must never return an error, even when both groups fail")
+
+			fetched, ferr := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, ferr)
+
+			if tt.wantGithubWritten {
+				assert.Equal(t, "failure", fetched.ShippedCheckConclusion)
+				assert.Equal(t, tt.prStatus.ApprovedCount, fetched.ShippedApprovedCount)
+				assert.Equal(t, tt.prStatus.ChangesRequestedCount, fetched.ShippedChangesReqCount)
+			} else {
+				assert.Empty(t, fetched.ShippedCheckConclusion, "github group failed — ShippedCheckConclusion must stay unset")
+				assert.Zero(t, fetched.ShippedApprovedCount)
+				assert.Zero(t, fetched.ShippedChangesReqCount)
+			}
+			// Never a sentinel string — reserved for genuine CI-conclusion values.
+			assert.NotEqual(t, "failed", fetched.ShippedCheckConclusion)
+
+			if tt.wantFileStatsWritten {
+				require.NotEmpty(t, fetched.ShippedFileStats)
+				var stats []git.FileStat
+				require.NoError(t, json.Unmarshal([]byte(fetched.ShippedFileStats), &stats))
+				require.Len(t, stats, 1)
+			} else {
+				assert.Empty(t, fetched.ShippedFileStats, "file-stats group failed — ShippedFileStats must stay unset")
+			}
+
+			// This test's every row has at least one group fail, so
+			// ShippedSnapshotCaptureFailed must always be true here.
+			assert.True(t, fetched.ShippedSnapshotCaptureFailed)
+
+			// ShippedSnapshotAt is set whenever at least one group succeeded
+			// (Task 3.3.1c); only the both-fail row has neither succeed.
+			if tt.wantGithubWritten || tt.wantFileStatsWritten {
+				assert.NotNil(t, fetched.ShippedSnapshotAt, "at least one group succeeded — ShippedSnapshotAt must be set")
+			}
+		})
+	}
+}
+
+// TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged
+// is the integration test: a real ent-backed Storage, a seeded pr_pending item,
+// and a merged PR faked at the existing prPendingChecker seam
+// (SetPRPendingCheckerFactory). After ReconcilePRPending returns,
+// BacklogItem.ShippedSnapshotAt must be non-nil and Status must be
+// BacklogStatusDone — asserted structurally (no time.Sleep/polling), since
+// CaptureShipSnapshot runs synchronously on the same goroutine, strictly before
+// the TransitionBacklogItemStatus call in the same `if merged` block.
+func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_WhenPRMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9003)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: true,
+		status: &git.PRStatus{ApprovedCount: 1, ChangesRequestedCount: 0, CIFailing: false},
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+	require.NotNil(t, fetched.ShippedSnapshotAt, "CaptureShipSnapshot must have run and captured at least the GitHub group before the done transition")
+	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
+	assert.Equal(t, 1, fetched.ShippedApprovedCount)
+}
+
+// TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged is the call-site
+// regression test for wiring CleanupBacklogContextFile/CleanupSlashCommands into
+// production: previously these functions had zero call sites. Once an item's
+// last work session's worktree is known and its PR merges, ReconcilePRPending
+// must remove the leftover .backlog-context.md and .claude/commands/backlog/
+// scaffolding from that worktree — ship.md's "must still exist" constraint
+// (see CleanupSlashCommands' doc comment) no longer applies once the PR is
+// merged and the item has reached done.
+func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 9010)
+
+	worktreePath := t.TempDir()
+	contextPath := filepath.Join(worktreePath, ".backlog-context.md")
+	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
+	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
+	statusPath := filepath.Join(cmdDir, "status.md")
+	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
+
+	inst := newTestInstance("pr-pending-worktree")
+	inst.UUID = uuid.New().String()
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: true,
+		status: &git.PRStatus{ApprovedCount: 1},
+	})
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+
+	_, statErr := os.Stat(contextPath)
+	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up once the item reaches done")
+	_, statErr = os.Stat(statusPath)
+	assert.True(t, os.IsNotExist(statErr), "slash command files must be cleaned up once the item reaches done")
 }

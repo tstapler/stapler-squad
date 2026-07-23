@@ -7,6 +7,8 @@ type EventType = pkgevents.EventType
 type Event = pkgevents.Event
 type EventBus = pkgevents.EventBus
 type Subscriber = pkgevents.Subscriber
+type BacklogChangeKind = pkgevents.BacklogChangeKind
+type BacklogItemEventPayload = pkgevents.BacklogItemEventPayload
 
 // Constants
 const (
@@ -17,6 +19,18 @@ const (
 	EventSessionAcknowledged = pkgevents.EventSessionAcknowledged
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
 	EventNotification        = pkgevents.EventNotification
+	EventBacklogItemChanged  = pkgevents.EventBacklogItemChanged
+)
+
+// BacklogChangeKind constants (mirrors pkg/events/types.go).
+const (
+	BacklogChangeStatusTransition      = pkgevents.BacklogChangeStatusTransition
+	BacklogChangeVerdictRecorded       = pkgevents.BacklogChangeVerdictRecorded
+	BacklogChangeSessionAttached       = pkgevents.BacklogChangeSessionAttached
+	BacklogChangeItemUpdated           = pkgevents.BacklogChangeItemUpdated
+	BacklogChangeItemArchived          = pkgevents.BacklogChangeItemArchived
+	BacklogChangeItemRemoved           = pkgevents.BacklogChangeItemRemoved
+	BacklogChangeTriageProgressUpdated = pkgevents.BacklogChangeTriageProgressUpdated
 )
 
 // Constructor functions (var allows assignment but is callable with identical syntax)
@@ -31,4 +45,5 @@ var (
 	NewSessionAcknowledgedEvent         = pkgevents.NewSessionAcknowledgedEvent
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
 	NewNotificationEvent                = pkgevents.NewNotificationEvent
+	NewBacklogItemChangedEvent          = pkgevents.NewBacklogItemChangedEvent
 )

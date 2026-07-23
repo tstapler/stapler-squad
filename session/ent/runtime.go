@@ -173,16 +173,32 @@ func init() {
 	backlogitemDescPlanApproved := backlogitemFields[12].Descriptor()
 	// backlogitem.DefaultPlanApproved holds the default value on creation for the plan_approved field.
 	backlogitem.DefaultPlanApproved = backlogitemDescPlanApproved.Default.(bool)
+	// backlogitemDescQueuedAutonomous is the schema descriptor for queued_autonomous field.
+	backlogitemDescQueuedAutonomous := backlogitemFields[15].Descriptor()
+	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
+	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[21].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[23].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
+	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
+	backlogitemDescShippedApprovedCount := backlogitemFields[25].Descriptor()
+	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
+	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
+	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
+	backlogitemDescShippedChangesReqCount := backlogitemFields[26].Descriptor()
+	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
+	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
+	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[29].Descriptor()
+	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
+	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[22].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[23].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[32].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -229,6 +245,10 @@ func init() {
 	backlogstuckstateDescLastCheckedAt := backlogstuckstateFields[4].Descriptor()
 	// backlogstuckstate.DefaultLastCheckedAt holds the default value on creation for the last_checked_at field.
 	backlogstuckstate.DefaultLastCheckedAt = backlogstuckstateDescLastCheckedAt.Default.(func() time.Time)
+	// backlogstuckstateDescRemediationAttempts is the schema descriptor for remediation_attempts field.
+	backlogstuckstateDescRemediationAttempts := backlogstuckstateFields[9].Descriptor()
+	// backlogstuckstate.DefaultRemediationAttempts holds the default value on creation for the remediation_attempts field.
+	backlogstuckstate.DefaultRemediationAttempts = backlogstuckstateDescRemediationAttempts.Default.(int32)
 	// backlogstuckstateDescID is the schema descriptor for id field.
 	backlogstuckstateDescID := backlogstuckstateFields[0].Descriptor()
 	// backlogstuckstate.DefaultID holds the default value on creation for the id field.

@@ -56,7 +56,18 @@ func validateUUID(id string) error {
 const (
 	ErrPermissionDenied = "PERMISSION_DENIED"
 	ErrItemNotFound     = "ITEM_NOT_FOUND"
+	ErrFeatureDisabled  = "FEATURE_DISABLED"
 )
+
+// featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
+// is set and currently reports false. A nil enabledCheck means always-enabled
+// (used by tests that construct handlers directly without wiring the flag).
+func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
+	if enabledCheck != nil && !enabledCheck() {
+		return errResult(ErrFeatureDisabled, "the backlog feature is disabled", "Enable it via Settings → Features.")
+	}
+	return nil
+}
 
 // ReviewCompletionSignaler allows the MCP handler to stop an AutonomousDriver
 // after submit_review_verdict completes. The stop call is belt-and-suspenders;
@@ -82,12 +93,16 @@ type backlogHandlers struct {
 	store         session.InstanceStore
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
 	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
 }
 
 // --- get_backlog_item ---
 
 func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	args := req.GetArguments()
 	itemID, ok := args["item_id"].(string)
 	if !ok || itemID == "" {
@@ -136,6 +151,30 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("\n\n")
 	}
 
+	// Latest review verdict, if one has been submitted. This is the primary way a
+	// still-running work session discovers review feedback without being killed and
+	// respawned — see request_review's guidance below.
+	if verdict := latestReviewVerdict(ctx, h.storage, itemID); verdict != nil {
+		sb.WriteString("## Latest Review Verdict\n")
+		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
+		if verdict.Summary != "" {
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", session.SanitizeForAgentContext(verdict.Summary, 500))
+		}
+		var perCriterion []session.CriterionVerdict
+		if verdict.PerCriterion != "" {
+			if jsonErr := json.Unmarshal([]byte(verdict.PerCriterion), &perCriterion); jsonErr != nil {
+				log.WarningLog.Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
+			}
+		}
+		for _, v := range perCriterion {
+			if v.Outcome == session.ReviewOutcomePass {
+				continue
+			}
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, session.SanitizeForAgentContext(v.Evidence, 300))
+		}
+		sb.WriteString("\n")
+	}
+
 	// Role-aware workflow guidance: look up the caller's role if a session UUID is present.
 	role := ""
 	if callerUUID, ok := sessionUUIDFromContext(ctx); ok {
@@ -158,6 +197,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
+		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Wait a bit, then call get_backlog_item again — once a verdict lands it appears under \"Latest Review Verdict\" above. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Track how many times you've called request_review in this session (count your own calls in this conversation) — after %d cycles without a PASS, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -182,9 +222,30 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	return mcpgo.NewToolResultText(envelope), nil
 }
 
+// latestReviewVerdict returns the most recently submitted ReviewVerdict for the item,
+// or nil if none exists yet. ListItemSessions orders ascending by created_at, so the
+// last session carrying a verdict is the most recent one.
+func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *session.ReviewVerdictSummary {
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
+		return nil
+	}
+	var latest *session.ReviewVerdictSummary
+	for _, s := range sessions {
+		if s.ReviewVerdict != nil {
+			latest = s.ReviewVerdict
+		}
+	}
+	return latest
+}
+
 // --- report_progress ---
 
 func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
@@ -260,6 +321,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 // --- request_review ---
 
 func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -315,7 +379,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	// Transition item to review status (from in_progress only).
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition); transErr != nil {
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredBySystem); transErr != nil {
 		log.InfoLog.Printf("[mcp:request_review] transition to review failed: %v", transErr)
 		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
 	}
@@ -353,6 +417,9 @@ type verdictInput struct {
 }
 
 func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -481,6 +548,9 @@ func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, e
 // --- submit_triage_result ---
 
 func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil

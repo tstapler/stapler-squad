@@ -39,6 +39,19 @@ const (
 	defaultProgram = "proxy-claude"
 )
 
+// isWithinStateDir reports whether workDir is baseDir itself or a descendant of it.
+// A cwd inside stapler-squad's own state directory (e.g. a session worktree under
+// ~/.stapler-squad/workspaces/.../worktrees/...) hashes to a workspace distinct from
+// the one normally used from the project/home directory.
+func isWithinStateDir(workDir, baseDir string) bool {
+	if workDir == "" || baseDir == "" {
+		return false
+	}
+	workDir = filepath.Clean(workDir)
+	baseDir = filepath.Clean(baseDir)
+	return workDir == baseDir || strings.HasPrefix(workDir, baseDir+string(filepath.Separator))
+}
+
 // IsTestMode detects if the application is running in test/benchmark mode
 func IsTestMode() bool {
 
@@ -98,8 +111,9 @@ func IsIsolatedInstance() bool {
 //  1. Test directory override via STAPLER_SQUAD_TEST_DIR (for --test-mode flag)
 //  2. Explicit instance ID via STAPLER_SQUAD_INSTANCE environment variable
 //  3. Test mode auto-detection (automatic isolation for tests/benchmarks)
-//  4. Workspace-based isolation (default for production, per-directory state)
-//  5. Global shared state (fallback, backward compatibility)
+//  4. Preferred workspace from preference file (explicit switch via SwitchDatabase RPC)
+//  5. Per-directory workspace isolation, opt-in via STAPLER_SQUAD_WORKSPACE_MODE=true
+//  6. Global shared state (default)
 func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
@@ -151,7 +165,16 @@ func GetConfigDirForDir(dir string) (string, error) {
 		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
 	}
 
-	// Priority 3.5: Preferred workspace from preference file
+	return resolveDefaultConfigDir(dir, baseDir)
+}
+
+// resolveDefaultConfigDir implements Priority 4-6 of GetConfigDirForDir: preferred
+// workspace file, opt-in per-directory workspace isolation, then shared state.
+// Split out from GetConfigDirForDir so it can be tested directly — Priority 3
+// (test mode auto-detection) is always true inside a `go test` binary, which
+// would otherwise make this logic unreachable in tests.
+func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
+	// Priority 4: Preferred workspace from preference file
 	// Written by SwitchDatabase RPC; cleared automatically on removal.
 	// Skipped in test mode (above) so tests always get isolated state.
 	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
@@ -164,15 +187,29 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 4: Workspace-based isolation (production default)
-	// Can be disabled with STAPLER_SQUAD_WORKSPACE_MODE=false
-	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") != "false" {
+	// Priority 5: Per-directory workspace isolation — opt-in only.
+	// A single shared workspace is the default; per-cwd auto-isolation must be
+	// explicitly enabled with STAPLER_SQUAD_WORKSPACE_MODE=true. Switching between
+	// workspaces is meant to be an explicit user action (see SwitchDatabase RPC /
+	// the workspace switcher UI), not an automatic side effect of the cwd a process
+	// happens to be started from — the latter is what caused sessions to silently
+	// "disappear" when the binary was started from inside a worktree.
+	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") == "true" {
 		workDir := dir
 		var err error
 		if workDir == "" {
 			workDir, err = os.Getwd()
 		}
 		if err == nil && workDir != "" {
+			if isWithinStateDir(workDir, baseDir) {
+				// Running with a cwd inside stapler-squad's own state directory (e.g. a
+				// session worktree) hashes to a workspace distinct from the one the user
+				// normally works from, silently landing on an empty database that looks
+				// like all sessions vanished. Almost always means the binary was started
+				// manually from within a worktree instead of via the installed service.
+				log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+					"cwd", workDir, "state_dir", baseDir)
+			}
 			// Hash the workspace path for a stable, filesystem-safe identifier
 			hash := sha256.Sum256([]byte(workDir))
 			workspaceID := fmt.Sprintf("%x", hash[:8])
@@ -184,7 +221,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 5: Global shared state (fallback, backward compatibility)
+	// Priority 6: Global shared state (default)
 	return baseDir, nil
 }
 
@@ -262,6 +299,17 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
+	// loop will spawn for a single item before leaving it for manual review. 0 = use the
+	// default (20). Individual items can also override this via
+	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
+	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
+	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
+	// "in_progress" at the same time. 0 = use the default (2). Values above
+	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
+	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
+
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
 	// Default: 100_000.
@@ -473,6 +521,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
 }
 
+// BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
+// Uploaded images referenced from backlog item descriptions are stored here,
+// durably (unlike the 24h temp paste dir) since they're linked from persisted
+// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+}
+
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
 // If NewProjectBaseDir is empty, it defaults to "~/Projects" with ~ expanded.
 func (c *Config) NewProjectBaseDirOrDefault() (string, error) {
@@ -503,6 +563,43 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 		return 100_000
 	}
 	return c.AnalyticsMaxRows
+}
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
+// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
+// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
+// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
+// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
+// for otherwise-recoverable items. Genuinely stuck items still get caught — just
+// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
+// that need to go further still.
+func (c *Config) MaxAutoReworkIterationsOrDefault() int {
+	if c == nil || c.MaxAutoReworkIterations <= 0 {
+		return 20
+	}
+	return c.MaxAutoReworkIterations
+}
+
+// maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
+// or negative — 0 concurrency would wedge the queue forever).
+// maxConcurrentBacklogWorkItemsHardCeiling caps how high the setting can go even via a
+// modified frontend request, to guard against reintroducing the 2026-07-12 OOM.
+const (
+	maxConcurrentBacklogWorkItemsDefault     = 2
+	maxConcurrentBacklogWorkItemsHardCeiling = 10
+)
+
+// MaxConcurrentBacklogWorkItemsOrDefault returns the configured backlog work-item
+// concurrency cap, clamped to [1, maxConcurrentBacklogWorkItemsHardCeiling]. Falls back
+// to the default (2) if unset (<=0) or c is nil.
+func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
+	if c == nil || c.MaxConcurrentBacklogWorkItems <= 0 {
+		return maxConcurrentBacklogWorkItemsDefault
+	}
+	if c.MaxConcurrentBacklogWorkItems > maxConcurrentBacklogWorkItemsHardCeiling {
+		return maxConcurrentBacklogWorkItemsHardCeiling
+	}
+	return c.MaxConcurrentBacklogWorkItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,

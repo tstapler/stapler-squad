@@ -31,6 +31,12 @@ const (
 	FieldSnoozedUntil = "snoozed_until"
 	// FieldContext holds the string denoting the context field in the database.
 	FieldContext = "context"
+	// FieldRemediationAttempts holds the string denoting the remediation_attempts field in the database.
+	FieldRemediationAttempts = "remediation_attempts"
+	// FieldNextRemediationAt holds the string denoting the next_remediation_at field in the database.
+	FieldNextRemediationAt = "next_remediation_at"
+	// FieldGraceBootTime holds the string denoting the grace_boot_time field in the database.
+	FieldGraceBootTime = "grace_boot_time"
 	// EdgeItem holds the string denoting the item edge name in mutations.
 	EdgeItem = "item"
 	// Table holds the table name of the backlogstuckstate in the database.
@@ -55,6 +61,9 @@ var Columns = []string{
 	FieldResolvedAt,
 	FieldSnoozedUntil,
 	FieldContext,
+	FieldRemediationAttempts,
+	FieldNextRemediationAt,
+	FieldGraceBootTime,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -72,6 +81,8 @@ var (
 	DefaultFirstDetectedAt func() time.Time
 	// DefaultLastCheckedAt holds the default value on creation for the "last_checked_at" field.
 	DefaultLastCheckedAt func() time.Time
+	// DefaultRemediationAttempts holds the default value on creation for the "remediation_attempts" field.
+	DefaultRemediationAttempts int32
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -122,6 +133,21 @@ func BySnoozedUntil(opts ...sql.OrderTermOption) OrderOption {
 // ByContext orders the results by the context field.
 func ByContext(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldContext, opts...).ToFunc()
+}
+
+// ByRemediationAttempts orders the results by the remediation_attempts field.
+func ByRemediationAttempts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRemediationAttempts, opts...).ToFunc()
+}
+
+// ByNextRemediationAt orders the results by the next_remediation_at field.
+func ByNextRemediationAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNextRemediationAt, opts...).ToFunc()
+}
+
+// ByGraceBootTime orders the results by the grace_boot_time field.
+func ByGraceBootTime(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGraceBootTime, opts...).ToFunc()
 }
 
 // ByItemField orders the results by item field.

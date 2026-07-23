@@ -27,11 +27,21 @@ const abandonedReviewGrace = 15 * time.Minute
 
 // bounceThreshold is the minimum number of in_progress->review round trips
 // within bounceLookback (with no PASS verdict) that flags an item bouncing.
-// Reuses maxAutoReworkIterations' established "we've tried enough" value.
+// Chosen to match server/services/backlog_service_triage.go's default rework
+// cap (3), but is an independent constant, NOT read from config.Config — the
+// rework cap is now user-configurable (Settings → Defaults) while this one
+// isn't, so the two can drift. Session-package reconcilers have no config.Config
+// plumbed in today; wire that through if this ever needs to move in lockstep.
 const bounceThreshold = 3
 
 // bounceLookback bounds the bouncing detector to *active* thrashing.
 const bounceLookback = 24 * time.Hour
+
+// bounceMainBranch is the branch reconcileBouncingItems' shipped-without-a-PR
+// fallback checks a bouncing item's most recent work-session commit against.
+// Matches server/services/backlog_service_triage.go's prFixMainBranch — kept
+// as an independent constant since this package cannot import server/services.
+const bounceMainBranch = "main"
 
 // stuckPRReady reports whether a pr_ready_unmerged condition first observed
 // at firstDetected has held long enough (> prReadyThreshold) as of now to be
@@ -60,6 +70,63 @@ func staleWork(lastProgress, now time.Time) bool {
 // non-converging "bouncing" cycle (>= bounceThreshold and !hasPass).
 func isBouncing(cycleCount int, hasPass bool) bool {
 	return cycleCount >= bounceThreshold && !hasPass
+}
+
+// IsRepeatedFailure reports whether the two most recent review verdicts (most
+// recent first, as returned by Storage.GetRecentReviewVerdictSummaries) are a
+// non-PASS outcome paired with an identical summary — i.e. the last rework
+// attempt changed nothing about why the item failed. This catches a
+// fast-looping non-converging cycle (e.g. an infrastructure error like a
+// missing diff, reproduced on every attempt) well before bounceThreshold's
+// 3-cycles-in-24h window would, since a broken-worktree or similar
+// environment fault can otherwise burn through the entire rework cap in
+// minutes without ever changing outcome. Exported: called from
+// server/services across the package boundary (AutoReopenAfterFailedReview).
+func IsRepeatedFailure(recent []ReviewVerdictSummary) bool {
+	if len(recent) < 2 {
+		return false
+	}
+	latest, prior := recent[0], recent[1]
+	if latest.OverallOutcome == string(ReviewOutcomePass) {
+		return false
+	}
+	return latest.OverallOutcome == prior.OverallOutcome && latest.Summary != "" && latest.Summary == prior.Summary
+}
+
+// consecutiveNoVerdictReviewThreshold is how many consecutive review-role
+// ItemSessions with no ReviewVerdict row at all must be observed (most recent
+// first) before IsRepeatedNoVerdictFailure trips. Matches IsRepeatedFailure's
+// "two identical attempts in a row" threshold for consistency.
+const consecutiveNoVerdictReviewThreshold = 2
+
+// IsRepeatedNoVerdictFailure reports whether the most recent
+// consecutiveNoVerdictReviewThreshold review-role ItemSessions for an item
+// (ordered most-recent-first, one bool per session: true if that session ever
+// had a ReviewVerdict row written) all exited without ever calling
+// submit_review_verdict — a crash, kill, or turn-cap stop on the review side.
+//
+// IsRepeatedFailure alone is blind to this failure shape: it only ever sees
+// sessions returned by Storage.GetRecentReviewVerdictSummaries, which queries
+// itemsession.HasReviewVerdict() — a review session that never wrote a
+// verdict is invisible to that query entirely, so two (or twenty) such
+// sessions in a row never produce two comparable summaries and the breaker
+// can never trip. That gap let a live item bounce 78 times in 24h — with the
+// rework cap recently raised from 3 to 20, well out of reach — before catching
+// it (see docs/tasks/backlog-feature-improvement.md, 2026-07-19 update). A run
+// of verdict-less review exits carries the identical "nothing about this
+// attempt changed" signal as two matching-summary failures, so it's treated
+// the same way: stop the auto-reopen loop instead of burning through the
+// rework cap.
+func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
+	if len(hadVerdict) < consecutiveNoVerdictReviewThreshold {
+		return false
+	}
+	for _, v := range hadVerdict[:consecutiveNoVerdictReviewThreshold] {
+		if v {
+			return false
+		}
+	}
+	return true
 }
 
 // prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001

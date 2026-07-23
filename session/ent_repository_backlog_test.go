@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,4 +125,109 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	fetchedItem, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "full", fetchedItem.PipelineMode)
+}
+
+// TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields
+// is the ent-based equivalent of migration reversibility (Story 3.1.2 / Step 5 of
+// plan.md's Migration Plan): since ent's auto-migration is additive/optional-field
+// with no down-migration to execute, "reversible" is verified as "old rows are
+// unaffected and new/optional columns default safely."
+func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFields(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Assertion 1: a pre-existing row (created without setting any of the 6 new
+	// fields, simulating a row created before this migration landed) reads back
+	// all 6 fields at their nil/zero-value default.
+	preExisting, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item created before ship-snapshot fields existed",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, preExisting.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "", fetchedPre.ShippedCheckConclusion)
+	assert.Equal(t, 0, fetchedPre.ShippedApprovedCount)
+	assert.Equal(t, 0, fetchedPre.ShippedChangesReqCount)
+	assert.Nil(t, fetchedPre.ShippedSnapshotAt)
+	assert.Equal(t, "", fetchedPre.ShippedFileStats)
+	assert.False(t, fetchedPre.ShippedSnapshotCaptureFailed)
+
+	// Assertion 2: a round-trip write via the same UpdateBacklogItem call
+	// CaptureShipSnapshot uses sets a subset of the 6 fields on that same
+	// pre-existing row, and every field that existed on the row before this
+	// migration is left unchanged (confirming the additive column add did not
+	// disturb existing data).
+	preUpdateStatus := fetchedPre.Status
+	preUpdatePrNumber := fetchedPre.PrNumber
+	snapshotAt := time.Now().UTC().Truncate(time.Second)
+	approvedCount := 2
+	captureFailed := true
+	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID, BacklogItemUpdate{
+		ShippedSnapshotAt:            &snapshotAt,
+		ShippedApprovedCount:         &approvedCount,
+		ShippedSnapshotCaptureFailed: &captureFailed,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, preExisting.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.ShippedSnapshotAt)
+	assert.True(t, snapshotAt.Equal(*fetchedAfterUpdate.ShippedSnapshotAt))
+	assert.Equal(t, approvedCount, fetchedAfterUpdate.ShippedApprovedCount)
+	assert.True(t, fetchedAfterUpdate.ShippedSnapshotCaptureFailed)
+	assert.Equal(t, preUpdateStatus, fetchedAfterUpdate.Status, "existing Status must be unchanged by the additive-field update")
+	assert.Equal(t, preUpdatePrNumber, fetchedAfterUpdate.PrNumber, "existing PrNumber must be unchanged by the additive-field update")
+
+	// Assertion 3: a brand-new item created with none of the 6 fields explicitly
+	// set persists successfully with no NOT NULL constraint violation, confirming
+	// Optional() is honored end-to-end through the generated client.
+	fresh, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "brand-new item, no ship-snapshot fields set",
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, fresh.ID)
+}
+
+// TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedStorage
+// sets all 6 new fields via UpdateBacklogItem then reads them back via GetBacklogItem
+// against a real ent-backed Storage, confirming the ent_repository_backlog.go mapping
+// (both the update-builder and the read-mapper) round-trips correctly end-to-end.
+func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedStorage(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for full snapshot round-trip",
+	})
+	require.NoError(t, err)
+
+	checkConclusion := "success"
+	approvedCount := 3
+	changesReqCount := 1
+	snapshotAt := time.Now().UTC().Truncate(time.Second)
+	fileStats := `[{"path":"foo.go","status":1,"additions":5,"deletions":2}]`
+	captureFailed := false
+
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		ShippedCheckConclusion:       &checkConclusion,
+		ShippedApprovedCount:         &approvedCount,
+		ShippedChangesReqCount:       &changesReqCount,
+		ShippedSnapshotAt:            &snapshotAt,
+		ShippedFileStats:             &fileStats,
+		ShippedSnapshotCaptureFailed: &captureFailed,
+	}, nil)
+	require.NoError(t, err)
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, checkConclusion, fetched.ShippedCheckConclusion)
+	assert.Equal(t, approvedCount, fetched.ShippedApprovedCount)
+	assert.Equal(t, changesReqCount, fetched.ShippedChangesReqCount)
+	require.NotNil(t, fetched.ShippedSnapshotAt)
+	assert.True(t, snapshotAt.Equal(*fetched.ShippedSnapshotAt))
+	assert.Equal(t, fileStats, fetched.ShippedFileStats)
+	assert.False(t, fetched.ShippedSnapshotCaptureFailed)
 }

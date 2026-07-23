@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // backlogCommandsDir is the relative path from worktree root for slash command files.
@@ -28,6 +29,11 @@ const backlogCommandsDir = ".claude/commands/backlog"
 // instance (BacklogService.pipelineEngine) — passing two different engines would
 // reintroduce the "2 independent callers can drift" regression this seam closes.
 func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePath string) error {
+	// Self-heal before writing: if a prior version of this branch ever got any backlog
+	// scaffolding file committed (see git.ScaffoldingExcludePatterns), untrack it now so this
+	// spawn doesn't perpetuate the pollution forward. See selfHealWorktreeScaffolding's doc comment.
+	selfHealWorktreeScaffolding(worktreePath)
+
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 
 	var mkErr error
@@ -58,7 +64,6 @@ func WriteSlashCommands(engine PipelineEngine, item *BacklogItemData, worktreePa
 		}
 	}
 
-	addWorktreeExcludes(worktreePath)
 	return nil
 }
 
@@ -90,20 +95,39 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 	}
 
 	// review.md
-	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n", itemID)
+	files["review.md"] = fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
+		"Do NOT end your session after this. Wait a bit, then call get_backlog_item (or /backlog/status) again — "+
+		"the verdict appears under \"Latest Review Verdict\" once the reviewer submits it.\n\n"+
+		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
+		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
+		"of this task, not a separate step someone else does.\n\n"+
+		"FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Keep count of how "+
+		"many times you've run /backlog/review in THIS session (count your own calls in this conversation — "+
+		"nothing tracks it for you). After %d review cycles without a PASS, STOP looping: run /backlog/ship "+
+		"anyway to open a PR so a human can pick up the review directly, rather than retrying /backlog/review "+
+		"again.\n", itemID, MaxSameSessionReviewAttempts)
 
 	// ship.md
-	files["ship.md"] = "You are ready to ship your work as a pull request.\n\n" +
+	files["ship.md"] = "You are ready to ship your work as a pull request — either because /backlog/review just " +
+		"returned PASS, or because review has looped without reaching a PASS and it's time to hand the work to a " +
+		"human instead of retrying indefinitely.\n\n" +
 		"Before shipping, confirm all acceptance criteria are marked complete (`/backlog/status`).\n\n" +
 		"Steps:\n" +
 		"1. Create the pull request:\n" +
 		"   Run `/github:pr-ship` — this drives the PR through local CI, code review, remote CI, and\n" +
 		"   merge-conflict resolution. It will stop short of actually merging; the final merge is left to\n" +
 		"   the human reviewer.\n\n" +
-		"2. Once `/github:pr-ship` reports all gates green, request the automated review:\n" +
-		"   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.\n\n" +
-		"Note: if the repository has no GitHub remote, use `gh pr create --fill` to create the PR manually,\n" +
-		"then run `/backlog/review`.\n"
+		"2. Once `/github:pr-ship` reports all gates green: if this work has NOT already received a PASS " +
+		"verdict (i.e. you're shipping because review looped without converging, not because it passed), " +
+		"request the automated review with the PR number included:\n" +
+		"   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.\n" +
+		"   If review already returned PASS before you got here, skip this — running it again will fail (the " +
+		"   item is no longer `in_progress`), and there's nothing left for it to check.\n\n" +
+		"Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which\n" +
+		"just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format\n" +
+		"and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),\n" +
+		"`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).\n" +
+		"Then run `/backlog/review`.\n"
 
 	// help.md — list all available commands
 	var helpSb strings.Builder
@@ -122,6 +146,14 @@ func buildDefaultSlashCommandSet(item *BacklogItemData) (map[string]string, erro
 
 // CleanupSlashCommands removes the backlog slash command directory.
 // Logs but does not return an error if the directory is absent.
+//
+// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
+// merged and the item transitions to done — NOT from review exit or any earlier
+// teardown path. shipViaAgentOrFallback relies on ship.md still being present in the
+// worktree after a work session exits review, so it can re-invoke `/backlog/ship` as a
+// one-shot headless call; by the time ReconcilePRPending sees a merged PR, that flow has
+// already completed and ship.md is no longer needed. Also exported for direct/manual
+// invocation and exercised by tests.
 func CleanupSlashCommands(worktreePath string) error {
 	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
 	if err := os.RemoveAll(cmdDir); err != nil {
@@ -137,6 +169,9 @@ func CleanupSlashCommands(worktreePath string) error {
 // priorSessions must match what was passed to the live CLI prompt (BuildTokenBudgetedPrompt)
 // so the on-disk fallback the agent re-reads after context compaction doesn't lose history.
 func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionSummary, worktreePath string) error {
+	// Self-heal before writing: see WriteSlashCommands' identical call for why.
+	selfHealWorktreeScaffolding(worktreePath)
+
 	prompt := BuildSessionInitialPrompt(item, priorSessions)
 
 	var sb strings.Builder
@@ -160,12 +195,22 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
 	}
-	addWorktreeExcludes(worktreePath)
 	return nil
 }
 
 // CleanupBacklogContextFile removes .backlog-context.md from the worktree root.
 // Logs but does not fail if the file is absent.
+//
+// Called from ReconcilePRPending (session/backlog_lifecycle.go) once an item's PR has
+// merged and the item transitions to done. Worktree teardown (Instance.Kill, Instance.Pause)
+// often already removes the entire worktree directory by that point, so this is frequently a
+// no-op — the file is untracked anyway (via addWorktreeExcludes + selfHealWorktreeScaffolding
+// + the commit-time staging guard), so it never appears in a git diff/PR regardless of how
+// long it lingers on disk. Kept as a best-effort cleanup for the case where the worktree is
+// still around, and exported for direct/manual invocation and exercised by tests. Do not wire
+// this into a review-exit or ship-time teardown path — see CleanupSlashCommands' doc comment
+// for why (ship.md in particular is deliberately relied on to still exist after a work session
+// ends, until the PR actually merges).
 func CleanupBacklogContextFile(worktreePath string) error {
 	path := filepath.Join(worktreePath, ".backlog-context.md")
 	if err := os.Remove(path); err != nil {
@@ -182,14 +227,6 @@ func writeFile(path, content string) error {
 		return fmt.Errorf("writeFile: failed to write %s: %w", path, err)
 	}
 	return nil
-}
-
-// backlogExcludePatterns are the git exclude patterns for all files stapler-squad
-// writes into worktrees. These must never be committed to the target repo.
-var backlogExcludePatterns = []string{
-	".backlog-context.md",
-	".claude/commands/backlog/",
-	"web-app/.next/",
 }
 
 // addWorktreeExcludes writes backlog-generated file patterns to
@@ -226,9 +263,30 @@ func addWorktreeExcludes(worktreePath string) {
 	}
 	defer f.Close()
 
-	for _, p := range backlogExcludePatterns {
+	for _, p := range git.ScaffoldingExcludePatterns {
 		if !strings.Contains(existing, p) {
 			fmt.Fprintln(f, p)
 		}
 	}
+}
+
+// selfHealWorktreeScaffolding is called at the start of every backlog scaffolding write
+// (WriteSlashCommands, WriteBacklogContextFile). It closes the gap that $GIT_DIR/info/exclude
+// and a tracked .gitignore entry both share: neither stops a file that is ALREADY tracked in
+// the branch's history from continuing to be committed by a later broad `git add`/`git commit
+// -a`. Untracking here means a branch that got one of these files committed once — however it
+// happened — self-heals the next time stapler-squad spawns/reattaches/reopens a session on it,
+// instead of requiring a manual "untrack" commit (this repo's own history has ~20 of those; see
+// git.ScaffoldingExcludePatterns and the PR that added this function for the full incident
+// history). GitWorktree.StageAllExceptScaffolding (session/git/worktree_git.go) is the
+// complementary guard that closes the same gap at commit time, for scaffolding that gets
+// tracked mid-session rather than inherited from a stale branch.
+func selfHealWorktreeScaffolding(worktreePath string) {
+	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
+	if err != nil {
+		log.WarningLog.Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+	} else if len(removed) > 0 {
+		log.InfoLog.Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+	}
+	addWorktreeExcludes(worktreePath)
 }

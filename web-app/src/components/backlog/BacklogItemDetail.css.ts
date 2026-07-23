@@ -35,6 +35,17 @@ export const scrollArea = style({
   gap: vars.space["4"],
 });
 
+// Epic 6.4: houses the edit-mode buffered-update/save-conflict InlineNotice.
+// Deliberately a sibling of `scrollArea` (flexShrink: 0), not a child of it —
+// a long form can scroll the banner's original position out of view, which
+// would defeat the point of a non-blocking-but-still-visible notice about a
+// concurrent server-side change (design/ux.md §6). Pinning it here keeps it
+// visible the same way `header` above it is, without making it a modal/toast.
+export const bannerBar = style({
+  flexShrink: 0,
+  padding: `${vars.space["3"]} ${vars.space["4"]} 0`,
+});
+
 export const errorBanner = style({
   display: "flex",
   alignItems: "flex-start",
@@ -498,8 +509,9 @@ export const workflowTimeline = style({
 
 export const workflowEvent = style({
   display: "flex",
-  alignItems: "baseline",
-  gap: vars.space["3"],
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["1"],
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   position: "relative",
   fontSize: vars.fontSize.sm,
@@ -515,6 +527,21 @@ export const workflowEvent = style({
     background: vars.color.borderSubtle,
     border: `2px solid ${vars.color.modalBackground}`,
   },
+});
+
+export const workflowEventRow = style({
+  display: "flex",
+  alignItems: "baseline",
+  gap: vars.space["3"],
+  flexWrap: "wrap",
+  width: "100%",
+});
+
+export const workflowEventNote = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontStyle: "italic",
+  width: "100%",
 });
 
 export const workflowEventFrom = style({
@@ -600,6 +627,56 @@ export const workflowEventMeta = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.xs,
   whiteSpace: "nowrap",
+});
+
+export const progressNoteList = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 0,
+});
+
+export const progressNoteItem = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} ${vars.space["2"]}`,
+  borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  fontSize: vars.fontSize.sm,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+    },
+  },
+});
+
+export const progressNoteMeta = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const verdictDetail = style({
+  marginTop: vars.space["1"],
+  padding: vars.space["2"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+});
+
+export const verdictSummary = style({
+  color: vars.color.textPrimary,
+});
+
+export const verdictCriterion = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "flex-start",
+  color: vars.color.textMuted,
 });
 
 export const loadingState = style({

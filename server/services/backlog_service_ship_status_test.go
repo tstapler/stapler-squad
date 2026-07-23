@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // attachWorkSessionWithCommit creates a work ItemSession for item, records
@@ -202,4 +204,157 @@ func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommits
 	assert.Equal(t, headSHA, st.Commits[0].Sha, "newest commit must come first")
 	assert.Equal(t, "second commit", st.Commits[0].Summary)
 	assert.Equal(t, "first commit", st.Commits[1].Summary)
+}
+
+// snapshotBacklogItemUpdate builds a BacklogItemUpdate populating all 6 durable
+// ship-snapshot fields, mirroring what CaptureShipSnapshot (Epic 3.3, implemented
+// separately) writes via a single UpdateBacklogItem call.
+func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReqCount int, snapshotAt time.Time, fileStatsJSON string, captureFailed bool) session.BacklogItemUpdate {
+	return session.BacklogItemUpdate{
+		ShippedCheckConclusion:       &checkConclusion,
+		ShippedApprovedCount:         &approvedCount,
+		ShippedChangesReqCount:       &changesReqCount,
+		ShippedSnapshotAt:            &snapshotAt,
+		ShippedFileStats:             &fileStatsJSON,
+		ShippedSnapshotCaptureFailed: &captureFailed,
+	}
+}
+
+// TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil
+// covers Story 3.4.1's happy path: a fully populated durable snapshot on the
+// BacklogItem's 6 new columns must flow straight into the response, with the
+// JSON-encoded file stats decoded into ShippedFileStat entries.
+func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapshotAtNonNil(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a durable ship snapshot",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	attachWorkSessionWithCommit(t, storage, repo, item.ID, "snapshot-work", repoPath, repoPath, "main", sha)
+
+	fileStats := []git.FileStat{
+		{Path: "a.go", Status: "modified", Additions: 5, Deletions: 1},
+		{Path: "b.go", Status: "added", Additions: 10, Deletions: 0},
+		{Path: "c.go", Status: "deleted", Additions: 0, Deletions: 8},
+	}
+	encoded, err := json.Marshal(fileStats)
+	require.NoError(t, err)
+
+	snapshotAt := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, snapshotBacklogItemUpdate("success", 2, 0, snapshotAt, string(encoded), false), nil)
+	require.NoError(t, err)
+
+	resp, err := svc.GetBacklogItemShipStatus(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemShipStatusRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	st := resp.Msg.Status
+	assert.Empty(t, st.Error)
+	assert.Equal(t, "success", st.ShippedCheckConclusion)
+	assert.Equal(t, int32(2), st.ShippedApprovedCount)
+	assert.Equal(t, int32(0), st.ShippedChangesReqCount)
+	require.NotNil(t, st.SnapshotAt)
+	assert.True(t, snapshotAt.Equal(st.SnapshotAt.AsTime()), "expected %s, got %s", snapshotAt, st.SnapshotAt.AsTime())
+	assert.False(t, st.SnapshotCaptureFailed)
+	require.Len(t, st.FileStats, 3)
+	assert.Equal(t, "a.go", st.FileStats[0].Path)
+	assert.Equal(t, sessionv1.FileStatus_FILE_STATUS_MODIFIED, st.FileStats[0].Status)
+	assert.Equal(t, int32(5), st.FileStats[0].Additions)
+	assert.Equal(t, int32(1), st.FileStats[0].Deletions)
+	assert.Equal(t, "b.go", st.FileStats[1].Path)
+	assert.Equal(t, sessionv1.FileStatus_FILE_STATUS_ADDED, st.FileStats[1].Status)
+	assert.Equal(t, "c.go", st.FileStats[2].Path)
+	assert.Equal(t, sessionv1.FileStatus_FILE_STATUS_DELETED, st.FileStats[2].Status)
+}
+
+// TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt
+// is the architecture-review Concern fix: a corrupt/truncated ShippedFileStats blob
+// must not fail the whole RPC — it should log a Warning with the item ID and leave
+// FileStats empty while every other snapshot field still populates normally.
+func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJsonCorrupt(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a corrupt ship snapshot",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	attachWorkSessionWithCommit(t, storage, repo, item.ID, "corrupt-snapshot-work", repoPath, repoPath, "main", sha)
+
+	snapshotAt := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, snapshotBacklogItemUpdate("success", 1, 0, snapshotAt, "{not valid json", false), nil)
+	require.NoError(t, err)
+
+	buf := swapWarningLog(t)
+
+	resp, err := svc.GetBacklogItemShipStatus(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemShipStatusRequest{ItemId: item.ID}))
+	require.NoError(t, err, "a corrupt file-stats blob must not fail the RPC")
+	st := resp.Msg.Status
+	assert.Empty(t, st.Error)
+	assert.Empty(t, st.FileStats)
+	assert.Equal(t, "success", st.ShippedCheckConclusion, "other snapshot fields must still populate")
+	assert.Equal(t, int32(1), st.ShippedApprovedCount)
+	require.NotNil(t, st.SnapshotAt)
+	assert.True(t, snapshotAt.Equal(st.SnapshotAt.AsTime()))
+	assert.Contains(t, buf.String(), item.ID, "warning log must contain the backlog item ID")
+	assert.Contains(t, buf.String(), "failed to decode ShippedFileStats")
+}
+
+// TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage
+// is the integration case: a row written via UpdateBacklogItem (the same call
+// CaptureShipSnapshot, implemented separately in Epic 3.3, would make) against a real
+// ent-backed Storage, then read through the actual connect RPC handler — confirming the
+// full storage-to-RPC mapping path, not just handler logic against an in-memory value.
+func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage(t *testing.T) {
+	_, repoPath := setupPRFixSyncRepo(t)
+	sha := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "item with a snapshot captured by the real reconciler path",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	attachWorkSessionWithCommit(t, storage, repo, item.ID, "ent-storage-snapshot-work", repoPath, repoPath, "main", sha)
+
+	fileStats := []git.FileStat{{Path: "only.go", Status: "modified", Additions: 3, Deletions: 2}}
+	encoded, err := json.Marshal(fileStats)
+	require.NoError(t, err)
+	snapshotAt := time.Date(2026, 7, 17, 12, 30, 0, 0, time.UTC)
+
+	updated, err := storage.UpdateBacklogItem(t.Context(), item.ID, snapshotBacklogItemUpdate("failure", 1, 1, snapshotAt, string(encoded), false), nil)
+	require.NoError(t, err)
+	require.NotNil(t, updated.ShippedSnapshotAt, "write must have persisted to the real ent-backed row")
+
+	// Re-fetch through storage.GetBacklogItem directly to confirm the write actually
+	// round-tripped through ent before exercising the RPC handler on top of it.
+	persisted, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ShippedSnapshotAt)
+	assert.Equal(t, "failure", persisted.ShippedCheckConclusion)
+
+	resp, err := svc.GetBacklogItemShipStatus(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemShipStatusRequest{ItemId: item.ID}))
+	require.NoError(t, err)
+	st := resp.Msg.Status
+	assert.Empty(t, st.Error)
+	assert.Equal(t, "failure", st.ShippedCheckConclusion)
+	assert.Equal(t, int32(1), st.ShippedApprovedCount)
+	assert.Equal(t, int32(1), st.ShippedChangesReqCount)
+	require.NotNil(t, st.SnapshotAt)
+	assert.True(t, snapshotAt.Equal(st.SnapshotAt.AsTime()))
+	require.Len(t, st.FileStats, 1)
+	assert.Equal(t, "only.go", st.FileStats[0].Path)
 }

@@ -204,6 +204,34 @@ func (_c *BacklogItemCreate) SetNillablePlanApprovedAt(v *time.Time) *BacklogIte
 	return _c
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (_c *BacklogItemCreate) SetQueuedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetQueuedAt(v)
+	return _c
+}
+
+// SetNillableQueuedAt sets the "queued_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableQueuedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetQueuedAt(*v)
+	}
+	return _c
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (_c *BacklogItemCreate) SetQueuedAutonomous(v bool) *BacklogItemCreate {
+	_c.mutation.SetQueuedAutonomous(v)
+	return _c
+}
+
+// SetNillableQueuedAutonomous sets the "queued_autonomous" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableQueuedAutonomous(v *bool) *BacklogItemCreate {
+	if v != nil {
+		_c.SetQueuedAutonomous(*v)
+	}
+	return _c
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (_c *BacklogItemCreate) SetPlanArtifactsPath(v string) *BacklogItemCreate {
 	_c.mutation.SetPlanArtifactsPath(v)
@@ -312,6 +340,104 @@ func (_c *BacklogItemCreate) SetPrNumber(v int) *BacklogItemCreate {
 func (_c *BacklogItemCreate) SetNillablePrNumber(v *int) *BacklogItemCreate {
 	if v != nil {
 		_c.SetPrNumber(*v)
+	}
+	return _c
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (_c *BacklogItemCreate) SetShippedCheckConclusion(v string) *BacklogItemCreate {
+	_c.mutation.SetShippedCheckConclusion(v)
+	return _c
+}
+
+// SetNillableShippedCheckConclusion sets the "shipped_check_conclusion" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedCheckConclusion(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedCheckConclusion(*v)
+	}
+	return _c
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (_c *BacklogItemCreate) SetShippedApprovedCount(v int) *BacklogItemCreate {
+	_c.mutation.SetShippedApprovedCount(v)
+	return _c
+}
+
+// SetNillableShippedApprovedCount sets the "shipped_approved_count" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedApprovedCount(v *int) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedApprovedCount(*v)
+	}
+	return _c
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (_c *BacklogItemCreate) SetShippedChangesReqCount(v int) *BacklogItemCreate {
+	_c.mutation.SetShippedChangesReqCount(v)
+	return _c
+}
+
+// SetNillableShippedChangesReqCount sets the "shipped_changes_req_count" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedChangesReqCount(v *int) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedChangesReqCount(*v)
+	}
+	return _c
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (_c *BacklogItemCreate) SetShippedSnapshotAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetShippedSnapshotAt(v)
+	return _c
+}
+
+// SetNillableShippedSnapshotAt sets the "shipped_snapshot_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedSnapshotAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedSnapshotAt(*v)
+	}
+	return _c
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (_c *BacklogItemCreate) SetShippedFileStats(v string) *BacklogItemCreate {
+	_c.mutation.SetShippedFileStats(v)
+	return _c
+}
+
+// SetNillableShippedFileStats sets the "shipped_file_stats" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedFileStats(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedFileStats(*v)
+	}
+	return _c
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (_c *BacklogItemCreate) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemCreate {
+	_c.mutation.SetShippedSnapshotCaptureFailed(v)
+	return _c
+}
+
+// SetNillableShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableShippedSnapshotCaptureFailed(v *bool) *BacklogItemCreate {
+	if v != nil {
+		_c.SetShippedSnapshotCaptureFailed(*v)
+	}
+	return _c
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (_c *BacklogItemCreate) SetReworkCapOverride(v int) *BacklogItemCreate {
+	_c.mutation.SetReworkCapOverride(v)
+	return _c
+}
+
+// SetNillableReworkCapOverride sets the "rework_cap_override" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableReworkCapOverride(v *int) *BacklogItemCreate {
+	if v != nil {
+		_c.SetReworkCapOverride(*v)
 	}
 	return _c
 }
@@ -519,9 +645,25 @@ func (_c *BacklogItemCreate) defaults() {
 		v := backlogitem.DefaultPlanApproved
 		_c.mutation.SetPlanApproved(v)
 	}
+	if _, ok := _c.mutation.QueuedAutonomous(); !ok {
+		v := backlogitem.DefaultQueuedAutonomous
+		_c.mutation.SetQueuedAutonomous(v)
+	}
 	if _, ok := _c.mutation.PrNumber(); !ok {
 		v := backlogitem.DefaultPrNumber
 		_c.mutation.SetPrNumber(v)
+	}
+	if _, ok := _c.mutation.ShippedApprovedCount(); !ok {
+		v := backlogitem.DefaultShippedApprovedCount
+		_c.mutation.SetShippedApprovedCount(v)
+	}
+	if _, ok := _c.mutation.ShippedChangesReqCount(); !ok {
+		v := backlogitem.DefaultShippedChangesReqCount
+		_c.mutation.SetShippedChangesReqCount(v)
+	}
+	if _, ok := _c.mutation.ShippedSnapshotCaptureFailed(); !ok {
+		v := backlogitem.DefaultShippedSnapshotCaptureFailed
+		_c.mutation.SetShippedSnapshotCaptureFailed(v)
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := backlogitem.DefaultCreatedAt()
@@ -575,6 +717,9 @@ func (_c *BacklogItemCreate) check() error {
 	}
 	if _, ok := _c.mutation.PlanApproved(); !ok {
 		return &ValidationError{Name: "plan_approved", err: errors.New(`ent: missing required field "BacklogItem.plan_approved"`)}
+	}
+	if _, ok := _c.mutation.QueuedAutonomous(); !ok {
+		return &ValidationError{Name: "queued_autonomous", err: errors.New(`ent: missing required field "BacklogItem.queued_autonomous"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "BacklogItem.created_at"`)}
@@ -670,6 +815,14 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 		_spec.SetField(backlogitem.FieldPlanApprovedAt, field.TypeTime, value)
 		_node.PlanApprovedAt = &value
 	}
+	if value, ok := _c.mutation.QueuedAt(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAt, field.TypeTime, value)
+		_node.QueuedAt = &value
+	}
+	if value, ok := _c.mutation.QueuedAutonomous(); ok {
+		_spec.SetField(backlogitem.FieldQueuedAutonomous, field.TypeBool, value)
+		_node.QueuedAutonomous = value
+	}
 	if value, ok := _c.mutation.PlanArtifactsPath(); ok {
 		_spec.SetField(backlogitem.FieldPlanArtifactsPath, field.TypeString, value)
 		_node.PlanArtifactsPath = value
@@ -701,6 +854,34 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PrNumber(); ok {
 		_spec.SetField(backlogitem.FieldPrNumber, field.TypeInt, value)
 		_node.PrNumber = value
+	}
+	if value, ok := _c.mutation.ShippedCheckConclusion(); ok {
+		_spec.SetField(backlogitem.FieldShippedCheckConclusion, field.TypeString, value)
+		_node.ShippedCheckConclusion = value
+	}
+	if value, ok := _c.mutation.ShippedApprovedCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedApprovedCount, field.TypeInt, value)
+		_node.ShippedApprovedCount = value
+	}
+	if value, ok := _c.mutation.ShippedChangesReqCount(); ok {
+		_spec.SetField(backlogitem.FieldShippedChangesReqCount, field.TypeInt, value)
+		_node.ShippedChangesReqCount = value
+	}
+	if value, ok := _c.mutation.ShippedSnapshotAt(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
+		_node.ShippedSnapshotAt = &value
+	}
+	if value, ok := _c.mutation.ShippedFileStats(); ok {
+		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
+		_node.ShippedFileStats = value
+	}
+	if value, ok := _c.mutation.ShippedSnapshotCaptureFailed(); ok {
+		_spec.SetField(backlogitem.FieldShippedSnapshotCaptureFailed, field.TypeBool, value)
+		_node.ShippedSnapshotCaptureFailed = value
+	}
+	if value, ok := _c.mutation.ReworkCapOverride(); ok {
+		_spec.SetField(backlogitem.FieldReworkCapOverride, field.TypeInt, value)
+		_node.ReworkCapOverride = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(backlogitem.FieldCreatedAt, field.TypeTime, value)
@@ -1045,6 +1226,36 @@ func (u *BacklogItemUpsert) ClearPlanApprovedAt() *BacklogItemUpsert {
 	return u
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsert) SetQueuedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldQueuedAt, v)
+	return u
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateQueuedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldQueuedAt)
+	return u
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsert) ClearQueuedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldQueuedAt)
+	return u
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsert) SetQueuedAutonomous(v bool) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldQueuedAutonomous, v)
+	return u
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateQueuedAutonomous() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldQueuedAutonomous)
+	return u
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (u *BacklogItemUpsert) SetPlanArtifactsPath(v string) *BacklogItemUpsert {
 	u.Set(backlogitem.FieldPlanArtifactsPath, v)
@@ -1192,6 +1403,150 @@ func (u *BacklogItemUpsert) AddPrNumber(v int) *BacklogItemUpsert {
 // ClearPrNumber clears the value of the "pr_number" field.
 func (u *BacklogItemUpsert) ClearPrNumber() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldPrNumber)
+	return u
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsert) SetShippedCheckConclusion(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedCheckConclusion, v)
+	return u
+}
+
+// UpdateShippedCheckConclusion sets the "shipped_check_conclusion" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedCheckConclusion() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedCheckConclusion)
+	return u
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsert) ClearShippedCheckConclusion() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedCheckConclusion)
+	return u
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (u *BacklogItemUpsert) SetShippedApprovedCount(v int) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedApprovedCount, v)
+	return u
+}
+
+// UpdateShippedApprovedCount sets the "shipped_approved_count" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedApprovedCount() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedApprovedCount)
+	return u
+}
+
+// AddShippedApprovedCount adds v to the "shipped_approved_count" field.
+func (u *BacklogItemUpsert) AddShippedApprovedCount(v int) *BacklogItemUpsert {
+	u.Add(backlogitem.FieldShippedApprovedCount, v)
+	return u
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (u *BacklogItemUpsert) ClearShippedApprovedCount() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedApprovedCount)
+	return u
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsert) SetShippedChangesReqCount(v int) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedChangesReqCount, v)
+	return u
+}
+
+// UpdateShippedChangesReqCount sets the "shipped_changes_req_count" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedChangesReqCount() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedChangesReqCount)
+	return u
+}
+
+// AddShippedChangesReqCount adds v to the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsert) AddShippedChangesReqCount(v int) *BacklogItemUpsert {
+	u.Add(backlogitem.FieldShippedChangesReqCount, v)
+	return u
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsert) ClearShippedChangesReqCount() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedChangesReqCount)
+	return u
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsert) SetShippedSnapshotAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedSnapshotAt, v)
+	return u
+}
+
+// UpdateShippedSnapshotAt sets the "shipped_snapshot_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedSnapshotAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedSnapshotAt)
+	return u
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsert) ClearShippedSnapshotAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedSnapshotAt)
+	return u
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (u *BacklogItemUpsert) SetShippedFileStats(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedFileStats, v)
+	return u
+}
+
+// UpdateShippedFileStats sets the "shipped_file_stats" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedFileStats() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedFileStats)
+	return u
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (u *BacklogItemUpsert) ClearShippedFileStats() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedFileStats)
+	return u
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsert) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldShippedSnapshotCaptureFailed, v)
+	return u
+}
+
+// UpdateShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateShippedSnapshotCaptureFailed() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldShippedSnapshotCaptureFailed)
+	return u
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsert) ClearShippedSnapshotCaptureFailed() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldShippedSnapshotCaptureFailed)
+	return u
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsert) SetReworkCapOverride(v int) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldReworkCapOverride, v)
+	return u
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateReworkCapOverride() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldReworkCapOverride)
+	return u
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsert) AddReworkCapOverride(v int) *BacklogItemUpsert {
+	u.Add(backlogitem.FieldReworkCapOverride, v)
+	return u
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsert) ClearReworkCapOverride() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldReworkCapOverride)
 	return u
 }
 
@@ -1475,6 +1830,41 @@ func (u *BacklogItemUpsertOne) ClearPlanApprovedAt() *BacklogItemUpsertOne {
 	})
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsertOne) SetQueuedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAt(v)
+	})
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateQueuedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAt()
+	})
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsertOne) ClearQueuedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearQueuedAt()
+	})
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsertOne) SetQueuedAutonomous(v bool) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAutonomous(v)
+	})
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateQueuedAutonomous() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAutonomous()
+	})
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (u *BacklogItemUpsertOne) SetPlanArtifactsPath(v string) *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
@@ -1647,6 +2037,174 @@ func (u *BacklogItemUpsertOne) UpdatePrNumber() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearPrNumber() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPrNumber()
+	})
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsertOne) SetShippedCheckConclusion(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedCheckConclusion(v)
+	})
+}
+
+// UpdateShippedCheckConclusion sets the "shipped_check_conclusion" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedCheckConclusion() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedCheckConclusion()
+	})
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsertOne) ClearShippedCheckConclusion() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedCheckConclusion()
+	})
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (u *BacklogItemUpsertOne) SetShippedApprovedCount(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedApprovedCount(v)
+	})
+}
+
+// AddShippedApprovedCount adds v to the "shipped_approved_count" field.
+func (u *BacklogItemUpsertOne) AddShippedApprovedCount(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddShippedApprovedCount(v)
+	})
+}
+
+// UpdateShippedApprovedCount sets the "shipped_approved_count" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedApprovedCount() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedApprovedCount()
+	})
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (u *BacklogItemUpsertOne) ClearShippedApprovedCount() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedApprovedCount()
+	})
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertOne) SetShippedChangesReqCount(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedChangesReqCount(v)
+	})
+}
+
+// AddShippedChangesReqCount adds v to the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertOne) AddShippedChangesReqCount(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddShippedChangesReqCount(v)
+	})
+}
+
+// UpdateShippedChangesReqCount sets the "shipped_changes_req_count" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedChangesReqCount() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedChangesReqCount()
+	})
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertOne) ClearShippedChangesReqCount() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedChangesReqCount()
+	})
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsertOne) SetShippedSnapshotAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedSnapshotAt(v)
+	})
+}
+
+// UpdateShippedSnapshotAt sets the "shipped_snapshot_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedSnapshotAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedSnapshotAt()
+	})
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsertOne) ClearShippedSnapshotAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedSnapshotAt()
+	})
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (u *BacklogItemUpsertOne) SetShippedFileStats(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedFileStats(v)
+	})
+}
+
+// UpdateShippedFileStats sets the "shipped_file_stats" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedFileStats() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedFileStats()
+	})
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (u *BacklogItemUpsertOne) ClearShippedFileStats() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedFileStats()
+	})
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsertOne) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedSnapshotCaptureFailed(v)
+	})
+}
+
+// UpdateShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateShippedSnapshotCaptureFailed() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedSnapshotCaptureFailed()
+	})
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsertOne) ClearShippedSnapshotCaptureFailed() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedSnapshotCaptureFailed()
+	})
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) SetReworkCapOverride(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetReworkCapOverride(v)
+	})
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) AddReworkCapOverride(v int) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddReworkCapOverride(v)
+	})
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateReworkCapOverride() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateReworkCapOverride()
+	})
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsertOne) ClearReworkCapOverride() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearReworkCapOverride()
 	})
 }
 
@@ -2099,6 +2657,41 @@ func (u *BacklogItemUpsertBulk) ClearPlanApprovedAt() *BacklogItemUpsertBulk {
 	})
 }
 
+// SetQueuedAt sets the "queued_at" field.
+func (u *BacklogItemUpsertBulk) SetQueuedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAt(v)
+	})
+}
+
+// UpdateQueuedAt sets the "queued_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateQueuedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAt()
+	})
+}
+
+// ClearQueuedAt clears the value of the "queued_at" field.
+func (u *BacklogItemUpsertBulk) ClearQueuedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearQueuedAt()
+	})
+}
+
+// SetQueuedAutonomous sets the "queued_autonomous" field.
+func (u *BacklogItemUpsertBulk) SetQueuedAutonomous(v bool) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetQueuedAutonomous(v)
+	})
+}
+
+// UpdateQueuedAutonomous sets the "queued_autonomous" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateQueuedAutonomous() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateQueuedAutonomous()
+	})
+}
+
 // SetPlanArtifactsPath sets the "plan_artifacts_path" field.
 func (u *BacklogItemUpsertBulk) SetPlanArtifactsPath(v string) *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
@@ -2271,6 +2864,174 @@ func (u *BacklogItemUpsertBulk) UpdatePrNumber() *BacklogItemUpsertBulk {
 func (u *BacklogItemUpsertBulk) ClearPrNumber() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPrNumber()
+	})
+}
+
+// SetShippedCheckConclusion sets the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsertBulk) SetShippedCheckConclusion(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedCheckConclusion(v)
+	})
+}
+
+// UpdateShippedCheckConclusion sets the "shipped_check_conclusion" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedCheckConclusion() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedCheckConclusion()
+	})
+}
+
+// ClearShippedCheckConclusion clears the value of the "shipped_check_conclusion" field.
+func (u *BacklogItemUpsertBulk) ClearShippedCheckConclusion() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedCheckConclusion()
+	})
+}
+
+// SetShippedApprovedCount sets the "shipped_approved_count" field.
+func (u *BacklogItemUpsertBulk) SetShippedApprovedCount(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedApprovedCount(v)
+	})
+}
+
+// AddShippedApprovedCount adds v to the "shipped_approved_count" field.
+func (u *BacklogItemUpsertBulk) AddShippedApprovedCount(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddShippedApprovedCount(v)
+	})
+}
+
+// UpdateShippedApprovedCount sets the "shipped_approved_count" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedApprovedCount() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedApprovedCount()
+	})
+}
+
+// ClearShippedApprovedCount clears the value of the "shipped_approved_count" field.
+func (u *BacklogItemUpsertBulk) ClearShippedApprovedCount() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedApprovedCount()
+	})
+}
+
+// SetShippedChangesReqCount sets the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertBulk) SetShippedChangesReqCount(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedChangesReqCount(v)
+	})
+}
+
+// AddShippedChangesReqCount adds v to the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertBulk) AddShippedChangesReqCount(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddShippedChangesReqCount(v)
+	})
+}
+
+// UpdateShippedChangesReqCount sets the "shipped_changes_req_count" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedChangesReqCount() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedChangesReqCount()
+	})
+}
+
+// ClearShippedChangesReqCount clears the value of the "shipped_changes_req_count" field.
+func (u *BacklogItemUpsertBulk) ClearShippedChangesReqCount() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedChangesReqCount()
+	})
+}
+
+// SetShippedSnapshotAt sets the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsertBulk) SetShippedSnapshotAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedSnapshotAt(v)
+	})
+}
+
+// UpdateShippedSnapshotAt sets the "shipped_snapshot_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedSnapshotAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedSnapshotAt()
+	})
+}
+
+// ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
+func (u *BacklogItemUpsertBulk) ClearShippedSnapshotAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedSnapshotAt()
+	})
+}
+
+// SetShippedFileStats sets the "shipped_file_stats" field.
+func (u *BacklogItemUpsertBulk) SetShippedFileStats(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedFileStats(v)
+	})
+}
+
+// UpdateShippedFileStats sets the "shipped_file_stats" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedFileStats() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedFileStats()
+	})
+}
+
+// ClearShippedFileStats clears the value of the "shipped_file_stats" field.
+func (u *BacklogItemUpsertBulk) ClearShippedFileStats() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedFileStats()
+	})
+}
+
+// SetShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsertBulk) SetShippedSnapshotCaptureFailed(v bool) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetShippedSnapshotCaptureFailed(v)
+	})
+}
+
+// UpdateShippedSnapshotCaptureFailed sets the "shipped_snapshot_capture_failed" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateShippedSnapshotCaptureFailed() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateShippedSnapshotCaptureFailed()
+	})
+}
+
+// ClearShippedSnapshotCaptureFailed clears the value of the "shipped_snapshot_capture_failed" field.
+func (u *BacklogItemUpsertBulk) ClearShippedSnapshotCaptureFailed() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearShippedSnapshotCaptureFailed()
+	})
+}
+
+// SetReworkCapOverride sets the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) SetReworkCapOverride(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetReworkCapOverride(v)
+	})
+}
+
+// AddReworkCapOverride adds v to the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) AddReworkCapOverride(v int) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.AddReworkCapOverride(v)
+	})
+}
+
+// UpdateReworkCapOverride sets the "rework_cap_override" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateReworkCapOverride() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateReworkCapOverride()
+	})
+}
+
+// ClearReworkCapOverride clears the value of the "rework_cap_override" field.
+func (u *BacklogItemUpsertBulk) ClearReworkCapOverride() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearReworkCapOverride()
 	})
 }
 

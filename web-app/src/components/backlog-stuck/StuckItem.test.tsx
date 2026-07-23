@@ -312,4 +312,62 @@ describe("StuckItem", () => {
       expect(onToggleExpand).not.toHaveBeenCalled();
     });
   });
+
+  describe("StuckItem_should_exposeRetryNow_When_OnTriggerRemediationNowProvided", () => {
+    it("does not render the retry control when onTriggerRemediationNow is omitted", () => {
+      render(<StuckItem item={makeItem()} isExpanded={false} onToggleExpand={jest.fn()} />);
+      expect(screen.queryByTestId("stuck-item-retry-now")).not.toBeInTheDocument();
+    });
+
+    it("calls onTriggerRemediationNow with itemId/reason and does not toggle expand", async () => {
+      const onToggleExpand = jest.fn();
+      const onTriggerRemediationNow = jest.fn().mockResolvedValue(undefined);
+      render(
+        <StuckItem
+          item={makeItem({ reason: StuckReason.BOUNCING, remediationAttempts: 1 })}
+          isExpanded={false}
+          onToggleExpand={onToggleExpand}
+          onTriggerRemediationNow={onTriggerRemediationNow}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("stuck-item-retry-now"));
+      await waitFor(() =>
+        expect(onTriggerRemediationNow).toHaveBeenCalledWith(
+          "f9fcef32-c27e-434d-b23f-c873c18afa92",
+          StuckReason.BOUNCING
+        )
+      );
+      expect(onToggleExpand).not.toHaveBeenCalled();
+    });
+
+    it("shows inline error text when the retry rejects", async () => {
+      const onTriggerRemediationNow = jest.fn().mockRejectedValue(new Error("already parked"));
+      render(
+        <StuckItem
+          item={makeItem({ reason: StuckReason.BOUNCING, remediationAttempts: 1 })}
+          isExpanded={false}
+          onToggleExpand={jest.fn()}
+          onTriggerRemediationNow={onTriggerRemediationNow}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("stuck-item-retry-now"));
+      await waitFor(() =>
+        expect(screen.getByTestId("stuck-item-retry-error").textContent).toMatch(/already parked/)
+      );
+    });
+
+    it("disables the retry control once remediation_attempts reaches the cap", () => {
+      render(
+        <StuckItem
+          item={makeItem({ reason: StuckReason.BOUNCING, remediationAttempts: 5 })}
+          isExpanded={false}
+          onToggleExpand={jest.fn()}
+          onTriggerRemediationNow={jest.fn()}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-retry-now")).toBeDisabled();
+    });
+  });
 });

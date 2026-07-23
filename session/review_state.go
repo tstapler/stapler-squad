@@ -84,6 +84,12 @@ type ReviewState struct {
 	// UnixNano. Written under mu (write); read without any lock via atomic ops.
 	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
 	lastMeaningfulOutputNs int64
+
+	// lastAcknowledgedNs is a lock-free shadow of LastAcknowledged stored as UnixNano,
+	// following the exact same pattern as lastMeaningfulOutputNs. Written under mu
+	// (MarkAcknowledged, instance_state.go); read without any lock via atomic ops.
+	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
+	lastAcknowledgedNs int64
 }
 
 // SyncAtomicTimestamps initialises atomic shadow fields from their time.Time counterparts.
@@ -93,12 +99,21 @@ func (rs *ReviewState) SyncAtomicTimestamps() {
 	if !rs.LastMeaningfulOutput.IsZero() {
 		atomic.StoreInt64(&rs.lastMeaningfulOutputNs, rs.LastMeaningfulOutput.UnixNano())
 	}
+	if !rs.LastAcknowledged.IsZero() {
+		atomic.StoreInt64(&rs.lastAcknowledgedNs, rs.LastAcknowledged.UnixNano())
+	}
 }
 
 // loadLastMeaningfulOutputNs returns the nanosecond timestamp without acquiring any lock.
 // Returns 0 when no meaningful output has been recorded yet.
 func (rs *ReviewState) loadLastMeaningfulOutputNs() int64 {
 	return atomic.LoadInt64(&rs.lastMeaningfulOutputNs)
+}
+
+// loadLastAcknowledgedNs returns the nanosecond timestamp without acquiring any lock.
+// Returns 0 when the session has not yet been acknowledged.
+func (rs *ReviewState) loadLastAcknowledgedNs() int64 {
+	return atomic.LoadInt64(&rs.lastAcknowledgedNs)
 }
 
 // ---- Package-level helpers -----------------------------------------------
@@ -129,13 +144,19 @@ func truncateString(s string, maxLen int) string {
 // ---- ReviewState methods --------------------------------------------------
 
 // TimeSinceLastMeaningfulOutput returns how long ago meaningful terminal output was received.
-// If LastMeaningfulOutput is zero, returns the duration since the given createdAt time.
-// Caller must hold the relevant mutex if concurrent access is possible.
+// If no meaningful output has been recorded yet, returns the duration since the given
+// createdAt time.
+//
+// Lock-free: reads the atomic shadow (lastMeaningfulOutputNs) via loadLastMeaningfulOutputNs()
+// rather than the plain LastMeaningfulOutput field, so this method is safe to call from any
+// goroutine — including outside the actor's serialized command closures (e.g.
+// HibernationSweeper.sweep(), which runs on its own independent background goroutine).
 func (rs *ReviewState) TimeSinceLastMeaningfulOutput(createdAt time.Time) time.Duration {
-	if rs.LastMeaningfulOutput.IsZero() {
+	ns := rs.loadLastMeaningfulOutputNs()
+	if ns == 0 {
 		return time.Since(createdAt)
 	}
-	return time.Since(rs.LastMeaningfulOutput)
+	return time.Since(time.Unix(0, ns))
 }
 
 // TimeSinceLastTerminalUpdate returns how long ago any terminal output was received.
@@ -151,14 +172,21 @@ func (rs *ReviewState) TimeSinceLastTerminalUpdate(createdAt time.Time) time.Dur
 // IsAcknowledgedAfterOutput returns true if the user acknowledged this session more recently
 // than the last meaningful terminal output — meaning no new output has occurred since the
 // user last dismissed the session from the review queue.
-// Returns false when LastMeaningfulOutput is zero: if no output has ever been recorded,
-// the acknowledgment cannot logically be "after" output, so the session is not snoozed.
-// Caller must hold the relevant mutex if concurrent access is possible.
+// Returns false when no meaningful output has been recorded yet: the acknowledgment cannot
+// logically be "after" output that never happened, so the session is not snoozed.
+//
+// Lock-free: reads both atomic shadows (lastMeaningfulOutputNs, lastAcknowledgedNs) rather
+// than the plain LastMeaningfulOutput/LastAcknowledged fields, so this method is safe to call
+// from any goroutine — including outside the actor's serialized command closures (e.g.
+// review_queue_determiner.go's Determine(), called directly on the live *Instance from
+// ReviewQueuePoller's own independent background goroutine).
 func (rs *ReviewState) IsAcknowledgedAfterOutput() bool {
-	if rs.LastMeaningfulOutput.IsZero() {
+	outputNs := rs.loadLastMeaningfulOutputNs()
+	if outputNs == 0 {
 		return false
 	}
-	return !rs.LastAcknowledged.IsZero() && rs.LastAcknowledged.After(rs.LastMeaningfulOutput)
+	ackNs := rs.loadLastAcknowledgedNs()
+	return ackNs != 0 && ackNs > outputNs
 }
 
 // IsInProcessingGracePeriod returns true if the session is within its processing grace window.

@@ -20,9 +20,26 @@ function setDismissed(itemId: string) {
   }
 }
 
-interface TriageReviewPanelProps {
+interface TriageReviewPanelBaseProps {
   item: BacklogItem;
   triageResult: TriageResult;
+}
+
+/**
+ * Story 4.1.2 (Structured Diagnostic): renders this panel as a read-only
+ * historical record for a Headless Diagnostic Session — Apply/Skip/Refine
+ * buttons and the dismiss ("Skip ×") button are omitted from the DOM (not
+ * disabled — absent), and dismissal is a no-op (a historical record
+ * shouldn't be dismissible). All informational content (summary,
+ * suggestions, task list) still renders. There is no write-mode callback to
+ * fabricate a stand-in for: the readOnly variant simply has none of them.
+ */
+export interface TriageReviewPanelReadOnlyProps extends TriageReviewPanelBaseProps {
+  readOnly: true;
+}
+
+export interface TriageReviewPanelWriteProps extends TriageReviewPanelBaseProps {
+  readOnly?: false;
   /** Called when the user clicks Apply — parent is responsible for the actual update + transition. */
   onApply: (preApplyCriteria: AcCriterion[]) => Promise<void>;
   /** Called when the user clicks Undo in the toast — parent reverts AC and status. */
@@ -32,14 +49,33 @@ interface TriageReviewPanelProps {
   onRefine?: (feedback: string) => Promise<void>;
 }
 
+export type TriageReviewPanelProps = TriageReviewPanelReadOnlyProps | TriageReviewPanelWriteProps;
+
+function isReadOnlyProps(props: TriageReviewPanelProps): props is TriageReviewPanelReadOnlyProps {
+  return props.readOnly === true;
+}
+
 /**
  * TriageReviewPanel — inline triage diff/review panel inside BacklogItemDetail.
  * Shows when triageStatus === "completed" AND item.status === "idea" AND not dismissed.
  *
  * Per UX spec Section 3.1 and Section 7.2.
  */
-export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, onSkip, onRefine }: TriageReviewPanelProps) {
-  const [dismissed, setDismissedState] = useState(() => isDismissed(item.id));
+export function TriageReviewPanel(props: TriageReviewPanelProps) {
+  const { item, triageResult } = props;
+  const readOnly = isReadOnlyProps(props);
+  const onApply = isReadOnlyProps(props) ? undefined : props.onApply;
+  const onUndoApply = isReadOnlyProps(props) ? undefined : props.onUndoApply;
+  const onSkip = isReadOnlyProps(props) ? undefined : props.onSkip;
+  const onRefine = isReadOnlyProps(props) ? undefined : props.onRefine;
+  // readOnly panels ignore the interactive dismissed flag entirely — it's
+  // keyed by item.id, which a readOnly historical-record render (Story
+  // 4.1.2) shares with the live interactive panel for the same item, so
+  // respecting it here would incorrectly hide a headless diagnostic
+  // session's record just because the user once dismissed the live prompt.
+  // A historical record shouldn't be dismissible in the first place, so
+  // isDismissed/setDismissed become no-ops in this mode.
+  const [dismissed, setDismissedState] = useState(() => (readOnly ? false : isDismissed(item.id)));
   const [applyState, setApplyState] = useState<"idle" | "applying" | "error">("idle");
   const [applyError, setApplyError] = useState<string | undefined>();
   const [showUndoToast, setShowUndoToast] = useState(false);
@@ -54,18 +90,21 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
     setIsMounted(true);
   }, []);
 
-  // Re-check dismissed state when item changes
+  // Re-check dismissed state when item changes (skipped in readOnly mode).
   useEffect(() => {
+    if (readOnly) return;
     setDismissedState(isDismissed(item.id));
-  }, [item.id]);
+  }, [item.id, readOnly]);
 
   const handleDismiss = useCallback(() => {
+    if (readOnly || !onSkip) return;
     setDismissed(item.id);
     setDismissedState(true);
     onSkip();
-  }, [item.id, onSkip]);
+  }, [item.id, onSkip, readOnly]);
 
   const handleApply = useCallback(async () => {
+    if (!onApply) return;
     // Cache pre-apply criteria for undo
     const cached = [...item.acCriteria];
     setPreApplyCriteria(cached);
@@ -149,16 +188,18 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
               <span className={styles.iterationBadge}> · Iteration {triageResult.iteration}</span>
             )}
           </h3>
-          <button
-            type="button"
-            className={styles.dismissButton}
-            onClick={handleDismiss}
-            aria-label="Dismiss triage review"
-            data-testid="triage-dismiss-button"
-            disabled={isApplying}
-          >
-            Skip ×
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              className={styles.dismissButton}
+              onClick={handleDismiss}
+              aria-label="Dismiss triage review"
+              data-testid="triage-dismiss-button"
+              disabled={isApplying}
+            >
+              Skip ×
+            </button>
+          )}
         </div>
 
         {/* Error banner */}
@@ -219,56 +260,60 @@ export function TriageReviewPanel({ item, triageResult, onApply, onUndoApply, on
           </>
         )}
 
-        {/* Actions */}
-        <div className={styles.actions}>
-          {hasSuggestions ? (
-            <button
-              type="button"
-              className={styles.applyButton}
-              onClick={handleApply}
-              disabled={isApplying}
-              aria-label="Apply triage suggestions — replaces acceptance criteria and marks item ready"
-              aria-busy={isApplying}
-              data-testid="triage-apply-button"
-            >
-              {isApplying ? "Applying…" : "Apply suggestions"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={styles.applyButton}
-              onClick={handleApply}
-              disabled={isApplying}
-              aria-busy={isApplying}
-              data-testid="triage-mark-ready-button"
-            >
-              {isApplying ? "Applying…" : "Mark ready"}
-            </button>
-          )}
-          <button
-            type="button"
-            className={styles.skipButton}
-            onClick={handleDismiss}
-            disabled={isApplying}
-            data-testid="triage-skip-button"
-          >
-            Skip — review later
-          </button>
-          {onRefine && !showRefineForm && (
+        {/* Actions — omitted entirely in readOnly mode (Story 4.1.2), not
+            just disabled, so a historical record never implies an
+            action is still possible. */}
+        {!readOnly && (
+          <div className={styles.actions}>
+            {hasSuggestions ? (
+              <button
+                type="button"
+                className={styles.applyButton}
+                onClick={handleApply}
+                disabled={isApplying}
+                aria-label="Apply triage suggestions — replaces acceptance criteria and marks item ready"
+                aria-busy={isApplying}
+                data-testid="triage-apply-button"
+              >
+                {isApplying ? "Applying…" : "Apply suggestions"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={styles.applyButton}
+                onClick={handleApply}
+                disabled={isApplying}
+                aria-busy={isApplying}
+                data-testid="triage-mark-ready-button"
+              >
+                {isApplying ? "Applying…" : "Mark ready"}
+              </button>
+            )}
             <button
               type="button"
               className={styles.skipButton}
-              onClick={() => setShowRefineForm(true)}
+              onClick={handleDismiss}
               disabled={isApplying}
-              data-testid="triage-refine-toggle-button"
+              data-testid="triage-skip-button"
             >
-              Not quite — give feedback
+              Skip — review later
             </button>
-          )}
-        </div>
+            {onRefine && !showRefineForm && (
+              <button
+                type="button"
+                className={styles.skipButton}
+                onClick={() => setShowRefineForm(true)}
+                disabled={isApplying}
+                data-testid="triage-refine-toggle-button"
+              >
+                Not quite — give feedback
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Refine with feedback */}
-        {onRefine && showRefineForm && (
+        {!readOnly && onRefine && showRefineForm && (
           <div className={styles.refineForm} role="form" aria-label="Refine triage with feedback">
             {refineState === "error" && refineError && (
               <TriageErrorBanner

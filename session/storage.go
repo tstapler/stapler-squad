@@ -238,6 +238,21 @@ func (s *Storage) GetEntClient() *ent.Client {
 	return nil
 }
 
+// SetItemChangePublisher wires p into the underlying repository when it is
+// ent-backed, following the same type-assertion-forwarding precedent as
+// GetEntClient above. server/dependencies.go only has a *Storage value in
+// scope (Storage.repo is a Repository interface field, not a concrete
+// *EntRepository), so this forwarding method is the entry point it uses to
+// reach ItemChangePublisher wiring. When the repository is not ent-backed
+// (e.g. an in-memory test double), the type assertion fails gracefully and
+// the publisher is simply never wired — no panic, matching GetEntClient's
+// nil-on-mismatch behavior.
+func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetItemChangePublisher(p)
+	}
+}
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.saveInstancesToRepo(instances)
@@ -718,8 +733,21 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
+func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
+}
+
+// FindDoneItemsOlderThan returns backlog items in "done" status whose most
+// recent done-transition happened at/before cutoff. Thin passthrough to the
+// ent-backed repository (same rationale as MarkStuck below) — returns
+// nil, nil for backends that don't support it (e.g. an in-memory test
+// double), never an error.
+func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.FindDoneItemsOlderThan(ctx, cutoff)
 }
 
 // --- BacklogStuckState (durable stuck-state read surface) ---
@@ -938,6 +966,16 @@ func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID 
 		return "", nil
 	}
 	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
+}
+
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
+// most recent first. Returns nil (not an error) when the repo isn't ent-backed.
+func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
 }
 
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.

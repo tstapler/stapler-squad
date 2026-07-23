@@ -189,6 +189,11 @@ func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
 // NewScannerWithReader constructs a Scanner with an explicit VCSReader.
 // Used in tests to inject a fake or alternative implementation.
 func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
+	// Register the real reader for debug introspection (see currentReader's
+	// doc comment) — a no-op for fake/test readers that don't match the type.
+	if gg, ok := reader.(*GoGitVCSReader); ok {
+		currentReader.Store(gg)
+	}
 	s := &Scanner{
 		reader:     reader,
 		scanQueue:  make(chan scanTask, 50),
@@ -491,6 +496,12 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 		}
 		result := s.scanWorktree(wt, defaultBranch, repoPath)
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
+			// Worktree went clean (e.g. the only uncommitted file was deleted) —
+			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
+			// removal pattern in review_queue_poller.go, which drops a stale
+			// UncommittedChanges queue entry once the determiner reports the
+			// worktree clean.
+			s.removeStaleResult(repoPath, wt.Branch)
 			continue // clean worktree — skip
 		}
 		results = append(results, result)
@@ -688,6 +699,21 @@ func (s *Scanner) GetResultByKey(repoPath, branch string) (ScanResult, bool) {
 func (s *Scanner) RemoveResult(repoPath, branch string) {
 	key := repoPath + "|" + branch
 	s.resultStore.Delete(key)
+}
+
+// removeStaleResult removes a previously stored result for a worktree that is
+// now clean and publishes EventUnfinishedWorkRemoved so subscribers drop it
+// immediately, rather than waiting for it to silently age out. No-op (and no
+// event) if nothing was stored for this key.
+func (s *Scanner) removeStaleResult(repoPath, branch string) {
+	key := repoPath + "|" + branch
+	if _, loaded := s.resultStore.LoadAndDelete(key); loaded && s.eventBus != nil {
+		s.eventBus.Publish(&pkgevents.Event{
+			Type:      EventUnfinishedWorkRemoved,
+			Timestamp: time.Now(),
+			Context:   key,
+		})
+	}
 }
 
 // AddRepo adds a repo path to the scan set, registers it with the fsnotify

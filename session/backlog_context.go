@@ -81,15 +81,38 @@ func parsePerCriterionVerdicts(raw string) ([]CriterionVerdict, error) {
 // items with many rework cycles.
 const maxPriorAttemptsWithFullEvidence = 3
 
+// MaxSameSessionReviewAttempts bounds how many times a single live work session should
+// loop on /backlog/review (equivalently, the request_review MCP tool) before giving up on
+// reaching PASS in-session and shipping the current state as a PR for human review instead
+// of retrying indefinitely. Exported so server/mcp/tools_backlog.go's get_backlog_item
+// status response — the other place a running session reads this same instruction from, on
+// every single poll — renders the identical number instead of drifting out of sync with
+// taskProtocolBlock below and backlog_commands.go's review.md, the two other copies of this
+// loop-bound.
+//
+// Deliberately independent of BacklogService.effectiveReworkCap's operator-configurable
+// ceiling (server/services/backlog_service_triage.go): that cap governs a different
+// mechanism — spawning a brand-new work session across an item's whole history once
+// AutoReopenAfterFailedReview decides the current one is gone — which never even
+// activates while this session stays alive (see AutoReopenAfterFailedReview's
+// hasActiveWorkSession guard and doc comment). Threading the operator-configured value
+// into this static prompt text would require adding a parameter to
+// BuildSessionInitialPrompt/BuildTokenBudgetedPrompt and every call site (PipelineEngine,
+// BacklogService, WriteBacklogContextFile, and their tests) — a larger, separate change
+// left as a candidate follow-up rather than folded into this fix.
+const MaxSameSessionReviewAttempts = 3
+
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
-const taskProtocolBlock = `## Your Task Protocol
+var taskProtocolBlock = fmt.Sprintf(`## Your Task Protocol
 1. Read ALL acceptance criteria before starting any work.
-2. Work through criteria systematically; run ` + "`/backlog/done-N`" + ` when criterion N is complete.
-3. When ALL criteria are done, run ` + "`/backlog/review`" + ` with a 2–3 sentence summary of what you built.
-4. If you hit a blocker or need human input, run ` + "`/backlog/review`" + ` describing what you need — do not stop silently.
-5. If your context is compacted or you lose track of your task, re-read ` + "`.backlog-context.md`" + ` or run ` + "`/backlog/status`" + ` immediately before continuing.
-6. If the ` + "`/backlog/*`" + ` commands fail or the MCP server is unavailable, continue your work using the criteria listed in ` + "`.backlog-context.md`" + ` and record completed criteria in your commit messages.
-7. NEVER end your session without calling ` + "`/backlog/review`" + ` — this is how the task is closed properly.`
+2. Work through criteria systematically; run `+"`/backlog/done-N`"+` when criterion N is complete.
+3. When ALL criteria are done, run `+"`/backlog/review`"+` with a 2–3 sentence summary of what you built.
+4. If you hit a blocker or need human input, run `+"`/backlog/review`"+` describing what you need — do not stop silently.
+5. If your context is compacted or you lose track of your task, re-read `+"`.backlog-context.md`"+` or run `+"`/backlog/status`"+` immediately before continuing.
+6. If the `+"`/backlog/*`"+` commands fail or the MCP server is unavailable, continue your work using the criteria listed in `+"`.backlog-context.md`"+` and record completed criteria in your commit messages.
+7. NEVER end your session without calling `+"`/backlog/review`"+` — this is how the task is closed properly.
+8. After `+"`/backlog/review`"+`, stay in this session — do not exit. Wait, then run `+"`/backlog/status`"+` again to check for a verdict. PASS → immediately run `+"`/backlog/ship`"+` yourself to open the pull request (it drives `+"`/github:pr-ship`"+`, which can rebase, resolve merge conflicts, and react to failing CI checks) — shipping the PR is part of this task, not a separate step someone else does; do not stop here. FAIL/PARTIAL → fix the noted gaps yourself and run `+"`/backlog/review`"+` again.
+9. Keep count of how many times you've run `+"`/backlog/review`"+` in THIS session (count your own calls in this conversation — nothing tracks it for you). After %d review cycles without a PASS, STOP looping: run `+"`/backlog/ship`"+` anyway to open a PR so a human can pick up the review directly, rather than retrying `+"`/backlog/review`"+` again. Nothing will kill or replace this session while you do any of this.`, MaxSameSessionReviewAttempts)
 
 // BuildSessionInitialPrompt renders the full context prompt for an agent session.
 func BuildSessionInitialPrompt(item *BacklogItemData, priorSessions []ItemSessionSummary) string {

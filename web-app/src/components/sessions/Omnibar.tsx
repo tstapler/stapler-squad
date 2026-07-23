@@ -37,6 +37,13 @@ import {
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
 import { useAliases } from "@/lib/hooks/useAliases";
+import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
+
+// Stable identity for callers that omit the `workflows` prop. `workflows` is a
+// dependency of the detection debounce effect below — a fresh `[]` literal as
+// the default parameter value would get a new identity every render, which
+// would restart the 150ms debounce on every render for such callers.
+const EMPTY_WORKFLOWS: WorkflowEntry[] = [];
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -44,7 +51,6 @@ interface OmnibarProps {
   onCreateSession: (data: OmnibarSessionData) => Promise<void>;
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
-  onSpawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
@@ -153,7 +159,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = [] }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = EMPTY_WORKFLOWS }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -256,8 +262,22 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     detection?.type === InputType.LocalPath ||
     detection?.type === InputType.PathWithBranch;
 
-  // Use the detected local path (strips branch suffix for PathWithBranch).
-  const completionPrefix = isPathInput ? detection?.localPath ?? input : "";
+  // `>shell <dir>` is still typing its directory argument when no `-- command`
+  // has been typed yet — offer the same directory completions as a normal path input.
+  const shellMetadata = detection?.type === InputType.SpawnShell
+    ? (detection.metadata as { shellDir?: string; shellCommand?: string } | undefined)
+    : undefined;
+  const isShellDirInput = Boolean(shellMetadata && !shellMetadata.shellCommand);
+
+  // Use the detected local path (strips branch suffix for PathWithBranch), or the
+  // in-progress `>shell` directory argument.
+  const completionPrefix = isPathInput
+    ? detection?.localPath ?? input
+    : isShellDirInput
+    ? shellMetadata?.shellDir ?? ""
+    : "";
+
+  const isPathCompletionActive = (isPathInput || isShellDirInput) && completionPrefix.length > 0;
 
   const {
     entries: completionEntries,
@@ -266,7 +286,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     isLoading: isCompletionLoading,
     error: completionError,
   } = usePathCompletions(completionPrefix, {
-    enabled: isPathInput,
+    enabled: isPathCompletionActive,
     directoriesOnly: true,
   });
 
@@ -281,7 +301,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       : isPathInput
       ? (detection?.localPath ?? "")
       : "";
-  const { worktrees, isLoading: isWorktreesLoading } = useWorktreeSuggestions(repoPathForWorktrees, {
+  const { worktrees, isLoading: isWorktreesLoading, error: worktreesError } = useWorktreeSuggestions(repoPathForWorktrees, {
     enabled: sessionType === "existing_worktree" && !!repoPathForWorktrees,
   });
 
@@ -321,7 +341,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const historyCount = historyMatches.length;
 
   const isDropdownVisible =
-    isPathInput && mergedEntries.length > 0 && !dropdownDismissed;
+    isPathCompletionActive && mergedEntries.length > 0 && !dropdownDismissed;
 
   // Discovery mode derived from modeState
   const isDiscoveryMode = modeState.type === "discovery";
@@ -392,13 +412,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Accept a completion entry: fill the input and continue for further completion.
   const handleCompletionSelect = useCallback(
     (entry: CompletionEntry) => {
-      const newInput = entry.isDirectory ? entry.path + "/" : entry.path;
+      const newPath = entry.isDirectory ? entry.path + "/" : entry.path;
+      const newInput = isShellDirInput ? `>shell ${newPath}` : newPath;
       setInput(newInput);
       setDropdownIndex(-1);
       setDropdownDismissed(false);
       inputRef.current?.focus();
     },
-    [setDropdownIndex, setDropdownDismissed]
+    [isShellDirInput, setDropdownIndex, setDropdownDismissed]
   );
 
   // Detect input type with debouncing
@@ -408,119 +429,126 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
 
     debounceRef.current = setTimeout(() => {
-      if (input.trim()) {
-        // Pre-process slash commands before detection so /oneoff etc. aren't
-        // misidentified as local paths by LocalPathDetector (priority 100).
-        const slashCmd = parseSlashCommand(input);
-        if (slashCmd) {
-          setFormField("sessionType", slashCmd.sessionType);
-        }
-        const detectInput = slashCmd ? slashCmd.remainder : input;
-        const result = detect(detectInput || input);
-        setDetection(result);
-
-        // Reset dropdown dismissed state when input type changes modes.
-        // Prevents session results from being suppressed after user dismisses
-        // path completion dropdown then backspaces to bare text.
-        if (result.type !== prevDetectionTypeRef.current) {
-          setDropdownDismissed(false);
-        }
-        prevDetectionTypeRef.current = result.type;
-
-        // Update mode based on detection type
-        if (result.type === InputType.NewSession) {
-          // "new/" prefix typed → creation_with_repo mode with query from parsedValue
-          dispatchMode({ kind: "new_prefix_typed", query: result.parsedValue });
-        } else {
-          dispatchMode({ kind: "detect", detection: result });
-          if (result.type === InputType.SessionSearch) {
-            setResultHighlightIndex(-1);
+      try {
+        if (input.trim()) {
+          // Pre-process slash commands before detection so /oneoff etc. aren't
+          // misidentified as local paths by LocalPathDetector (priority 100).
+          const slashCmd = parseSlashCommand(input);
+          if (slashCmd) {
+            setFormField("sessionType", slashCmd.sessionType);
           }
-        }
+          const detectInput = slashCmd ? slashCmd.remainder : input;
+          const result = detect(detectInput || input);
+          setDetection(result);
 
-        // Auto-fill session name (and firstPrompt for `>` separator) if:
-        // 1. Session name is empty, OR
-        // 2. Session name matches the last auto-suggested name (not manually edited)
-        // This allows suggestions to update as the user types the path (e.g., "~" → "sqlway")
-        if (result.type === InputType.SessionSearch && !slashCmd) {
-          // Derive-on-read: split on first `>` to populate name + firstPrompt
-          const parsed = parseInputWithSeparator(input);
-          const derivedName = parsed.name;
-          if (derivedName && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            setSessionName(derivedName);
-            lastSuggestedNameRef.current = derivedName;
+          // Reset dropdown dismissed state when input type changes modes.
+          // Prevents session results from being suppressed after user dismisses
+          // path completion dropdown then backspaces to bare text.
+          if (result.type !== prevDetectionTypeRef.current) {
+            setDropdownDismissed(false);
           }
-          if (parsed.firstPrompt) {
-            setFormField("firstPrompt", parsed.firstPrompt);
-          }
-        } else if (
-          result.suggestedName &&
-          result.type !== InputType.Alias &&
-          result.type !== InputType.Command &&
-          result.type !== InputType.SpawnShell
-        ) {
-          // Skip for Alias — the alias-specific block below handles name population
-          // (running both would reset lastSuggestedNameRef mid-effect and cause oscillation).
-          // Skip for Command/SpawnShell — their suggestedName is a human-readable label
-          // ("Switch to Matrix theme"), not a session-name candidate.
-          if (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current) {
-            // Detectors like LocalPath/PathWithBranch/NewSession/GitHub* build suggestedName
-            // from raw path segments, branch names, or free text — slug it here so every
-            // detector gets a valid kebab-case name for free instead of each one remembering to.
-            const slugged = toSessionSlug(result.suggestedName);
-            setSessionName(slugged);
-            lastSuggestedNameRef.current = slugged;
-          }
-        }
+          prevDetectionTypeRef.current = result.type;
 
-        // Auto-fill branch if detected
-        if (result.branch && !branchRef.current) {
-          setBranch(result.branch);
-        }
-
-        // When an alias resolves, populate form fields from its configured defaults
-        // so the user can see (and optionally adjust) what will be created.
-        if (result.type === InputType.Alias) {
-          const aliasMeta = result.metadata as AliasMetadata | undefined;
-          const alias = aliasMeta?.alias;
-          if (alias) {
-            if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
-              setFormField("program", alias.program);
-              lastSuggestedProgramRef.current = alias.program;
+          // Update mode based on detection type
+          if (result.type === InputType.NewSession) {
+            // "new/" prefix typed → creation_with_repo mode with query from parsedValue
+            dispatchMode({ kind: "new_prefix_typed", query: result.parsedValue });
+          } else {
+            dispatchMode({ kind: "detect", detection: result });
+            if (result.type === InputType.SessionSearch) {
+              setResultHighlightIndex(-1);
             }
-            // UNSPECIFIED means "Default (directory)" in the alias editor — always apply it.
-            // Skipping UNSPECIFIED left the form at its initial "new_worktree" default.
-            const resolvedSessionType = alias.sessionType !== SessionType.UNSPECIFIED
-              ? protoSessionTypeToFormString(alias.sessionType)
-              : "directory";
-            setFormField("sessionType", resolvedSessionType);
-            setFormField("autoYes", alias.autoYes);
           }
-          // Populate branch from @alias:branch syntax so the user can see/edit it.
-          if (aliasMeta?.branch && !branchRef.current) {
-            setBranch(aliasMeta.branch);
+
+          // Auto-fill session name (and firstPrompt for `>` separator) if:
+          // 1. Session name is empty, OR
+          // 2. Session name matches the last auto-suggested name (not manually edited)
+          // This allows suggestions to update as the user types the path (e.g., "~" → "sqlway")
+          if (result.type === InputType.SessionSearch && !slashCmd) {
+            // Derive-on-read: split on first `>` to populate name + firstPrompt
+            const parsed = parseInputWithSeparator(input);
+            const derivedName = parsed.name;
+            if (derivedName && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              setSessionName(derivedName);
+              lastSuggestedNameRef.current = derivedName;
+            }
+            if (parsed.firstPrompt) {
+              setFormField("firstPrompt", parsed.firstPrompt);
+            }
+          } else if (
+            result.suggestedName &&
+            result.type !== InputType.Alias &&
+            result.type !== InputType.Command &&
+            result.type !== InputType.SpawnShell
+          ) {
+            // Skip for Alias — the alias-specific block below handles name population
+            // (running both would reset lastSuggestedNameRef mid-effect and cause oscillation).
+            // Skip for Command/SpawnShell — their suggestedName is a human-readable label
+            // ("Switch to Matrix theme"), not a session-name candidate.
+            if (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current) {
+              // Detectors like LocalPath/PathWithBranch/NewSession/GitHub* build suggestedName
+              // from raw path segments, branch names, or free text — slug it here so every
+              // detector gets a valid kebab-case name for free instead of each one remembering to.
+              const slugged = toSessionSlug(result.suggestedName);
+              setSessionName(slugged);
+              lastSuggestedNameRef.current = slugged;
+            }
           }
-          // If the user typed a label after the alias name (e.g. "@ssq my-feature"),
-          // use it as the session name so they can see and edit it before submitting.
-          // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
-          const typedLabel = aliasMeta?.label;
-          const namePrefix = alias?.namePrefix ?? "";
-          if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            // Slug the typed portion only — speech-to-text and free typing won't
-            // produce dashes on their own (e.g. "deck drainage" → "deck-drainage").
-            const suggested = namePrefix ? `${namePrefix}${toSessionSlug(typedLabel)}` : toSessionSlug(typedLabel);
-            setSessionName(suggested);
-            lastSuggestedNameRef.current = suggested;
-          } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
-            // No label yet but prefix defined: show just the prefix so the user knows what to complete.
-            setSessionName(namePrefix);
-            lastSuggestedNameRef.current = namePrefix;
+
+          // Auto-fill branch if detected
+          if (result.branch && !branchRef.current) {
+            setBranch(result.branch);
           }
+
+          // When an alias resolves, populate form fields from its configured defaults
+          // so the user can see (and optionally adjust) what will be created.
+          if (result.type === InputType.Alias) {
+            const aliasMeta = result.metadata as AliasMetadata | undefined;
+            const alias = aliasMeta?.alias;
+            if (alias) {
+              if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
+                setFormField("program", alias.program);
+                lastSuggestedProgramRef.current = alias.program;
+              }
+              // UNSPECIFIED means "Default (directory)" in the alias editor — always apply it.
+              // Skipping UNSPECIFIED left the form at its initial "new_worktree" default.
+              const resolvedSessionType = alias.sessionType !== SessionType.UNSPECIFIED
+                ? protoSessionTypeToFormString(alias.sessionType)
+                : "directory";
+              setFormField("sessionType", resolvedSessionType);
+              setFormField("autoYes", alias.autoYes);
+            }
+            // Populate branch from @alias:branch syntax so the user can see/edit it.
+            if (aliasMeta?.branch && !branchRef.current) {
+              setBranch(aliasMeta.branch);
+            }
+            // If the user typed a label after the alias name (e.g. "@ssq my-feature"),
+            // use it as the session name so they can see and edit it before submitting.
+            // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
+            const typedLabel = aliasMeta?.label;
+            const namePrefix = alias?.namePrefix ?? "";
+            if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              // Slug the typed portion only — speech-to-text and free typing won't
+              // produce dashes on their own (e.g. "deck drainage" → "deck-drainage").
+              const suggested = namePrefix ? `${namePrefix}${toSessionSlug(typedLabel)}` : toSessionSlug(typedLabel);
+              setSessionName(suggested);
+              lastSuggestedNameRef.current = suggested;
+            } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+              // No label yet but prefix defined: show just the prefix so the user knows what to complete.
+              setSessionName(namePrefix);
+              lastSuggestedNameRef.current = namePrefix;
+            }
+          }
+        } else {
+          setDetection(null);
+          dispatchMode({ kind: "reset_to_discovery" });
+          setResultHighlightIndex(-1);
         }
-      } else {
-        setDetection(null);
-        dispatchMode({ kind: "reset_to_discovery" });
-        setResultHighlightIndex(-1);
+      } catch (err) {
+        // Never let a thrown exception mid-update abandon UI state — leave the
+        // last valid detection/canSubmit state in place and surface the failure.
+        console.error("[Omnibar] input detection failed:", err);
+        setError(err instanceof Error ? err.message : "Failed to process input");
       }
     }, 150); // 150ms debounce
 
@@ -529,7 +557,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         clearTimeout(debounceRef.current);
       }
     };
-  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName]);
+    // aliases/workflows are included so detection re-evaluates once the async
+    // alias/workflow lists resolve — otherwise a fast "@alias" typed before the
+    // AliasDetector/WorkflowDetector registers permanently mis-detects (e.g. as
+    // SessionSearch) with no keystroke left to trigger a re-run.
+  }, [input, dispatchMode, setFormField, setBranch, setDropdownDismissed, setResultHighlightIndex, setSessionName, aliases, workflows]);
 
   // Focus input when opened
   useEffect(() => {
@@ -770,7 +802,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }, liveEntries[0].name);
             if (lcp) {
               const sep = completionBaseDir.endsWith("/") ? "" : "/";
-              setInput(completionBaseDir + sep + lcp);
+              const newPath = completionBaseDir + sep + lcp;
+              setInput(isShellDirInput ? `>shell ${newPath}` : newPath);
               setDropdownDismissed(false);
             }
           }
@@ -831,6 +864,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       mergedEntries,
       liveEntries,
       completionBaseDir,
+      isShellDirInput,
       dropdownIndex,
       handleCompletionSelect,
       onClose,
@@ -949,11 +983,32 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return;
     }
 
-    // Spawn shell command (>shell [optional command]) — fire-and-forget, no session-creation flow.
+    // Spawn shell command (>shell [dir] [-- command]) — creates a real terminal session
+    // via the standard session-creation flow, rooted at `shellDir` (if given) and running
+    // `shellCommand` as the session program (defaults to an interactive shell).
     if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) {
-      const { commandArg } = (detection.metadata ?? {}) as { commandArg?: string };
-      onSpawnShell?.(undefined, "", commandArg);
-      onClose();
+      const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
+        shellDir?: string;
+        shellCommand?: string;
+      };
+      const sessionData: OmnibarSessionData = {
+        title: shellCommand ? shellCommand : shellDir ? `Terminal: ${shellDir}` : "Terminal",
+        path: shellDir ?? "",
+        program: shellCommand ?? "bash",
+        sessionType: shellDir ? "directory" : "one_off",
+        createIfMissing: Boolean(shellDir),
+        autoYes: false,
+      };
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateSession(sessionData);
+        if (shellCommand) addRecentShellCommand(shellCommand);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create session");
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -1120,7 +1175,6 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     saveHistory,
     onCreateSession,
     onClose,
-    onSpawnShell,
     onRunWorkflow,
     formState.firstPrompt,
     router,
@@ -1283,6 +1337,48 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             </div>
           );
         })()}
+        {detection?.type === InputType.SpawnShell && (() => {
+          const { shellDir, shellCommand } = (detection.metadata ?? {}) as {
+            shellDir?: string;
+            shellCommand?: string;
+          };
+          const recentCommands = getRecentShellCommands();
+          return (
+            <>
+              <div role="status" aria-live="polite" data-testid="spawn-shell-chip">
+                <span>{shellCommand ? `Run "${shellCommand}"` : "Open terminal"}</span>
+                {shellDir ? <span> in {shellDir}</span> : null}
+              </div>
+              {!shellCommand && !shellDir && recentCommands.length > 0 && (
+                <div data-testid="spawn-shell-recent-commands">
+                  {recentCommands.map((cmd) => (
+                    <button
+                      key={cmd}
+                      type="button"
+                      data-testid="spawn-shell-recent-command"
+                      onClick={() => {
+                        setInput(`>shell -- ${cmd}`);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {cmd}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          );
+        })()}
+        {isShellDirInput && isDropdownVisible && (
+          <PathCompletionDropdown
+            id="shell-dir-completion-listbox"
+            entries={mergedEntries}
+            historyCount={historyCount}
+            selectedIndex={dropdownIndex}
+            onSelect={handleCompletionSelect}
+            isLoading={isCompletionLoading}
+          />
+        )}
 
         {/* Discovery mode: session results + recent repos */}
         {isDiscoveryMode && !isAtDropdownVisible && (
@@ -1343,6 +1439,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             onCancel={onClose}
             worktrees={worktrees}
             isWorktreesLoading={isWorktreesLoading}
+            worktreesError={worktreesError}
             isSubmitting={isSubmitting}
             canSubmit={canSubmit}
             error={error}

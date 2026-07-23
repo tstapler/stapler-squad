@@ -1,8 +1,11 @@
 "use client";
 // +feature: backlog:item-card
 
-import { useCallback } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { getStatusLabel } from "@/lib/backlog/status";
+import { BlockerChip } from "./BlockerChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
 
@@ -12,6 +15,24 @@ interface BacklogItemCardProps {
   onClick: (itemId: string) => void;
   /** The action key currently in flight for this card, or null when idle. */
   pendingAction?: string | null;
+  /**
+   * Epic 6.4 (backlog-event-driven-updates): force the "just changed" flash
+   * even though this exact card instance just (re)mounted. Used by
+   * BacklogBoard.tsx when a live status change moves an item into a new
+   * column — the card is a *fresh* mount there (different column/parent),
+   * so this component's own `item.liveVersion` before/after comparison
+   * below can never detect the change on its own (there is no "before").
+   * BacklogBoard tracks the column transition itself and flips this on for
+   * a bounded window so the destination-column entry still reads as part
+   * of the same "just changed" event (ux.md §7 AC #8).
+   */
+  forceJustChanged?: boolean;
+  /**
+   * This item's entry from useStuckBacklogItems()'s open list, or undefined
+   * when the item isn't currently flagged stuck. Resolved once at the board
+   * page level (not per-card) and passed down — see board/page.tsx.
+   */
+  stuckItem?: StuckBacklogItem;
 }
 
 interface ActionSpec {
@@ -68,10 +89,44 @@ const PRIORITY_LABELS: Record<number, string> = {
   5: "P5",
 };
 
-export function BacklogItemCard({ item, onAction, onClick, pendingAction = null }: BacklogItemCardProps) {
+// Epic 6.1 (backlog-event-driven-updates): how long the `.justChanged` flash
+// class stays applied. ux.md §1 calls for "~250ms, fading" (Linear/Jira-
+// style); Story 6.1.1's Given/When/Then uses the same figure.
+const FLASH_DURATION_MS = 250;
+
+export const BacklogItemCard = memo(function BacklogItemCard({
+  item,
+  onAction,
+  onClick,
+  pendingAction = null,
+  forceJustChanged = false,
+  stuckItem,
+}: BacklogItemCardProps) {
   const actionSpec = getActionSpec(item);
   const isTriageRunning = item.triageStatus === "running";
   const isActionPending = pendingAction === actionSpec.action;
+
+  // `item.liveVersion` only advances for a genuine live (non-snapshot)
+  // BacklogItemEvent (see useWatchBacklogItems.ts / backlogItemsSlice.ts) —
+  // never for the initial snapshot, a reconnect resync, or a forced-
+  // is_snapshot replay copy (pre-mortem #4). Comparing against the
+  // previously-seen value (not just "did the item prop change") is what
+  // keeps a resnapshot from flashing even though the item's fields did
+  // change while disconnected — and comparing to a ref instead of keying off
+  // `item` reference identity means this never fires on first mount.
+  const prevLiveVersionRef = useRef(item.liveVersion);
+  const [justChanged, setJustChanged] = useState(false);
+
+  useEffect(() => {
+    const prev = prevLiveVersionRef.current;
+    const next = item.liveVersion;
+    prevLiveVersionRef.current = next;
+    if (prev === undefined || next === undefined || next === prev) return;
+
+    setJustChanged(true);
+    const timer = setTimeout(() => setJustChanged(false), FLASH_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [item.liveVersion]);
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't open detail if the action button was clicked
@@ -91,9 +146,11 @@ export function BacklogItemCard({ item, onAction, onClick, pendingAction = null 
     [onAction, item.id],
   );
 
+  const showFlash = justChanged || forceJustChanged;
+
   return (
     <div
-      className={styles.card}
+      className={showFlash ? `${styles.card} ${styles.justChanged}` : styles.card}
       role="article"
       tabIndex={0}
       data-testid="backlog-item-card"
@@ -109,6 +166,9 @@ export function BacklogItemCard({ item, onAction, onClick, pendingAction = null 
           aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "P?"}`}
         >
           {PRIORITY_LABELS[item.priority] ?? "P?"}
+        </span>
+        <span className={styles.statusLabel} data-testid="backlog-item-card-status">
+          {getStatusLabel(item.status)}
         </span>
       </div>
 
@@ -145,7 +205,8 @@ export function BacklogItemCard({ item, onAction, onClick, pendingAction = null 
             actionSpec.label
           )}
         </button>
+        {stuckItem && <BlockerChip variant="compact" item={stuckItem} />}
       </div>
     </div>
   );
-}
+});

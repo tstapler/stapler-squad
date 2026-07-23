@@ -41,6 +41,16 @@ import (
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
+// createSessionTimeout bounds the synchronous portion of CreateSession (path
+// resolution, GitHub URL clone). It must stay comfortably above the slowest
+// known synchronous sub-operation — GitHub URL resolution can shell out to
+// `git clone`, which research puts at up to ~120s for large repos — so a
+// legitimate slow-but-successful create still completes. NOTE: this is
+// decoupled from the tmux startup poll (~10s), which runs in a background
+// goroutine *after* the RPC returns and is intentionally not bound by this
+// deadline; if that internal bound is retuned, revisit this value too.
+const createSessionTimeout = 150 * time.Second
+
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -483,6 +493,26 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 	return s.reviewQueuePoller.FindInstance(id)
 }
 
+// ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the
+// session.SessionArchiver interface (implemented here so both BacklogService and
+// session.BacklogLifecycleListener can soft-archive backlog work sessions without
+// reinventing the ArchiveSession RPC's logic — see ArchiveSession above).
+// No-op (not an error) if the session isn't tracked live or is already archived, so
+// callers can invoke this unconditionally from a sweep without extra existence checks.
+func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone / never tracked
+	}
+	if !inst.SetArchivedAtIfNil(time.Now()) {
+		return nil // already archived
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
+	}
+	return nil
+}
+
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
 // It kills the live tmux session identified by UUID (best-effort; errors are non-fatal).
 func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID string) error {
@@ -501,6 +531,37 @@ func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID stri
 // It returns true if the session UUID is currently tracked in the live in-memory poller.
 func (s *SessionService) IsSessionLive(sessionUUID string) bool {
 	return s.FindLiveInstance(sessionUUID) != nil
+}
+
+// TimeSinceLastMeaningfulOutput satisfies the BacklogService.SessionStopper
+// interface. It reports how long it has been since sessionUUID's live
+// Instance last produced meaningful terminal output. ok is false when the
+// session isn't currently tracked live (mirrors IsSessionLive's "not found"
+// case) — callers must not use dur in that case.
+func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time.Duration, bool) {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return 0, false
+	}
+	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
+// KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
+// It closes the tmux pane only (Instance.KillSession), leaving the worktree
+// intact — unlike StopSessionByUUID (Instance.Kill/Destroy), which also runs
+// CleanupWorktree and would delete a worktree still in use by the next rework
+// round. Best-effort: errors are logged, not returned, since this runs as
+// cleanup alongside a new spawn that should proceed regardless.
+func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone
+	}
+	if err := inst.KillSession(); err != nil {
+		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // KillTmuxSessionByTitle satisfies the BacklogService.SessionStopper interface.
@@ -731,6 +792,13 @@ func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycle
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 	s.autonomousSvc.SetReviewGateTrigger(t)
+}
+
+// SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
+// service so a turn-cap-stopped work session gets a fresh turn budget instead of
+// being forced into review.
+func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	s.autonomousSvc.SetAutonomousStuckRespawner(r)
 }
 
 // TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
@@ -1113,6 +1181,9 @@ func (s *SessionService) CreateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateSessionRequest],
 ) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, createSessionTimeout)
+	defer cancel()
+
 	// Validate required fields
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
@@ -1177,8 +1248,16 @@ func (s *SessionService) CreateSession(
 
 	if session.IsGitHubURL(req.Msg.Path) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
-		localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
+
+		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
+		// timeout genuinely cancels the subprocess instead of abandoning it
+		// to keep running in the background after the RPC returns.
+		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
+			}
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
 		}
 		resolvedPath = localPath
@@ -1186,8 +1265,8 @@ func (s *SessionService) CreateSession(
 		clonedRepoPath = localPath
 
 		// Use branch from GitHub URL if not explicitly provided
-		if branch == "" && ref.Branch != "" {
-			branch = ref.Branch
+		if branch == "" && gitHubRef.Branch != "" {
+			branch = gitHubRef.Branch
 		}
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
@@ -3177,6 +3256,23 @@ func (s *SessionService) ResolveDefaults(ctx context.Context, req *connect.Reque
 // UpdateGlobalDefaults replaces the global default fields.
 func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.Request[sessionv1.UpdateGlobalDefaultsRequest]) (*connect.Response[sessionv1.UpdateGlobalDefaultsResponse], error) {
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
+}
+
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save (server/dependencies.go uses this to
+// trigger an immediate backlog-queue dequeue sweep when the concurrency limit
+// is raised).
+func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
+	s.defaultsSvc.SetOnGlobalDefaultsUpdated(fn)
+}
+
+// SetSharedBacklogConfig wires the *config.Config instance (and its guarding
+// mutex) BacklogService reads its concurrency fields from into this
+// SessionService's DefaultsService, so UpdateGlobalDefaults can propagate a
+// Settings change into BacklogService's live view without a process restart
+// (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
+func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
 }
 
 // UpsertProfile creates or updates a named profile.

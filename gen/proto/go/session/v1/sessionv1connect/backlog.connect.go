@@ -81,6 +81,9 @@ const (
 	// BacklogServiceTriggerReReviewProcedure is the fully-qualified name of the BacklogService's
 	// TriggerReReview RPC.
 	BacklogServiceTriggerReReviewProcedure = "/session.v1.BacklogService/TriggerReReview"
+	// BacklogServiceTriggerShipPRProcedure is the fully-qualified name of the BacklogService's
+	// TriggerShipPR RPC.
+	BacklogServiceTriggerShipPRProcedure = "/session.v1.BacklogService/TriggerShipPR"
 	// BacklogServiceTriggerSyncProcedure is the fully-qualified name of the BacklogService's
 	// TriggerSync RPC.
 	BacklogServiceTriggerSyncProcedure = "/session.v1.BacklogService/TriggerSync"
@@ -141,6 +144,18 @@ const (
 	// BacklogServiceSnoozeStuckItemProcedure is the fully-qualified name of the BacklogService's
 	// SnoozeStuckItem RPC.
 	BacklogServiceSnoozeStuckItemProcedure = "/session.v1.BacklogService/SnoozeStuckItem"
+	// BacklogServiceResetStuckRemediationProcedure is the fully-qualified name of the BacklogService's
+	// ResetStuckRemediation RPC.
+	BacklogServiceResetStuckRemediationProcedure = "/session.v1.BacklogService/ResetStuckRemediation"
+	// BacklogServiceBulkResetStuckRemediationProcedure is the fully-qualified name of the
+	// BacklogService's BulkResetStuckRemediation RPC.
+	BacklogServiceBulkResetStuckRemediationProcedure = "/session.v1.BacklogService/BulkResetStuckRemediation"
+	// BacklogServiceTriggerRemediationNowProcedure is the fully-qualified name of the BacklogService's
+	// TriggerRemediationNow RPC.
+	BacklogServiceTriggerRemediationNowProcedure = "/session.v1.BacklogService/TriggerRemediationNow"
+	// BacklogServiceWatchBacklogItemsProcedure is the fully-qualified name of the BacklogService's
+	// WatchBacklogItems RPC.
+	BacklogServiceWatchBacklogItemsProcedure = "/session.v1.BacklogService/WatchBacklogItems"
 )
 
 // BacklogServiceClient is a client for the session.v1.BacklogService service.
@@ -180,6 +195,11 @@ type BacklogServiceClient interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -226,6 +246,31 @@ type BacklogServiceClient interface {
 	// SnoozeStuckItem suppresses a stuck row from the active view and from
 	// re-notification until the given time.
 	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error)
 }
 
 // NewBacklogServiceClient constructs a client for the session.v1.BacklogService service. By
@@ -333,6 +378,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+BacklogServiceTriggerReReviewProcedure,
 			connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerShipPR: connect.NewClient[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerShipPRProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
 			connect.WithClientOptions(opts...),
 		),
 		triggerSync: connect.NewClient[v1.TriggerSyncRequest, v1.TriggerSyncResponse](
@@ -455,6 +506,30 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
 			connect.WithClientOptions(opts...),
 		),
+		resetStuckRemediation: connect.NewClient[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		bulkResetStuckRemediation: connect.NewClient[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceBulkResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerRemediationNow: connect.NewClient[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerRemediationNowProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+			connect.WithClientOptions(opts...),
+		),
+		watchBacklogItems: connect.NewClient[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent](
+			httpClient,
+			baseURL+BacklogServiceWatchBacklogItemsProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -476,6 +551,7 @@ type backlogServiceClient struct {
 	suggestNextItem             *connect.Client[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse]
 	overrideVerdict             *connect.Client[v1.OverrideVerdictRequest, v1.OverrideVerdictResponse]
 	triggerReReview             *connect.Client[v1.TriggerReReviewRequest, v1.TriggerReReviewResponse]
+	triggerShipPR               *connect.Client[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse]
 	triggerSync                 *connect.Client[v1.TriggerSyncRequest, v1.TriggerSyncResponse]
 	createItemSource            *connect.Client[v1.CreateItemSourceRequest, v1.CreateItemSourceResponse]
 	listItemSources             *connect.Client[v1.ListItemSourcesRequest, v1.ListItemSourcesResponse]
@@ -496,6 +572,10 @@ type backlogServiceClient struct {
 	submitManualReview          *connect.Client[v1.SubmitManualReviewRequest, v1.SubmitManualReviewResponse]
 	listStuckBacklogItems       *connect.Client[v1.ListStuckBacklogItemsRequest, v1.ListStuckBacklogItemsResponse]
 	snoozeStuckItem             *connect.Client[v1.SnoozeStuckItemRequest, v1.SnoozeStuckItemResponse]
+	resetStuckRemediation       *connect.Client[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse]
+	bulkResetStuckRemediation   *connect.Client[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse]
+	triggerRemediationNow       *connect.Client[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse]
+	watchBacklogItems           *connect.Client[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent]
 }
 
 // CreateBacklogItem calls session.v1.BacklogService.CreateBacklogItem.
@@ -576,6 +656,11 @@ func (c *backlogServiceClient) OverrideVerdict(ctx context.Context, req *connect
 // TriggerReReview calls session.v1.BacklogService.TriggerReReview.
 func (c *backlogServiceClient) TriggerReReview(ctx context.Context, req *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error) {
 	return c.triggerReReview.CallUnary(ctx, req)
+}
+
+// TriggerShipPR calls session.v1.BacklogService.TriggerShipPR.
+func (c *backlogServiceClient) TriggerShipPR(ctx context.Context, req *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return c.triggerShipPR.CallUnary(ctx, req)
 }
 
 // TriggerSync calls session.v1.BacklogService.TriggerSync.
@@ -678,6 +763,26 @@ func (c *backlogServiceClient) SnoozeStuckItem(ctx context.Context, req *connect
 	return c.snoozeStuckItem.CallUnary(ctx, req)
 }
 
+// ResetStuckRemediation calls session.v1.BacklogService.ResetStuckRemediation.
+func (c *backlogServiceClient) ResetStuckRemediation(ctx context.Context, req *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return c.resetStuckRemediation.CallUnary(ctx, req)
+}
+
+// BulkResetStuckRemediation calls session.v1.BacklogService.BulkResetStuckRemediation.
+func (c *backlogServiceClient) BulkResetStuckRemediation(ctx context.Context, req *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return c.bulkResetStuckRemediation.CallUnary(ctx, req)
+}
+
+// TriggerRemediationNow calls session.v1.BacklogService.TriggerRemediationNow.
+func (c *backlogServiceClient) TriggerRemediationNow(ctx context.Context, req *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return c.triggerRemediationNow.CallUnary(ctx, req)
+}
+
+// WatchBacklogItems calls session.v1.BacklogService.WatchBacklogItems.
+func (c *backlogServiceClient) WatchBacklogItems(ctx context.Context, req *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error) {
+	return c.watchBacklogItems.CallServerStream(ctx, req)
+}
+
 // BacklogServiceHandler is an implementation of the session.v1.BacklogService service.
 type BacklogServiceHandler interface {
 	// CreateBacklogItem adds a new item to the backlog.
@@ -715,6 +820,11 @@ type BacklogServiceHandler interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -761,6 +871,31 @@ type BacklogServiceHandler interface {
 	// SnoozeStuckItem suppresses a stuck row from the active view and from
 	// re-notification until the given time.
 	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error
 }
 
 // NewBacklogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -864,6 +999,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		BacklogServiceTriggerReReviewProcedure,
 		svc.TriggerReReview,
 		connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceTriggerShipPRHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerShipPRProcedure,
+		svc.TriggerShipPR,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
 		connect.WithHandlerOptions(opts...),
 	)
 	backlogServiceTriggerSyncHandler := connect.NewUnaryHandler(
@@ -986,6 +1127,30 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceResetStuckRemediationProcedure,
+		svc.ResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceBulkResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceBulkResetStuckRemediationProcedure,
+		svc.BulkResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceTriggerRemediationNowHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerRemediationNowProcedure,
+		svc.TriggerRemediationNow,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceWatchBacklogItemsHandler := connect.NewServerStreamHandler(
+		BacklogServiceWatchBacklogItemsProcedure,
+		svc.WatchBacklogItems,
+		connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.BacklogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BacklogServiceCreateBacklogItemProcedure:
@@ -1020,6 +1185,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceOverrideVerdictHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerReReviewProcedure:
 			backlogServiceTriggerReReviewHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerShipPRProcedure:
+			backlogServiceTriggerShipPRHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerSyncProcedure:
 			backlogServiceTriggerSyncHandler.ServeHTTP(w, r)
 		case BacklogServiceCreateItemSourceProcedure:
@@ -1060,6 +1227,14 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceListStuckBacklogItemsHandler.ServeHTTP(w, r)
 		case BacklogServiceSnoozeStuckItemProcedure:
 			backlogServiceSnoozeStuckItemHandler.ServeHTTP(w, r)
+		case BacklogServiceResetStuckRemediationProcedure:
+			backlogServiceResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceBulkResetStuckRemediationProcedure:
+			backlogServiceBulkResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerRemediationNowProcedure:
+			backlogServiceTriggerRemediationNowHandler.ServeHTTP(w, r)
+		case BacklogServiceWatchBacklogItemsProcedure:
+			backlogServiceWatchBacklogItemsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1131,6 +1306,10 @@ func (UnimplementedBacklogServiceHandler) OverrideVerdict(context.Context, *conn
 
 func (UnimplementedBacklogServiceHandler) TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerReReview is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerShipPR is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error) {
@@ -1211,4 +1390,20 @@ func (UnimplementedBacklogServiceHandler) ListStuckBacklogItems(context.Context,
 
 func (UnimplementedBacklogServiceHandler) SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.SnoozeStuckItem is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.BulkResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerRemediationNow is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.WatchBacklogItems is not implemented"))
 }

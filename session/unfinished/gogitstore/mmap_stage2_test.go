@@ -251,16 +251,27 @@ func TestSharedIndex_MmapMode_RefreshDetectsRepack(t *testing.T) {
 	// See TestRegistry_UseMmapIndex_True_EngagesMmapLoader's cleanup comment.
 	t.Cleanup(func() { store.stopPackWatch() })
 
+	// Read everything needed from store.index while holding the lock, but
+	// unlock BEFORE any t.Fatalf — calling t.Fatalf while store.mu is still
+	// held would runtime.Goexit() out of this goroutine without ever
+	// reaching the Unlock below, deadlocking any later store.mu.Lock() call
+	// (including the t.Cleanup(store.stopPackWatch) registered above) for
+	// the rest of the test binary's life, until go test's 10-minute
+	// timeout kills it. See TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack's
+	// identical fix for the CI incident this was caught from (multi-pack
+	// fixture -> this precondition failing -> a real hang, not just a
+	// clean test failure).
 	store.mu.Lock()
-	if len(store.index) != 1 {
-		t.Fatalf("setup: got %d packs, want 1", len(store.index))
-	}
+	numPacks := len(store.index)
 	var oldHash plumbing.Hash
 	var oldLi *lockedIndex
 	for h, li := range store.index {
 		oldHash, oldLi = h, li
 	}
 	store.mu.Unlock()
+	if numPacks != 1 {
+		t.Fatalf("setup: got %d packs, want 1", numPacks)
+	}
 	if oldLi.handle == nil {
 		t.Fatal("setup: expected mmap-backed entry")
 	}
@@ -428,15 +439,26 @@ func TestMmapIndex_PinnedReadersSurviveConcurrentRealRepack(t *testing.T) {
 		t.Fatalf("ensureIndex: %v", err)
 	}
 
+	// Read everything needed from store.index while holding the lock, but
+	// unlock BEFORE any t.Fatalf — see TestSharedIndex_MmapMode_RefreshDetectsRepack's
+	// identical fix above for why: a t.Fatalf while store.mu is still held
+	// runtime.Goexit()s out of this goroutine without ever reaching the
+	// Unlock below, deadlocking the t.Cleanup(store.stopPackWatch) call
+	// registered above (it also takes store.mu) for the rest of the test
+	// binary's life — this is the exact hang a 2026-07-20 CI run hit
+	// (`mmap_stage2_test.go:433: setup: got 3 packs, want 1` followed by
+	// `panic: test timed out after 10m0s`), triggered whenever
+	// buildPackedFixture's underlying repo ends up with more than one pack.
 	store.mu.Lock()
-	if len(store.index) != 1 {
-		t.Fatalf("setup: got %d packs, want 1", len(store.index))
-	}
+	numPacks := len(store.index)
 	var li *lockedIndex
 	for _, v := range store.index {
 		li = v
 	}
 	store.mu.Unlock()
+	if numPacks != 1 {
+		t.Fatalf("setup: got %d packs, want 1", numPacks)
+	}
 	if li.handle == nil {
 		t.Fatal("setup: expected mmap-backed entry")
 	}

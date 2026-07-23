@@ -333,3 +333,140 @@ func TestListShippedCommits_should_ReturnEmpty_When_HeadEqualsBase(t *testing.T)
 	require.NoError(t, err)
 	assert.Empty(t, commits)
 }
+
+// TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines
+// verifies the happy path (Story 3.2.1): a two-commit range that adds 5 lines to one
+// file and deletes 2 from another must report per-file addition/deletion counts with
+// no error, and without shelling out to git (.claude/rules/prefer-go-git-over-subshells.md).
+func TestFileStatsBetween_ShouldReturnPerFileCounts_WhenCommitsAddAndDeleteLines(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	// bar.go starts with content so a later commit can delete lines from it.
+	barContent := "line1\nline2\nline3\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte(barContent), 0o644))
+	runGit(t, work, "add", "bar.go")
+	runGit(t, work, "commit", "-m", "add bar.go")
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	// foo.go is a brand new file adding 5 lines.
+	fooContent := "a\nb\nc\nd\ne\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "foo.go"), []byte(fooContent), 0o644))
+	runGit(t, work, "add", "foo.go")
+
+	// bar.go loses its last 2 lines.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "bar.go"), []byte("line1\n"), 0o644))
+	runGit(t, work, "add", "bar.go")
+
+	runGit(t, work, "commit", "-m", "add foo.go, trim bar.go")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	stats, err := FileStatsBetween(work, baseSHA, headSHA)
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+
+	byPath := map[string]FileStat{}
+	for _, s := range stats {
+		byPath[s.Path] = s
+	}
+
+	foo, ok := byPath["foo.go"]
+	require.True(t, ok, "expected an entry for foo.go, got %+v", stats)
+	assert.Equal(t, "added", foo.Status)
+	assert.Equal(t, 5, foo.Additions)
+	assert.Equal(t, 0, foo.Deletions)
+
+	bar, ok := byPath["bar.go"]
+	require.True(t, ok, "expected an entry for bar.go, got %+v", stats)
+	assert.Equal(t, "modified", bar.Status)
+	assert.Equal(t, 0, bar.Additions)
+	assert.Equal(t, 2, bar.Deletions)
+}
+
+// TestFileStatsBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo verifies that
+// an invalid/unresolvable baseSHA surfaces as a non-nil error, matching
+// IsCommitOnMain's existing error-wrapping style — not a panic, not an empty silent
+// slice.
+func TestFileStatsBetween_ShouldReturnError_WhenBaseSHADoesNotExistInRepo(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	stats, err := FileStatsBetween(work, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", headSHA)
+	require.Error(t, err)
+	assert.Nil(t, stats)
+}
+
+// TestFileStatsBetween_ShouldReportSingleRenameEntry_WhenFileRenamedWithNoContentChange
+// verifies go-git's native rename detection against real git plumbing (not a mocked
+// call): a pure rename must produce ONE entry keyed by the new path, not a delete+add
+// pair a hand-parsed `git diff --numstat` would risk mishandling.
+func TestFileStatsBetween_ShouldReportSingleRenameEntry_WhenFileRenamedWithNoContentChange(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	content := "line1\nline2\nline3\n"
+	require.NoError(t, os.WriteFile(filepath.Join(work, "old.go"), []byte(content), 0o644))
+	runGit(t, work, "add", "old.go")
+	runGit(t, work, "commit", "-m", "add old.go")
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	runGit(t, work, "mv", "old.go", "new.go")
+	runGit(t, work, "commit", "-m", "rename old.go to new.go")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	stats, err := FileStatsBetween(work, baseSHA, headSHA)
+	require.NoError(t, err)
+	require.Len(t, stats, 1, "a pure rename must produce exactly one entry, not a delete+add pair: got %+v", stats)
+	assert.Equal(t, "new.go", stats[0].Path)
+	assert.Equal(t, "renamed", stats[0].Status)
+	assert.Equal(t, 0, stats[0].Additions)
+	assert.Equal(t, 0, stats[0].Deletions)
+}
+
+// TestFileStatsBetween_ShouldReturnEmpty_WhenBaseEqualsHead verifies the degenerate
+// no-op range returns an empty slice with no error, mirroring
+// TestListShippedCommits_should_ReturnEmpty_When_HeadEqualsBase's convention.
+func TestFileStatsBetween_ShouldReturnEmpty_WhenBaseEqualsHead(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+	sha := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	stats, err := FileStatsBetween(work, sha, sha)
+	require.NoError(t, err)
+	assert.Empty(t, stats)
+}
+
+// TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges verifies the
+// spike finding (see FileStatsBetween's doc comment): go-git produces zero diff
+// chunks for a changed binary file, so it must be silently omitted from the result
+// rather than reported as a synthetic 0/0 entry or causing an error.
+func TestFileStatsBetween_ShouldOmitBinaryFiles_WhenBinaryContentChanges(t *testing.T) {
+	origin := setupTestRepo(t)
+	work := cloneTestRepo(t, origin)
+
+	binA := make([]byte, 64)
+	for i := range binA {
+		binA[i] = byte(i)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(work, "image.bin"), binA, 0o644))
+	runGit(t, work, "add", "image.bin")
+	runGit(t, work, "commit", "-m", "add image.bin")
+	baseSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	binB := make([]byte, 64)
+	for i := range binB {
+		binB[i] = byte(255 - i)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(work, "image.bin"), binB, 0o644))
+	// Also touch a text file so the range isn't degenerate.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "notes.txt"), []byte("hello\n"), 0o644))
+	runGit(t, work, "add", "image.bin", "notes.txt")
+	runGit(t, work, "commit", "-m", "change image.bin, add notes.txt")
+	headSHA := strings.TrimSpace(runGit(t, work, "rev-parse", "HEAD"))
+
+	stats, err := FileStatsBetween(work, baseSHA, headSHA)
+	require.NoError(t, err, "a changed binary file must not cause an error")
+	require.Len(t, stats, 1, "the binary file must be omitted, leaving only notes.txt: got %+v", stats)
+	assert.Equal(t, "notes.txt", stats[0].Path)
+}

@@ -1,7 +1,8 @@
 /**
  * Tests for TriageReviewPanel component (T-12, cases 6–11).
- * Also covers mapBacklogItem triageStatus logic (cases 12–13) via direct unit tests
- * on the mapping helper (tested by proxy through the BacklogItem domain type shape).
+ *
+ * mapBacklogItem's triageStatus derivation logic is tested directly against
+ * the real function in useBacklogService.test.ts — it is not re-tested here.
  */
 
 import React from "react";
@@ -42,6 +43,7 @@ function makeItem(overrides: Partial<BacklogItem> = {}): BacklogItem {
     acCriteria: [],
     linkedSessions: [],
     statusEvents: [],
+    progressNotes: [],
     totalEstimatedCostUsd: 0,
     triageStatus: "completed",
     triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,
@@ -352,54 +354,54 @@ describe("TriageReviewPanel_refine_with_feedback", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests 12–13: mapBacklogItem triageStatus logic
-// These test the domain mapping rules in useBacklogService via the BacklogItem type.
-// We construct BacklogItem objects directly using the same rules as mapBacklogItem
-// to verify the P12 fix logic is correct.
+// Story 4.1.2: readOnly mode (Structured Diagnostic for Headless Diagnostic
+// Sessions)
 // ---------------------------------------------------------------------------
 
-describe("mapBacklogItem_triageStatus_is_failed_when_session_ended_but_no_triageResult", () => {
-  it("triageStatus is 'failed' when triage session has endedAt but no triageResult.summary", () => {
-    // Simulates the P12 fix: ended session with no triage result → "failed"
-    const item: BacklogItem = makeItem({
-      triageStatus: "failed",
-      triageResult: undefined,
-      linkedSessions: [
-        {
-          entityId: "session-001",
-          sessionId: "uuid-001",
-          role: "triage",
-          endedAt: new Date().toISOString(),
-          triageResult: undefined,
-          estimatedCostUsd: 0,
-        },
-      ],
-    });
+describe("TriageReviewPanel_should_HideApplySkipRefineButtonsAndShowSummarySuggestionsTasks_When_ReadOnlyIsTrue", () => {
+  it("omits Apply/Skip/Refine/dismiss buttons but keeps summary, suggestions, and task list", () => {
+    // readOnly props have no write-mode callbacks at all (discriminated
+    // union) — nothing to fabricate noop stand-ins for.
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={{
+          ...TRIAGE_RESULT_WITH_SUGGESTIONS,
+          tasks: [{ text: "Reworded AC #2", estimate: "", category: "" }],
+        }}
+        readOnly
+      />
+    );
 
-    expect(item.triageStatus).toBe("failed");
-    expect(item.triageResult).toBeUndefined();
+    // Panel and its informational content are present.
+    expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
+    expect(screen.getByText(TRIAGE_RESULT_WITH_SUGGESTIONS.summary)).toBeInTheDocument();
+    expect(screen.getByText("User sees confirmation on submit")).toBeInTheDocument();
+    expect(screen.getByTestId("triage-task-list")).toBeInTheDocument();
+    expect(screen.getByText("Reworded AC #2")).toBeInTheDocument();
+
+    // Action buttons absent from the DOM (not merely disabled).
+    expect(screen.queryByTestId("triage-apply-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-mark-ready-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-skip-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-refine-toggle-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("triage-dismiss-button")).not.toBeInTheDocument();
   });
-});
 
-describe("mapBacklogItem_triageStatus_is_completed_when_session_ended_and_triageResult_present", () => {
-  it("triageStatus is 'completed' when triage session has endedAt AND non-empty summary", () => {
-    // Simulates the P12 fix: ended session with result → "completed"
-    const item: BacklogItem = makeItem({
-      triageStatus: "completed",
-      triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,
-      linkedSessions: [
-        {
-          entityId: "session-002",
-          sessionId: "uuid-002",
-          role: "triage",
-          endedAt: new Date().toISOString(),
-          triageResult: TRIAGE_RESULT_WITH_SUGGESTIONS,
-          estimatedCostUsd: 0,
-        },
-      ],
-    });
+  it("ignores a pre-existing localStorage dismissal for the same item.id — a historical record is never dismissible", () => {
+    // Simulates the user having dismissed the live interactive triage panel
+    // for this item — the readOnly historical-record render must not
+    // inherit that dismissed state (they share the same localStorage key).
+    localStorage.setItem("triage-panel-dismissed-item-001", "1");
 
-    expect(item.triageStatus).toBe("completed");
-    expect(item.triageResult?.summary).toBeTruthy();
+    render(
+      <TriageReviewPanel
+        item={makeItem()}
+        triageResult={TRIAGE_RESULT_WITH_SUGGESTIONS}
+        readOnly
+      />
+    );
+
+    expect(screen.getByTestId("triage-review-panel")).toBeInTheDocument();
   });
 });

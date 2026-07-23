@@ -1,4 +1,4 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const pageWrapper = style({
@@ -130,6 +130,36 @@ export const searchInput = style({
   },
 });
 
+export const groupByLabel = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  marginLeft: "auto",
+});
+
+export const showArchivedLabel = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+
+export const groupBySelect = style({
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontFamily: vars.font.sans,
+  cursor: "pointer",
+});
+
 export const filterChipGroup = style({
   display: "flex",
   gap: vars.space["1"],
@@ -236,6 +266,62 @@ export const tableRowActive = style({
   background: vars.color.accentBg,
 });
 
+// Sweep fix (backlog-event-driven-updates Phase 5 compliance sweep,
+// 2026-07-22): ux.md UX AC #6 requires list rows to get "a background flash
+// that fades within ~1 second" on a genuine live update, mirroring
+// BacklogItemCard.css.ts's `justChanged` (used by the Kanban board) — the
+// original list-page implementation wired liveVersion tracking for the exit
+// transition (Epic 6.3, tableRowExiting below) but never added the in-place
+// flash treatment itself for rows that stay visible.
+const rowFlashKeyframes = keyframes({
+  "0%": { backgroundColor: vars.color.accentHover },
+  "100%": { backgroundColor: "transparent" },
+});
+
+export const tableRowJustChanged = style({
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: rowFlashKeyframes,
+      animationDuration: "250ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: no animation — flat instant tint, cleared by the same
+    // timeout that removes the class (mirrors BacklogItemCard.css.ts).
+    "(prefers-reduced-motion: reduce)": {
+      backgroundColor: vars.color.accentHover,
+    },
+  },
+});
+
+// Epic 6.3 (backlog-event-driven-updates): brief fade-out for a row whose
+// item just stopped matching the active filter due to a genuine live status
+// change (ux.md §7 — "reads as moved, not vanished"), instead of an instant
+// disappearance. Composed with `tableRow`, same pattern as
+// BacklogItemCard.css.ts's `justChanged`.
+const rowExitKeyframes = keyframes({
+  "0%": { opacity: 1 },
+  "100%": { opacity: 0 },
+});
+
+export const tableRowExiting = style({
+  pointerEvents: "none",
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: rowExitKeyframes,
+      animationDuration: "200ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: removal is already instant (driven by JS, see
+    // page.tsx), so no transition/animation is applied here — just avoid a
+    // stray opaque flash of the row before it's removed from the DOM.
+    "(prefers-reduced-motion: reduce)": {
+      opacity: 1,
+    },
+  },
+});
+
 export const tableCell = style({
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   color: vars.color.textPrimary,
@@ -255,6 +341,29 @@ export const acProgressCell = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   whiteSpace: "nowrap",
+});
+
+export const repoPathCell = style({
+  maxWidth: "240px",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: vars.color.textSecondary,
+  fontFamily: vars.font.mono,
+  fontSize: vars.fontSize.xs,
+});
+
+export const groupHeaderCell = style({
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  fontFamily: vars.font.mono,
+  background: vars.color.surfaceMuted,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  borderTop: `1px solid ${vars.color.borderColor}`,
 });
 
 export const emptyState = style({
@@ -344,6 +453,11 @@ export const statusReady = style({
   background: vars.statusBadge.inputBg,
   color: vars.statusBadge.inputFg,
   border: `1px solid ${vars.statusBadge.inputBorder}`,
+});
+export const statusQueued = style({
+  background: vars.statusBadge.idleBg,
+  color: vars.statusBadge.idleFg,
+  border: `1px solid ${vars.statusBadge.idleBorder}`,
 });
 export const statusInProgress = style({
   background: vars.statusBadge.uncommittedBg,
