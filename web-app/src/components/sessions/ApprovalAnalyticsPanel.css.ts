@@ -299,7 +299,7 @@ export const barTotal = style({
 });
 
 export const barTool = style({
-  background: "#8b5cf6",
+  background: vars.color.gitConflict,
   opacity: 0.7,
 });
 
@@ -314,12 +314,12 @@ export const barCmd = style({
 });
 
 export const barPython = style({
-  background: "#3b82f6",
+  background: vars.color.gitRenamed,
   opacity: 0.7,
 });
 
 export const barGap = style({
-  background: "#f97316",
+  background: vars.color.gitModified,
   opacity: 0.8,
 });
 

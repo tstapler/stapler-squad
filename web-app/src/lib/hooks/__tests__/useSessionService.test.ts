@@ -25,11 +25,13 @@ import { Session, DetectedStatus, SessionStatus } from "@/gen/session/v1/types_p
 
 const mockWatchSessions = jest.fn();
 const mockListSessions = jest.fn();
+const mockCreateSession = jest.fn();
 
 jest.mock("@connectrpc/connect", () => ({
   createClient: () => ({
     watchSessions: mockWatchSessions,
     listSessions: mockListSessions,
+    createSession: mockCreateSession,
   }),
 }));
 
@@ -321,5 +323,65 @@ describe("useSessionService — initial load gating", () => {
 
     expect(mockListSessions).not.toHaveBeenCalled();
     unmount();
+  });
+});
+
+// AC2: the CreateSession RPC must be bounded by a client-side timeout so a
+// stalled backend can't leave the omnibar's Create button grayed out forever —
+// the promise returned by createSession() always has to settle.
+describe("useSessionService — createSession timeout (AC2)", () => {
+  beforeEach(() => {
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<never>(() => {}),
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("passes a bounded timeoutMs call option to the createSession RPC", async () => {
+    mockCreateSession.mockResolvedValue({ session: { id: "s1" } });
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      await result.current.createSession({ title: "test-session", path: "/tmp/x" });
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "test-session" }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+    const [, callOpts] = mockCreateSession.mock.calls[0];
+    expect(callOpts.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it("propagates a rejection (e.g. from the transport's timeoutMs deadline firing) so isSubmitting can reset", async () => {
+    // The transport (connect-web's createConnectTransport) turns timeoutMs into
+    // a DeadlineExceeded rejection once it elapses — this asserts createSession()
+    // propagates that rejection rather than swallowing it, which is what lets
+    // Omnibar.tsx's catch handler reset isSubmitting and show an error.
+    mockCreateSession.mockRejectedValue(new Error("the operation timed out"));
+
+    const store = makeTestStore();
+    const { result } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      await expect(
+        result.current.createSession({ title: "hangy", path: "/tmp/x" })
+      ).rejects.toThrow("the operation timed out");
+    });
   });
 });

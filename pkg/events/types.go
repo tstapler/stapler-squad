@@ -24,7 +24,66 @@ const (
 	EventApprovalResponse EventType = "session.approval_response"
 	// EventNotification is emitted when a session sends a notification
 	EventNotification EventType = "session.notification"
+	// EventBacklogItemChanged is emitted when a backlog item is mutated
+	// (status transition, verdict recorded, session attached, item updated,
+	// archived, removed, or triage progress updated).
+	EventBacklogItemChanged EventType = "backlog_item_changed"
 )
+
+// BacklogChangeKind identifies which kind of backlog item mutation a
+// BacklogItemEventPayload describes.
+type BacklogChangeKind string
+
+const (
+	// BacklogChangeStatusTransition is emitted when an item's status changes.
+	BacklogChangeStatusTransition BacklogChangeKind = "status_transition"
+	// BacklogChangeVerdictRecorded is emitted when a review verdict is saved.
+	BacklogChangeVerdictRecorded BacklogChangeKind = "verdict_recorded"
+	// BacklogChangeSessionAttached is emitted when a session is attached to an item.
+	BacklogChangeSessionAttached BacklogChangeKind = "session_attached"
+	// BacklogChangeItemUpdated is emitted when item fields (title, description, etc.) change.
+	BacklogChangeItemUpdated BacklogChangeKind = "item_updated"
+	// BacklogChangeItemArchived is emitted when an item is archived.
+	BacklogChangeItemArchived BacklogChangeKind = "item_archived"
+	// BacklogChangeItemRemoved is emitted when an item is deleted.
+	BacklogChangeItemRemoved BacklogChangeKind = "item_removed"
+	// BacklogChangeTriageProgressUpdated is emitted when in-flight triage progress
+	// is written (UpdateItemSessionTriageResult). Converts to the existing
+	// BacklogItemUpdatedEvent oneof variant on the wire, not a new proto message.
+	BacklogChangeTriageProgressUpdated BacklogChangeKind = "triage_progress_updated"
+)
+
+// BacklogItemEventPayload carries the backlog-specific data for an
+// EventBacklogItemChanged event. Only the fields relevant to Kind are
+// expected to be populated.
+type BacklogItemEventPayload struct {
+	// Kind identifies which backlog mutation this payload describes.
+	Kind BacklogChangeKind
+	// Item is the current snapshot of the backlog item after the mutation.
+	Item *session.BacklogItemData
+	// OldStatus is the prior status for BacklogChangeStatusTransition.
+	OldStatus string
+	// NewStatus is the new status for BacklogChangeStatusTransition.
+	NewStatus string
+	// UpdatedFields lists which fields changed for BacklogChangeItemUpdated
+	// (and BacklogChangeTriageProgressUpdated).
+	UpdatedFields []string
+	// SessionID identifies the session for BacklogChangeSessionAttached.
+	SessionID string
+	// ArchivedAt is the archival timestamp for BacklogChangeItemArchived.
+	ArchivedAt *time.Time
+	// RemovedReason describes why an item was removed for BacklogChangeItemRemoved.
+	RemovedReason string
+	// Verdict mirrors BacklogItemChange.Verdict one-to-one; populated only
+	// when Kind == BacklogChangeVerdictRecorded, copied straight through by
+	// the adapter so the verdict reaches subscribers as first-class payload
+	// data rather than something derived by joining item_sessions.
+	Verdict *session.ReviewVerdictData
+	// IsSnapshot is true when this event was generated as part of an
+	// initial-snapshot send (e.g. WatchBacklogItems's first batch) rather
+	// than a live mutation.
+	IsSnapshot bool
+}
 
 // Event represents a session state change event.
 // This is the internal Go representation that will be converted to protobuf events.
@@ -66,6 +125,9 @@ type Event struct {
 	NotificationTitle    string
 	NotificationMessage  string
 	NotificationMetadata map[string]string
+	// BacklogItemPayload carries backlog item change data for
+	// EventBacklogItemChanged events. Nil for all other event types.
+	BacklogItemPayload *BacklogItemEventPayload
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
@@ -145,6 +207,15 @@ func NewApprovalResponseEvent(sessionID string, approved bool, context string) *
 		SessionID: sessionID,
 		Approved:  approved,
 		Context:   context,
+	}
+}
+
+// NewBacklogItemChangedEvent creates an event for a backlog item mutation.
+func NewBacklogItemChangedEvent(payload *BacklogItemEventPayload) *Event {
+	return &Event{
+		Type:               EventBacklogItemChanged,
+		Timestamp:          time.Now(),
+		BacklogItemPayload: payload,
 	}
 }
 

@@ -146,12 +146,43 @@ var methodToID = map[string]string{
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerShipPR":               "backlog:trigger-ship-pr",
 	"TriggerSync":                 "backlog:trigger-sync",
 	"CreateItemSource":            "backlog:create-source",
 	"ListItemSources":             "backlog:list-sources",
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"GetBacklogItemDiff":          "backlog:get-item-diff",
+	"GetBacklogItemCost":          "backlog:get-item-cost",
+	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",
+	"GetSessionBacklogIndex":      "backlog:get-session-index",
+	"SubmitManualReview":          "backlog:submit-manual-review",
+	"ListStuckBacklogItems":       "backlog:list-stuck",
+	"SnoozeStuckItem":             "backlog:snooze-stuck",
+	"ResetStuckRemediation":       "backlog:reset-stuck-remediation",
+	"BulkResetStuckRemediation":   "backlog:bulk-reset-stuck-remediation",
+	"TriggerRemediationNow":       "backlog:trigger-remediation-now",
+	"CreatePipelineMode":          "backlog:create-pipeline-mode",
+	"UpdatePipelineMode":          "backlog:update-pipeline-mode",
+	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
+	"GetPipelineMode":             "backlog:get-pipeline-mode",
+	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	// GitHub issue import RPCs (BacklogService) - mapped to the method name
+	// itself, not a kebab-case backlog:* id: origin/main already has
+	// committed registry files under docs/registry/features/backend/{method
+	// name}.json (id: "SearchGitHubRepos" etc.), produced by ScanProto's own
+	// fallback (id = method) from before these existed in methodToID at all.
+	// A kebab-case id here would relocate those files to a new path/id on
+	// every PR that touches methodToID, which register-generate's own git
+	// diff (and the "Check new RPCs have tests" CI gate, which diffs
+	// registry files against origin/main) would then flag as a brand new,
+	// untested RPC - even though SearchGitHubRepos/ListGitHubIssues already
+	// have real tests committed upstream (server/services/backlog_github_rpc_test.go).
+	// Matching the existing fallback id keeps the generated file identical.
+	"SearchGitHubRepos": "SearchGitHubRepos",
+	"ListGitHubIssues":  "ListGitHubIssues",
+	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",
@@ -198,6 +229,8 @@ var methodToID = map[string]string{
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
 	// Backlog item lifecycle RPCs
 	"DeleteBacklogItem": "backlog:delete-item",
+	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
+	"WatchBacklogItems": "backlog:watch",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

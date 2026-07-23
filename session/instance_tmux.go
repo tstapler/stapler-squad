@@ -16,6 +16,37 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
+// directly (shell-quoted) into the tmux new-session command string, versus
+// written to a temp file and referenced via command substitution (see
+// promptArg). tmux's client/server protocol caps the entire new-session
+// command around 16KB -- measured empirically: `tmux new-session -d -s <name>
+// <command>` succeeds with a ~16KB command string and fails client-side with
+// "command too long" once the string crosses somewhere between 16000 and
+// 16500 bytes -- and that budget also has to cover the rest of the claude
+// invocation (--mcp-config JSON, --allowedTools, --permission-mode, etc.) plus
+// tmux's own session-name/workdir/env args, not just the prompt. 4KB leaves
+// generous headroom for all of that.
+//
+// This is the exact failure that broke backlog review-gate spawns: a large
+// description plus many acceptance criteria (each carrying a verbose
+// self-reported implementation note) pushed the review prompt alone past
+// tmux's limit, so `tmux new-session` rejected the command outright with
+// "command too long" on every single attempt, and
+// BacklogLifecycle.ReconcileStuckReviewGates kept re-spawning the identical,
+// permanently-doomed command every ~8 minutes with no operator-visible signal
+// beyond a repeating log line.
+const maxInlinePromptBytes = 4096
+
+// promptFileCleanupDelay is how long promptArg waits before removing a
+// temp-file-backed prompt (see promptArg). The file only needs to survive
+// long enough for the shell tmux spawns to evaluate the `$(cat ...)` command
+// substitution, which happens as part of exec'ing the claude command --
+// effectively immediately after `tmux new-session` returns successfully. The
+// delay is generous purely to tolerate a slow/loaded box; it is not a
+// correctness requirement, so tests may shrink it to avoid a real sleep.
+var promptFileCleanupDelay = 30 * time.Second
+
 // programKind is a sealed sum type over the kinds of launchable programs.
 // Holding a claudeProgram is proof that isClaude() returned true — downstream
 // code needs no further guards. Parse once at the boundary, trust internally.
@@ -129,9 +160,76 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
 		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
-		parts = append(parts, "--", shellQuote(i.Prompt))
+		parts = append(parts, "--", i.promptArg())
 	}
 	return strings.Join(parts, " ")
+}
+
+// promptArg returns the shell syntax used to supply i.Prompt as the trailing
+// positional argument to claude. Short prompts are embedded directly
+// (shell-quoted), as before. Prompts at or above maxInlinePromptBytes are
+// written to a temp file and referenced via a `"$(cat '<path>')"` command
+// substitution instead.
+//
+// This distinction matters because tmux's new-session command-length limit
+// (see maxInlinePromptBytes) applies to the literal command string handed to
+// tmux, which tmux inspects before any shell ever runs -- so a large prompt
+// embedded inline blows that budget outright, regardless of how carefully it
+// is quoted. Routing it through a file keeps the string tmux sees short; the
+// substitution -- and the real prompt content -- is only expanded later, by
+// the shell tmux spawns to actually run the command, which is not subject to
+// tmux's own limit. This was verified empirically: a `tmux new-session`
+// command referencing a 20KB file via `$(cat ...)` succeeds and the spawned
+// process receives the full, unmodified 20KB content, while the same 20KB
+// embedded inline is rejected outright with "command too long".
+//
+// On temp-file write failure this falls back to the inline (shell-quoted)
+// form so a filesystem hiccup degrades to the pre-existing behavior (which
+// works fine for prompts under the tmux limit) rather than silently dropping
+// the prompt.
+//
+// Caveat: POSIX command substitution strips ALL trailing newlines from its
+// output, so if i.Prompt ends in one or more "\n" characters, the claude
+// process receives the prompt with that trailing whitespace removed (content
+// is otherwise byte-identical). This is semantically inert for an LLM prompt
+// and is a world apart from the bug being fixed here (the entire tail of the
+// prompt being dropped or the spawn failing outright), so it's accepted
+// rather than worked around with a fragile shell trim-guard hack.
+func (i *Instance) promptArg() string {
+	if len(i.Prompt) < maxInlinePromptBytes {
+		return shellQuote(i.Prompt)
+	}
+	f, err := os.CreateTemp("", "stapler-squad-prompt-*.txt")
+	if err != nil {
+		log.Warn("promptArg: failed to create temp file for large prompt, embedding inline", "err", err, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	path := f.Name()
+	if _, writeErr := f.WriteString(i.Prompt); writeErr != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		log.Warn("promptArg: failed to write temp prompt file, embedding inline", "err", writeErr, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	// Captured before spawning: promptFileCleanupDelay is a package var tests
+	// override for the duration of a single call (see
+	// withShortPromptFileCleanupDelay), restoring it via t.Cleanup once the
+	// test returns. Reading the var directly inside the goroutine below would
+	// race that restore — the goroutine can still be asleep, holding a read of
+	// the shared var pending, when t.Cleanup's write lands.
+	delay := promptFileCleanupDelay
+	go func() {
+		time.Sleep(delay)
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Warn("promptArg: failed to clean up temp prompt file", "path", path, "err", rmErr)
+		}
+	}()
+	return fmt.Sprintf(`"$(cat %s)"`, shellQuote(path))
 }
 
 // claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
@@ -212,7 +310,8 @@ func (i *Instance) KillExternalSession() error {
 	// Kill the tmux session
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
+	//nolint:tmuxsocketscope targets a user-created external session; no isolated variant exists to target
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to kill tmux session '%s': %w", i.ExternalMetadata.TmuxSessionName, err)
 	}
@@ -223,7 +322,7 @@ func (i *Instance) KillExternalSession() error {
 // HasUpdated reports whether terminal content has changed since the last check.
 // Returns (updated, hasPrompt) and side-effects terminal timestamps on change.
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return false, false
 	}
 
@@ -246,7 +345,7 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 func (i *Instance) TapEnter() {
-	if !i.started || !i.AutoYes {
+	if !i.started.Load() || !i.AutoYes {
 		return
 	}
 	if err := i.pm().TapEnter(); err != nil {
@@ -256,7 +355,7 @@ func (i *Instance) TapEnter() {
 
 // Attach attaches to the tmux session and returns a done channel.
 func (i *Instance) Attach() (chan struct{}, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
 	return i.pm().Attach()
@@ -264,7 +363,7 @@ func (i *Instance) Attach() (chan struct{}, error) {
 
 // SetPreviewSize sets the detached terminal dimensions for preview rendering.
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -306,15 +405,39 @@ func (i *Instance) TmuxSessionExists() bool {
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
-	if i.Status == Paused || i.Status == Stopped || !i.started || !i.pm().HasSession() {
+	if i.Status == Paused || i.Status == Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
 	}
 	return i.pm().IsAlive()
 }
 
+// PaneProcessDead reports whether the tmux session is alive (TmuxAlive()==true)
+// but the wrapped program running in the pane has already exited. remain-on-exit
+// keeps the tmux session/pane around as a "Pane is dead (signal N, ...)"
+// placeholder after the wrapped program is killed (e.g. OOM SIGKILL) or crashes,
+// rather than tearing the session down -- so TmuxAlive() alone reports this
+// session as healthy forever. Health checks must consult this in addition to
+// TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
+// (e.g. native process manager), which have no equivalent placeholder state.
+func (i *Instance) PaneProcessDead() bool {
+	if !i.TmuxAlive() {
+		return false
+	}
+	tb, ok := i.pm().(*TmuxBackend)
+	if !ok {
+		return false
+	}
+	tm := tb.TmuxManager()
+	if tm == nil {
+		return false
+	}
+	_, _, dead := tm.PaneExitStatus()
+	return dead
+}
+
 // GetPTYReader returns the PTY file handle for the tmux session.
 func (i *Instance) GetPTYReader() (*os.File, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("session not started")
 	}
 	return i.pm().GetPTY()
@@ -323,7 +446,7 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 // WriteToPTY writes data to the PTY, sending input to the terminal session.
 // This is used for forwarding client input to the tmux session.
 func (i *Instance) WriteToPTY(data []byte) (int, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return 0, fmt.Errorf("session not started")
 	}
 	return i.pm().SendKeys(string(data))
@@ -332,7 +455,7 @@ func (i *Instance) WriteToPTY(data []byte) (int, error) {
 // ResizePTY resizes the terminal dimensions.
 // This is used when clients resize their terminal windows.
 func (i *Instance) ResizePTY(cols, rows int) error {
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("session not started")
 	}
 	if err := i.pm().SetWindowSize(cols, rows); err != nil {
@@ -345,7 +468,7 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 // This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return "", fmt.Errorf("session not started or paused")
 	}
 	return i.pm().CapturePaneContent()
@@ -354,7 +477,7 @@ func (i *Instance) CapturePaneContent() (string, error) {
 // CapturePaneContentRaw captures pane content with ANSI codes preserved (no line joining).
 // Essential for hybrid streaming where cursor positioning codes must be preserved.
 func (i *Instance) CapturePaneContentRaw() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return "", fmt.Errorf("session not started or paused")
 	}
 
@@ -393,7 +516,7 @@ func (i *Instance) GetScrollbackHistory(startLine, endLine string) (string, erro
 
 // SendPrompt sends a prompt to the tmux session. Delegates to processManager.SendPromptWithEnter.
 func (i *Instance) SendPrompt(prompt string) error {
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("instance not started")
 	}
 	return i.pm().SendPromptWithEnter(prompt)
@@ -439,7 +562,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)
 	}
-	i.started = session != nil
+	i.started.Store(session != nil)
 }
 
 // SetWindowSize propagates window size changes to the tmux session.
@@ -460,7 +583,7 @@ func (i *Instance) RefreshTmuxClient() error {
 
 // SendKeys sends keys to the tmux session.
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	_, err := i.pm().SendKeys(keys)
@@ -470,7 +593,7 @@ func (i *Instance) SendKeys(keys string) error {
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	if !i.started || i.Status == Paused {
+	if !i.started.Load() || i.Status == Paused {
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)
@@ -480,7 +603,10 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 // The DoesSessionExist guard is omitted here: TmuxSession.GetPanePID already uses
 // the CM fast path (no subprocess) and falls back to display-message which returns
 // an error if the session is gone. Avoiding a separate list-sessions call per instance
-// prevents N concurrent tmux list-sessions subprocesses during HistoryLinker.ScanAll.
+// keeps this cheap for HistoryLinker.ScanAll, which calls this sequentially (not
+// fanned out) per session anyway -- and the display-message subprocess fallback is
+// itself gated (session/tmux's exec gate), so there's no need for a second guard
+// here even if that ever changes.
 func (i *Instance) GetPanePID() (int32, error) {
 	return i.pm().GetPanePID()
 }

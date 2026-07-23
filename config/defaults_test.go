@@ -197,6 +197,35 @@ func TestResolveDefaults_DirectoryRuleReferencesProfile(t *testing.T) {
 	}
 }
 
+func TestMaxConcurrentBacklogWorkItemsOrDefault_ClampsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"unset", 0, maxConcurrentBacklogWorkItemsDefault},
+		{"negative", -5, maxConcurrentBacklogWorkItemsDefault},
+		{"valid", 4, 4},
+		{"at ceiling", maxConcurrentBacklogWorkItemsHardCeiling, maxConcurrentBacklogWorkItemsHardCeiling},
+		{"above ceiling", maxConcurrentBacklogWorkItemsHardCeiling + 50, maxConcurrentBacklogWorkItemsHardCeiling},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{MaxConcurrentBacklogWorkItems: tt.value}
+			if got := cfg.MaxConcurrentBacklogWorkItemsOrDefault(); got != tt.want {
+				t.Errorf("MaxConcurrentBacklogWorkItemsOrDefault() with value=%d = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *Config
+		if got := cfg.MaxConcurrentBacklogWorkItemsOrDefault(); got != maxConcurrentBacklogWorkItemsDefault {
+			t.Errorf("nil config: got %d, want %d", got, maxConcurrentBacklogWorkItemsDefault)
+		}
+	})
+}
+
 func TestUnionTags(t *testing.T) {
 	result := unionTags([]string{"a", "b"}, []string{"b", "c"})
 	if len(result) != 3 {

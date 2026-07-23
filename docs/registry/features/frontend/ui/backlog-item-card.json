@@ -3,8 +3,13 @@
   "type": "frontend",
   "component": "BacklogItemCard",
   "path": "web-app/src/components/backlog/BacklogItemCard.tsx",
-  "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "BacklogItemCard_should_RenderStatusLabelFromGetStatusLabel_When_ItemStatusIsReview",
+    "BacklogItemCard_should_RenderQueuedStatusLabelIndependently_When_GetActionSpecFallsThroughToDefaultBranch",
+    "BacklogItemCard_should_RenderCompactBlockerChip_When_StuckItemPropProvided",
+    "BacklogItemCard_should_OmitBlockerChipAndKeepFooterUnchanged_When_StuckItemPropUndefined"
+  ],
+  "lastModified": "2026-07-21T00:00:00Z"
 }

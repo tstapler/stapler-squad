@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,13 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
+// e.g. "https://github.com/owner/repo/pull/148" -> 148. Mirrors
+// session/storage_backlog.go's identical pattern (BackfillMissingPRNumbers) —
+// duplicated here rather than imported since session/git cannot import the
+// parent session package without a cycle.
+var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
 // runGitCommand executes a git command and returns any error.
 // Uses the executor for circuit breaker support when available.
@@ -49,16 +57,8 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	}
 
 	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.Error("failed to commit changes", "err", err)
-			return fmt.Errorf("failed to commit changes: %w", err)
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
@@ -110,16 +110,8 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	}
 
 	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.Error("failed to stage changes", "err", err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit (local only)
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.Error("failed to commit changes", "err", err)
-			return fmt.Errorf("failed to commit changes: %w", err)
+		if err := g.stageAndCommit(commitMessage); err != nil {
+			return err
 		}
 		g.InvalidateDirtyCache()
 	}
@@ -127,28 +119,104 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
+// stageAndCommit stages all changes (minus scaffolding), then commits — unless
+// the only staged change was a scaffolding file that staging just untracked, in
+// which case it skips the commit gracefully instead of failing on git's
+// "nothing to commit". Shared by CommitChanges and PushChanges, whose stage/
+// commit sequence is otherwise identical.
+func (g *GitWorktree) stageAndCommit(commitMessage string) error {
+	if err := g.StageAllExceptScaffolding(); err != nil {
+		log.Error("failed to stage changes", "err", err)
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	hasStaged, err := g.HasStagedChanges()
+	if err != nil {
+		log.Error("failed to check staged changes", "err", err)
+		return fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	if !hasStaged {
+		return nil
+	}
+
+	if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+		log.Error("failed to commit changes", "err", err)
+		return fmt.Errorf("failed to commit changes: %w", err)
+	}
+	return nil
+}
+
+// StageAllExceptScaffolding stages all worktree changes (`git add .`) and then
+// untracks any staged path matching ScaffoldingExcludePatterns, so backlog
+// automation scaffolding files (.backlog-context.md, .claude/commands/backlog/*)
+// don't get (re)committed even if they were already tracked in this branch's
+// history — gitignore/info-exclude rules only stop a NEW path from being
+// staged, not one that's already in the index (see UntrackScaffolding's doc
+// comment). Deliberately fails open on the untrack step (logs and continues
+// rather than blocking a real commit) — the CI backstop workflow
+// (.github/workflows/backlog-scaffolding-guard.yml) is the second, independent
+// layer for the rare case where the untrack step itself errors.
+func (g *GitWorktree) StageAllExceptScaffolding() error {
+	if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	removed, err := UntrackScaffolding(g.worktreePath, ScaffoldingExcludePatterns)
+	if err != nil {
+		log.Error("failed to untrack scaffolding files before commit", "worktree", g.worktreePath, "err", err)
+	} else if len(removed) > 0 {
+		log.Info("untracked scaffolding file(s) before commit", "worktree", g.worktreePath, "files", removed)
+	}
+	return nil
+}
+
+// HasStagedChanges reports whether the git index differs from HEAD — i.e.
+// whether a commit right now would actually record anything. Used after
+// StageAllExceptScaffolding so a commit whose only staged change was a
+// just-untracked scaffolding file is skipped gracefully instead of failing on
+// "nothing to commit".
+func (g *GitWorktree) HasStagedChanges() (bool, error) {
+	out, err := g.runGitCommand(g.worktreePath, "diff", "--cached", "--name-only")
+	if err != nil {
+		return false, fmt.Errorf("failed to check staged changes: %w", err)
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // PrimeDirtyCacheAt sets the dirty-cache timestamp to t without running git status.
 // Use this to stagger per-session cache expiry so sessions added to the poller
 // within a short window don't all expire simultaneously and burst-launch git subprocesses.
 func (g *GitWorktree) PrimeDirtyCacheAt(t time.Time) {
-	g.isDirtyCacheMu.Lock()
-	g.isDirtyCacheTime = t
-	g.isDirtyCacheMu.Unlock()
+	g.isDirtyCache.Store(dirtyCacheState{dirty: false, time: t})
 }
 
 // InvalidateDirtyCache clears the IsDirty cache so the next call re-runs git status.
 // Call this whenever worktree state changes outside of Claude's control (e.g. after a
 // manual commit, after running git operations, or in tests after writing files directly).
 func (g *GitWorktree) InvalidateDirtyCache() {
-	g.isDirtyCacheMu.Lock()
-	g.isDirtyCacheTime = time.Time{}
-	g.isDirtyCacheMu.Unlock()
+	g.isDirtyCache.Store(dirtyCacheState{}) // zero time signals "cache invalid"
 }
 
 // IsDirty checks if the worktree has uncommitted changes.
-// Results are cached for IsDirtyCacheTTL (15 s) to avoid spawning a subprocess on every call.
+// Results are cached for IsDirtyCacheTTL (dirty) or IsDirtyCleanCacheTTL (clean).
 func (g *GitWorktree) IsDirty() (bool, error) {
 	return g.IsDirtyWithHint(false)
+}
+
+// isDirtyCacheTTL returns the TTL to apply based on the current cached state.
+// Clean worktrees use a longer TTL because they won't change while the session is idle,
+// and InvalidateDirtyCache() fires on every code path that could make them dirty. A
+// cached error (e.g. worktree directory missing) gets its own short backoff so a broken
+// worktree isn't re-checked on every poller tick.
+func isDirtyCacheTTL(state dirtyCacheState) time.Duration {
+	switch {
+	case state.err != nil:
+		return IsDirtyErrorCacheTTL
+	case state.dirty:
+		return IsDirtyCacheTTL
+	default:
+		return IsDirtyCleanCacheTTL
+	}
 }
 
 // IsDirtyWithHint checks if the worktree has uncommitted changes.
@@ -156,47 +224,93 @@ func (g *GitWorktree) IsDirty() (bool, error) {
 // (or false if no cached value is available yet), because Claude never modifies worktree state
 // while it is actively generating output.
 func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
-	// Fast path: hold read lock and check whether the cache is still fresh.
-	g.isDirtyCacheMu.RLock()
-	cacheValid := !g.isDirtyCacheTime.IsZero() && time.Since(g.isDirtyCacheTime) < IsDirtyCacheTTL
-	if cacheValid || claudeActive {
-		cached := g.isDirtyCache
-		g.isDirtyCacheMu.RUnlock()
-		return cached, nil
+	// Fast path: lock-free atomic load; TTL varies by cached state (dirty/clean/error).
+	// dirty → IsDirtyCacheTTL (30s); clean → IsDirtyCleanCacheTTL (5min); error → IsDirtyErrorCacheTTL (60s).
+	if v := g.isDirtyCache.Load(); v != nil {
+		state := v.(dirtyCacheState)
+		if claudeActive || (!state.time.IsZero() && time.Since(state.time) < isDirtyCacheTTL(state)) {
+			if state.err != nil {
+				return false, state.err
+			}
+			return state.dirty, nil
+		}
+	} else if claudeActive {
+		return false, nil
 	}
-	g.isDirtyCacheMu.RUnlock()
 
-	// Slow path: run the subprocess outside any lock so concurrent readers are not
-	// blocked for the full git-status wall time (~50–200 ms per worktree).
-	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
-	if err != nil {
-		return false, fmt.Errorf("failed to check worktree status: %w", err)
+	// Slow path: run git status --porcelain via subprocess, wrapped in singleflight
+	// so concurrent callers coalesce onto a single status check rather than each
+	// spawning their own git process.
+	type dirtyResult struct {
+		dirty bool
+		err   error
 	}
-	dirty := len(output) > 0
+	v, _, _ := g.isDirtySF.Do(g.worktreePath, func() (interface{}, error) {
+		out, subErr := g.runGitCommand(g.worktreePath, "status", "--porcelain")
+		return dirtyResult{len(out) > 0, subErr}, nil
+	})
+	res := v.(dirtyResult)
+	if res.err != nil {
+		// Cache the failure with a backoff TTL (isDirtyCacheTTL routes err!=nil to
+		// IsDirtyErrorCacheTTL) so a worktree with a stale/missing path — e.g. left
+		// behind by a rework/reopen cycle — doesn't get re-checked on every poller
+		// tick (previously: a fresh subprocess spawn roughly every few seconds,
+		// indefinitely, for a directory that will never come back on its own).
+		wrapped := fmt.Errorf("failed to check worktree status: %w", res.err)
+		g.isDirtyCache.Store(dirtyCacheState{time: time.Now(), err: wrapped})
+		return false, wrapped
+	}
+	dirty := res.dirty
 
-	// Write lock only to store the result.  Return our own observation (`dirty`),
-	// not the cache slot: re-reading the slot after a lost write race could return
-	// a different goroutine's observation, which may be stale relative to ours.
-	g.isDirtyCacheMu.Lock()
-	if g.isDirtyCacheTime.IsZero() || time.Since(g.isDirtyCacheTime) >= IsDirtyCacheTTL {
-		g.isDirtyCache = dirty
-		g.isDirtyCacheTime = time.Now()
-	}
-	g.isDirtyCacheMu.Unlock()
+	// Store the result. Return our own observation (`dirty`), not a re-read of
+	// the slot: a lost write race (InvalidateDirtyCache after singleflight started)
+	// is harmless — the next call will re-run git status when TTL expires.
+	g.isDirtyCache.Store(dirtyCacheState{dirty: dirty, time: time.Now()})
 	return dirty, nil
 }
 
-// IsBranchCheckedOut checks if the instance branch is currently checked out
+// IsBranchCheckedOut checks if the instance branch is currently checked out.
+// Uses go-git to read HEAD directly (no subprocess).
 func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
-	output, err := g.runGitCommand(g.repoPath, "branch", "--show-current")
+	current, err := getCurrentBranchName(g.repoPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to get current branch: %w", err)
 	}
-	return strings.TrimSpace(string(output)) == g.branchName, nil
+	return current == g.branchName, nil
 }
 
-// PushBranch pushes the current branch to origin without committing.
-// Use CommitChanges first if there are uncommitted changes.
+// OpenBranchURL opens the branch URL in the default browser
+func (g *GitWorktree) OpenBranchURL() error {
+	// Check if GitHub CLI is available
+	if err := checkGHCLI(); err != nil {
+		return err
+	}
+
+	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer browseCancel()
+	cmd := safeexec.CommandContext(browseCtx, "gh", "browse", "--branch", g.branchName)
+	cmd.Dir = g.worktreePath
+	if err := g.runExec(cmd); err != nil {
+		return fmt.Errorf("failed to open branch URL: %w", err)
+	}
+	return nil
+}
+
+// runExec runs a command through the executor (or directly if no executor is set).
+func (g *GitWorktree) runExec(cmd *exec.Cmd) error {
+	if g.cmdExec != nil {
+		return g.cmdExec.Run(cmd)
+	}
+	return cmd.Run()
+}
+
+// runCombinedOutput runs a command through the executor and returns combined output.
+func (g *GitWorktree) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+	if g.cmdExec != nil {
+		return g.cmdExec.CombinedOutput(cmd)
+	}
+	return cmd.CombinedOutput()
+}
 func (g *GitWorktree) PushBranch() error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
@@ -240,18 +354,37 @@ func (g *GitWorktree) CreatePR(title, body string) (prURL string, prNumber int, 
 		return "", 0, fmt.Errorf("gh pr create failed: %s (%w)", out, runErr)
 	}
 
-	// gh pr create prints the PR URL as the last line.
+	// gh pr create prints the PR URL as the last line. Some gh versions treat
+	// "PR already exists for this branch" as success rather than an error (the
+	// findExistingPR race-check above already covers the common case, but not
+	// every gh version/timing), so out may point at a pre-existing PR.
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	prURL = strings.TrimSpace(lines[len(lines)-1])
 
-	// Fetch the PR number from the URL.
-	numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer numCancel()
-	numCmd := safeexec.CommandContext(numCtx, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
-	numCmd.Dir = g.worktreePath
-	numOut, numErr := g.runCombinedOutput(numCmd)
-	if numErr == nil {
-		prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
+	// Parse the number directly from the URL first — a plain string operation
+	// that can't silently fail the way a second gh subprocess call can. Found
+	// live: the separate `gh pr view --head` call below occasionally returned
+	// empty/erroring output (its error was silently swallowed, leaving
+	// prNumber at its zero value) even though prURL had already resolved
+	// correctly — the resulting "PR #0" was then passed to EnablePRAutoMerge,
+	// which predictably failed with "no pull requests found", so auto-merge
+	// never got enabled for a PR that otherwise pushed and tracked correctly.
+	if m := prNumberFromURLRe.FindStringSubmatch(prURL); m != nil {
+		if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 {
+			prNumber = n
+		}
+	}
+	if prNumber == 0 {
+		// Fallback: the URL didn't parse (unexpected format) — try the
+		// original gh-view-based lookup as a last resort.
+		numCtx, numCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer numCancel()
+		numCmd := safeexec.CommandContext(numCtx, "gh", "pr", "view", "--json", "number", "--jq", ".number", "--head", g.branchName)
+		numCmd.Dir = g.worktreePath
+		numOut, numErr := g.runCombinedOutput(numCmd)
+		if numErr == nil {
+			prNumber, _ = strconv.Atoi(strings.TrimSpace(string(numOut)))
+		}
 	}
 
 	return prURL, prNumber, nil
@@ -281,18 +414,117 @@ func (g *GitWorktree) findExistingPR() (string, int, error) {
 	return url, num, nil
 }
 
-// PRStatus holds the CI and review state for a pull request.
+// reviewInfo captures the blocking review that tripped HasBlockingReviews.
+type reviewInfo struct{ author, body string }
+
+// PRStatus holds the CI, review, and conflict state for a pull request.
 type PRStatus struct {
 	// CIFailing is true when at least one CI check has a terminal failure.
 	CIFailing bool
 	// HasBlockingReviews is true when a reviewer has requested changes.
 	HasBlockingReviews bool
+	// HasConflicts is true when GitHub reports mergeStateStatus == "DIRTY" or
+	// mergeable == "CONFLICTING" — its branch cannot be merged as-is and needs
+	// a rebase. Both fields are checked (see Task 1.1.1d) because gh's
+	// mergeable field has been observed returning stale data (cli/cli#9583).
+	HasConflicts bool
+	// IsClosed is true when the PR's state is CLOSED (rejected by a human without
+	// merging) rather than OPEN or MERGED. Callers must check this before treating
+	// "not merged" as "still open and healthy" — a closed PR will never merge on
+	// its own no matter how long ReconcilePRPending keeps polling it.
+	IsClosed bool
+	// IsDraft is true when the PR is still marked draft on GitHub. Captured from
+	// the same gh pr view call as everything else on this struct (no second API
+	// call) so callers such as the backlog stuck-item detector (prReadyToMergeSolo)
+	// can gate on it without an extra fetch.
+	IsDraft bool
+	// Mergeable is the raw upper-cased GitHub `mergeable` field ("MERGEABLE",
+	// "CONFLICTING", or "UNKNOWN"). HasConflicts is the belt-and-suspenders
+	// bool derived from this plus mergeStateStatus (see above); Mergeable is
+	// exposed separately for callers (prReadyToMergeSolo) that want the literal
+	// "MERGEABLE" check called out in ADR-001 rather than the inverse-of-conflict
+	// approximation.
+	Mergeable string
+	// ApprovedCount is the number of current non-dismissed APPROVED reviews.
+	ApprovedCount int
+	// ChangesRequestedCount is the number of current non-dismissed
+	// CHANGES_REQUESTED reviews (equivalently, len of the reviews backing
+	// HasBlockingReviews — exposed as a count so callers building a
+	// github.PRInfo-shaped value don't need to re-derive it from the bool).
+	ChangesRequestedCount int
 	// FeedbackText is a combined human-readable summary for the fix agent.
 	FeedbackText string
+
+	failedChecks    []string     // unexported; captured CI failures, consumed by render()
+	blockingReviews []reviewInfo // unexported; one entry per CHANGES_REQUESTED review
+	// conflictMergeStateStatus is the raw mergeStateStatus value that tripped
+	// HasConflicts; only meaningful when HasConflicts is true. A plain string
+	// rather than a nil-checked pointer, since HasConflicts is already the
+	// single source of truth for "is there a conflict" — render() branches on
+	// HasConflicts, not on this field's zero-ness.
+	conflictMergeStateStatus string
+	generalComments          []string // unexported; existing "general comments" section content (unchanged behavior, just relocated)
 }
 
-// GetPRStatus fetches the combined CI check status, reviewer decisions, and
-// PR comments for the given pull request number.
+// render assembles FeedbackText from the fields captured during evaluation,
+// in a fixed order (conflict first — features.md §2A), so FeedbackText can
+// never drift from the bools it's derived from.
+func (s *PRStatus) render() string {
+	var sb strings.Builder
+
+	if s.HasConflicts {
+		sb.WriteString("## Merge conflict\n")
+		fmt.Fprintf(&sb,
+			"This PR's branch has merge conflicts against its base branch (mergeStateStatus=%s) "+
+				"and cannot be merged as-is.\n"+
+				"Rebase onto the base branch and resolve conflicts. This is not necessarily a "+
+				"re-implementation of the original acceptance criteria — the PR's existing changes "+
+				"are still correct, they just need to be replayed onto a moved base.\n\n"+
+				"Follow these rules when resolving:\n"+
+				"- Push with `git push --force-with-lease`, never `--force`. This fails safely if "+
+				"the remote branch moved since you last fetched it, instead of silently discarding commits.\n"+
+				"- If a conflicting file is a config file (for example `.gitignore`) and one side of "+
+				"the conflict looks suspiciously short or placeholder-like compared to the other, prefer "+
+				"the longer/more-complete side rather than guessing — this repo has hit real `.gitignore` "+
+				"truncation incidents from automated rebases before.\n"+
+				"- If you cannot confidently resolve a conflicting hunk, leave the conflict markers in "+
+				"place, do not force-push, and say so clearly in your final message instead of guessing.\n"+
+				"- Before finishing, run `git diff --stat` comparing your final branch against the base "+
+				"branch's pre-rebase state, and paste that output verbatim into both your final report "+
+				"and the PR description. Call out `.gitignore` or any other config/lockfile whose line-count "+
+				"delta looks disproportionate. This rebase will force-push over the PR's existing diff, which "+
+				"resets GitHub's review view — the diff-stat is the one artifact a human reviewer can check "+
+				"against your summary instead of trusting it on faith.\n\n",
+			s.conflictMergeStateStatus)
+	}
+
+	if len(s.failedChecks) > 0 {
+		sb.WriteString("## Failing CI checks\n")
+		for _, fc := range s.failedChecks {
+			sb.WriteString("- " + fc + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	for _, br := range s.blockingReviews {
+		sb.WriteString("## Review: changes requested by @" + br.author + "\n")
+		if br.body != "" {
+			sb.WriteString(br.body + "\n\n")
+		}
+	}
+
+	if len(s.generalComments) > 0 {
+		sb.WriteString("## PR comments\n")
+		for _, c := range s.generalComments {
+			sb.WriteString(c + "\n\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// GetPRStatus fetches the combined CI check status, reviewer decisions,
+// mergeability, and PR comments for the given pull request number.
 func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 	if err := checkGHCLI(); err != nil {
 		return nil, err
@@ -301,13 +533,20 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 	defer cancel()
 
 	cmd := safeexec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber),
-		"--json", "statusCheckRollup,reviews,comments")
+		"--json", "statusCheckRollup,reviews,comments,mergeable,mergeStateStatus,state,isDraft")
 	cmd.Dir = g.worktreePath
 	raw, err := g.runCombinedOutput(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view failed: %s (%w)", raw, err)
 	}
 
+	return parsePRStatusPayload(raw)
+}
+
+// parsePRStatusPayload parses gh pr view's combined JSON output, evaluates
+// all PR-status signals into structured fields, and renders FeedbackText
+// from them. It has no I/O dependency and is directly unit-testable.
+func parsePRStatusPayload(raw []byte) (*PRStatus, error) {
 	var payload struct {
 		StatusCheckRollup []struct {
 			Typename   string `json:"__typename"`
@@ -332,16 +571,35 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 				Login string `json:"login"`
 			} `json:"author"`
 		} `json:"comments"`
+		Mergeable        string `json:"mergeable"`
+		MergeStateStatus string `json:"mergeStateStatus"`
+		State            string `json:"state"`
+		IsDraft          bool   `json:"isDraft"`
 	}
-	if jsonErr := json.Unmarshal([]byte(raw), &payload); jsonErr != nil {
+	if jsonErr := json.Unmarshal(raw, &payload); jsonErr != nil {
 		return nil, fmt.Errorf("parse pr status: %w", jsonErr)
 	}
 
 	status := &PRStatus{}
-	var sb strings.Builder
+	status.IsClosed = strings.ToUpper(payload.State) == "CLOSED"
+	status.IsDraft = payload.IsDraft
+	status.Mergeable = strings.ToUpper(payload.Mergeable)
+
+	// Evaluate mergeability first — a PR that can't even be rebased makes
+	// CI/review feedback moot until it's mergeable again. Check both fields:
+	// cli/cli#9583 documents gh's `mergeable` field returning stale/incorrect
+	// data vs. `mergeStateStatus` for the same PR (stack.md §3), so this is a
+	// belt-and-suspenders OR, not a single-field check. UNKNOWN on both fields
+	// falls through to "no signal this cycle" by construction — neither
+	// comparison below matches "UNKNOWN".
+	mss := strings.ToUpper(payload.MergeStateStatus)
+	mg := strings.ToUpper(payload.Mergeable)
+	if mss == "DIRTY" || mg == "CONFLICTING" {
+		status.HasConflicts = true
+		status.conflictMergeStateStatus = payload.MergeStateStatus
+	}
 
 	// Evaluate CI checks.
-	var failedChecks []string
 	for _, check := range payload.StatusCheckRollup {
 		name := check.Name
 		if name == "" {
@@ -361,38 +619,47 @@ func (g *GitWorktree) GetPRStatus(prNumber int) (*PRStatus, error) {
 			if url != "" {
 				entry += " (" + url + ")"
 			}
-			failedChecks = append(failedChecks, entry)
+			status.failedChecks = append(status.failedChecks, entry)
 		}
-	}
-	if len(failedChecks) > 0 {
-		sb.WriteString("## Failing CI checks\n")
-		for _, fc := range failedChecks {
-			sb.WriteString("- " + fc + "\n")
-		}
-		sb.WriteString("\n")
 	}
 
 	// Evaluate reviews.
 	for _, r := range payload.Reviews {
-		if strings.ToUpper(r.State) == "CHANGES_REQUESTED" {
+		switch strings.ToUpper(r.State) {
+		case "CHANGES_REQUESTED":
 			status.HasBlockingReviews = true
-			sb.WriteString("## Review: changes requested by @" + r.Author.Login + "\n")
-			if r.Body != "" {
-				sb.WriteString(r.Body + "\n\n")
-			}
+			status.ChangesRequestedCount++
+			status.blockingReviews = append(status.blockingReviews, reviewInfo{author: r.Author.Login, body: r.Body})
+		case "APPROVED":
+			status.ApprovedCount++
 		}
 	}
 
 	// Include general PR comments as context.
-	if len(payload.Comments) > 0 {
-		sb.WriteString("## PR comments\n")
-		for _, c := range payload.Comments {
-			sb.WriteString("@" + c.Author.Login + ": " + c.Body + "\n\n")
-		}
+	for _, c := range payload.Comments {
+		status.generalComments = append(status.generalComments, "@"+c.Author.Login+": "+c.Body)
 	}
 
-	status.FeedbackText = sb.String()
+	status.FeedbackText = status.render()
 	return status, nil
+}
+
+// EnablePRAutoMerge enables GitHub auto-merge on the given PR so it merges
+// automatically once required CI checks pass. Best-effort: fails silently
+// when the repo does not have auto-merge enabled in its branch protection rules.
+func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
+	if err := checkGHCLI(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "gh", "pr", "merge", strconv.Itoa(prNumber), "--auto", "--squash")
+	cmd.Dir = g.worktreePath
+	out, err := g.runCombinedOutput(cmd)
+	if err != nil {
+		return fmt.Errorf("gh pr merge --auto failed: %s (%w)", out, err)
+	}
+	return nil
 }
 
 // IsPRMerged reports whether the given PR number has been merged.
@@ -411,35 +678,4 @@ func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
 	return strings.TrimSpace(string(out)) == "MERGED", nil
 }
 
-// OpenBranchURL opens the branch URL in the default browser
-func (g *GitWorktree) OpenBranchURL() error {
-	// Check if GitHub CLI is available
-	if err := checkGHCLI(); err != nil {
-		return err
-	}
-
-	browseCtx, browseCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer browseCancel()
-	cmd := safeexec.CommandContext(browseCtx, "gh", "browse", "--branch", g.branchName)
-	cmd.Dir = g.worktreePath
-	if err := g.runExec(cmd); err != nil {
-		return fmt.Errorf("failed to open branch URL: %w", err)
-	}
-	return nil
-}
-
 // runExec runs a command through the executor (or directly if no executor is set).
-func (g *GitWorktree) runExec(cmd *exec.Cmd) error {
-	if g.cmdExec != nil {
-		return g.cmdExec.Run(cmd)
-	}
-	return cmd.Run()
-}
-
-// runCombinedOutput runs a command through the executor and returns combined output.
-func (g *GitWorktree) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
-	if g.cmdExec != nil {
-		return g.cmdExec.CombinedOutput(cmd)
-	}
-	return cmd.CombinedOutput()
-}

@@ -146,6 +146,11 @@ type mockTmuxManager struct {
 
 	// ResetExitOnce
 	resetExitCalls int
+
+	// PaneExitStatus
+	paneExitCode   int
+	paneExitSignal string
+	paneExitDead   bool
 }
 
 func (m *mockTmuxManager) IsAlive() bool {
@@ -295,6 +300,11 @@ func (m *mockTmuxManager) ResetExitOnce() {
 func (m *mockTmuxManager) Session() *tmux.TmuxSession     { return nil }
 func (m *mockTmuxManager) SetSession(_ *tmux.TmuxSession) {}
 func (m *mockTmuxManager) DoesSessionExist() bool         { return m.isAliveReturn }
+
+// PaneExitStatus
+func (m *mockTmuxManager) PaneExitStatus() (code int, signal string, dead bool) {
+	return m.paneExitCode, m.paneExitSignal, m.paneExitDead
+}
 
 // --- T-UNIT-1: GetSessionIdentifier value correctness ---
 

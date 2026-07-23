@@ -11,13 +11,15 @@ import {
   ItemSession as ItemSessionProto,
   TriageTask as TriageTaskProto,
   BacklogStatusEvent as BacklogStatusEventProto,
+  BacklogProgressNote as BacklogProgressNoteProto,
+  PipelineMode as PipelineModeProto,
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
 // Domain types exposed to UI (mapped from proto, but without Message<> noise)
 // ---------------------------------------------------------------------------
 
-export type KnownBacklogStatus = "idea" | "refining" | "ready" | "in_progress" | "review" | "pr_pending" | "done" | "archived";
+export type KnownBacklogStatus = "idea" | "refining" | "ready" | "queued" | "in_progress" | "review" | "pr_pending" | "done" | "archived";
 // (string & {}) preserves autocomplete for KnownBacklogStatus values while still
 // accepting unknown statuses returned by newer server versions.
 export type BacklogItemStatus = KnownBacklogStatus | (string & {});
@@ -69,6 +71,22 @@ export interface LinkedSession {
   estimatedCostUsd: number;
   /** Git branch name for the session's worktree, if one exists. */
   worktreeBranch?: string;
+  /** Absolute path to the session's git worktree, if one exists. */
+  worktreePath?: string;
+  /**
+   * Pipeline mode slug this session actually ran under, frozen at session
+   * start — "" means the built-in default mode (or a pre-Epic-1.6 session
+   * predating this field). Never re-resolved against the live mode list;
+   * see BacklogItemDetail.tsx's "what ran" surface (Epic 3.4).
+   */
+  pipelineModeSnapshot?: string;
+  /**
+   * SHA-256 content hash of the pipeline mode at the moment this session
+   * ran — "" when pipelineModeSnapshot is "" (default mode / pre-feature
+   * session, no meaningful drift comparison). Compared against the mode's
+   * current PipelineMode.contentHash to detect content drift.
+   */
+  pipelineModeSnapshotHash?: string;
 }
 
 export interface BacklogItem {
@@ -81,6 +99,10 @@ export interface BacklogItem {
   repoPath?: string;
   skipPlanning: boolean;
   skipReviewGate: boolean;
+  /** When true, a work session is spawned automatically once the item reaches ready — no manual "Spawn Session" click required. */
+  autoSpawnSession: boolean;
+  /** When true, a PR is created automatically (same one-shot prompt as the manual Review Queue "Create PR" button) once a work session reaches TASK_COMPLETE — no manual click required. */
+  autoCreatePR: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
   acCriteria: AcCriterion[];
@@ -98,19 +120,104 @@ export interface BacklogItem {
   triageResult?: TriageResult;
   /** Status transition history for this item (audit log) */
   statusEvents: StatusEvent[];
+  /** Implementer's report_progress audit trail (audit log) */
+  progressNotes: ProgressNote[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
   prUrl?: string;
   /** GitHub PR number when item is in pr_pending status */
   prNumber?: number;
+  /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
+  pipelineMode?: string;
+  /**
+   * Per-item override for the auto-rework cap. Undefined = use the global
+   * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
+   * this item's own cap, replacing the global value.
+   */
+  reworkCapOverride?: number;
+  /**
+   * Live-update generation counter (Epic 6.1, backlog-event-driven-updates).
+   * Populated only by `useWatchBacklogItems` — incremented once per genuine
+   * live (non-snapshot) `BacklogItemEvent` for this item, so
+   * `BacklogItemCard` can flash on a real change without ever flashing on
+   * the initial snapshot or a reconnect/poll resync. Undefined for items
+   * obtained via a one-shot RPC call (`listBacklogItems`, `getBacklogItem`,
+   * etc.) rather than the watch stream.
+   */
+  liveVersion?: number;
 }
+
+/**
+ * PipelineMode is a named, slug-addressed, user-creatable definition of which
+ * slash-commands and prompt content a backlog item's pipeline uses. Mapped
+ * from session.v1.PipelineMode (see backlog_pb.ts).
+ */
+export interface PipelineMode {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  statusCommandTemplate: string;
+  doneCommandTemplate: string;
+  failCommandTemplate: string;
+  reviewCommandTemplate: string;
+  shipCommandTemplate: string;
+  helpCommandTemplate: string;
+  triagePromptTemplate: string;
+  reviewPromptTemplate: string;
+  initialPromptTemplate: string;
+  /** SHA-256 (hex, truncated to 16 chars) over the 9 content-template fields, computed server-side. */
+  contentHash: string;
+}
+
+/**
+ * Payload for CreatePipelineMode. All 9 content-template fields are optional —
+ * an omitted field is sent as "" (no partial-update semantics on create,
+ * unlike PipelineModeUpdateInput below).
+ */
+export interface PipelineModeInput {
+  slug: string;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  statusCommandTemplate?: string;
+  doneCommandTemplate?: string;
+  failCommandTemplate?: string;
+  reviewCommandTemplate?: string;
+  shipCommandTemplate?: string;
+  helpCommandTemplate?: string;
+  triagePromptTemplate?: string;
+  reviewPromptTemplate?: string;
+  initialPromptTemplate?: string;
+}
+
+/**
+ * Payload for UpdatePipelineMode. Slug is immutable after creation (per
+ * plan.md's Story 3.3.2) so it is intentionally absent here — only
+ * name/description/enabled/content-template fields may be changed. Every
+ * field is a true partial-update: an omitted key leaves the stored value
+ * untouched (mirrors BacklogItemInput's Partial<> update convention).
+ */
+export type PipelineModeUpdateInput = Partial<Omit<PipelineModeInput, "slug">>;
 
 export interface StatusEvent {
   id: string;
   fromStatus: string;
   toStatus: string;
   triggeredBy: string;
+  createdAt?: string;
+  /** Human-readable reason for this transition, e.g. "auto-reopened after FAIL verdict". */
+  note?: string;
+}
+
+/** A single report_progress call — the implementer's append-only decision history. */
+export interface ProgressNote {
+  id: string;
+  criterionIndex: number;
+  note: string;
+  status: string;
   createdAt?: string;
 }
 
@@ -121,15 +228,28 @@ export interface BacklogItemInput {
   priority?: number;
   skipPlanning?: boolean;
   skipReviewGate?: boolean;
+  autoSpawnSession?: boolean;
+  autoCreatePR?: boolean;
   acCriteria?: AcCriterion[];
   notes?: string;
   skipTriage?: boolean;
+  /** Pipeline mode slug, or "" for the built-in default. */
+  pipelineMode?: string;
+  /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
+  reworkCapOverride?: number;
 }
 
 export interface ListBacklogItemsFilter {
   statuses?: BacklogItemStatus[];
   priorities?: number[];
   includeTerminal?: boolean;
+  /**
+   * When true, includes items with status "archived" in the default
+   * (no explicit `statuses`) result set. Independent of includeTerminal —
+   * defaults to false so archived items stay hidden unless the caller opts
+   * in (see the backlog page's "Show Archived" toggle).
+   */
+  includeArchived?: boolean;
   search?: string;
 }
 
@@ -154,6 +274,9 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
     worktreeBranch: s.worktreeBranch || undefined,
+    worktreePath: s.worktreePath || undefined,
+    pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
+    pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
   };
 
   // Map review verdict if present
@@ -205,10 +328,48 @@ function mapStatusEvent(e: BacklogStatusEventProto): StatusEvent {
     toStatus: e.toStatus,
     triggeredBy: e.triggeredBy,
     createdAt: e.createdAt ? new Date(Number(e.createdAt.seconds) * 1000).toISOString() : undefined,
+    note: e.note,
   };
 }
 
-function mapBacklogItem(p: BacklogItemProto): BacklogItem {
+function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
+  return {
+    id: n.id,
+    criterionIndex: n.criterionIndex,
+    note: n.note,
+    status: n.status,
+    createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
+  };
+}
+
+function mapPipelineMode(p: PipelineModeProto): PipelineMode {
+  return {
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    description: p.description,
+    enabled: p.enabled,
+    statusCommandTemplate: p.statusCommandTemplate,
+    doneCommandTemplate: p.doneCommandTemplate,
+    failCommandTemplate: p.failCommandTemplate,
+    reviewCommandTemplate: p.reviewCommandTemplate,
+    shipCommandTemplate: p.shipCommandTemplate,
+    helpCommandTemplate: p.helpCommandTemplate,
+    triagePromptTemplate: p.triagePromptTemplate,
+    reviewPromptTemplate: p.reviewPromptTemplate,
+    initialPromptTemplate: p.initialPromptTemplate,
+    contentHash: p.contentHash,
+  };
+}
+
+// Exported so other real-time consumers (useWatchBacklogItems) can convert
+// the raw proto BacklogItem their stream/store deals in to this file's mapped
+// domain BacklogItem — the shape BacklogItemCard/BacklogBoard/BacklogItemDetail
+// actually render (acCriteria, gateVerdict, triageStatus, ISO date strings,
+// etc., none of which exist on the raw proto message). Also exported for
+// direct unit testing of triageStatus derivation — see
+// useBacklogService.test.ts.
+export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
   const linkedSessions = (p.itemSessions ?? []).map(mapItemSession);
 
   // Extract gate verdict from the most recent session (for review status)
@@ -261,6 +422,8 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     repoPath: p.repoPath || undefined,
     skipPlanning: p.skipPlanning,
     skipReviewGate: p.skipReviewGate,
+    autoSpawnSession: p.autoSpawnSession,
+    autoCreatePR: p.autoCreatePr,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
@@ -274,9 +437,12 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageStatus,
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
+    progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
+    pipelineMode: p.pipelineMode || undefined,
+    reworkCapOverride: p.reworkCapOverride,
   };
 }
 
@@ -311,6 +477,9 @@ export interface GitHubIssue {
   state: string;
   url: string;
   labels: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  isPR: boolean;
 }
 
 export class GitHubAuthError extends Error {
@@ -339,12 +508,35 @@ interface UseBacklogServiceReturn {
     toStatus: BacklogItemStatus,
     precondition?: BacklogItemStatus
   ) => Promise<BacklogItem | null>;
-  spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string } | null>;
+  spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string; queued: boolean } | null>;
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
+  /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
+  triggerShipPR: (id: string) => Promise<{ prUrl: string } | null>;
+  submitManualReview: (id: string, overallOutcome: string, summary: string) => Promise<BacklogItem | null>;
+  /**
+   * Fetches all pipeline modes (enabled AND disabled — callers that only want
+   * selectable modes, e.g. the item-form selector, must filter on `enabled`
+   * themselves). Rethrows on failure so callers can distinguish "no modes
+   * defined yet" from "the fetch failed".
+   */
+  listPipelineModes: () => Promise<PipelineMode[]>;
+  /** Fetches a single pipeline mode by slug. Rethrows (incl. CodeNotFound) so callers can distinguish "not found" from other failures. */
+  getPipelineMode: (slug: string) => Promise<PipelineMode | null>;
+  /**
+   * Creates a new pipeline mode. Rethrows on failure (in particular
+   * `ConnectError` with `Code.InvalidArgument` from the backend's Story 2.3.1
+   * content validation) so callers can display the error inline instead of a
+   * generic failure state.
+   */
+  createPipelineMode: (data: PipelineModeInput) => Promise<PipelineMode>;
+  /** Partial-updates an existing pipeline mode. Rethrows on failure — see createPipelineMode. */
+  updatePipelineMode: (id: string, data: PipelineModeUpdateInput) => Promise<PipelineMode>;
+  /** Deletes a pipeline mode by id. Rethrows on failure. */
+  deletePipelineMode: (id: string) => Promise<boolean>;
   /** Last error from createBacklogItem, updateBacklogItem, transitionStatus, or spawnSessionFromItem. */
   lastError: Error | null;
   /** Clears the lastError state. */
@@ -373,6 +565,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           status: filter?.statuses ?? [],
           priority: filter?.priorities ?? [],
           includeTerminal: filter?.includeTerminal ?? false,
+          includeArchived: filter?.includeArchived ?? false,
           sortBy: "",
         });
         const items = (resp.items ?? []).map(mapBacklogItem);
@@ -416,9 +609,12 @@ export function useBacklogService(): UseBacklogServiceReturn {
           priority: data.priority ?? 3,
           skipPlanning: data.skipPlanning ?? false,
           skipReviewGate: data.skipReviewGate ?? false,
+          autoSpawnSession: data.autoSpawnSession ?? false,
+          autoCreatePr: data.autoCreatePR ?? false,
           acceptanceCriteria: toProtoAcCriteria(data.acCriteria ?? []),
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
+          pipelineMode: data.pipelineMode ?? "",
         });
         return resp.item
           ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
@@ -445,8 +641,12 @@ export function useBacklogService(): UseBacklogServiceReturn {
           priority: data.priority,
           skipPlanning: data.skipPlanning,
           skipReviewGate: data.skipReviewGate,
+          autoSpawnSession: data.autoSpawnSession,
+          autoCreatePr: data.autoCreatePR,
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
+          pipelineMode: data.pipelineMode,
+          reworkCapOverride: data.reworkCapOverride,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
@@ -501,14 +701,14 @@ export function useBacklogService(): UseBacklogServiceReturn {
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
-        return null;
+        throw err;
       }
     },
     []
   );
 
   const spawnSessionFromItem = useCallback(
-    async (id: string, options?: { autonomous?: boolean; force?: boolean }): Promise<{ sessionUuid: string } | null> => {
+    async (id: string, options?: { autonomous?: boolean; force?: boolean }): Promise<{ sessionUuid: string; queued: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
@@ -517,11 +717,11 @@ export function useBacklogService(): UseBacklogServiceReturn {
           autonomous: options?.autonomous ?? false,
           force: options?.force ?? false,
         });
-        return { sessionUuid: resp.sessionUuid };
+        return { sessionUuid: resp.sessionUuid, queued: resp.queued };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
-        return null;
+        throw err;
       }
     },
     []
@@ -550,7 +750,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     } catch (err) {
       console.error("[useBacklogService] cancelTriage:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
-      return false;
+      throw err;
     }
   }, []);
 
@@ -593,6 +793,131 @@ export function useBacklogService(): UseBacklogServiceReturn {
     } catch (err) {
       console.error("[useBacklogService] triggerReReview:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  /**
+   * Runs the same one-shot PR-creation prompt the opt-in AutoCreatePR policy
+   * uses automatically, for an item in review with no PR yet — the
+   * self-service "Ship PR" action on the item detail page. Can take a while
+   * (the underlying RunOneShot call may run for several minutes), matching
+   * ReviewQueuePanel's existing manual "Create PR" flow. Rethrows on failure
+   * so the caller can show the specific error (e.g. "work session not
+   * running") rather than a generic failure state.
+   */
+  const triggerShipPR = useCallback(async (id: string): Promise<{ prUrl: string } | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.triggerShipPR({ itemId: id });
+      return { prUrl: resp.prUrl };
+    } catch (err) {
+      console.error("[useBacklogService] triggerShipPR:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  const submitManualReview = useCallback(
+    async (id: string, overallOutcome: string, summary: string): Promise<BacklogItem | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.submitManualReview({ itemId: id, overallOutcome, summary });
+        return resp.item ? mapBacklogItem(resp.item) : null;
+      } catch (err) {
+        console.error("[useBacklogService] submitManualReview:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        throw err;
+      }
+    },
+    []
+  );
+
+  const listPipelineModes = useCallback(async (): Promise<PipelineMode[]> => {
+    if (!clientRef.current) return [];
+    try {
+      const resp = await clientRef.current.listPipelineModes({});
+      return (resp.items ?? []).map(mapPipelineMode);
+    } catch (err) {
+      console.error("[useBacklogService] listPipelineModes:", err);
+      throw err;
+    }
+  }, []);
+
+  const getPipelineMode = useCallback(async (slug: string): Promise<PipelineMode | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.getPipelineMode({ slug });
+      return resp.item ? mapPipelineMode(resp.item) : null;
+    } catch (err) {
+      console.error("[useBacklogService] getPipelineMode:", err);
+      throw err;
+    }
+  }, []);
+
+  const createPipelineMode = useCallback(async (data: PipelineModeInput): Promise<PipelineMode> => {
+    if (!clientRef.current) throw new Error("Backlog service not connected");
+    try {
+      const resp = await clientRef.current.createPipelineMode({
+        slug: data.slug,
+        name: data.name,
+        description: data.description ?? "",
+        enabled: data.enabled ?? false,
+        statusCommandTemplate: data.statusCommandTemplate ?? "",
+        doneCommandTemplate: data.doneCommandTemplate ?? "",
+        failCommandTemplate: data.failCommandTemplate ?? "",
+        reviewCommandTemplate: data.reviewCommandTemplate ?? "",
+        shipCommandTemplate: data.shipCommandTemplate ?? "",
+        helpCommandTemplate: data.helpCommandTemplate ?? "",
+        triagePromptTemplate: data.triagePromptTemplate ?? "",
+        reviewPromptTemplate: data.reviewPromptTemplate ?? "",
+        initialPromptTemplate: data.initialPromptTemplate ?? "",
+      });
+      if (!resp.item) throw new Error("createPipelineMode: server returned no item");
+      return mapPipelineMode(resp.item);
+    } catch (err) {
+      console.error("[useBacklogService] createPipelineMode:", err);
+      throw err;
+    }
+  }, []);
+
+  const updatePipelineMode = useCallback(
+    async (id: string, data: PipelineModeUpdateInput): Promise<PipelineMode> => {
+      if (!clientRef.current) throw new Error("Backlog service not connected");
+      try {
+        const resp = await clientRef.current.updatePipelineMode({
+          id,
+          name: data.name,
+          description: data.description,
+          enabled: data.enabled,
+          statusCommandTemplate: data.statusCommandTemplate,
+          doneCommandTemplate: data.doneCommandTemplate,
+          failCommandTemplate: data.failCommandTemplate,
+          reviewCommandTemplate: data.reviewCommandTemplate,
+          shipCommandTemplate: data.shipCommandTemplate,
+          helpCommandTemplate: data.helpCommandTemplate,
+          triagePromptTemplate: data.triagePromptTemplate,
+          reviewPromptTemplate: data.reviewPromptTemplate,
+          initialPromptTemplate: data.initialPromptTemplate,
+        });
+        if (!resp.item) throw new Error("updatePipelineMode: server returned no item");
+        return mapPipelineMode(resp.item);
+      } catch (err) {
+        console.error("[useBacklogService] updatePipelineMode:", err);
+        throw err;
+      }
+    },
+    []
+  );
+
+  const deletePipelineMode = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.deletePipelineMode({ id });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] deletePipelineMode:", err);
       throw err;
     }
   }, []);
@@ -665,6 +990,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           state: i.state,
           url: i.url,
           labels: i.labels,
+          createdAt: i.createdAt ? new Date(Number(i.createdAt.seconds) * 1000).toISOString() : undefined,
+          updatedAt: i.updatedAt ? new Date(Number(i.updatedAt.seconds) * 1000).toISOString() : undefined,
+          isPR: i.isPr ?? false,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {
@@ -697,6 +1025,13 @@ export function useBacklogService(): UseBacklogServiceReturn {
       approvePlan,
       overrideVerdict,
       triggerReReview,
+      triggerShipPR,
+      submitManualReview,
+      listPipelineModes,
+      getPipelineMode,
+      createPipelineMode,
+      updatePipelineMode,
+      deletePipelineMode,
       lastError,
       clearError,
     }),

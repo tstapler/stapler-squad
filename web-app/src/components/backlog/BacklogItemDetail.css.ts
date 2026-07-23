@@ -1,5 +1,22 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+
+const spinKeyframes = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+export const buttonSpinner = style({
+  display: "inline-block",
+  width: 12,
+  height: 12,
+  border: `2px solid currentColor`,
+  borderTopColor: "transparent",
+  borderRadius: vars.radii.full,
+  animation: `${spinKeyframes} 0.7s linear infinite`,
+  opacity: 0.7,
+  flexShrink: 0,
+});
 
 export const container = style({
   display: "flex",
@@ -16,6 +33,17 @@ export const scrollArea = style({
   display: "flex",
   flexDirection: "column",
   gap: vars.space["4"],
+});
+
+// Epic 6.4: houses the edit-mode buffered-update/save-conflict InlineNotice.
+// Deliberately a sibling of `scrollArea` (flexShrink: 0), not a child of it —
+// a long form can scroll the banner's original position out of view, which
+// would defeat the point of a non-blocking-but-still-visible notice about a
+// concurrent server-side change (design/ux.md §6). Pinning it here keeps it
+// visible the same way `header` above it is, without making it a modal/toast.
+export const bannerBar = style({
+  flexShrink: 0,
+  padding: `${vars.space["3"]} ${vars.space["4"]} 0`,
 });
 
 export const errorBanner = style({
@@ -270,6 +298,17 @@ export const actionButton = style({
   },
 });
 
+export const actionButtonSecondary = style({
+  background: "transparent",
+  color: vars.color.textMuted,
+  borderColor: vars.color.borderMuted,
+  ":hover": {
+    background: vars.color.accentHover,
+    borderColor: vars.color.textMuted,
+    color: vars.color.textPrimary,
+  },
+});
+
 export const actionButtonDanger = style({
   background: vars.color.errorBg,
   color: vars.color.error,
@@ -298,13 +337,49 @@ export const sessionList = style({
 
 export const sessionRow = style({
   display: "flex",
-  alignItems: "center",
-  gap: vars.space["3"],
+  flexDirection: "column",
+  gap: vars.space["1"],
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.sm,
   fontSize: vars.fontSize.sm,
+});
+
+export const sessionRowMain = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["3"],
+});
+
+export const pipelineGroup = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  paddingLeft: vars.space["1"],
+});
+
+export const pipelineLabel = style({
+  color: vars.color.textDisabled,
+});
+
+export const pipelineValue = style({
+  color: vars.color.textSecondary,
+});
+
+export const pipelineDriftBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  padding: `1px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  whiteSpace: "nowrap",
 });
 
 export const sessionLink = style({
@@ -417,6 +492,13 @@ export const artifactsPath = style({
   wordBreak: "break-all",
 });
 
+export const worktreePathRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  flexWrap: "wrap",
+});
+
 export const workflowTimeline = style({
   display: "flex",
   flexDirection: "column",
@@ -427,8 +509,9 @@ export const workflowTimeline = style({
 
 export const workflowEvent = style({
   display: "flex",
-  alignItems: "baseline",
-  gap: vars.space["3"],
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: vars.space["1"],
   padding: `${vars.space["1"]} ${vars.space["2"]}`,
   position: "relative",
   fontSize: vars.fontSize.sm,
@@ -444,6 +527,21 @@ export const workflowEvent = style({
     background: vars.color.borderSubtle,
     border: `2px solid ${vars.color.modalBackground}`,
   },
+});
+
+export const workflowEventRow = style({
+  display: "flex",
+  alignItems: "baseline",
+  gap: vars.space["3"],
+  flexWrap: "wrap",
+  width: "100%",
+});
+
+export const workflowEventNote = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontStyle: "italic",
+  width: "100%",
 });
 
 export const workflowEventFrom = style({
@@ -529,6 +627,56 @@ export const workflowEventMeta = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.xs,
   whiteSpace: "nowrap",
+});
+
+export const progressNoteList = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 0,
+});
+
+export const progressNoteItem = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+  padding: `${vars.space["2"]} ${vars.space["2"]}`,
+  borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  fontSize: vars.fontSize.sm,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+    },
+  },
+});
+
+export const progressNoteMeta = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const verdictDetail = style({
+  marginTop: vars.space["1"],
+  padding: vars.space["2"],
+  background: vars.color.surfaceSubtle,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+});
+
+export const verdictSummary = style({
+  color: vars.color.textPrimary,
+});
+
+export const verdictCriterion = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "flex-start",
+  color: vars.color.textMuted,
 });
 
 export const loadingState = style({
@@ -634,4 +782,68 @@ export const errorState = style({
   padding: vars.space["12"],
   color: vars.color.error,
   fontSize: vars.fontSize.sm,
+});
+
+export const manualReviewForm = style({
+  marginTop: vars.space["3"],
+  padding: vars.space["4"],
+  borderRadius: vars.radii.md,
+  border: `1px solid ${vars.color.borderColor}`,
+  background: vars.color.cardBackground,
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
+});
+
+export const manualReviewTitle = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  color: vars.color.textPrimary,
+  margin: 0,
+});
+
+export const manualReviewRow = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["1"],
+});
+
+export const manualReviewLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+});
+
+export const manualReviewSelect = style({
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.inputBorder}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  fontSize: vars.fontSize.sm,
+  cursor: "pointer",
+});
+
+export const manualReviewTextarea = style({
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.inputBorder}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  fontSize: vars.fontSize.sm,
+  resize: "vertical",
+  fontFamily: "inherit",
+  selectors: {
+    "&:focus": {
+      outline: "none",
+      borderColor: vars.color.inputFocusBorder,
+    },
+  },
+});
+
+export const manualReviewActions = style({
+  display: "flex",
+  gap: vars.space["2"],
 });

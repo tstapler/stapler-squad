@@ -3508,7 +3508,11 @@ type FileChange struct {
 	// Whether the change is staged for commit
 	IsStaged bool `protobuf:"varint,3,opt,name=is_staged,json=isStaged,proto3" json:"is_staged,omitempty"`
 	// Original path for renames/copies
-	OldPath       string `protobuf:"bytes,4,opt,name=old_path,json=oldPath,proto3" json:"old_path,omitempty"`
+	OldPath string `protobuf:"bytes,4,opt,name=old_path,json=oldPath,proto3" json:"old_path,omitempty"`
+	// Lines added, from `git diff --numstat` (0 for untracked/binary files)
+	Additions int32 `protobuf:"varint,5,opt,name=additions,proto3" json:"additions,omitempty"`
+	// Lines removed, from `git diff --numstat` (0 for untracked/binary files)
+	Deletions     int32 `protobuf:"varint,6,opt,name=deletions,proto3" json:"deletions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3569,6 +3573,20 @@ func (x *FileChange) GetOldPath() string {
 		return x.OldPath
 	}
 	return ""
+}
+
+func (x *FileChange) GetAdditions() int32 {
+	if x != nil {
+		return x.Additions
+	}
+	return 0
+}
+
+func (x *FileChange) GetDeletions() int32 {
+	if x != nil {
+		return x.Deletions
+	}
+	return 0
 }
 
 // VCSStatus represents the current status of the version control system
@@ -6665,13 +6683,15 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\bmetadata\x18\t \x03(\v2&.session.v1.Notification.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x88\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc4\x01\n" +
 	"\n" +
 	"FileChange\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12.\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x16.session.v1.FileStatusR\x06status\x12\x1b\n" +
 	"\tis_staged\x18\x03 \x01(\bR\bisStaged\x12\x19\n" +
-	"\bold_path\x18\x04 \x01(\tR\aoldPath\"\x84\x05\n" +
+	"\bold_path\x18\x04 \x01(\tR\aoldPath\x12\x1c\n" +
+	"\tadditions\x18\x05 \x01(\x05R\tadditions\x12\x1c\n" +
+	"\tdeletions\x18\x06 \x01(\x05R\tdeletions\"\x84\x05\n" +
 	"\tVCSStatus\x12'\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x13.session.v1.VCSTypeR\x04type\x12\x16\n" +
 	"\x06branch\x18\x02 \x01(\tR\x06branch\x12\x1f\n" +

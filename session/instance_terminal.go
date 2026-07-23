@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -48,7 +49,7 @@ func (i *Instance) MatchesID(id string) bool {
 // SetTitle sets the title of the instance. Returns an error if the instance has started.
 // We can't change the title once it's been used for a tmux session etc.
 func (i *Instance) SetTitle(title string) error {
-	if i.started {
+	if i.started.Load() {
 		return fmt.Errorf("cannot change title of a started instance")
 	}
 	i.Title = title
@@ -102,22 +103,55 @@ func (i *Instance) combineErrors(errs []error) error {
 	return fmt.Errorf("%s", errMsg)
 }
 
+// previewBlocked reports whether preview capture should be skipped for this instance -
+// either because it hasn't started yet, or because its lifecycle status makes a live
+// terminal capture meaningless (Paused/Stopped/Hibernated).
+//
+// Reads Status via Snapshot(), not a bare field read: actor commands
+// (transitionToLocked et al.) write i.Status directly while running inside
+// the actor's own serialization, not under i.mu, so an unguarded read here
+// doesn't synchronize with that write at all (see GetStatus's doc comment).
+// Preview() and PreviewFullHistory() share this check so the two can't drift.
+func (i *Instance) previewBlocked() bool {
+	status := i.Snapshot().Status
+	return !i.started.Load() || status == Paused || status == Stopped || status == Hibernated
+}
+
 // Preview returns the current visible terminal content.
-// Prefers the in-memory PTY buffer from ClaudeController; falls back to capture-pane.
+// Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
+// instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped {
+	if i.previewBlocked() {
 		return "", nil
 	}
 
-	// Prefer the in-memory PTY buffer from ClaudeController (no subprocess).
+	// tmux performs real terminal emulation (cursor movement, redraws, screen
+	// clears), so capture-pane returns the actual current screen rather than an
+	// approximation reconstructed from a raw byte stream. CapturePaneContent has
+	// a 1s TTL cache (see TmuxProcessManager), so preferring it here does not add
+	// a subprocess spawn on every poll tick.
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if content, err := tb.CapturePaneContent(); err == nil {
+			return content, nil
+		}
+	}
+
+	// Native backend (capture-pane not yet implemented there) or tmux capture
+	// failed: fall back to the in-memory PTY buffer.
+	// GetRecentOutput(0) would return the ENTIRE 10MB session-lifetime buffer
+	// (PTYAccess.GetRecentOutput treats n<=0 as "give me everything"), not the
+	// current screen — a dialog answered minutes ago would still scan as
+	// "visible" to callers like isStartupDialog/shouldApprovePrompt for as
+	// long as it takes 10MB of subsequent output to evict it. Bound the read
+	// to the same tail window the working status-detection path already uses.
 	if ctrl := i.GetController(); ctrl != nil {
-		raw := ctrl.GetRecentOutput(0)
+		raw := ctrl.GetRecentOutput(detection.StatusDetectionTailBytes)
 		return string(raw), nil
 	}
 
-	// Fallback for external/attached sessions: use capture-pane subprocess.
-	// Skip the TmuxAlive() pre-check (which spawns a subprocess); let CapturePaneContent
-	// handle the "session doesn't exist" case via its own error path.
+	// No controller at all (e.g. external/attached sessions): try capture-pane
+	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
+	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
 	content, err := i.pm().CapturePaneContent()
 	if err != nil {
 		return "", nil
@@ -128,7 +162,7 @@ func (i *Instance) Preview() (string, error) {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped {
+	if i.previewBlocked() {
 		return "", nil
 	}
 
@@ -149,7 +183,7 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // Called during graceful shutdown so cold restore can restart in the right directory.
 // No-op if the session is not started, paused, or the tmux session is dead.
 func (i *Instance) CaptureCurrentState() error {
-	if !i.started || i.Paused() {
+	if !i.started.Load() || i.Paused() {
 		return nil
 	}
 	if !i.pm().IsAlive() {
@@ -275,6 +309,10 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 	var result prUpdateResult
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		inst := s.inst
+		// i.mu guards the writes + buildSnapshot together: legacy setters
+		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
+		// outside the actor — see runActor's doc comment in actor.go.
+		inst.mu.Lock()
 		result.PriorityChanged = priority != inst.GitHubPRPriority
 		inst.GitHubPRState = state
 		inst.GitHubPRPriority = priority
@@ -284,7 +322,9 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		inst.GitHubCheckConclusion = checkConclusion
 		inst.GitHubPRStatusTerminal = terminal
 		inst.LastPRStatusCheck = time.Now()
-		inst.snapshot.Store(buildSnapshot(inst))
+		snap := buildSnapshot(inst)
+		inst.mu.Unlock()
+		inst.snapshot.Store(snap)
 		return nil
 	})
 	return result

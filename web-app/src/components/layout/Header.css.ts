@@ -19,8 +19,8 @@ export const header = style({
   // Header always uses a dark backdrop regardless of OS color scheme.
   // Override text tokens so all children get sufficient contrast.
   vars: {
-    [vars.color.textPrimary]: "#ededed",
-    [vars.color.textSecondary]: "#b4b4b4",
+    [vars.color.textPrimary]: vars.color.headerTextPrimary,
+    [vars.color.textSecondary]: vars.color.headerTextSecondary,
   },
 
   "@media": {

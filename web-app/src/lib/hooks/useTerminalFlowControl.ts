@@ -1,40 +1,25 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
-import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema, InputWithEcho, InputWithEchoSchema } from "@/gen/session/v1/events_pb";
+import { useRef, useCallback, useEffect } from "react";
+import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
-import { StateApplicator } from "@/lib/terminal/StateApplicator";
-import { EchoOverlay } from "@/lib/terminal/EchoOverlay";
 import type { Terminal } from '@xterm/xterm';
 
 export interface UseTerminalFlowControlOptions {
   sessionId: string;
-  streamingMode: "raw" | "raw-compressed" | "state" | "hybrid" | "ssp";
-  enablePredictiveEcho: boolean;
   getTerminal: () => Terminal | null;
   /** Push a message onto the connection queue. Stored via ref to avoid stale closures. */
   pushMessageRef: React.MutableRefObject<((msg: TerminalData) => void) | null>;
   isConnectedRef: React.MutableRefObject<boolean>;
   onError?: (error: Error) => void;
-  onEchoAck?: (echoNum: bigint, latencyMs: number) => void;
 }
 
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
-  sendInputWithEcho: (input: string) => bigint;
   resize: (cols: number, rows: number) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
   requestFullResync: (urgent?: boolean) => void;
-  getIsApplyingState: () => boolean;
-  sspNegotiated: boolean;
-  setSspNegotiated: (value: boolean) => void;
-
-  // Internal methods used by the message handler in the parent composition hook
-  handleStateMessage: (msg: any) => void;
-  handleDiffMessage: (msg: any) => void;
-  handleSspNegotiation: (msg: any) => void;
-  handleCurrentPaneResponse: (msg: any) => void;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
   getIsResyncingRef: () => React.MutableRefObject<boolean>;
@@ -42,28 +27,17 @@ export interface UseTerminalFlowControlResult {
 }
 
 /**
- * useTerminalFlowControl - Resync logic, resize throttling, message dispatch,
- * SSP echo tracking, and StateApplicator integration.
- *
- * Bug Risk 1 mitigation: stateApplicatorRef and isResyncingRef are kept in the
- * same hook to preserve synchronous ref access during the SSP state machine.
- *
- * Bug Risk 3 mitigation: pushMessage is accessed via pushMessageRef.current
- * (not captured in closures) to prevent stale closure issues on reconnect.
+ * useTerminalFlowControl - Resync logic, resize throttling, and message dispatch
+ * for terminal input/resize/scrollback/flow-control.
  */
 export function useTerminalFlowControl({
   sessionId,
-  streamingMode,
-  enablePredictiveEcho,
   getTerminal,
   pushMessageRef,
   isConnectedRef,
   onError,
-  onEchoAck,
 }: UseTerminalFlowControlOptions): UseTerminalFlowControlResult {
-  const [sspNegotiated, setSspNegotiated] = useState(false);
-
-  // Resync state machine refs (Bug Risk 1: keep these together)
+  // Resync state machine refs
   const isResyncingRef = useRef(false);
   const waitingForPaneResponseRef = useRef(false);
   const lastResyncTimeRef = useRef<number>(0);
@@ -81,14 +55,6 @@ export function useTerminalFlowControl({
       }
     };
   }, []);
-
-  // StateApplicator (lazy init) - kept in same hook as resync refs per Bug Risk 1
-  const stateApplicatorRef = useRef<StateApplicator | null>(null);
-
-  // SSP echo tracking
-  const echoOverlayRef = useRef<EchoOverlay | null>(null);
-  const echoCounterRef = useRef<bigint>(BigInt(0));
-  const echoTimestampsRef = useRef<Map<bigint, number>>(new Map());
 
   // Helper to set error state
   const handleError = useCallback((err: unknown) => {
@@ -144,7 +110,6 @@ export function useTerminalFlowControl({
         includeEscapes: true,
         targetCols: currentTerminal.cols,
         targetRows: currentTerminal.rows,
-        streamingMode: streamingMode,
       });
 
       pushMessage(
@@ -159,161 +124,7 @@ export function useTerminalFlowControl({
     } catch (err) {
       handleError(err);
     }
-  }, [sessionId, getTerminal, streamingMode, pushMessage, pushMessageRef, isConnectedRef, handleError]);
-
-  // ---- Dimension mismatch handler (shared between state and diff init) ----
-
-  const setupDimensionMismatchHandler = useCallback((applicator: StateApplicator) => {
-    applicator.setOnDimensionMismatch((expectedCols, expectedRows, actualCols, actualRows) => {
-      console.warn(
-        `[useTerminalFlowControl] DIMENSION MISMATCH DETECTED: ` +
-        `server sent ${expectedCols}x${expectedRows}, ` +
-        `but terminal is ${actualCols}x${actualRows}. ` +
-        `Requesting resync with correct dimensions...`
-      );
-
-      if (!isResyncingRef.current) {
-        console.log(`[useTerminalFlowControl] Triggering resync due to dimension mismatch`);
-        requestFullResync(true);
-      } else {
-        console.log(`[useTerminalFlowControl] Already resyncing, skipping duplicate resync request`);
-      }
-    });
-  }, [requestFullResync]);
-
-  // ---- StateApplicator lazy initialization ----
-
-  const getOrInitStateApplicator = useCallback((messageType: 'state' | 'diff'): StateApplicator | null => {
-    if (stateApplicatorRef.current) return stateApplicatorRef.current;
-
-    const currentTerminal = getTerminal();
-    if (!currentTerminal) {
-      console.warn(`[useTerminalFlowControl] Received ${messageType} but terminal not ready yet`);
-      return null;
-    }
-
-    const applicator = new StateApplicator(currentTerminal);
-    console.log(`[useTerminalFlowControl] State applicator lazily initialized on first ${messageType}`);
-
-    setupDimensionMismatchHandler(applicator);
-
-    // Wire echo overlay for diff messages if predictive echo is enabled
-    if (messageType === 'diff' && enablePredictiveEcho && echoOverlayRef.current) {
-      applicator.setEchoOverlay(echoOverlayRef.current);
-      applicator.setOnEchoAck((ack) => {
-        const sendTime = echoTimestampsRef.current.get(ack.echoAckNum);
-        if (sendTime) {
-          const latencyMs = Date.now() - sendTime;
-          echoTimestampsRef.current.delete(ack.echoAckNum);
-          console.log(`[useTerminalFlowControl] Echo ack ${ack.echoAckNum}: RTT=${latencyMs}ms`);
-          onEchoAck?.(ack.echoAckNum, latencyMs);
-        }
-      });
-    }
-
-    stateApplicatorRef.current = applicator;
-    return applicator;
-  }, [getTerminal, enablePredictiveEcho, onEchoAck, setupDimensionMismatchHandler]);
-
-  // ---- Message handlers (called from parent hook's message loop) ----
-
-  const handleStateMessage = useCallback((msg: any) => {
-    const applicator = getOrInitStateApplicator('state');
-    if (!applicator) return;
-
-    // If waiting for pane response, this is the initial state
-    if (waitingForPaneResponseRef.current) {
-      console.log('[useTerminalFlowControl] Received complete terminal state as pane response');
-      waitingForPaneResponseRef.current = false;
-      isResyncingRef.current = false;
-    }
-
-    // Check dimension consistency
-    const currentTerminal = getTerminal();
-    if (currentTerminal && msg.dimensions) {
-      const stateCols = Number(msg.dimensions.cols);
-      const stateRows = Number(msg.dimensions.rows);
-
-      if (stateCols !== currentTerminal.cols || stateRows !== currentTerminal.rows) {
-        console.log(
-          `[useTerminalFlowControl] State dimension difference: ` +
-          `state=${stateCols}x${stateRows}, terminal=${currentTerminal.cols}x${currentTerminal.rows}. ` +
-          `StateApplicator will handle resize automatically.`
-        );
-      }
-    }
-
-    const success = applicator.applyState(msg);
-    if (!success) {
-      console.log(
-        `[useTerminalFlowControl] State sequence ${msg.sequence} ignored ` +
-        `(current: ${applicator.getCurrentSequence()})`
-      );
-    } else {
-      console.log(
-        `[useTerminalFlowControl] Applied state sequence ${msg.sequence} ` +
-        `(${msg.lines.length} lines)`
-      );
-    }
-  }, [getOrInitStateApplicator, getTerminal]);
-
-  const handleDiffMessage = useCallback((msg: any) => {
-    const applicator = getOrInitStateApplicator('diff');
-    if (!applicator) return;
-
-    const success = applicator.applyDiff(msg);
-
-    if (!success) {
-      console.warn(
-        `[useTerminalFlowControl] Diff sequence mismatch: ` +
-        `diff.fromSequence=${msg.fromSequence}, ` +
-        `current=${applicator.getCurrentSequence()}. ` +
-        `Requesting resync.`
-      );
-      requestFullResync(true);
-    } else {
-      console.log(
-        `[useTerminalFlowControl] Applied diff ${msg.fromSequence}->${msg.toSequence} ` +
-        `(${msg.changedCells} cells changed, ${msg.diffBytes?.length || 0} bytes)`
-      );
-    }
-  }, [getOrInitStateApplicator, requestFullResync]);
-
-  const handleSspNegotiation = useCallback((msg: any) => {
-    if (!msg.isRequest && msg.negotiated) {
-      console.log('[useTerminalFlowControl] SSP capabilities negotiated:', {
-        predictiveEcho: msg.negotiated.supportsPredictiveEcho,
-        diffUpdates: msg.negotiated.supportsDiffUpdates,
-        compression: msg.negotiated.compressionAlgorithms,
-      });
-      setSspNegotiated(true);
-
-      // Initialize echo overlay if predictive echo is enabled
-      if (msg.negotiated.supportsPredictiveEcho && enablePredictiveEcho) {
-        const currentTerminal = getTerminal();
-        if (currentTerminal && !echoOverlayRef.current) {
-          echoOverlayRef.current = new EchoOverlay({ debug: true });
-          echoOverlayRef.current.attach(currentTerminal);
-          console.log('[useTerminalFlowControl] Echo overlay initialized after SSP negotiation');
-        }
-      }
-    }
-  }, [enablePredictiveEcho, getTerminal]);
-
-  const handleCurrentPaneResponse = useCallback((msg: any) => {
-    console.warn("[useTerminalFlowControl] Received deprecated currentPaneResponse");
-
-    const currentTerminal = getTerminal();
-    if (currentTerminal) {
-      stateApplicatorRef.current = new StateApplicator(currentTerminal);
-      console.log("[useTerminalFlowControl] Created fresh state applicator after receiving current pane");
-      setupDimensionMismatchHandler(stateApplicatorRef.current);
-    }
-
-    isResyncingRef.current = false;
-    waitingForPaneResponseRef.current = false;
-    console.log("[useTerminalFlowControl] Pane response received - ready to process deltas");
-  }, [getTerminal, setupDimensionMismatchHandler]);
+  }, [sessionId, getTerminal, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
   // ---- Message dispatch functions ----
 
@@ -375,43 +186,6 @@ export function useTerminalFlowControl({
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
-  const sendInputWithEcho = useCallback((input: string): bigint => {
-    if (!pushMessageRef.current || !isConnectedRef.current) return BigInt(0);
-
-    try {
-      echoCounterRef.current = echoCounterRef.current + BigInt(1);
-      const echoNum = echoCounterRef.current;
-      const clientTimestamp = Date.now();
-
-      echoTimestampsRef.current.set(echoNum, clientTimestamp);
-
-      if (echoOverlayRef.current && enablePredictiveEcho) {
-        echoOverlayRef.current.showPredictiveEcho(input);
-      }
-
-      const inputBytes = new TextEncoder().encode(input);
-
-      pushMessage(
-        create(TerminalDataSchema, {
-          sessionId,
-          data: {
-            case: "inputEcho",
-            value: create(InputWithEchoSchema, {
-              data: inputBytes,
-              echoNum: echoNum,
-              clientTimestampMs: BigInt(clientTimestamp),
-            }),
-          },
-        })
-      );
-
-      return echoNum;
-    } catch (err) {
-      handleError(err);
-      return BigInt(0);
-    }
-  }, [sessionId, enablePredictiveEcho, pushMessage, pushMessageRef, isConnectedRef, handleError]);
-
   const resize = useCallback((cols: number, rows: number) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {
       console.warn("Cannot resize terminal: stream not connected");
@@ -456,7 +230,6 @@ export function useTerminalFlowControl({
                   includeEscapes: true,
                   targetCols: cols,
                   targetRows: rows,
-                  streamingMode: streamingMode || "raw-compressed",
                 }),
               },
             })
@@ -480,7 +253,7 @@ export function useTerminalFlowControl({
     }
 
     doSend();
-  }, [sessionId, streamingMode, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {
@@ -532,10 +305,6 @@ export function useTerminalFlowControl({
     }
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
-  const getIsApplyingState = useCallback(() => {
-    return stateApplicatorRef.current?.getIsApplyingState() ?? false;
-  }, []);
-
   const markResyncComplete = useCallback(() => {
     isResyncingRef.current = false;
   }, []);
@@ -549,18 +318,10 @@ export function useTerminalFlowControl({
 
   return {
     sendInput,
-    sendInputWithEcho,
     resize,
     requestScrollback,
     sendFlowControl,
     requestFullResync,
-    getIsApplyingState,
-    sspNegotiated,
-    setSspNegotiated,
-    handleStateMessage,
-    handleDiffMessage,
-    handleSspNegotiation,
-    handleCurrentPaneResponse,
     markResyncComplete,
     markPaneResponseReceived,
     getIsResyncingRef,

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,8 +10,26 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
+
+// ReviewGateTrigger is implemented by BacklogLifecycleListener to fire an
+// immediate headless review when an autonomous work session completes.
+type ReviewGateTrigger interface {
+	TriggerReviewForSession(workSessionUUID string)
+}
+
+// AutonomousStuckRespawner is implemented by BacklogService to give an
+// in_progress backlog item a fresh work-session turn budget after an
+// autonomous work session hits its turn cap without a DONE signal, instead of
+// forcing the item into review against work the driver itself flagged
+// incomplete (see onAutonomousDriverComplete's SessionRoleWork case). Gated
+// by the same rework cap AutoReopenAfterFailedReview uses, so this respawn
+// loop can't run forever either.
+type AutonomousStuckRespawner interface {
+	AutoRespawnAutonomousWork(ctx context.Context, itemID string) error
+}
 
 // AutonomousOrchestrationService manages the lifecycle of AutonomousDriver instances:
 // registering them on session creation, stopping them on deletion/hibernate, and
@@ -34,6 +53,36 @@ type AutonomousOrchestrationService struct {
 	// storageGetter returns the concrete backing store for backlog item transitions.
 	// Wired at construction time via a closure over the InstanceStore.
 	storageGetter func() *session.Storage
+
+	// reviewGateTrigger fires an immediate headless review when a work session
+	// completes under autonomous mode. Optional — if nil, review runs on next ReconcileStuck tick.
+	reviewGateTrigger ReviewGateTrigger
+
+	// autonomousStuckRespawner gives an item a fresh autonomous work-session
+	// turn budget when a work session hits its turn cap without a DONE signal.
+	// Optional — if nil, the item is simply left in_progress (marked
+	// autonomous_stuck) until a human reopens it manually.
+	autonomousStuckRespawner AutonomousStuckRespawner
+}
+
+// SetReviewGateTrigger wires the review gate trigger (typically BacklogLifecycleListener).
+func (a *AutonomousOrchestrationService) SetReviewGateTrigger(t ReviewGateTrigger) {
+	a.reviewGateTrigger = t
+}
+
+// SetAutonomousStuckRespawner wires the respawner (typically BacklogService) used to
+// retry a turn-cap-stopped autonomous work session instead of forcing it to review.
+func (a *AutonomousOrchestrationService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	a.autonomousStuckRespawner = r
+}
+
+// TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger, used
+// by the request_review MCP tool to spawn a review gate immediately instead of waiting
+// for the next ReconcileStuck tick. No-op if no trigger is wired.
+func (a *AutonomousOrchestrationService) TriggerReviewForSession(sessionUUID string) {
+	if a.reviewGateTrigger != nil {
+		a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
+	}
 }
 
 // NewAutonomousOrchestrationService creates a new service.
@@ -212,22 +261,54 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	a.bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
 
 	// Look up the backlog item linked to this session.
+	// statusTransitionErr is surfaced in the notification below so the operator never sees
+	// "complete" while the backlog item silently failed to advance (e.g. a concurrent status
+	// change broke the optimistic-concurrency precondition).
+	var statusTransitionErr error
 	if a.storageGetter != nil {
 		concreteStorage := a.storageGetter()
 		if concreteStorage != nil {
 			is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
-			if err == nil && is != nil {
-				item, itemErr := is.Edges.BacklogItemOrErr()
-				if itemErr == nil && item != nil {
+			if err != nil {
+				if errors.Is(err, session.ErrNotFound) {
+					// Expected: most autonomous sessions are not backlog-linked.
+					log.Debug("[AutonomousDriver] onAutonomousDriverComplete: no linked backlog item session", "session", instanceName)
+				} else {
+					// A real lookup failure would otherwise take the identical silent path as
+					// "not backlog-linked" above, making it undiagnosable in production.
+					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: item session lookup failed", "session", instanceName, "err", err)
+				}
+			} else {
+				item, itemErr := concreteStorage.GetBacklogItem(ctx, is.BacklogItemID)
+				if itemErr != nil || item == nil {
+					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: failed to load linked backlog item", "itemSession", is.ID, "item", is.BacklogItemID, "err", itemErr)
+				} else {
+					// Write a durable autonomous_stuck row so a turn-cap stop is visible in
+					// the Unfinished tab, not just the ephemeral "Autonomous fix stuck"
+					// notification published below — previously invisible to the whole
+					// stuck-reason/recovery system every other detector in
+					// session/backlog_lifecycle.go participates in. Additive, never a gate:
+					// a MarkStuck/MarkStuckNotified failure is logged but must not block the
+					// role-specific status handling below.
+					if !outcome.Done {
+						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
+							session.BacklogStatus(item.Status),
+							fmt.Sprintf("autonomous driver stopped after %d turns without a DONE signal (%s)", outcome.Turns, outcome.Reason)); markErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
+						} else if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
+							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
+						}
+					}
+
 					var toStatus session.BacklogStatus
 					var expectedStatus string
-					switch is.SessionRole {
+					switch is.Role {
 					case session.SessionRoleTriage:
 						if !outcome.Done {
 							// Triage was interrupted/stuck — notify operator but do not advance the item.
 							// The item stays at 'idea' so the operator can re-trigger triage.
 							a.bus.Publish(events.NewNotificationEvent(
-								item.ID.String(),
+								item.ID,
 								"Triage stuck",
 								fmt.Sprintf("stuck-triage-%s", item.ID),
 								int32(9), // NotificationType_FAILURE (warning)
@@ -242,19 +323,114 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 						toStatus = session.BacklogStatusReady
 						expectedStatus = string(session.BacklogStatusIdea)
 					case session.SessionRoleWork:
-						toStatus = session.BacklogStatusReview
-						expectedStatus = string(session.BacklogStatusInProgress)
-					default:
-						// SessionRoleReview and unknown roles: no transition from AutonomousDriver.
-						// Review outcomes are managed by submit_review_verdict.
-						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.SessionRole, "item", item.ID)
+						if !outcome.Done {
+							// Turn-cap stop with no DONE signal: don't force the item into
+							// review — that reviews known-incomplete work every time, and
+							// (before this fix) a doomed review that itself exits with no
+							// verdict fed straight back into another turn-cap-doomed work
+							// session, with no working circuit breaker to stop it (a live
+							// item bounced 78 times in 24h this way — see
+							// docs/tasks/backlog-feature-improvement.md, 2026-07-19 update).
+							// Leave toStatus unset so the item stays in_progress; the
+							// autonomous_stuck row written above already makes this visible
+							// in the Unfinished tab, and the generic "Autonomous fix stuck"
+							// notification below still fires. Give the item a fresh turn
+							// budget directly instead, gated by the same rework cap the
+							// review-side auto-reopen loop uses.
+							log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
+							if a.autonomousStuckRespawner != nil {
+								respawner := a.autonomousStuckRespawner
+								itemID := item.ID
+								itemTitle := item.Title
+								// Backoff-gated (session/backlog_remediation.go, Phase A of
+								// docs/tasks/backlog-stuck-item-auto-remediation.md): the
+								// MarkStuck(autonomous_stuck) call just above always
+								// refreshes/opens this item's stuck row on every
+								// turn-cap-without-DONE occurrence, so without this gate the
+								// respawn below would fire on every single occurrence too —
+								// exactly the "burns through the rework cap in minutes"
+								// shape the design doc's backoff schedule exists to stop
+								// (count-capped only by the rework cap otherwise, which can
+								// be raised well past what a genuinely-looping item should
+								// get). Checked synchronously (not inside the goroutine) so
+								// the attempt/restart-grace accounting write happens exactly
+								// once per eligible occurrence, before the async dispatch.
+								due, justParked, gateErr := concreteStorage.RemediationDue(ctx, itemID, domain.StuckReasonAutonomousStuck)
+								if gateErr != nil {
+									log.Warn("[AutonomousDriver] RemediationDue(autonomous_stuck) failed", "item", itemID, "err", gateErr)
+									due = true // fail open — see session.autoReopenWithBackoffGate's identical rationale
+								}
+								if justParked {
+									a.bus.Publish(events.NewNotificationEvent(
+										itemID,
+										"Auto-rework paused",
+										fmt.Sprintf("stuck-autonomous-parked-%s", itemID),
+										int32(8), // NotificationType_WARNING
+										int32(3), // NotificationPriority_HIGH
+										"Automated retry paused",
+										fmt.Sprintf("%s — automated turn-budget respawns have been retried %d times over an extended period without finishing. It now needs manual attention; use Reset to try again automatically.", itemTitle, session.MaxRemediationAttempts),
+										nil,
+									))
+								}
+								if due {
+									go func() {
+										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
+											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+										}
+									}()
+								} else {
+									log.Info("[AutonomousDriver] autonomous_stuck remediation backoff not yet due, skipping respawn", "item", itemID)
+								}
+							}
+						} else {
+							toStatus = session.BacklogStatusReview
+							expectedStatus = string(session.BacklogStatusInProgress)
+						}
+					case session.SessionRoleReview:
+						// Review outcomes are managed by submit_review_verdict — no transition,
+						// and no generic notification (that would duplicate the review-specific one).
+						// The review driver completing without hitting the turn cap is still
+						// evidence the "driver run stuck" condition no longer applies, so resolve
+						// any open autonomous_stuck row here even though the item's own status
+						// transition (if any) happens elsewhere. Only when outcome.Done — a stuck
+						// review run must not immediately undo the MarkStuck call a few lines up.
+						if outcome.Done {
+							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
+						}
+						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
 						return
+					default:
+						// Unrecognized role — a new pipeline stage was likely added elsewhere
+						// without updating this switch. Previously this fell into the same silent
+						// return as SessionRoleReview, leaving the operator with zero signal. Log
+						// at Warn (diagnosable) and fall through to the generic done/stuck
+						// notification below instead of returning early.
+						log.Warn("[AutonomousDriver] onAutonomousDriverComplete: unrecognized session role, skipping status transition", "role", is.Role, "item", item.ID)
 					}
-					precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-					if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, precondition); transErr != nil {
-						log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
-					} else {
-						log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+					if toStatus != "" {
+						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
+						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil {
+							statusTransitionErr = transErr
+							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
+						} else {
+							log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+							// The item just advanced via the automated pipeline. Close any open
+							// autonomous_stuck row now rather than leaving it for a human to clear
+							// via resolveStuckOnManualTransition (server/services/
+							// backlog_service_lifecycle.go), which only fires on a manual
+							// TransitionBacklogItemStatus RPC — items that complete entirely through
+							// the automated pipeline never hit that path. Only resolve on an actually
+							// successful (outcome.Done) run: the SessionRoleWork case above still
+							// transitions in_progress->review even when the driver got stuck, and
+							// MarkStuck may have just (re)opened this exact row a few lines up.
+							if outcome.Done {
+								a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
+							}
+							// Immediately kick off headless review for completed work sessions.
+							if toStatus == session.BacklogStatusReview && a.reviewGateTrigger != nil {
+								a.reviewGateTrigger.TriggerReviewForSession(sessionUUID)
+							}
+						}
 					}
 				}
 			}
@@ -275,10 +451,40 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
 		notifType = int32(9) // NotificationType_FAILURE
 	}
+	if statusTransitionErr != nil {
+		// The driver finished (or got stuck), but the backlog item's status update failed.
+		// Never let the operator see "complete" while the item is silently stuck in its
+		// previous status — override the notification to say so explicitly.
+		title += " — status update failed"
+		body += fmt.Sprintf(" The backlog item status could not be updated (%v); it may be stuck in its previous status — check manually.", statusTransitionErr)
+		notifType = int32(9) // NotificationType_FAILURE
+	}
 	a.bus.Publish(events.NewNotificationEvent(
 		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
 		notifType,
 		int32(2), // NotificationPriority_MEDIUM
 		title, body, nil,
 	))
+}
+
+// resolveAutonomousStuck best-effort closes any open autonomous_stuck row for
+// itemID. Mirrors the resolve-at-point-of-success pattern resolveToPRPending
+// uses for push_failed/abandoned_review (session/backlog_lifecycle.go:1729-1738).
+// autonomous_stuck has no non-terminal anchor in selfHealStuck's per-reason
+// sweep (session/backlog_lifecycle.go's selfHealStuck) — it relies on that
+// sweep's blanket terminal-status rule (any open row on a done/archived item
+// is resolved regardless of reason) to eventually catch it, or on a
+// human-initiated TransitionBacklogItemStatus RPC via
+// resolveStuckOnManualTransition (server/services/backlog_service_lifecycle.go).
+// This function exists to resolve the row immediately, at the moment of
+// success, rather than waiting for the next sweep tick: without it, items
+// that are marked autonomous_stuck and then later complete purely through the
+// automated pipeline (no human ever clicks a manual transition) would sit
+// with a stuck row open until the next selfHealStuck run. A failure here is
+// logged, not returned: this is bookkeeping cleanup and must never block the
+// caller's own notification/transition handling.
+func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Context, storage *session.Storage, itemID string) {
+	if _, err := storage.ResolveStuck(ctx, itemID, domain.StuckReasonAutonomousStuck); err != nil {
+		log.Warn("[AutonomousDriver] resolveAutonomousStuck ResolveStuck(autonomous_stuck) failed", "item", itemID, "err", err)
+	}
 }

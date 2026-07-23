@@ -10,41 +10,27 @@ import (
 	"unicode/utf8"
 )
 
-// TestShouldAnswerStartupDialog verifies the cooldown guard that prevents
-// re-sending "1\n" within 5 seconds of the first answer. This is the extracted
+// TestShouldAnswerStartupDialog verifies the latch guard that prevents
+// re-sending "1\n" while the dialog we already answered is still visible —
+// regardless of how long the terminal takes to redraw. This is the extracted
 // helper used in runSessionDriverWithPrompt.
 func TestShouldAnswerStartupDialog(t *testing.T) {
-	dialogOutput := `Quick safety check: Is this a project you created or one you trust?
- 1. Yes, I trust this folder
- 2. No, exit`
-
-	t.Run("returns true when dialog present and cooldown has not started", func(t *testing.T) {
-		var zeroTime time.Time
-		got := shouldAnswerStartupDialog(dialogOutput, zeroTime, 5*time.Second)
+	t.Run("returns true when dialog present and not awaiting clear", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(true, false)
 		if !got {
-			t.Error("expected true for fresh dialog with zero lastAnsweredAt")
+			t.Error("expected true for fresh dialog")
 		}
 	})
 
-	t.Run("returns false when within the cooldown window", func(t *testing.T) {
-		recent := time.Now()
-		got := shouldAnswerStartupDialog(dialogOutput, recent, 5*time.Second)
+	t.Run("returns false while awaiting clear, no matter how long it's been", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(true, true)
 		if got {
-			t.Error("expected false within cooldown window")
+			t.Error("expected false while awaiting clear")
 		}
 	})
 
-	t.Run("returns true when cooldown has elapsed", func(t *testing.T) {
-		old := time.Now().Add(-10 * time.Second)
-		got := shouldAnswerStartupDialog(dialogOutput, old, 5*time.Second)
-		if !got {
-			t.Error("expected true after cooldown has elapsed")
-		}
-	})
-
-	t.Run("returns false for non-dialog output regardless of cooldown", func(t *testing.T) {
-		var zeroTime time.Time
-		got := shouldAnswerStartupDialog("> ", zeroTime, 5*time.Second)
+	t.Run("returns false for non-dialog output regardless of latch state", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(false, false)
 		if got {
 			t.Error("expected false for non-dialog output")
 		}
@@ -167,6 +153,33 @@ func TestShouldApprovePrompt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShouldApprovePromptOnce covers #165: the driver re-checks NeedsApproval
+// every poll tick, and the status can remain NeedsApproval for an arbitrarily
+// long number of ticks after "1\r" is sent while the PTY redraws. A fixed-
+// duration cooldown can still expire before the redraw finishes on a slow
+// terminal, resending "1" into whatever appears next once it does — the latch
+// must stay armed for as long as the dialog is actually still visible, with
+// no time limit.
+func TestShouldApprovePromptOnce(t *testing.T) {
+	t.Run("returns true when dialog present and not awaiting clear", func(t *testing.T) {
+		if !shouldApprovePromptOnce(true, false) {
+			t.Error("expected true for fresh dialog")
+		}
+	})
+
+	t.Run("returns false while awaiting clear, no matter how long it's been", func(t *testing.T) {
+		if shouldApprovePromptOnce(true, true) {
+			t.Error("expected false while awaiting clear — prevents repeated 1s")
+		}
+	})
+
+	t.Run("returns false for non-matching output regardless of latch state", func(t *testing.T) {
+		if shouldApprovePromptOnce(false, false) {
+			t.Error("expected false for non-dialog output")
+		}
+	})
 }
 
 // UT-3: TestIsOneShot — verifies one-shot detection logic.

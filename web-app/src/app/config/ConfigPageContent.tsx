@@ -41,6 +41,12 @@ interface FileState {
   originalContent: string;
 }
 
+// How long to wait for listClaudeConfigs before giving up and surfacing an
+// error instead of leaving the file list stuck on "Loading..." forever. A
+// hung/unresponsive server never rejects the RPC promise on its own — without
+// this the fetch just never settles and `loading` stays true indefinitely.
+const CONFIG_LOAD_TIMEOUT_MS = 15000;
+
 // Server info returned by /api/server-info
 interface ServerInfo {
   ca_pem_path: string;
@@ -196,10 +202,18 @@ export function ConfigPageContent() {
     try {
       setLoading(true);
       setError(null);
-      const response = await clientRef.current.listClaudeConfigs({});
+      const response = await Promise.race([
+        clientRef.current.listClaudeConfigs({}),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Timed out waiting for the server to respond.")),
+            CONFIG_LOAD_TIMEOUT_MS
+          )
+        ),
+      ]);
       setConfigs(response.configs);
     } catch (err) {
-      setError(`Failed to load configs: ${err}`);
+      setError(`Failed to load configs: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -420,6 +434,13 @@ export function ConfigPageContent() {
           </h2>
           {loading ? (
             <div>Loading...</div>
+          ) : error && configs.length === 0 ? (
+            <div className={styles.fileListErrorState}>
+              <div className={styles.fileListErrorMessage}>{error}</div>
+              <button className={styles.retryButton} onClick={loadConfigs}>
+                Retry
+              </button>
+            </div>
           ) : (
             <div className={styles.fileListItems}>
               {configs.map((config, index) => (

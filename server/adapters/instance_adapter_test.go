@@ -121,19 +121,12 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 }
 
 // TC-4: TestToProtoSubStatus_WaitingForAgent verifies that StatusWaitingForAgent
-// maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatus switch.
-//
-// Note: toProtoSubStatus reads DetectedStatus via inst.GetDetectedStatus(), which
-// requires a running ClaudeController (not available in unit tests). The non-Active
-// short-circuit path of toProtoSubStatus is verified here, and the StatusWaitingForAgent
-// mapping is verified via subStatusFromItem (review_queue_adapter.go), which shares
-// the same switch logic and is exercisable without a controller.
+// maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatusFromInfo switch.
 func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	// Verify the non-Active short-circuit: a non-Active instance always returns UNSPECIFIED.
-	inst := &session.Instance{Status: session.Paused}
-	got := toProtoSubStatus(inst)
+	got := toProtoSubStatusFromInfo(session.Paused, 0, session.InstanceStatusInfo{})
 	if got != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
-		t.Errorf("toProtoSubStatus(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
+		t.Errorf("toProtoSubStatusFromInfo(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
 	}
 
 	// Verify the StatusWaitingForAgent → SUB_STATUS_WAITING_FOR_AGENT mapping.
@@ -143,14 +136,10 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_WAITING_FOR_AGENT", gotSubStatus)
 	}
 
-	// A fresh Active instance with no controller returns StatusUnknown → UNSPECIFIED,
-	// confirming that any non-UNSPECIFIED result requires an explicit switch case.
-	activeNoCtrl := &session.Instance{Status: session.Active}
-	gotActive := toProtoSubStatus(activeNoCtrl)
+	// An Active instance with no controller (IsControllerActive=false) returns UNSPECIFIED.
+	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
 	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
-		// If this ever fires it means GetDetectedStatus() returned something other
-		// than Unknown without a running controller — update this test accordingly.
-		t.Logf("toProtoSubStatus(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
+		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
 	}
 }
 

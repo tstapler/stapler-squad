@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { GroupedVirtuoso } from "react-virtuoso";
 import { createClient } from "@connectrpc/connect";
 import { SessionService, Project } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -43,10 +45,8 @@ import {
   select,
   sortDirButton,
   checkboxLabel,
-  sessionList,
-  categoryGroup,
   categoryTitle,
-  categoryContent,
+  collapseToggle,
   empty,
   clearButton,
   newSessionHeaderButton,
@@ -77,6 +77,13 @@ interface SessionListProps {
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
   onResumeHibernatedSession?: (sessionId: string) => void;
+  /**
+   * Called when the "Show archived" toggle changes to true, so the parent can
+   * re-fetch sessions with includeArchived via the session service. Turning the
+   * toggle off does not call this — archived sessions are filtered client-side
+   * instead, since the server-side default already excludes them going forward.
+   */
+  onFetchArchivedSessions?: (includeArchived: boolean) => void;
   /** When true, renders the loading skeleton instead of the session list. */
   isLoading?: boolean;
   /** Prefix for localStorage keys, used when multiple instances are rendered (e.g. split view). */
@@ -90,14 +97,137 @@ interface SessionListProps {
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
 type SortDir = 'asc' | 'desc';
 
+// Stable-callback prop types for SessionRowWrapper.
+// Using (session: Session) / (id: string) shapes lets the parent pass
+// one useCallback per action instead of one closure per row.
+interface SessionRowHandlers {
+  onSessionClick?: (session: Session) => void;
+  onSessionOpenInNewPane?: (session: Session) => void;
+  onDeleteSession?: (id: string) => Promise<void> | void;
+  onPauseSession?: (id: string) => void;
+  onResumeSession?: (session: Session) => void;
+  onCloneSession?: (id: string) => void;
+  onNewWorkspaceSession?: (id: string) => void;
+  onRestartSession?: (id: string) => Promise<boolean | void>;
+  onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
+  onRunOneShot?: (sessionId: string) => Promise<void>;
+  onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (id: string, message: string) => void;
+  onClearConversationState?: (id: string) => Promise<boolean>;
+  onHibernateSession?: (id: string) => void;
+  onResumeHibernatedSession?: (id: string) => void;
+  onUpdateTags?: (id: string, tags: string[]) => void;
+  onToggleSession?: (id: string, e: React.MouseEvent) => void;
+}
+
+interface SessionRowWrapperProps extends SessionRowHandlers {
+  session: Session;
+  visibleColumns: ColumnKey[];
+  selectMode: boolean;
+  isSelected: boolean;
+  suppressApprovalSubStatus: boolean;
+}
+
+// Memoized wrapper: turns stable per-action handlers into per-session closures
+// only once per session identity change. The outer SessionList can pass one
+// useCallback per action (e.g. onDeleteSession accepts an id), and this wrapper
+// creates the () => onDeleteSession(session.id) closure just once.
+const SessionRowWrapper = React.memo(function SessionRowWrapper({
+  session,
+  visibleColumns,
+  selectMode,
+  isSelected,
+  suppressApprovalSubStatus,
+  onSessionClick,
+  onSessionOpenInNewPane,
+  onDeleteSession,
+  onPauseSession,
+  onResumeSession,
+  onCloneSession,
+  onNewWorkspaceSession,
+  onRestartSession,
+  onCreateCheckpoint,
+  onRunOneShot,
+  onSetRateLimitEnabled,
+  onToggleAutonomousMode,
+  onSteerAutonomousSession,
+  onClearConversationState,
+  onHibernateSession,
+  onResumeHibernatedSession,
+  onUpdateTags,
+  onToggleSession,
+}: SessionRowWrapperProps) {
+  const id = session.id;
+  return (
+    <SessionRow
+      session={session}
+      onClick={onSessionClick ? () => onSessionClick(session) : undefined}
+      onPause={onPauseSession ? () => onPauseSession(id) : undefined}
+      onResume={onResumeSession ? () => onResumeSession(session) : undefined}
+      onDelete={onDeleteSession ? () => onDeleteSession(id) : undefined}
+      onClone={onCloneSession ? () => onCloneSession(id) : undefined}
+      onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
+      onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
+      onRestart={onRestartSession}
+      onCreateCheckpoint={onCreateCheckpoint}
+      onRunOneShot={onRunOneShot}
+      onSetRateLimitEnabled={onSetRateLimitEnabled}
+      onToggleAutonomousMode={onToggleAutonomousMode}
+      onSteerAutonomousSession={onSteerAutonomousSession}
+      onClearConversationState={onClearConversationState}
+      onHibernate={onHibernateSession ? () => onHibernateSession(id) : undefined}
+      onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(id) : undefined}
+      onUpdateTags={onUpdateTags}
+      suppressApprovalSubStatus={suppressApprovalSubStatus}
+      visibleColumns={visibleColumns}
+      selectMode={selectMode}
+      isSelected={isSelected}
+      onToggleSelect={onToggleSession ? (e) => onToggleSession(id, e) : undefined}
+    />
+  );
+});
+
+// Toggle button rendered inside a group header to collapse/expand its sessions.
+// Shared between row-mode and card-mode header render sites.
+const CategoryCollapseToggle = React.memo(function CategoryCollapseToggle({
+  groupKey,
+  displayName,
+  collapsed,
+  onToggle,
+}: {
+  groupKey: string;
+  displayName: string;
+  collapsed: boolean;
+  onToggle: (groupKey: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="category-collapse-toggle"
+      className={collapseToggle}
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? "Expand" : "Collapse"} ${displayName} category`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle(groupKey);
+      }}
+    >
+      {collapsed ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+    </button>
+  );
+});
+
 const BASE_STORAGE_KEYS = {
   SEARCH_QUERY: 'stapler-squad-search-query',
   SELECTED_STATUS: 'stapler-squad-selected-status',
   SELECTED_CATEGORY: 'stapler-squad-selected-category',
   SELECTED_TAG: 'stapler-squad-selected-tag',
   HIDE_PAUSED: 'stapler-squad-hide-paused',
+  SHOW_ARCHIVED: 'stapler-squad-show-archived',
   FILTER_NEEDS_APPROVAL: 'stapler-squad-filter-needs-approval',
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
+  COLLAPSED_GROUPS: 'stapler-squad-collapsed-groups',
   SORT_FIELD: 'stapler-squad-sort-field',
   SORT_DIR: 'stapler-squad-sort-dir',
   VISIBLE_COLUMNS: 'stapler-squad-visible-columns',
@@ -160,6 +290,7 @@ export function SessionList({
   onClearConversationState,
   onHibernateSession,
   onResumeHibernatedSession,
+  onFetchArchivedSessions,
   isLoading = false,
   storageKeyPrefix,
   extraHeaderActions,
@@ -194,6 +325,11 @@ export function SessionList({
   const [hidePaused, setHidePaused] = useState(() =>
     loadFromStorage(STORAGE_KEYS.HIDE_PAUSED, false)
   );
+  // showArchived: when true, re-fetches sessions with includeArchived=true (server-side
+  // default excludes archived sessions) and stops client-side filtering them out below.
+  const [showArchived, setShowArchived] = useState(() =>
+    loadFromStorage(STORAGE_KEYS.SHOW_ARCHIVED, false)
+  );
   // filterNeedsApproval: when true, show only Active sessions with subStatus === NEEDS_APPROVAL.
   // Replaces the old lifecycle-status NEEDS_APPROVAL filter (which was status===5).
   const [filterNeedsApproval, setFilterNeedsApproval] = useState(() =>
@@ -201,6 +337,11 @@ export function SessionList({
   );
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, GroupingStrategy.Category)
+  );
+  // Collapsed group keys — flat set shared across grouping strategies (a key that
+  // recurs after switching strategies, e.g. "Backlog", stays collapsed).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set(loadFromStorage<string[]>(STORAGE_KEYS.COLLAPSED_GROUPS, []))
   );
   const [sortField, setSortField] = useState<SortField>(() =>
     loadFromStorage(STORAGE_KEYS.SORT_FIELD, 'lastActivity')
@@ -323,12 +464,31 @@ export function SessionList({
   }, [STORAGE_KEYS, hidePaused]);
 
   useEffect(() => {
+    saveToStorage(STORAGE_KEYS.SHOW_ARCHIVED, showArchived);
+  }, [STORAGE_KEYS, showArchived]);
+
+  // Re-fetch with includeArchived whenever the toggle changes (including on mount, so a
+  // persisted "on" preference re-fetches archived sessions rather than showing a stale
+  // client-only filtered view). The server excludes archived sessions by default, so
+  // turning the toggle off does not need a re-fetch — filteredSessions below hides them.
+  useEffect(() => {
+    if (showArchived) {
+      onFetchArchivedSessions?.(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived]);
+
+  useEffect(() => {
     saveToStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, filterNeedsApproval);
   }, [STORAGE_KEYS, filterNeedsApproval]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy);
   }, [STORAGE_KEYS, groupingStrategy]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.COLLAPSED_GROUPS, Array.from(collapsedGroups));
+  }, [STORAGE_KEYS, collapsedGroups]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField);
@@ -411,9 +571,16 @@ export function SessionList({
         return false;
       }
 
+      // Archived filter — hidden by default even if a prior includeArchived fetch
+      // left archived sessions in the Redux store (e.g. toggle turned back off
+      // without a fresh non-archived fetch).
+      if (!showArchived && session.archivedAt) {
+        return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, pendingDeleteIds]);
+  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval, showArchived, pendingDeleteIds]);
 
   // Sort filtered sessions
   const sortedSessions = useMemo(() => {
@@ -479,15 +646,36 @@ export function SessionList({
         : undefined;
       const isUngrouped = groupKey === "No Project";
       items.push({ kind: "header", groupKey, displayName, groupSessions: grpSessions, projectData, isProjectGrouping, isUngrouped });
-      for (const s of grpSessions) {
-        items.push({ kind: "session", session: s });
+      if (!collapsedGroups.has(groupKey)) {
+        for (const s of grpSessions) {
+          items.push({ kind: "session", session: s });
+        }
       }
     }
     return items;
-  }, [groupedSessions, groupingStrategy, projects, viewMode]);
+  }, [groupedSessions, groupingStrategy, projects, viewMode, collapsedGroups]);
 
   const flatItemsRef = useRef(flatItems);
   flatItemsRef.current = flatItems;
+
+  // Card-mode virtualization data: flat session array and per-group counts for GroupedVirtuoso.
+  const { cardFlatSessions, cardGroupCounts } = useMemo(() => {
+    if (viewMode !== "card") return { cardFlatSessions: [] as Session[], cardGroupCounts: [] as number[] };
+    const flat: Session[] = [];
+    const counts: number[] = [];
+    // Collapsed groups keep their slot in cardGroupCounts (count 0) rather than being
+    // removed — this preserves the groupIndex → groupedSessions[groupIndex] mapping
+    // GroupedVirtuoso's groupContent callback relies on, with no index remap needed.
+    for (const { groupKey, sessions: grpSessions } of groupedSessions) {
+      if (collapsedGroups.has(groupKey)) {
+        counts.push(0);
+        continue;
+      }
+      counts.push(grpSessions.length);
+      for (const s of grpSessions) flat.push(s);
+    }
+    return { cardFlatSessions: flat, cardGroupCounts: counts };
+  }, [groupedSessions, viewMode, collapsedGroups]);
 
   const rowVirtualizer = useVirtualizer({
     count: viewMode === "row" ? flatItems.length : 0,
@@ -501,6 +689,18 @@ export function SessionList({
   const handleCycleGrouping = () => {
     setGroupingStrategy(cycleGroupingStrategy(groupingStrategy));
   };
+
+  const toggleGroupCollapsed = useCallback((groupKey: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  }, []);
 
   // Bulk actions handlers
   const handleToggleSelectMode = () => {
@@ -545,6 +745,19 @@ export function SessionList({
     const allSessionIds = new Set(filteredSessions.map(s => s.id));
     setSelectedSessions(allSessionIds);
   }, [filteredSessions]);
+
+  // Stable row-handler callbacks passed to SessionRowWrapper.
+  // These accept (session) or (id) so SessionRowWrapper can be memoized —
+  // the per-session closures are only recreated inside the wrapper when session identity changes.
+  const stableOnSessionClick = useCallback((session: Session) => onSessionClick?.(session), [onSessionClick]);
+  const stableOnSessionOpenInNewPane = useCallback((session: Session) => onSessionOpenInNewPane?.(session), [onSessionOpenInNewPane]);
+  const stableOnDeleteSession = useCallback((id: string) => onDeleteSession?.(id), [onDeleteSession]);
+  const stableOnPauseSession = useCallback((id: string) => onPauseSession?.(id), [onPauseSession]);
+  const stableOnResumeSession = useCallback((session: Session) => onResumeSession?.(session), [onResumeSession]);
+  const stableOnCloneSession = useCallback((id: string) => onCloneSession?.(id), [onCloneSession]);
+  const stableOnNewWorkspaceSession = useCallback((id: string) => onNewWorkspaceSession?.(id), [onNewWorkspaceSession]);
+  const stableOnHibernateSession = useCallback((id: string) => onHibernateSession?.(id), [onHibernateSession]);
+  const stableOnResumeHibernatedSession = useCallback((id: string) => onResumeHibernatedSession?.(id), [onResumeHibernatedSession]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedSessions(new Set());
@@ -859,6 +1072,19 @@ export function SessionList({
               <span>Hide Paused</span>
             </label>
 
+            {/* Show archived toggle — archived sessions are excluded server-side by
+                default; enabling this re-fetches with includeArchived. */}
+            <label className={checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+                aria-label="Show archived sessions"
+                data-testid="show-archived-toggle"
+              />
+              <span>Show Archived</span>
+            </label>
+
             {/* Needs-approval quick filter */}
             <label className={checkboxLabel}>
               <input
@@ -1012,6 +1238,11 @@ export function SessionList({
                     aria-level={3}
                     className={categoryTitle}
                     style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
+                    onClick={(e) => {
+                      if (groupingStrategy === GroupingStrategy.None) return;
+                      if (e.target !== e.currentTarget) return;
+                      toggleGroupCollapsed(item.groupKey);
+                    }}
                   >
                     {item.isProjectGrouping && item.projectData && renamingProjectId === item.projectData.id ? (
                       <form
@@ -1043,7 +1274,22 @@ export function SessionList({
                       </form>
                     ) : (
                       <>
-                        <span>{item.displayName} ({item.groupSessions.length})</span>
+                        {groupingStrategy !== GroupingStrategy.None && (
+                          <CategoryCollapseToggle
+                            groupKey={item.groupKey}
+                            displayName={item.displayName}
+                            collapsed={collapsedGroups.has(item.groupKey)}
+                            onToggle={toggleGroupCollapsed}
+                          />
+                        )}
+                        <span
+                          onClick={() => {
+                            if (groupingStrategy === GroupingStrategy.None) return;
+                            toggleGroupCollapsed(item.groupKey);
+                          }}
+                        >
+                          {item.displayName} ({item.groupSessions.length})
+                        </span>
                         {item.isProjectGrouping && item.projectData && (
                           <>
                             {item.projectData.runningCount > 0 && (
@@ -1116,30 +1362,30 @@ export function SessionList({
                   </div>
                 ) : (
                   <div role="listitem">
-                  <SessionRow
+                  <SessionRowWrapper
                     session={item.session}
-                    onClick={() => onSessionClick?.(item.session)}
-                    onPause={onPauseSession ? () => onPauseSession(item.session.id) : undefined}
-                    onResume={onResumeSession ? () => onResumeSession(item.session) : undefined}
-                    onDelete={onDeleteSession ? () => onDeleteSession(item.session.id) : undefined}
-                    onClone={onCloneSession ? () => onCloneSession(item.session.id) : undefined}
-                    onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(item.session) : undefined}
-                    onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(item.session.id) : undefined}
-                    onRestart={onRestartSession}
+                    onSessionClick={stableOnSessionClick}
+                    onSessionOpenInNewPane={stableOnSessionOpenInNewPane}
+                    onDeleteSession={stableOnDeleteSession}
+                    onPauseSession={stableOnPauseSession}
+                    onResumeSession={stableOnResumeSession}
+                    onCloneSession={stableOnCloneSession}
+                    onNewWorkspaceSession={stableOnNewWorkspaceSession}
+                    onRestartSession={onRestartSession}
                     onCreateCheckpoint={onCreateCheckpoint}
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
                     onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
-                    onHibernate={onHibernateSession ? () => onHibernateSession(item.session.id) : undefined}
-                    onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(item.session.id) : undefined}
+                    onHibernateSession={stableOnHibernateSession}
+                    onResumeHibernatedSession={stableOnResumeHibernatedSession}
                     onUpdateTags={onUpdateTags}
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
                     visibleColumns={visibleColumns}
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(item.session.id)}
-                    onToggleSelect={(e) => handleToggleSession(item.session.id, e)}
+                    onToggleSession={handleToggleSession}
                   />
                   </div>
                 )}
@@ -1148,157 +1394,187 @@ export function SessionList({
           })}
         </div>
       ) : (
-        // Card mode: non-virtualized (cards are variable-height; fewer are typically shown)
-        <div className={sessionList}>
-          {groupedSessions.map(({ groupKey, displayName, sessions: groupSessions }) => {
+        // Card mode: virtualized with GroupedVirtuoso — only visible cards are rendered.
+        <GroupedVirtuoso
+          customScrollParent={containerRef.current ?? undefined}
+          groupCounts={cardGroupCounts}
+          groupContent={(groupIndex) => {
+            const grp = groupedSessions[groupIndex];
+            if (!grp) return null;
+            const { groupKey, displayName, sessions: grpSessions } = grp;
             const isProjectGrouping = groupingStrategy === GroupingStrategy.Project;
             const projectData = isProjectGrouping
               ? projects.find((p) => p.id === groupKey || p.name === displayName)
               : undefined;
             const isUngrouped = groupKey === "No Project";
             return (
-              <div key={groupKey} className={categoryGroup}>
-                <div role="heading" aria-level={3} className={categoryTitle} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                  {isProjectGrouping && projectData && renamingProjectId === projectData.id ? (
-                    <form
+              <div
+                role="heading"
+                aria-level={3}
+                className={categoryTitle}
+                style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}
+                onClick={(e) => {
+                  if (groupingStrategy === GroupingStrategy.None) return;
+                  if (e.target !== e.currentTarget) return;
+                  toggleGroupCollapsed(groupKey);
+                }}
+              >
+                {isProjectGrouping && projectData && renamingProjectId === projectData.id ? (
+                  <form
+                    aria-label={`Rename project ${displayName}`}
+                    style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}
+                    onSubmit={async (e) => { e.preventDefault(); setRenameError(null); try { await handleProjectRename(projectData.id, renameValue); } catch { setRenameError("Failed to rename — try again"); } }}
+                  >
+                    <input
+                      autoFocus
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Escape") { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
                       aria-label={`Rename project ${displayName}`}
-                      style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}
-                      onSubmit={async (e) => { e.preventDefault(); setRenameError(null); try { await handleProjectRename(projectData.id, renameValue); } catch { setRenameError("Failed to rename — try again"); } }}
-                    >
-                      <input
-                        autoFocus
-                        type="text"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Escape") { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); } }}
-                        aria-label={`Rename project ${displayName}`}
-                        aria-describedby={renameError ? `card-rename-error-${projectData!.id}` : undefined}
-                        style={{
-                          padding: "2px 6px",
-                          border: "1px solid var(--input-focus-border)",
-                          borderRadius: "4px",
-                          fontSize: "inherit",
-                          fontWeight: "inherit",
-                          background: "var(--input-background)",
-                          color: "var(--text-primary)",
-                        }}
+                      aria-describedby={renameError ? `card-rename-error-${projectData!.id}` : undefined}
+                      style={{
+                        padding: "2px 6px",
+                        border: "1px solid var(--input-focus-border)",
+                        borderRadius: "4px",
+                        fontSize: "inherit",
+                        fontWeight: "inherit",
+                        background: "var(--input-background)",
+                        color: "var(--text-primary)",
+                      }}
+                    />
+                    <button type="submit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--success)", fontSize: "1rem" }} title="Save" aria-label="Save project name">✓</button>
+                    <button type="button" onClick={() => { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">✕</button>
+                    {renameError && <span id={`card-rename-error-${projectData!.id}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
+                  </form>
+                ) : (
+                  <>
+                    {groupingStrategy !== GroupingStrategy.None && (
+                      <CategoryCollapseToggle
+                        groupKey={groupKey}
+                        displayName={displayName}
+                        collapsed={collapsedGroups.has(groupKey)}
+                        onToggle={toggleGroupCollapsed}
                       />
-                      <button type="submit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--success)", fontSize: "1rem" }} title="Save" aria-label="Save project name">✓</button>
-                      <button type="button" onClick={() => { const id = projectData!.id; setRenamingProjectId(null); setRenameError(null); setTimeout(() => { document.querySelector<HTMLElement>(`[data-rename-btn="${id}"]`)?.focus(); }, 0); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel" aria-label="Cancel rename">✕</button>
-                      {renameError && <span id={`card-rename-error-${projectData!.id}`} role="alert" style={{ color: "var(--error)", fontSize: "0.75rem", width: "100%" }}>{renameError}</span>}
-                    </form>
-                  ) : (
-                    <>
-                      <span>{displayName} ({groupSessions.length})</span>
-                      {isProjectGrouping && projectData && (
-                        <>
-                          {projectData.runningCount > 0 && (
-                            <span role="img" aria-label={`${projectData.runningCount} running`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--success-bg)", color: "var(--success)", borderRadius: "10px" }}>
-                              {projectData.runningCount} Running
-                            </span>
-                          )}
-                          {projectData.completeCount > 0 && (
-                            <span role="img" aria-label={`${projectData.completeCount} complete`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--primary)", color: "white", borderRadius: "10px", opacity: 0.85 }}>
-                              {projectData.completeCount} Complete
-                            </span>
-                          )}
-                          {projectData.reviewReadyCount > 0 && (
-                            <span role="img" aria-label={`${projectData.reviewReadyCount} ready for review`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--warning-bg)", color: "var(--warning)", borderRadius: "10px" }}>
-                              {projectData.reviewReadyCount} Review
-                            </span>
-                          )}
-                        </>
-                      )}
-                      {isProjectGrouping && projectData && !isUngrouped && (
-                        <span style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
-                          <button
-                            type="button"
-                            data-rename-btn={projectData.id}
-                            onClick={() => { setRenamingProjectId(projectData.id); setRenameValue(projectData.name); setRenameError(null); }}
-                            title="Rename project"
-                            aria-label={`Rename project ${displayName}`}
-                            aria-expanded={false}
-                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
-                          >
-                            <span aria-hidden="true">✏️</span>
-                          </button>
-                          {deletingProjectId === projectData.id ? (
-                            <span role="group" aria-label="Confirm project deletion" style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                              <span role="alert" aria-atomic="true">Remove project? {groupSessions.length} session{groupSessions.length !== 1 ? "s" : ""} will become ungrouped.</span>
-                              <button
-                                type="button"
-                                onClick={() => handleProjectDelete(projectData.id)}
-                                aria-label={`Confirm delete project ${displayName}`}
-                                style={{ background: "var(--error)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem" }}
-                              >
-                                Delete
-                              </button>
-                              <button
-                                type="button"
-                                autoFocus
-                                aria-label={`Cancel delete project ${displayName}`}
-                                onClick={() => setDeletingProjectId(null)}
-                                style={{ background: "none", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem", color: "var(--text-secondary)" }}
-                              >
-                                Cancel
-                              </button>
-                            </span>
-                          ) : (
+                    )}
+                    <span
+                      onClick={() => {
+                        if (groupingStrategy === GroupingStrategy.None) return;
+                        toggleGroupCollapsed(groupKey);
+                      }}
+                    >
+                      {displayName} ({grpSessions.length})
+                    </span>
+                    {isProjectGrouping && projectData && (
+                      <>
+                        {projectData.runningCount > 0 && (
+                          <span role="img" aria-label={`${projectData.runningCount} running`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--success-bg)", color: "var(--success)", borderRadius: "10px" }}>
+                            {projectData.runningCount} Running
+                          </span>
+                        )}
+                        {projectData.completeCount > 0 && (
+                          <span role="img" aria-label={`${projectData.completeCount} complete`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--primary)", color: "white", borderRadius: "10px", opacity: 0.85 }}>
+                            {projectData.completeCount} Complete
+                          </span>
+                        )}
+                        {projectData.reviewReadyCount > 0 && (
+                          <span role="img" aria-label={`${projectData.reviewReadyCount} ready for review`} style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--warning-bg)", color: "var(--warning)", borderRadius: "10px" }}>
+                            {projectData.reviewReadyCount} Review
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {isProjectGrouping && projectData && !isUngrouped && (
+                      <span style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
+                        <button
+                          type="button"
+                          data-rename-btn={projectData.id}
+                          onClick={() => { setRenamingProjectId(projectData.id); setRenameValue(projectData.name); setRenameError(null); }}
+                          title="Rename project"
+                          aria-label={`Rename project ${displayName}`}
+                          aria-expanded={false}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
+                        >
+                          <span aria-hidden="true">✏️</span>
+                        </button>
+                        {deletingProjectId === projectData.id ? (
+                          <span role="group" aria-label="Confirm project deletion" style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                            <span role="alert" aria-atomic="true">Remove project? {grpSessions.length} session{grpSessions.length !== 1 ? "s" : ""} will become ungrouped.</span>
                             <button
                               type="button"
-                              onClick={() => setDeletingProjectId(projectData.id)}
-                              title="Delete project"
-                              aria-label={`Delete project ${displayName}`}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
+                              onClick={() => handleProjectDelete(projectData.id)}
+                              aria-label={`Confirm delete project ${displayName}`}
+                              style={{ background: "var(--error)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem" }}
                             >
-                              <span aria-hidden="true">🗑️</span>
+                              Delete
                             </button>
-                          )}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </div>
-              <div className={categoryContent} role="list">
-                  {groupSessions.map((session, index) => (
-                    <div key={session.id} role="listitem" style={{'--card-index': index} as React.CSSProperties}>
-                      <SessionCard
-                        session={session}
-                        onClick={() => onSessionClick?.(session)}
-                        onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
-                        onDelete={() => onDeleteSession?.(session.id)}
-                        onPause={() => onPauseSession?.(session.id)}
-                        onResume={() => onResumeSession?.(session)}
-                        onClone={() => onCloneSession?.(session.id)}
-                        onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
-                        onRename={onRenameSession}
-                        onRestart={onRestartSession}
-                        onUpdateTags={onUpdateTags}
-                        onCreateCheckpoint={onCreateCheckpoint}
-                        onListCheckpoints={onListCheckpoints}
-                        onForkFromCheckpoint={onForkFromCheckpoint}
-                        onRunOneShot={onRunOneShot}
-                        onSetRateLimitEnabled={onSetRateLimitEnabled}
-                        onToggleAutonomousMode={onToggleAutonomousMode}
-                        onSteerAutonomousSession={onSteerAutonomousSession}
-                        onClearConversationState={onClearConversationState}
-                        onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}
-                        onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(session.id) : undefined}
-                        selectMode={selectMode}
-                        isSelected={selectedSessions.has(session.id)}
-                        onToggleSelect={(e) => handleToggleSession(session.id, e)}
-                        reviewItem={reviewItemBySessionId.get(session.id)}
-                        detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
-                        detectedContext={detectedStatusMap[session.id]?.detectedContext}
-                        suppressApprovalSubStatus={clearedSessions.has(session.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
-            </div>
+                            <button
+                              type="button"
+                              autoFocus
+                              aria-label={`Cancel delete project ${displayName}`}
+                              onClick={() => setDeletingProjectId(null)}
+                              style={{ background: "none", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem", color: "var(--text-secondary)" }}
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingProjectId(projectData.id)}
+                            title="Delete project"
+                            aria-label={`Delete project ${displayName}`}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
+                          >
+                            <span aria-hidden="true">🗑️</span>
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
             );
-          })}
-        </div>
+          }}
+          itemContent={(index) => {
+            const session = cardFlatSessions[index];
+            if (!session) return null;
+            return (
+              <div role="listitem" style={{'--card-index': index} as React.CSSProperties}>
+                <SessionCard
+                  session={session}
+                  onClick={() => onSessionClick?.(session)}
+                  onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
+                  onDelete={() => onDeleteSession?.(session.id)}
+                  onPause={() => onPauseSession?.(session.id)}
+                  onResume={() => onResumeSession?.(session)}
+                  onClone={() => onCloneSession?.(session.id)}
+                  onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
+                  onRename={onRenameSession}
+                  onRestart={onRestartSession}
+                  onUpdateTags={onUpdateTags}
+                  onCreateCheckpoint={onCreateCheckpoint}
+                  onListCheckpoints={onListCheckpoints}
+                  onForkFromCheckpoint={onForkFromCheckpoint}
+                  onRunOneShot={onRunOneShot}
+                  onSetRateLimitEnabled={onSetRateLimitEnabled}
+                  onToggleAutonomousMode={onToggleAutonomousMode}
+                  onSteerAutonomousSession={onSteerAutonomousSession}
+                  onClearConversationState={onClearConversationState}
+                  onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}
+                  onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(session.id) : undefined}
+                  selectMode={selectMode}
+                  isSelected={selectedSessions.has(session.id)}
+                  onToggleSelect={(e) => handleToggleSession(session.id, e)}
+                  reviewItem={reviewItemBySessionId.get(session.id)}
+                  detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
+                  detectedContext={detectedStatusMap[session.id]?.detectedContext}
+                  suppressApprovalSubStatus={clearedSessions.has(session.id)}
+                />
+              </div>
+            );
+          }}
+        />
       )}
 
     </div>

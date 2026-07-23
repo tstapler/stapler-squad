@@ -39,6 +39,19 @@ const (
 	defaultProgram = "proxy-claude"
 )
 
+// isWithinStateDir reports whether workDir is baseDir itself or a descendant of it.
+// A cwd inside stapler-squad's own state directory (e.g. a session worktree under
+// ~/.stapler-squad/workspaces/.../worktrees/...) hashes to a workspace distinct from
+// the one normally used from the project/home directory.
+func isWithinStateDir(workDir, baseDir string) bool {
+	if workDir == "" || baseDir == "" {
+		return false
+	}
+	workDir = filepath.Clean(workDir)
+	baseDir = filepath.Clean(baseDir)
+	return workDir == baseDir || strings.HasPrefix(workDir, baseDir+string(filepath.Separator))
+}
+
 // IsTestMode detects if the application is running in test/benchmark mode
 func IsTestMode() bool {
 
@@ -54,6 +67,43 @@ func IsTestMode() bool {
 	return false
 }
 
+// IsNamedInstance reports whether this process is running as an explicitly
+// named, non-default instance (STAPLER_SQUAD_INSTANCE set to anything other
+// than "" or "shared" — see GetConfigDirForDir's priority hierarchy above).
+// A named instance gets its own isolated DB/config directory but does NOT get
+// its own tmux socket — it shares the default tmux server with every other
+// instance on the machine, including the real production one. IsTestMode()
+// alone doesn't catch this: this repo's own E2E harness (tests/e2e, per
+// CLAUDE.md: "STAPLER_SQUAD_INSTANCE=e2e-local ./stapler-squad
+// --tmux-keep-server") runs the real production binary, not a `go test`
+// binary, so IsTestMode() returns false for it even though it has exactly the
+// same "small, isolated instance list vs. the shared tmux socket" hazard a
+// `go test` binary does. Confirmed live: an e2e-local run's orphan sweep
+// killed 5 unrelated production tmux sessions it had never heard of,
+// including the interactive session this very fix was written in.
+func IsNamedInstance() bool {
+	instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	return instanceID != "" && instanceID != "shared"
+}
+
+// IsIsolatedInstance reports whether this process's config/DB state is
+// isolated from the shared default (~/.stapler-squad) directory by ANY known
+// mechanism: a `go test` binary (IsTestMode), an explicit named instance
+// (IsNamedInstance), or a STAPLER_SQUAD_TEST_DIR override (GetConfigDirForDir
+// priority 1 — used by --test-mode harnesses like tests/demo/helpers.go's
+// StartDemoServer). Isolated DB state does NOT imply an isolated tmux socket
+// under any of these mechanisms — see IsNamedInstance's doc comment for the
+// confirmed incident that motivated this check. Call sites that could
+// otherwise touch shared, non-isolated resources (like the default tmux
+// socket in ReconcileOrphanedTmuxSessions) must skip when this is true.
+// STAPLER_SQUAD_TEST_DIR was the still-missing case: a demo/test-mode harness
+// process gets a fully isolated DB via GetConfigDirForDir but, before this
+// check existed, its startup orphan sweep still targeted the shared default
+// tmux socket — killing every real production session it didn't recognize.
+func IsIsolatedInstance() bool {
+	return IsTestMode() || IsNamedInstance() || os.Getenv("STAPLER_SQUAD_TEST_DIR") != ""
+}
+
 // GetConfigDir returns the path to the application's configuration directory
 // with hierarchical isolation for safe multi-instance and test execution.
 //
@@ -61,8 +111,9 @@ func IsTestMode() bool {
 //  1. Test directory override via STAPLER_SQUAD_TEST_DIR (for --test-mode flag)
 //  2. Explicit instance ID via STAPLER_SQUAD_INSTANCE environment variable
 //  3. Test mode auto-detection (automatic isolation for tests/benchmarks)
-//  4. Workspace-based isolation (default for production, per-directory state)
-//  5. Global shared state (fallback, backward compatibility)
+//  4. Preferred workspace from preference file (explicit switch via SwitchDatabase RPC)
+//  5. Per-directory workspace isolation, opt-in via STAPLER_SQUAD_WORKSPACE_MODE=true
+//  6. Global shared state (default)
 func GetConfigDir() (string, error) {
 	return GetConfigDirForDir("")
 }
@@ -114,7 +165,16 @@ func GetConfigDirForDir(dir string) (string, error) {
 		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
 	}
 
-	// Priority 3.5: Preferred workspace from preference file
+	return resolveDefaultConfigDir(dir, baseDir)
+}
+
+// resolveDefaultConfigDir implements Priority 4-6 of GetConfigDirForDir: preferred
+// workspace file, opt-in per-directory workspace isolation, then shared state.
+// Split out from GetConfigDirForDir so it can be tested directly — Priority 3
+// (test mode auto-detection) is always true inside a `go test` binary, which
+// would otherwise make this logic unreachable in tests.
+func resolveDefaultConfigDir(dir, baseDir string) (string, error) {
+	// Priority 4: Preferred workspace from preference file
 	// Written by SwitchDatabase RPC; cleared automatically on removal.
 	// Skipped in test mode (above) so tests always get isolated state.
 	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
@@ -127,15 +187,29 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 4: Workspace-based isolation (production default)
-	// Can be disabled with STAPLER_SQUAD_WORKSPACE_MODE=false
-	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") != "false" {
+	// Priority 5: Per-directory workspace isolation — opt-in only.
+	// A single shared workspace is the default; per-cwd auto-isolation must be
+	// explicitly enabled with STAPLER_SQUAD_WORKSPACE_MODE=true. Switching between
+	// workspaces is meant to be an explicit user action (see SwitchDatabase RPC /
+	// the workspace switcher UI), not an automatic side effect of the cwd a process
+	// happens to be started from — the latter is what caused sessions to silently
+	// "disappear" when the binary was started from inside a worktree.
+	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") == "true" {
 		workDir := dir
 		var err error
 		if workDir == "" {
 			workDir, err = os.Getwd()
 		}
 		if err == nil && workDir != "" {
+			if isWithinStateDir(workDir, baseDir) {
+				// Running with a cwd inside stapler-squad's own state directory (e.g. a
+				// session worktree) hashes to a workspace distinct from the one the user
+				// normally works from, silently landing on an empty database that looks
+				// like all sessions vanished. Almost always means the binary was started
+				// manually from within a worktree instead of via the installed service.
+				log.Warn("cwd is inside stapler-squad state directory; this process will use a different workspace than usual and may appear to have no sessions",
+					"cwd", workDir, "state_dir", baseDir)
+			}
 			// Hash the workspace path for a stable, filesystem-safe identifier
 			hash := sha256.Sum256([]byte(workDir))
 			workspaceID := fmt.Sprintf("%x", hash[:8])
@@ -147,7 +221,7 @@ func GetConfigDirForDir(dir string) (string, error) {
 		}
 	}
 
-	// Priority 5: Global shared state (fallback, backward compatibility)
+	// Priority 6: Global shared state (default)
 	return baseDir, nil
 }
 
@@ -200,9 +274,6 @@ type Config struct {
 	PerformBackgroundHealthChecks bool `json:"perform_background_health_checks"`
 	// KeyCategories defines custom category mappings for key bindings in help system
 	KeyCategories map[string]string `json:"key_categories"`
-	// TerminalStreamingMode controls how terminal output is streamed to the client
-	// Options: "raw" (direct PTY streaming), "state" (MOSH-style state sync), "hybrid" (both)
-	TerminalStreamingMode string `json:"terminal_streaming_mode"`
 	// VCSPreference controls which version control system to prefer when both are available
 	// Options: "auto" (prefer JJ if available), "jj" (always use JJ), "git" (always use Git)
 	VCSPreference string `json:"vcs_preference"`
@@ -228,6 +299,17 @@ type Config struct {
 	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
 	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
 	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
+	// MaxAutoReworkIterations caps how many automated work sessions the backlog auto-reopen
+	// loop will spawn for a single item before leaving it for manual review. 0 = use the
+	// default (20). Individual items can also override this via
+	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
+	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
+	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// MaxConcurrentBacklogWorkItems caps how many distinct backlog items may be
+	// "in_progress" at the same time. 0 = use the default (2). Values above
+	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
+	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
+
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
 	// Default: 100_000.
@@ -246,6 +328,8 @@ type Config struct {
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
 	// Capacity holds configuration for the provider capacity monitoring and transition feature.
 	Capacity CapacityConfig `json:"capacity,omitempty"`
+	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
+	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
 
 	// Escape analytics configuration
 
@@ -285,15 +369,34 @@ func DefaultConfig() *Config {
 	return defaultConfigWithExecutor(nil)
 }
 
+// testModeSentinelProgram replaces the real default program whenever a Config is
+// auto-constructed (no explicit executor) under `go test`. Without this,
+// GetClaudeCommand's PATH fallback (lookPathOnlyExecutor.LookPath, which is a real
+// exec.LookPath) finds and returns the genuine, locally-installed "claude" binary --
+// so a test that forgets to isolate its config/cleanup doesn't just leak an idle
+// process, it leaks a live, authenticated, tool-wielding Claude Code agent (with its
+// own MCP server tree) running indefinitely. "true" exits immediately, so a leaked
+// tmux pane closes itself instead of staying up forever.
+const testModeSentinelProgram = "true"
+
 // defaultConfigWithExecutor creates the default Config using the provided executor.
 // Pass nil to use the default timeout executor.
 func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg := NewConfigWithExecutor(exec)
 
-	program, err := cfg.GetClaudeCommand()
-	if err != nil {
-		log.Error("failed to get claude command", "err", err)
-		program = defaultProgram
+	var program string
+	if exec == nil && IsTestMode() {
+		// Auto-constructed (DefaultConfig()/LoadConfig()) and running under go test:
+		// never resolve to a real launchable program. Tests that intentionally need
+		// real program resolution pass an explicit executor (see TestDefaultConfig).
+		program = testModeSentinelProgram
+	} else {
+		var err error
+		program, err = cfg.GetClaudeCommand()
+		if err != nil {
+			log.Error("failed to get claude command", "err", err)
+			program = defaultProgram
+		}
 	}
 
 	availablePrograms := cfg.GetAvailablePrograms()
@@ -323,9 +426,11 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
 	cfg.PerformBackgroundHealthChecks = true // Enabled by default for automated session maintenance
 	cfg.KeyCategories = getDefaultKeyCategories()
-	cfg.TerminalStreamingMode = "raw" // Default to raw streaming (simpler, more reliable)
-	cfg.VCSPreference = "auto"        // Default to auto-detection (prefer JJ if available)
+	cfg.VCSPreference = "auto" // Default to auto-detection (prefer JJ if available)
 	cfg.AvailablePrograms = availablePrograms
+	cfg.TmuxExecGate = TmuxExecGateConfig{
+		Slots: defaultTmuxExecGateSlots,
+	}
 	cfg.Hibernation = HibernationConfig{
 		Enabled:                   true,
 		IdleTimeoutMinutes:        20,
@@ -416,6 +521,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
 }
 
+// BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
+// Uploaded images referenced from backlog item descriptions are stored here,
+// durably (unlike the 24h temp paste dir) since they're linked from persisted
+// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+}
+
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
 // If NewProjectBaseDir is empty, it defaults to "~/Projects" with ~ expanded.
 func (c *Config) NewProjectBaseDirOrDefault() (string, error) {
@@ -446,6 +563,43 @@ func (c *Config) AnalyticsMaxRowsOrDefault() int {
 		return 100_000
 	}
 	return c.AnalyticsMaxRows
+}
+
+// MaxAutoReworkIterationsOrDefault returns the configured rework-cap ceiling, or 20
+// if not set (zero value) or c is nil (BacklogService's cfg is nil in some test setups).
+// Raised from 3 to 20: 3 was tripping routinely on real, ultimately-fixable items
+// (e.g. a multi-round diff/review-harness flake, or a straightforward merge conflict)
+// well before the work was actually stuck, forcing manual "Reopen for Revision" clicks
+// for otherwise-recoverable items. Genuinely stuck items still get caught — just
+// later — and per-item overrides (BacklogItemData.ReworkCapOverride) exist for cases
+// that need to go further still.
+func (c *Config) MaxAutoReworkIterationsOrDefault() int {
+	if c == nil || c.MaxAutoReworkIterations <= 0 {
+		return 20
+	}
+	return c.MaxAutoReworkIterations
+}
+
+// maxConcurrentBacklogWorkItemsDefault is used when the config value is unset (0
+// or negative — 0 concurrency would wedge the queue forever).
+// maxConcurrentBacklogWorkItemsHardCeiling caps how high the setting can go even via a
+// modified frontend request, to guard against reintroducing the 2026-07-12 OOM.
+const (
+	maxConcurrentBacklogWorkItemsDefault     = 2
+	maxConcurrentBacklogWorkItemsHardCeiling = 10
+)
+
+// MaxConcurrentBacklogWorkItemsOrDefault returns the configured backlog work-item
+// concurrency cap, clamped to [1, maxConcurrentBacklogWorkItemsHardCeiling]. Falls back
+// to the default (2) if unset (<=0) or c is nil.
+func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
+	if c == nil || c.MaxConcurrentBacklogWorkItems <= 0 {
+		return maxConcurrentBacklogWorkItemsDefault
+	}
+	if c.MaxConcurrentBacklogWorkItems > maxConcurrentBacklogWorkItemsHardCeiling {
+		return maxConcurrentBacklogWorkItemsHardCeiling
+	}
+	return c.MaxConcurrentBacklogWorkItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,

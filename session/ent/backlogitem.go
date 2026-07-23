@@ -35,10 +35,20 @@ type BacklogItem struct {
 	SkipReviewGate bool `json:"skip_review_gate,omitempty"`
 	// SkipPlanning holds the value of the "skip_planning" field.
 	SkipPlanning bool `json:"skip_planning,omitempty"`
+	// When true, a work session is spawned automatically once the item reaches ready — no manual 'Spawn Session' click required.
+	AutoSpawnSession bool `json:"auto_spawn_session,omitempty"`
+	// When true, a PR is created automatically (via the same one-shot prompt the manual Review Queue 'Create PR' button uses) once a work session for this item reaches TASK_COMPLETE — no manual click required.
+	AutoCreatePr bool `json:"auto_create_pr,omitempty"`
+	// Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline).
+	PipelineMode string `json:"pipeline_mode,omitempty"`
 	// PlanApproved holds the value of the "plan_approved" field.
 	PlanApproved bool `json:"plan_approved,omitempty"`
 	// PlanApprovedAt holds the value of the "plan_approved_at" field.
 	PlanApprovedAt *time.Time `json:"plan_approved_at,omitempty"`
+	// Set when a fresh spawn hits the concurrency cap and the item is queued instead of rejected. Drives FIFO dequeue ordering.
+	QueuedAt *time.Time `json:"queued_at,omitempty"`
+	// Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully.
+	QueuedAutonomous bool `json:"queued_autonomous,omitempty"`
 	// PlanArtifactsPath holds the value of the "plan_artifacts_path" field.
 	PlanArtifactsPath string `json:"plan_artifacts_path,omitempty"`
 	// JSON set of field names modified by the user
@@ -55,6 +65,20 @@ type BacklogItem struct {
 	PrURL string `json:"pr_url,omitempty"`
 	// PrNumber holds the value of the "pr_number" field.
 	PrNumber int `json:"pr_number,omitempty"`
+	// Durable GitHub CI-conclusion snapshot captured at ship time — genuine GitHub CI-conclusion values only, never a capture-failure sentinel. See shipped_snapshot_capture_failed.
+	ShippedCheckConclusion string `json:"shipped_check_conclusion,omitempty"`
+	// Durable review-approval-count snapshot captured at ship time.
+	ShippedApprovedCount int `json:"shipped_approved_count,omitempty"`
+	// Durable "changes requested" review-count snapshot captured at ship time.
+	ShippedChangesReqCount int `json:"shipped_changes_req_count,omitempty"`
+	// Timestamp the durable ship snapshot was captured at.
+	ShippedSnapshotAt *time.Time `json:"shipped_snapshot_at,omitempty"`
+	// JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time
+	ShippedFileStats string `json:"shipped_file_stats,omitempty"`
+	// true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values
+	ShippedSnapshotCaptureFailed bool `json:"shipped_snapshot_capture_failed,omitempty"`
+	// Per-item override for the auto-rework cap (MaxAutoReworkIterationsOrDefault). Nil = use the global default. 0 = unlimited for this item. >0 = this item's own cap, replacing (not adding to) the global value.
+	ReworkCapOverride *int `json:"rework_cap_override,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -74,11 +98,15 @@ type BacklogItemEdges struct {
 	Sessions []*Session `json:"sessions,omitempty"`
 	// StatusEvents holds the value of the status_events edge.
 	StatusEvents []*BacklogStatusEvent `json:"status_events,omitempty"`
+	// StuckStates holds the value of the stuck_states edge.
+	StuckStates []*BacklogStuckState `json:"stuck_states,omitempty"`
+	// ProgressNotes holds the value of the progress_notes edge.
+	ProgressNotes []*BacklogProgressNote `json:"progress_notes,omitempty"`
 	// Source holds the value of the source edge.
 	Source *ItemSource `json:"source,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [6]bool
 }
 
 // ItemSessionsOrErr returns the ItemSessions value or an error if the edge
@@ -108,12 +136,30 @@ func (e BacklogItemEdges) StatusEventsOrErr() ([]*BacklogStatusEvent, error) {
 	return nil, &NotLoadedError{edge: "status_events"}
 }
 
+// StuckStatesOrErr returns the StuckStates value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) StuckStatesOrErr() ([]*BacklogStuckState, error) {
+	if e.loadedTypes[3] {
+		return e.StuckStates, nil
+	}
+	return nil, &NotLoadedError{edge: "stuck_states"}
+}
+
+// ProgressNotesOrErr returns the ProgressNotes value or an error if the edge
+// was not loaded in eager-loading.
+func (e BacklogItemEdges) ProgressNotesOrErr() ([]*BacklogProgressNote, error) {
+	if e.loadedTypes[4] {
+		return e.ProgressNotes, nil
+	}
+	return nil, &NotLoadedError{edge: "progress_notes"}
+}
+
 // SourceOrErr returns the Source value or an error if the edge
 // was not loaded in eager-loading, or loaded but was not found.
 func (e BacklogItemEdges) SourceOrErr() (*ItemSource, error) {
 	if e.Source != nil {
 		return e.Source, nil
-	} else if e.loadedTypes[3] {
+	} else if e.loadedTypes[5] {
 		return nil, &NotFoundError{label: itemsource.Label}
 	}
 	return nil, &NotLoadedError{edge: "source"}
@@ -124,13 +170,13 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldPlanApproved:
+		case backlogitem.FieldSkipReviewGate, backlogitem.FieldSkipPlanning, backlogitem.FieldAutoSpawnSession, backlogitem.FieldAutoCreatePr, backlogitem.FieldPlanApproved, backlogitem.FieldQueuedAutonomous, backlogitem.FieldShippedSnapshotCaptureFailed:
 			values[i] = new(sql.NullBool)
-		case backlogitem.FieldPriority, backlogitem.FieldPrNumber:
+		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
 			values[i] = new(sql.NullInt64)
-		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL:
+		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -205,6 +251,24 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.SkipPlanning = value.Bool
 			}
+		case backlogitem.FieldAutoSpawnSession:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field auto_spawn_session", values[i])
+			} else if value.Valid {
+				_m.AutoSpawnSession = value.Bool
+			}
+		case backlogitem.FieldAutoCreatePr:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field auto_create_pr", values[i])
+			} else if value.Valid {
+				_m.AutoCreatePr = value.Bool
+			}
+		case backlogitem.FieldPipelineMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field pipeline_mode", values[i])
+			} else if value.Valid {
+				_m.PipelineMode = value.String
+			}
 		case backlogitem.FieldPlanApproved:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field plan_approved", values[i])
@@ -217,6 +281,19 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PlanApprovedAt = new(time.Time)
 				*_m.PlanApprovedAt = value.Time
+			}
+		case backlogitem.FieldQueuedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field queued_at", values[i])
+			} else if value.Valid {
+				_m.QueuedAt = new(time.Time)
+				*_m.QueuedAt = value.Time
+			}
+		case backlogitem.FieldQueuedAutonomous:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field queued_autonomous", values[i])
+			} else if value.Valid {
+				_m.QueuedAutonomous = value.Bool
 			}
 		case backlogitem.FieldPlanArtifactsPath:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -268,6 +345,50 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PrNumber = int(value.Int64)
 			}
+		case backlogitem.FieldShippedCheckConclusion:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_check_conclusion", values[i])
+			} else if value.Valid {
+				_m.ShippedCheckConclusion = value.String
+			}
+		case backlogitem.FieldShippedApprovedCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_approved_count", values[i])
+			} else if value.Valid {
+				_m.ShippedApprovedCount = int(value.Int64)
+			}
+		case backlogitem.FieldShippedChangesReqCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_changes_req_count", values[i])
+			} else if value.Valid {
+				_m.ShippedChangesReqCount = int(value.Int64)
+			}
+		case backlogitem.FieldShippedSnapshotAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_snapshot_at", values[i])
+			} else if value.Valid {
+				_m.ShippedSnapshotAt = new(time.Time)
+				*_m.ShippedSnapshotAt = value.Time
+			}
+		case backlogitem.FieldShippedFileStats:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_file_stats", values[i])
+			} else if value.Valid {
+				_m.ShippedFileStats = value.String
+			}
+		case backlogitem.FieldShippedSnapshotCaptureFailed:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field shipped_snapshot_capture_failed", values[i])
+			} else if value.Valid {
+				_m.ShippedSnapshotCaptureFailed = value.Bool
+			}
+		case backlogitem.FieldReworkCapOverride:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field rework_cap_override", values[i])
+			} else if value.Valid {
+				_m.ReworkCapOverride = new(int)
+				*_m.ReworkCapOverride = int(value.Int64)
+			}
 		case backlogitem.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -313,6 +434,16 @@ func (_m *BacklogItem) QuerySessions() *SessionQuery {
 // QueryStatusEvents queries the "status_events" edge of the BacklogItem entity.
 func (_m *BacklogItem) QueryStatusEvents() *BacklogStatusEventQuery {
 	return NewBacklogItemClient(_m.config).QueryStatusEvents(_m)
+}
+
+// QueryStuckStates queries the "stuck_states" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryStuckStates() *BacklogStuckStateQuery {
+	return NewBacklogItemClient(_m.config).QueryStuckStates(_m)
+}
+
+// QueryProgressNotes queries the "progress_notes" edge of the BacklogItem entity.
+func (_m *BacklogItem) QueryProgressNotes() *BacklogProgressNoteQuery {
+	return NewBacklogItemClient(_m.config).QueryProgressNotes(_m)
 }
 
 // QuerySource queries the "source" edge of the BacklogItem entity.
@@ -367,6 +498,15 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString("skip_planning=")
 	builder.WriteString(fmt.Sprintf("%v", _m.SkipPlanning))
 	builder.WriteString(", ")
+	builder.WriteString("auto_spawn_session=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AutoSpawnSession))
+	builder.WriteString(", ")
+	builder.WriteString("auto_create_pr=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AutoCreatePr))
+	builder.WriteString(", ")
+	builder.WriteString("pipeline_mode=")
+	builder.WriteString(_m.PipelineMode)
+	builder.WriteString(", ")
 	builder.WriteString("plan_approved=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PlanApproved))
 	builder.WriteString(", ")
@@ -374,6 +514,14 @@ func (_m *BacklogItem) String() string {
 		builder.WriteString("plan_approved_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	if v := _m.QueuedAt; v != nil {
+		builder.WriteString("queued_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("queued_autonomous=")
+	builder.WriteString(fmt.Sprintf("%v", _m.QueuedAutonomous))
 	builder.WriteString(", ")
 	builder.WriteString("plan_artifacts_path=")
 	builder.WriteString(_m.PlanArtifactsPath)
@@ -402,6 +550,31 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("pr_number=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PrNumber))
+	builder.WriteString(", ")
+	builder.WriteString("shipped_check_conclusion=")
+	builder.WriteString(_m.ShippedCheckConclusion)
+	builder.WriteString(", ")
+	builder.WriteString("shipped_approved_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ShippedApprovedCount))
+	builder.WriteString(", ")
+	builder.WriteString("shipped_changes_req_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ShippedChangesReqCount))
+	builder.WriteString(", ")
+	if v := _m.ShippedSnapshotAt; v != nil {
+		builder.WriteString("shipped_snapshot_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("shipped_file_stats=")
+	builder.WriteString(_m.ShippedFileStats)
+	builder.WriteString(", ")
+	builder.WriteString("shipped_snapshot_capture_failed=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ShippedSnapshotCaptureFailed))
+	builder.WriteString(", ")
+	if v := _m.ReworkCapOverride; v != nil {
+		builder.WriteString("rework_cap_override=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

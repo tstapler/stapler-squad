@@ -8,7 +8,7 @@ var BacklogApprovePlan = featureregistry.Feature{
 	Title:       "Approve Plan",
 	Description: "Approves the plan artifact for a backlog item, marking it ready for execution.",
 	RPCIDs:      []string{"backlog:approve-plan"},
-	Status:      featureregistry.StatusStable,
+	Status:      featureregistry.StatusExperimental,
 	Since:       "1.0.0",
 }
 
@@ -38,7 +38,7 @@ var BacklogCreateItem = featureregistry.Feature{
 	Title:       "Create Backlog Item",
 	Description: "Creates a new backlog item with a title and optional metadata.",
 	RPCIDs:      []string{"backlog:create-item"},
-	Status:      featureregistry.StatusStable,
+	Status:      featureregistry.StatusExperimental,
 	Since:       "1.0.0",
 }
 
@@ -88,7 +88,7 @@ var BacklogListItems = featureregistry.Feature{
 	Title:       "List Backlog Items",
 	Description: "Lists backlog items with optional filtering by status and other criteria.",
 	RPCIDs:      []string{"backlog:list-items"},
-	Status:      featureregistry.StatusStable,
+	Status:      featureregistry.StatusExperimental,
 	Since:       "1.0.0",
 }
 

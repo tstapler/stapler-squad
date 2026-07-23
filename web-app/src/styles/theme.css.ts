@@ -1,3 +1,6 @@
+/* eslint-disable no-restricted-syntax -- this file defines the literal hex values behind
+ * vars.color.* for every theme (see theme-contract.css.ts); consuming .css.ts files must
+ * use vars.color.* tokens instead of hex literals per .claude/rules/css-architecture.md. */
 import { createTheme } from "@vanilla-extract/css";
 import { vars } from "./theme-contract.css";
 
@@ -52,6 +55,12 @@ const terminalTokens = {
   terminalHoverBg: "#3e3e42",
 };
 
+// Header always uses a dark backdrop regardless of theme — mirrors terminalTokens above.
+const headerTokens = {
+  headerTextPrimary: "#ededed",
+  headerTextSecondary: "#b4b4b4",
+};
+
 export const lightTheme = createTheme(vars, {
   color: {
     textPrimary: "#0a0a0a",
@@ -97,12 +106,18 @@ export const lightTheme = createTheme(vars, {
 
     accentBg: "rgba(0, 112, 243, 0.08)",
     accentHover: "rgba(0, 112, 243, 0.16)",
+    /* accentText: primary (#0070f3) on accentBg (~#ebf4fe) measures 4.09:1 —
+     * fails WCAG AA (needs >=4.5:1), caught by InlineNotice's Reload button
+     * (tests/e2e/accessibility.spec.ts). primaryDark (#003d99) on the same
+     * background measures ~9.2:1. */
+    accentText: "#003d99",
 
     inputBackground: "#ffffff",
     inputText: "#0a0a0a",
     placeholderColor: "#9ca3af",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#b91c1c", logWarn: "#d97706", logInfo: "#1d4ed8",
     logDebug: "#6b7280", logTrace: "#4b5563",
@@ -194,12 +209,16 @@ export const darkTheme = createTheme(vars, {
 
     accentBg: "rgba(45, 156, 219, 0.1)",
     accentHover: "rgba(45, 156, 219, 0.2)",
+    /* accentText: primary (#2d9cdb) already measures ~5:1 against accentBg
+     * blended over cardBackground — unchanged from pre-fix behavior. */
+    accentText: "#2d9cdb",
 
     inputBackground: "#2a2a2a",
     inputText: "#ededed",
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#2563eb",
     logDebug: "#6b7280", logTrace: "#4b5563",
@@ -294,12 +313,15 @@ export const matrixTheme = createTheme(vars, {
 
     accentBg: "rgba(0,255,65,0.1)",
     accentHover: "rgba(0,255,65,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#00ff41",
 
     inputBackground: "#050505",
     inputText: "#00ff41",
     placeholderColor: "#004d18",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#cc0033", logWarn: "#cc8800", logInfo: "#00aaff",
     logDebug: "#00802b", logTrace: "#006622",
@@ -402,12 +424,15 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     accentBg: "rgba(255,45,120,0.1)",
     accentHover: "rgba(255,45,120,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#cc245f",
 
     inputBackground: "#0f0f22",
     inputText: "#fcee09",
     placeholderColor: "#4a4603",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#ff2d78", logWarn: "#ffd700", logInfo: "#00d4ff",
     logDebug: "#9d4edd", logTrace: "#7b2d8b",
@@ -510,12 +535,15 @@ export const wh40kTheme = createTheme(vars, {
 
     accentBg: "rgba(192,160,32,0.1)",
     accentHover: "rgba(192,160,32,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#c0a020",
 
     inputBackground: "#120e0a",
     inputText: "#c8b89a",
     placeholderColor: "#786858",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#8b1a1a", logWarn: "#c0a020", logInfo: "#1a4a8b",
     logDebug: "#6b6040", logTrace: "#4a4030",
@@ -618,12 +646,15 @@ export const cleanTheme = createTheme(vars, {
 
     accentBg: "rgba(99,102,241,0.1)",
     accentHover: "rgba(99,102,241,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#6366f1",
 
     inputBackground: "#161b22",
     inputText: "#e2e8f0",
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#4f46e5",
     logDebug: "#6b7280", logTrace: "#4b5563",

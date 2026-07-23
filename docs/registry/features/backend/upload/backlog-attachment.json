@@ -1,0 +1,22 @@
+{
+  "id": "upload:backlog-attachment",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/v1/upload-backlog-attachment",
+  "httpMethod": "POST",
+  "httpPath": "/api/v1/upload-backlog-attachment",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_attachment_upload_handler.go",
+  "tested": true,
+  "testIds": [
+    "TestBacklogAttachmentUpload_PNG_Success",
+    "TestBacklogAttachmentUpload_JPEG_Success",
+    "TestBacklogAttachmentUpload_SpoofedExtension_Rejected",
+    "TestBacklogAttachmentUpload_SVG_Rejected",
+    "TestBacklogAttachmentUpload_PathTraversalFilename",
+    "TestBacklogAttachmentUpload_OversizedFile",
+    "TestBacklogAttachmentUpload_EmptyFile",
+    "TestBacklogAttachmentUpload_MissingFileField"
+  ],
+  "lastModified": "2026-07-08T12:16:05.579967631-07:00"
+}

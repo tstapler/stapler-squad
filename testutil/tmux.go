@@ -431,8 +431,15 @@ func CleanupTmuxSessionsWithPrefix(t *testing.T, prefix string) {
 
 	execImpl := executor.MakeExecutor()
 
+	// Resolve once, here -- not per-command below. This is a test-only helper,
+	// but without this it enumerates and kills sessions on the real, shared
+	// default tmux socket unconditionally, even inside a `go test` binary --
+	// the exact incident class tmux.ResolveSocket exists to close. See its
+	// doc comment for the incident history.
+	socket := tmux.ResolveSocket("")
+
 	// List all sessions
-	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "list-sessions", "-F", "#{session_name}")
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), socket.Args("list-sessions", "-F", "#{session_name}")...)
 	output, err := execImpl.Output(cmd)
 	if err != nil {
 		// No sessions running is fine
@@ -447,7 +454,7 @@ func CleanupTmuxSessionsWithPrefix(t *testing.T, prefix string) {
 	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, sessionName := range sessions {
 		if strings.HasPrefix(sessionName, prefix) {
-			killCmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "kill-session", "-t", sessionName)
+			killCmd := safeexec.CommandContext(context.Background(), tmux.Binary(), socket.Args("kill-session", "-t", sessionName)...)
 			if err := execImpl.Run(killCmd); err != nil {
 				t.Logf("Warning: failed to kill session %s: %v", sessionName, err)
 			}

@@ -5,8 +5,8 @@
   "method": "OverrideVerdict",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service.go",
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
 }

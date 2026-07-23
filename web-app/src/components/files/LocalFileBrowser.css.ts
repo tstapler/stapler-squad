@@ -25,6 +25,11 @@ export const pathForm = style({
   alignItems: "center",
 });
 
+export const pathInputWrapper = style({
+  flex: 1,
+  minWidth: 0,
+});
+
 export const pathInput = style({
   flex: 1,
   background: vars.color.inputBackground,

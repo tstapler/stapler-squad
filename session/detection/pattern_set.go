@@ -3,14 +3,11 @@ package detection
 import (
 	"fmt"
 	"regexp"
-	"sync"
 )
 
 // PatternSet holds compiled regex slices for all StatusPatterns categories.
-// All field mutations after construction must acquire mu before writing.
+// Immutable after NewPatternSet returns — no lock needed.
 type PatternSet struct {
-	mu sync.RWMutex
-
 	patterns StatusPatterns
 
 	readyRegexes           []*regexp.Regexp
@@ -68,15 +65,8 @@ func (ps *PatternSet) compile() error {
 }
 
 // MatchLines runs the pattern priority chain on the given text string and raw PTY bytes.
-// Returns (status, patternName, description). Acquires mu.RLock.
+// Returns (status, patternName, description).
 func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, string, string) {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
-	return ps.matchLocked(text, rawPTY)
-}
-
-// matchLocked is the inner implementation; callers must hold ps.mu.RLock.
-func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, string, string) {
 	// Error patterns (highest priority)
 	for i, regex := range ps.errorRegexes {
 		if regex.MatchString(text) {
@@ -152,7 +142,5 @@ func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, s
 
 // Patterns returns the StatusPatterns used by this PatternSet.
 func (ps *PatternSet) Patterns() StatusPatterns {
-	ps.mu.RLock()
-	defer ps.mu.RUnlock()
 	return ps.patterns
 }

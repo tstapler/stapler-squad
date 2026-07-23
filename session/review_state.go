@@ -1,8 +1,10 @@
 package session
 
 import (
-	"fmt"
+	"encoding/binary"
+	"encoding/hex"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
@@ -14,9 +16,13 @@ import (
 // ReviewState holds all timestamps and state related to the review queue and terminal activity
 // tracking for a session. It is embedded in Instance so all field accesses remain unchanged.
 //
-// Fields are protected by Instance.mu; do not lock ReviewState independently.
-// Methods on ReviewState are intentionally non-locking — callers must hold mu
-// if concurrent access is possible.
+// Fields are NOT protected by Instance.mu. Mutation is serialized through the actor's
+// send()/sendSyncErr() closures instead (see UpdateTerminalTimestamps in
+// instance_approval.go, which routes through i.send() rather than i.mu.Lock()) - the
+// same "no locking, serialize via the actor's own command queue" discipline used by
+// transitionToLocked et al. Methods on ReviewState are intentionally non-locking -
+// callers must be running inside an actor command closure (or otherwise be the sole
+// writer) if concurrent access is possible.
 //
 // Direct field access via Go embedding promotion (inst.LastMeaningfulOutput etc.) is used by:
 //   - session/review_queue_poller.go: reads LastMeaningfulOutput, LastAcknowledged,
@@ -27,8 +33,8 @@ import (
 //   - server/adapters/instance_adapter.go: reads LastTerminalUpdate, LastMeaningfulOutput
 //   - server/review_queue_manager.go: writes LastUserResponse directly
 //
-// All access is either within the session package (under mu) or through
-// Instance methods that acquire mu.
+// All access is either within the session package (via the actor's serialized
+// closures) or through Instance methods that route through i.send()/sendSyncErr().
 //
 // TODO: Migrate cross-package field accesses (server/) to accessor methods to enable
 // future encapsulation of ReviewState as a composed (non-embedded) field.
@@ -78,6 +84,12 @@ type ReviewState struct {
 	// UnixNano. Written under mu (write); read without any lock via atomic ops.
 	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
 	lastMeaningfulOutputNs int64
+
+	// lastAcknowledgedNs is a lock-free shadow of LastAcknowledged stored as UnixNano,
+	// following the exact same pattern as lastMeaningfulOutputNs. Written under mu
+	// (MarkAcknowledged, instance_state.go); read without any lock via atomic ops.
+	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
+	lastAcknowledgedNs int64
 }
 
 // SyncAtomicTimestamps initialises atomic shadow fields from their time.Time counterparts.
@@ -87,6 +99,9 @@ func (rs *ReviewState) SyncAtomicTimestamps() {
 	if !rs.LastMeaningfulOutput.IsZero() {
 		atomic.StoreInt64(&rs.lastMeaningfulOutputNs, rs.LastMeaningfulOutput.UnixNano())
 	}
+	if !rs.LastAcknowledged.IsZero() {
+		atomic.StoreInt64(&rs.lastAcknowledgedNs, rs.LastAcknowledged.UnixNano())
+	}
 }
 
 // loadLastMeaningfulOutputNs returns the nanosecond timestamp without acquiring any lock.
@@ -95,15 +110,27 @@ func (rs *ReviewState) loadLastMeaningfulOutputNs() int64 {
 	return atomic.LoadInt64(&rs.lastMeaningfulOutputNs)
 }
 
+// loadLastAcknowledgedNs returns the nanosecond timestamp without acquiring any lock.
+// Returns 0 when the session has not yet been acknowledged.
+func (rs *ReviewState) loadLastAcknowledgedNs() int64 {
+	return atomic.LoadInt64(&rs.lastAcknowledgedNs)
+}
+
 // ---- Package-level helpers -----------------------------------------------
 
 // computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.
 // This signature is used to detect actual content changes vs app restarts with unchanged content.
 // MurmurHash3 is significantly faster than SHA256 and perfect for non-cryptographic checksums.
-// Returns a hex-encoded string representation of the hash (16 characters for 64-bit hash).
+// Returns a 16-character hex string. Uses unsafe.StringData to avoid a []byte copy.
 func computeContentSignature(content string) string {
-	hash := murmur3.Sum64([]byte(content))
-	return fmt.Sprintf("%016x", hash)
+	var b []byte
+	if len(content) > 0 {
+		b = unsafe.Slice(unsafe.StringData(content), len(content))
+	}
+	hash := murmur3.Sum64(b)
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], hash)
+	return hex.EncodeToString(buf[:])
 }
 
 // truncateString truncates s to maxLen characters. Used for log messages.
@@ -117,13 +144,19 @@ func truncateString(s string, maxLen int) string {
 // ---- ReviewState methods --------------------------------------------------
 
 // TimeSinceLastMeaningfulOutput returns how long ago meaningful terminal output was received.
-// If LastMeaningfulOutput is zero, returns the duration since the given createdAt time.
-// Caller must hold the relevant mutex if concurrent access is possible.
+// If no meaningful output has been recorded yet, returns the duration since the given
+// createdAt time.
+//
+// Lock-free: reads the atomic shadow (lastMeaningfulOutputNs) via loadLastMeaningfulOutputNs()
+// rather than the plain LastMeaningfulOutput field, so this method is safe to call from any
+// goroutine — including outside the actor's serialized command closures (e.g.
+// HibernationSweeper.sweep(), which runs on its own independent background goroutine).
 func (rs *ReviewState) TimeSinceLastMeaningfulOutput(createdAt time.Time) time.Duration {
-	if rs.LastMeaningfulOutput.IsZero() {
+	ns := rs.loadLastMeaningfulOutputNs()
+	if ns == 0 {
 		return time.Since(createdAt)
 	}
-	return time.Since(rs.LastMeaningfulOutput)
+	return time.Since(time.Unix(0, ns))
 }
 
 // TimeSinceLastTerminalUpdate returns how long ago any terminal output was received.
@@ -139,14 +172,21 @@ func (rs *ReviewState) TimeSinceLastTerminalUpdate(createdAt time.Time) time.Dur
 // IsAcknowledgedAfterOutput returns true if the user acknowledged this session more recently
 // than the last meaningful terminal output — meaning no new output has occurred since the
 // user last dismissed the session from the review queue.
-// Returns false when LastMeaningfulOutput is zero: if no output has ever been recorded,
-// the acknowledgment cannot logically be "after" output, so the session is not snoozed.
-// Caller must hold the relevant mutex if concurrent access is possible.
+// Returns false when no meaningful output has been recorded yet: the acknowledgment cannot
+// logically be "after" output that never happened, so the session is not snoozed.
+//
+// Lock-free: reads both atomic shadows (lastMeaningfulOutputNs, lastAcknowledgedNs) rather
+// than the plain LastMeaningfulOutput/LastAcknowledged fields, so this method is safe to call
+// from any goroutine — including outside the actor's serialized command closures (e.g.
+// review_queue_determiner.go's Determine(), called directly on the live *Instance from
+// ReviewQueuePoller's own independent background goroutine).
 func (rs *ReviewState) IsAcknowledgedAfterOutput() bool {
-	if rs.LastMeaningfulOutput.IsZero() {
+	outputNs := rs.loadLastMeaningfulOutputNs()
+	if outputNs == 0 {
 		return false
 	}
-	return !rs.LastAcknowledged.IsZero() && rs.LastAcknowledged.After(rs.LastMeaningfulOutput)
+	ackNs := rs.loadLastAcknowledgedNs()
+	return ackNs != 0 && ackNs > outputNs
 }
 
 // IsInProcessingGracePeriod returns true if the session is within its processing grace window.
@@ -170,13 +210,18 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 //   - shouldUpdateMeaningful: true when the content carries meaningful signal (not just banners).
 //   - sessionTitle: used only for structured debug logging.
 //
-// Caller must hold Instance.mu.
-func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) {
+// Caller must be running inside the actor's serialized command closure (via i.send()/
+// sendSyncErr()), not holding Instance.mu - see UpdateTerminalTimestamps in
+// instance_approval.go, the sole caller.
+// Returns true when any field was updated (caller should rebuild the snapshot).
+func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) bool {
 	now := time.Now()
+	changed := false
 
 	// Always update LastTerminalUpdate for any non-blank raw output.
 	if len(strings.TrimSpace(rawContent)) > 0 {
 		rs.LastTerminalUpdate = now
+		changed = true
 	}
 
 	if shouldUpdateMeaningful {
@@ -185,6 +230,7 @@ func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shou
 			rs.LastMeaningfulOutput = now
 			atomic.StoreInt64(&rs.lastMeaningfulOutputNs, now.UnixNano())
 			rs.LastOutputSignature = signature
+			changed = true
 			log.ForSession(sessionTitle).Debug("Updated LastMeaningfulOutput timestamp")
 		} else {
 			log.ForSession(sessionTitle).Debug("Skipped LastMeaningfulOutput update (content unchanged since last update)")
@@ -192,6 +238,7 @@ func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shou
 	} else {
 		log.ForSession(sessionTitle).Debug("NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
 	}
+	return changed
 }
 
 // ComputePromptSignature computes a hash of the prompt content using the last 10 lines.
@@ -208,8 +255,14 @@ func (rs *ReviewState) ComputePromptSignature(content string) string {
 		startIdx = 0
 	}
 	promptContext := strings.Join(lines[startIdx:], "\n")
-	hash := murmur3.Sum64([]byte(promptContext))
-	return fmt.Sprintf("%016x", hash)
+	var b []byte
+	if len(promptContext) > 0 {
+		b = unsafe.Slice(unsafe.StringData(promptContext), len(promptContext))
+	}
+	hash := murmur3.Sum64(b)
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], hash)
+	return hex.EncodeToString(buf[:])
 }
 
 // DetectAndTrackPrompt detects whether the current status represents a new user-facing prompt

@@ -68,16 +68,9 @@ jest.mock('@/lib/terminal/MessageQueue', () => ({
 jest.mock('../useTerminalFlowControl', () => ({
   useTerminalFlowControl: () => ({
     sendInput: jest.fn(),
-    sendInputWithEcho: jest.fn().mockReturnValue(BigInt(0)),
     resize: jest.fn(),
     requestScrollback: jest.fn(),
     sendFlowControl: jest.fn(),
-    getIsApplyingState: jest.fn().mockReturnValue(false),
-    sspNegotiated: false,
-    handleStateMessage: jest.fn(),
-    handleDiffMessage: jest.fn(),
-    handleSspNegotiation: jest.fn(),
-    handleCurrentPaneResponse: jest.fn(),
     requestFullResync: jest.fn(),
     getIsResyncingRef: jest.fn().mockReturnValue({ current: false }),
   }),
@@ -93,11 +86,6 @@ jest.mock('../useTerminalMetrics', () => ({
     stopRecording: jest.fn(),
     isRecording: false,
   }),
-}));
-
-jest.mock('@/lib/compression/lzma', () => ({
-  decompressLZMA: jest.fn(),
-  isLZMACompressed: jest.fn().mockReturnValue(false),
 }));
 
 // ---------------------------------------------------------------------------

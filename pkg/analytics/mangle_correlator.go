@@ -2,7 +2,6 @@ package analytics
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -33,14 +32,27 @@ type Stage1Observation struct {
 // that (session, type) pair — a real limitation, but an ongoing desync is itself a symptom
 // worth surfacing (it shows up as a run of unexplained "stripped"/mismatched events) rather
 // than a silently wrong byte-offset correlation.
+// pendingKey is the zero-alloc map key for pending Stage 1 observations.
+type pendingKey struct {
+	sessionID    string
+	sequenceType string
+	ordinal      int64
+}
+
+// ordinalKey is the zero-alloc map key for per-(session, type) ordinal counters.
+type ordinalKey struct {
+	sessionID    string
+	sequenceType string
+}
+
 type MangleCorrelator struct {
 	mu      sync.Mutex
-	pending map[string]Stage1Observation // key: sessionID+":"+sequenceType+":"+ordinal
+	pending map[pendingKey]Stage1Observation
 	// stage1Ordinals/stage2Ordinals are independent per-(session,type) counters. They are
 	// deliberately not shared: Stage 1 and Stage 2 are driven by different goroutines
 	// observing different transports, and each counts only what it has itself seen.
-	stage1Ordinals map[string]int64 // key: sessionID+":"+sequenceType
-	stage2Ordinals map[string]int64 // key: sessionID+":"+sequenceType
+	stage1Ordinals map[ordinalKey]int64
+	stage2Ordinals map[ordinalKey]int64
 	maxAge         time.Duration
 	maxSize        int
 }
@@ -48,16 +60,12 @@ type MangleCorrelator struct {
 // NewMangleCorrelator creates a correlator with the given TTL and max pending size.
 func NewMangleCorrelator(maxAge time.Duration, maxSize int) *MangleCorrelator {
 	return &MangleCorrelator{
-		pending:        make(map[string]Stage1Observation),
-		stage1Ordinals: make(map[string]int64),
-		stage2Ordinals: make(map[string]int64),
+		pending:        make(map[pendingKey]Stage1Observation),
+		stage1Ordinals: make(map[ordinalKey]int64),
+		stage2Ordinals: make(map[ordinalKey]int64),
 		maxAge:         maxAge,
 		maxSize:        maxSize,
 	}
-}
-
-func ordinalKey(sessionID, sequenceType string, ordinal int64) string {
-	return fmt.Sprintf("%s:%s:%d", sessionID, sequenceType, ordinal)
 }
 
 // RecordStage1 records a Stage 1 observation for later correlation. It is assigned the next
@@ -75,11 +83,11 @@ func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, by
 		}
 	}
 
-	ordKey := sessionID + ":" + sequenceType
-	c.stage1Ordinals[ordKey]++
-	ordinal := c.stage1Ordinals[ordKey]
+	ok := ordinalKey{sessionID, sequenceType}
+	c.stage1Ordinals[ok]++
+	ordinal := c.stage1Ordinals[ok]
 
-	c.pending[ordinalKey(sessionID, sequenceType, ordinal)] = Stage1Observation{
+	c.pending[pendingKey{sessionID, sequenceType, ordinal}] = Stage1Observation{
 		PayloadHash:  hash,
 		ByteLen:      byteLen,
 		WallTime:     time.Now(),
@@ -97,16 +105,16 @@ func (c *MangleCorrelator) CheckStage2(sessionID, sequenceType, hash string, byt
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	ordKey := sessionID + ":" + sequenceType
-	c.stage2Ordinals[ordKey]++
-	ordinal := c.stage2Ordinals[ordKey]
+	ok2 := ordinalKey{sessionID, sequenceType}
+	c.stage2Ordinals[ok2]++
+	ordinal := c.stage2Ordinals[ok2]
 
-	key := ordinalKey(sessionID, sequenceType, ordinal)
-	obs, ok := c.pending[key]
+	pk := pendingKey{sessionID, sequenceType, ordinal}
+	obs, ok := c.pending[pk]
 	if !ok {
 		return false, ""
 	}
-	delete(c.pending, key)
+	delete(c.pending, pk)
 
 	if obs.PayloadHash == hash {
 		return false, ""

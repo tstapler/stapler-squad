@@ -96,6 +96,21 @@ func SkipPlanning(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldSkipPlanning, v))
 }
 
+// AutoSpawnSession applies equality check predicate on the "auto_spawn_session" field. It's identical to AutoSpawnSessionEQ.
+func AutoSpawnSession(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoSpawnSession, v))
+}
+
+// AutoCreatePr applies equality check predicate on the "auto_create_pr" field. It's identical to AutoCreatePrEQ.
+func AutoCreatePr(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoCreatePr, v))
+}
+
+// PipelineMode applies equality check predicate on the "pipeline_mode" field. It's identical to PipelineModeEQ.
+func PipelineMode(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPipelineMode, v))
+}
+
 // PlanApproved applies equality check predicate on the "plan_approved" field. It's identical to PlanApprovedEQ.
 func PlanApproved(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanApproved, v))
@@ -104,6 +119,16 @@ func PlanApproved(v bool) predicate.BacklogItem {
 // PlanApprovedAt applies equality check predicate on the "plan_approved_at" field. It's identical to PlanApprovedAtEQ.
 func PlanApprovedAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanApprovedAt, v))
+}
+
+// QueuedAt applies equality check predicate on the "queued_at" field. It's identical to QueuedAtEQ.
+func QueuedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAt, v))
+}
+
+// QueuedAutonomous applies equality check predicate on the "queued_autonomous" field. It's identical to QueuedAutonomousEQ.
+func QueuedAutonomous(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAutonomous, v))
 }
 
 // PlanArtifactsPath applies equality check predicate on the "plan_artifacts_path" field. It's identical to PlanArtifactsPathEQ.
@@ -144,6 +169,41 @@ func PrURL(v string) predicate.BacklogItem {
 // PrNumber applies equality check predicate on the "pr_number" field. It's identical to PrNumberEQ.
 func PrNumber(v int) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPrNumber, v))
+}
+
+// ShippedCheckConclusion applies equality check predicate on the "shipped_check_conclusion" field. It's identical to ShippedCheckConclusionEQ.
+func ShippedCheckConclusion(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedCheckConclusion, v))
+}
+
+// ShippedApprovedCount applies equality check predicate on the "shipped_approved_count" field. It's identical to ShippedApprovedCountEQ.
+func ShippedApprovedCount(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedApprovedCount, v))
+}
+
+// ShippedChangesReqCount applies equality check predicate on the "shipped_changes_req_count" field. It's identical to ShippedChangesReqCountEQ.
+func ShippedChangesReqCount(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedChangesReqCount, v))
+}
+
+// ShippedSnapshotAt applies equality check predicate on the "shipped_snapshot_at" field. It's identical to ShippedSnapshotAtEQ.
+func ShippedSnapshotAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotAt, v))
+}
+
+// ShippedFileStats applies equality check predicate on the "shipped_file_stats" field. It's identical to ShippedFileStatsEQ.
+func ShippedFileStats(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedFileStats, v))
+}
+
+// ShippedSnapshotCaptureFailed applies equality check predicate on the "shipped_snapshot_capture_failed" field. It's identical to ShippedSnapshotCaptureFailedEQ.
+func ShippedSnapshotCaptureFailed(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotCaptureFailed, v))
+}
+
+// ReworkCapOverride applies equality check predicate on the "rework_cap_override" field. It's identical to ReworkCapOverrideEQ.
+func ReworkCapOverride(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldReworkCapOverride, v))
 }
 
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
@@ -571,6 +631,91 @@ func SkipPlanningNEQ(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNEQ(FieldSkipPlanning, v))
 }
 
+// AutoSpawnSessionEQ applies the EQ predicate on the "auto_spawn_session" field.
+func AutoSpawnSessionEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoSpawnSession, v))
+}
+
+// AutoSpawnSessionNEQ applies the NEQ predicate on the "auto_spawn_session" field.
+func AutoSpawnSessionNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldAutoSpawnSession, v))
+}
+
+// AutoCreatePrEQ applies the EQ predicate on the "auto_create_pr" field.
+func AutoCreatePrEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldAutoCreatePr, v))
+}
+
+// AutoCreatePrNEQ applies the NEQ predicate on the "auto_create_pr" field.
+func AutoCreatePrNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldAutoCreatePr, v))
+}
+
+// PipelineModeEQ applies the EQ predicate on the "pipeline_mode" field.
+func PipelineModeEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPipelineMode, v))
+}
+
+// PipelineModeNEQ applies the NEQ predicate on the "pipeline_mode" field.
+func PipelineModeNEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldPipelineMode, v))
+}
+
+// PipelineModeIn applies the In predicate on the "pipeline_mode" field.
+func PipelineModeIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldPipelineMode, vs...))
+}
+
+// PipelineModeNotIn applies the NotIn predicate on the "pipeline_mode" field.
+func PipelineModeNotIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldPipelineMode, vs...))
+}
+
+// PipelineModeGT applies the GT predicate on the "pipeline_mode" field.
+func PipelineModeGT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldPipelineMode, v))
+}
+
+// PipelineModeGTE applies the GTE predicate on the "pipeline_mode" field.
+func PipelineModeGTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldPipelineMode, v))
+}
+
+// PipelineModeLT applies the LT predicate on the "pipeline_mode" field.
+func PipelineModeLT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldPipelineMode, v))
+}
+
+// PipelineModeLTE applies the LTE predicate on the "pipeline_mode" field.
+func PipelineModeLTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldPipelineMode, v))
+}
+
+// PipelineModeContains applies the Contains predicate on the "pipeline_mode" field.
+func PipelineModeContains(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContains(FieldPipelineMode, v))
+}
+
+// PipelineModeHasPrefix applies the HasPrefix predicate on the "pipeline_mode" field.
+func PipelineModeHasPrefix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasPrefix(FieldPipelineMode, v))
+}
+
+// PipelineModeHasSuffix applies the HasSuffix predicate on the "pipeline_mode" field.
+func PipelineModeHasSuffix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasSuffix(FieldPipelineMode, v))
+}
+
+// PipelineModeEqualFold applies the EqualFold predicate on the "pipeline_mode" field.
+func PipelineModeEqualFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEqualFold(FieldPipelineMode, v))
+}
+
+// PipelineModeContainsFold applies the ContainsFold predicate on the "pipeline_mode" field.
+func PipelineModeContainsFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContainsFold(FieldPipelineMode, v))
+}
+
 // PlanApprovedEQ applies the EQ predicate on the "plan_approved" field.
 func PlanApprovedEQ(v bool) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldPlanApproved, v))
@@ -629,6 +774,66 @@ func PlanApprovedAtIsNil() predicate.BacklogItem {
 // PlanApprovedAtNotNil applies the NotNil predicate on the "plan_approved_at" field.
 func PlanApprovedAtNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldPlanApprovedAt))
+}
+
+// QueuedAtEQ applies the EQ predicate on the "queued_at" field.
+func QueuedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAt, v))
+}
+
+// QueuedAtNEQ applies the NEQ predicate on the "queued_at" field.
+func QueuedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldQueuedAt, v))
+}
+
+// QueuedAtIn applies the In predicate on the "queued_at" field.
+func QueuedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldQueuedAt, vs...))
+}
+
+// QueuedAtNotIn applies the NotIn predicate on the "queued_at" field.
+func QueuedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldQueuedAt, vs...))
+}
+
+// QueuedAtGT applies the GT predicate on the "queued_at" field.
+func QueuedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldQueuedAt, v))
+}
+
+// QueuedAtGTE applies the GTE predicate on the "queued_at" field.
+func QueuedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldQueuedAt, v))
+}
+
+// QueuedAtLT applies the LT predicate on the "queued_at" field.
+func QueuedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldQueuedAt, v))
+}
+
+// QueuedAtLTE applies the LTE predicate on the "queued_at" field.
+func QueuedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldQueuedAt, v))
+}
+
+// QueuedAtIsNil applies the IsNil predicate on the "queued_at" field.
+func QueuedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldQueuedAt))
+}
+
+// QueuedAtNotNil applies the NotNil predicate on the "queued_at" field.
+func QueuedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldQueuedAt))
+}
+
+// QueuedAutonomousEQ applies the EQ predicate on the "queued_autonomous" field.
+func QueuedAutonomousEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldQueuedAutonomous, v))
+}
+
+// QueuedAutonomousNEQ applies the NEQ predicate on the "queued_autonomous" field.
+func QueuedAutonomousNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldQueuedAutonomous, v))
 }
 
 // PlanArtifactsPathEQ applies the EQ predicate on the "plan_artifacts_path" field.
@@ -1156,6 +1361,376 @@ func PrNumberNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldPrNumber))
 }
 
+// ShippedCheckConclusionEQ applies the EQ predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionNEQ applies the NEQ predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionNEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionIn applies the In predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldShippedCheckConclusion, vs...))
+}
+
+// ShippedCheckConclusionNotIn applies the NotIn predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionNotIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldShippedCheckConclusion, vs...))
+}
+
+// ShippedCheckConclusionGT applies the GT predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionGT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionGTE applies the GTE predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionGTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionLT applies the LT predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionLT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionLTE applies the LTE predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionLTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionContains applies the Contains predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionContains(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContains(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionHasPrefix applies the HasPrefix predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionHasPrefix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasPrefix(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionHasSuffix applies the HasSuffix predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionHasSuffix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasSuffix(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionIsNil applies the IsNil predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedCheckConclusion))
+}
+
+// ShippedCheckConclusionNotNil applies the NotNil predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedCheckConclusion))
+}
+
+// ShippedCheckConclusionEqualFold applies the EqualFold predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionEqualFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEqualFold(FieldShippedCheckConclusion, v))
+}
+
+// ShippedCheckConclusionContainsFold applies the ContainsFold predicate on the "shipped_check_conclusion" field.
+func ShippedCheckConclusionContainsFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContainsFold(FieldShippedCheckConclusion, v))
+}
+
+// ShippedApprovedCountEQ applies the EQ predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountNEQ applies the NEQ predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountNEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountIn applies the In predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldShippedApprovedCount, vs...))
+}
+
+// ShippedApprovedCountNotIn applies the NotIn predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountNotIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldShippedApprovedCount, vs...))
+}
+
+// ShippedApprovedCountGT applies the GT predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountGT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountGTE applies the GTE predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountGTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountLT applies the LT predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountLT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountLTE applies the LTE predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountLTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldShippedApprovedCount, v))
+}
+
+// ShippedApprovedCountIsNil applies the IsNil predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedApprovedCount))
+}
+
+// ShippedApprovedCountNotNil applies the NotNil predicate on the "shipped_approved_count" field.
+func ShippedApprovedCountNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedApprovedCount))
+}
+
+// ShippedChangesReqCountEQ applies the EQ predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountNEQ applies the NEQ predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountNEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountIn applies the In predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldShippedChangesReqCount, vs...))
+}
+
+// ShippedChangesReqCountNotIn applies the NotIn predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountNotIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldShippedChangesReqCount, vs...))
+}
+
+// ShippedChangesReqCountGT applies the GT predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountGT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountGTE applies the GTE predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountGTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountLT applies the LT predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountLT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountLTE applies the LTE predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountLTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldShippedChangesReqCount, v))
+}
+
+// ShippedChangesReqCountIsNil applies the IsNil predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedChangesReqCount))
+}
+
+// ShippedChangesReqCountNotNil applies the NotNil predicate on the "shipped_changes_req_count" field.
+func ShippedChangesReqCountNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedChangesReqCount))
+}
+
+// ShippedSnapshotAtEQ applies the EQ predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtNEQ applies the NEQ predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtIn applies the In predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldShippedSnapshotAt, vs...))
+}
+
+// ShippedSnapshotAtNotIn applies the NotIn predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldShippedSnapshotAt, vs...))
+}
+
+// ShippedSnapshotAtGT applies the GT predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtGTE applies the GTE predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtLT applies the LT predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtLTE applies the LTE predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldShippedSnapshotAt, v))
+}
+
+// ShippedSnapshotAtIsNil applies the IsNil predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedSnapshotAt))
+}
+
+// ShippedSnapshotAtNotNil applies the NotNil predicate on the "shipped_snapshot_at" field.
+func ShippedSnapshotAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedSnapshotAt))
+}
+
+// ShippedFileStatsEQ applies the EQ predicate on the "shipped_file_stats" field.
+func ShippedFileStatsEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsNEQ applies the NEQ predicate on the "shipped_file_stats" field.
+func ShippedFileStatsNEQ(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsIn applies the In predicate on the "shipped_file_stats" field.
+func ShippedFileStatsIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldShippedFileStats, vs...))
+}
+
+// ShippedFileStatsNotIn applies the NotIn predicate on the "shipped_file_stats" field.
+func ShippedFileStatsNotIn(vs ...string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldShippedFileStats, vs...))
+}
+
+// ShippedFileStatsGT applies the GT predicate on the "shipped_file_stats" field.
+func ShippedFileStatsGT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsGTE applies the GTE predicate on the "shipped_file_stats" field.
+func ShippedFileStatsGTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsLT applies the LT predicate on the "shipped_file_stats" field.
+func ShippedFileStatsLT(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsLTE applies the LTE predicate on the "shipped_file_stats" field.
+func ShippedFileStatsLTE(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsContains applies the Contains predicate on the "shipped_file_stats" field.
+func ShippedFileStatsContains(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContains(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsHasPrefix applies the HasPrefix predicate on the "shipped_file_stats" field.
+func ShippedFileStatsHasPrefix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasPrefix(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsHasSuffix applies the HasSuffix predicate on the "shipped_file_stats" field.
+func ShippedFileStatsHasSuffix(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldHasSuffix(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsIsNil applies the IsNil predicate on the "shipped_file_stats" field.
+func ShippedFileStatsIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedFileStats))
+}
+
+// ShippedFileStatsNotNil applies the NotNil predicate on the "shipped_file_stats" field.
+func ShippedFileStatsNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedFileStats))
+}
+
+// ShippedFileStatsEqualFold applies the EqualFold predicate on the "shipped_file_stats" field.
+func ShippedFileStatsEqualFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEqualFold(FieldShippedFileStats, v))
+}
+
+// ShippedFileStatsContainsFold applies the ContainsFold predicate on the "shipped_file_stats" field.
+func ShippedFileStatsContainsFold(v string) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldContainsFold(FieldShippedFileStats, v))
+}
+
+// ShippedSnapshotCaptureFailedEQ applies the EQ predicate on the "shipped_snapshot_capture_failed" field.
+func ShippedSnapshotCaptureFailedEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotCaptureFailed, v))
+}
+
+// ShippedSnapshotCaptureFailedNEQ applies the NEQ predicate on the "shipped_snapshot_capture_failed" field.
+func ShippedSnapshotCaptureFailedNEQ(v bool) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldShippedSnapshotCaptureFailed, v))
+}
+
+// ShippedSnapshotCaptureFailedIsNil applies the IsNil predicate on the "shipped_snapshot_capture_failed" field.
+func ShippedSnapshotCaptureFailedIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldShippedSnapshotCaptureFailed))
+}
+
+// ShippedSnapshotCaptureFailedNotNil applies the NotNil predicate on the "shipped_snapshot_capture_failed" field.
+func ShippedSnapshotCaptureFailedNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedSnapshotCaptureFailed))
+}
+
+// ReworkCapOverrideEQ applies the EQ predicate on the "rework_cap_override" field.
+func ReworkCapOverrideEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideNEQ applies the NEQ predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNEQ(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideIn applies the In predicate on the "rework_cap_override" field.
+func ReworkCapOverrideIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldReworkCapOverride, vs...))
+}
+
+// ReworkCapOverrideNotIn applies the NotIn predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNotIn(vs ...int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldReworkCapOverride, vs...))
+}
+
+// ReworkCapOverrideGT applies the GT predicate on the "rework_cap_override" field.
+func ReworkCapOverrideGT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideGTE applies the GTE predicate on the "rework_cap_override" field.
+func ReworkCapOverrideGTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideLT applies the LT predicate on the "rework_cap_override" field.
+func ReworkCapOverrideLT(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideLTE applies the LTE predicate on the "rework_cap_override" field.
+func ReworkCapOverrideLTE(v int) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldReworkCapOverride, v))
+}
+
+// ReworkCapOverrideIsNil applies the IsNil predicate on the "rework_cap_override" field.
+func ReworkCapOverrideIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldReworkCapOverride))
+}
+
+// ReworkCapOverrideNotNil applies the NotNil predicate on the "rework_cap_override" field.
+func ReworkCapOverrideNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldReworkCapOverride))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldCreatedAt, v))
@@ -1297,6 +1872,52 @@ func HasStatusEvents() predicate.BacklogItem {
 func HasStatusEventsWith(preds ...predicate.BacklogStatusEvent) predicate.BacklogItem {
 	return predicate.BacklogItem(func(s *sql.Selector) {
 		step := newStatusEventsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasStuckStates applies the HasEdge predicate on the "stuck_states" edge.
+func HasStuckStates() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, StuckStatesTable, StuckStatesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasStuckStatesWith applies the HasEdge predicate on the "stuck_states" edge with a given conditions (other predicates).
+func HasStuckStatesWith(preds ...predicate.BacklogStuckState) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newStuckStatesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasProgressNotes applies the HasEdge predicate on the "progress_notes" edge.
+func HasProgressNotes() predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ProgressNotesTable, ProgressNotesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasProgressNotesWith applies the HasEdge predicate on the "progress_notes" edge with a given conditions (other predicates).
+func HasProgressNotesWith(preds ...predicate.BacklogProgressNote) predicate.BacklogItem {
+	return predicate.BacklogItem(func(s *sql.Selector) {
+		step := newProgressNotesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

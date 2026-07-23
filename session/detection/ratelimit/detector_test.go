@@ -321,6 +321,10 @@ func TestStripANSI(t *testing.T) {
 		{"\x1b[1;32mgreen\x1b[0m", "green"},
 		{"no escape codes", "no escape codes"},
 		{"\x1b[0m\x1b[1m\x1b[4m\x1b[7m\x1b[9m\x1b[0m", ""},
+		// CSI final-byte range is 0x40-0x7E per ECMA-48, not just letters —
+		// '@' (Insert Character) and '~' must be stripped too.
+		{"retry \x1b[5@after 60 seconds", "retry after 60 seconds"},
+		{"retry \x1b[3~after 60 seconds", "retry after 60 seconds"},
 	}
 
 	for _, tc := range tests {

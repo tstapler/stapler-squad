@@ -12,6 +12,12 @@ import type { Interceptor } from "@connectrpc/connect";
  * All ConnectRPC services are mounted under /api/ prefix.
  */
 export function getApiBaseUrl(): string {
+  // Explicit override always wins, even in the browser (e.g. `next dev`
+  // running on its own port against a separately-ported backend).
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+
   // In browser environment
   if (typeof window !== 'undefined') {
     // Use the current origin (hostname + port) with /api prefix
@@ -19,7 +25,7 @@ export function getApiBaseUrl(): string {
   }
 
   // Fallback for server-side rendering or development
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8543/api';
+  return 'http://localhost:8543/api';
 }
 
 /**

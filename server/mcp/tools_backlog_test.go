@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,8 +183,84 @@ func TestReportProgress_SuccessfullyUpdatesAcStatus(t *testing.T) {
 	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Len(t, criteria, 2)
-	require.Equal(t, "done", criteria[0].Status, "criterion 0 should be marked done")
-	require.Equal(t, "pending", criteria[1].Status, "criterion 1 should remain pending")
+	require.Equal(t, session.AcStatusDone, criteria[0].Status, "criterion 0 should be marked done")
+	require.Equal(t, session.AcStatusPending, criteria[1].Status, "criterion 1 should remain pending")
+}
+
+// TestReportProgress_AppendsProgressNoteHistory verifies that reportProgress creates
+// a progress-note history row (AppendProgressNote) alongside the existing
+// overwrite-in-place AC criterion update — the history call is additive, not a
+// replacement for the existing behavior.
+func TestReportProgress_AppendsProgressNoteHistory(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Test item",
+		Description:        "Item for testing",
+		AcceptanceCriteria: `[{"index":0,"text":"Must work","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	isData := session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}
+	_, err = storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	// First call: in_progress with a note.
+	req1 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "in_progress",
+		"note":           "started investigating",
+	})
+	result1, err := handler.reportProgress(ctxWithUUID, req1)
+	require.NoError(t, err)
+	require.Len(t, result1.Content, 1)
+
+	// Second call: pass with a different note, same criterion — the existing
+	// overwrite behavior replaces the criterion's current note, but the history
+	// must retain BOTH notes.
+	req2 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "pass",
+		"note":           "implemented successfully",
+	})
+	result2, err := handler.reportProgress(ctxWithUUID, req2)
+	require.NoError(t, err)
+	require.Len(t, result2.Content, 1)
+
+	// The current-note-per-criterion behavior is unchanged: only the latest note
+	// is visible on the AC criterion itself.
+	fetchedItem, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Len(t, criteria, 1)
+	require.Equal(t, session.AcStatusDone, criteria[0].Status)
+	require.Equal(t, "implemented successfully", criteria[0].Note, "current note is overwritten by the latest call, as before")
+
+	// The new history log must contain BOTH notes, in order.
+	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "both report_progress calls must be preserved in the history")
+
+	require.Equal(t, "started investigating", notes[0].Note)
+	require.Equal(t, "in_progress", notes[0].Status)
+
+	require.Equal(t, "implemented successfully", notes[1].Note)
+	require.Equal(t, "done", notes[1].Status)
 }
 
 // TestGetBacklogItem_ReturnsItemWithEnvelope verifies that getBacklogItem
@@ -230,6 +307,54 @@ func TestGetBacklogItem_ReturnsItemWithEnvelope(t *testing.T) {
 	require.Contains(t, text, "User can login with email", "should contain AC criterion")
 	require.Contains(t, text, "Password is hashed", "should contain second AC criterion")
 	require.Contains(t, text, "report_progress", "should list available tools")
+}
+
+// TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap
+// verifies the role:work guidance a live work session reads on every
+// get_backlog_item/backlog status poll tells it to run /backlog/ship both
+// immediately on a PASS verdict and as a bounded escape hatch after
+// session.MaxSameSessionReviewAttempts cycles without one — closing the gap
+// where this text previously said "PASS → status becomes done, you're
+// finished" and "Keep looping until PASS" with no mention of /backlog/ship at
+// all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20). This is the
+// dynamic counterpart to session.taskProtocolBlock and review.md — the text a
+// running session actually re-reads on every poll, not just at session start.
+func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Ship me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.getBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	require.Contains(t, text, "Your Role: Work")
+	require.Contains(t, text, "/backlog/ship")
+	require.Contains(t, text, fmt.Sprintf("%d cycles", session.MaxSameSessionReviewAttempts))
+	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
 }
 
 // TestGetBacklogItem_ReturnsNotFoundError verifies that getBacklogItem
@@ -339,7 +464,7 @@ func TestReportProgress_MapsStatusValues(t *testing.T) {
 
 	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
-	require.Equal(t, "done", criteria[0].Status, "pass should be mapped to done")
+	require.Equal(t, session.AcStatusDone, criteria[0].Status, "pass should be mapped to done")
 }
 
 // ─── T-11 tests 7 & 8: submitTriageResult notification publishing ─────────────
@@ -456,6 +581,92 @@ func TestRequestReview_TransitionsItemToReview(t *testing.T) {
 	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }
 
+// TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
+// non-empty verification_notes argument is stored on the caller's ItemSession
+// so the review gate can later surface it in the reviewer's prompt.
+func TestRequestReview_PersistsVerificationNotesOnWorkSession(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	notes := "ran `go test ./session/...` -> ok (41 tests); ran make install-service, confirmed session groups under Category=Backlog"
+	req := makeToolReq(map[string]interface{}{
+		"item_id":            item.ID,
+		"message":            "Implemented the feature, all criteria done.",
+		"verification_notes": notes,
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+
+	fetched, err := storage.GetItemSession(ctx, workIS.ID)
+	require.NoError(t, err)
+	assert.Equal(t, notes, fetched.VerificationNotes)
+}
+
+// TestRequestReview_RejectsVerificationNotesOver4000Chars verifies the length
+// guard on verification_notes mirrors the existing guard on message.
+func TestRequestReview_RejectsVerificationNotesOver4000Chars(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":            item.ID,
+		"message":            "Done.",
+		"verification_notes": strings.Repeat("a", 4001),
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+
+	// Item must remain in_progress — the transition should not have happened.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+}
+
 // TestRequestReview_RejectsWhenSessionNotLinked verifies PERMISSION_DENIED
 // when session is not linked to the item.
 func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
@@ -511,4 +722,22 @@ func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
 		require.True(t, ok)
 		assert.Contains(t, tc.Text, "Triage result submitted")
 	})
+}
+
+// TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
+// verifies that the request_review tool description (and its verification_notes
+// field description) instruct the agent to cite an exact file path and
+// function/symbol when claiming an acceptance criterion is already satisfied by
+// existing code, rather than making an unsupported "already implemented" claim.
+func TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement(t *testing.T) {
+	data, err := os.ReadFile("tools_backlog.go")
+	require.NoError(t, err, "read tools_backlog.go")
+
+	content := string(data)
+	assert.Contains(t, content, "already satisfied by existing code",
+		"request_review tool description must instruct agents to flag already-implemented acceptance criteria")
+	assert.Contains(t, content, "cite the exact file path and function/symbol",
+		"request_review tool description must require a file/function citation for already-implemented claims")
+	assert.Contains(t, content, "already implemented",
+		"request_review tool description must call out unsupported \"already implemented\" claims as weak evidence")
 }

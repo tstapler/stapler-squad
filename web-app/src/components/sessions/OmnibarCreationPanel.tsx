@@ -17,6 +17,7 @@ import {
 } from "./Omnibar.css";
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
+import { RadioGroup } from "@/components/ui/RadioGroup";
 import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
 import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
 import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
@@ -24,18 +25,48 @@ import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestio
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
 export const SESSION_TYPES = [
-  { value: "new_worktree", label: "New branch (isolated)" },
-  { value: "directory", label: "Existing folder" },
-  { value: "existing_worktree", label: "Existing branch" },
-  { value: "one_off", label: "Temporary (no git)" },
-  { value: "new_project", label: "New Project" },
-  { value: "autonomous", label: "Fix Autonomously (Beta)" },
+  {
+    value: "new_worktree",
+    label: "New branch (isolated)",
+    description:
+      "Use this when you want to try something risky without touching your main branch — e.g. a refactor, a new feature, or a change you might abandon. Creates an isolated branch and working directory.",
+  },
+  {
+    value: "directory",
+    label: "Existing folder",
+    description:
+      "Use this when you just want to work in a folder as-is — e.g. quick edits to a repo you already have checked out, or a folder with no git history.",
+  },
+  {
+    value: "existing_worktree",
+    label: "Existing branch",
+    description:
+      "Use this when you want to resume work on a branch that's already checked out — e.g. picking up review feedback or continuing a session from earlier.",
+  },
+  {
+    value: "one_off",
+    label: "Temporary (no git)",
+    description:
+      "Use this when you need scratch space for a quick experiment — e.g. testing a snippet or script. No path needed; a temporary directory is created automatically.",
+  },
+  {
+    value: "new_project",
+    label: "New Project",
+    description:
+      "Use this when starting something brand new — e.g. a side project or prototype. Creates a directory, runs git init, and makes an initial commit.",
+  },
 ] as const;
+
+// Autonomous mode's hint text, shown when the "Autonomous mode" checkbox is checked.
+// Not a session type itself — it's an orthogonal flag that composes with whichever
+// type is selected above (see AUTONOMOUS_MODE_HINT usage below).
+export const AUTONOMOUS_MODE_HINT =
+  "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 
 const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
-const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4], SESSION_TYPES[5]]; // existing_worktree, new_project, autonomous
+const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4]]; // existing_worktree, new_project
 const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
@@ -54,70 +85,28 @@ function SessionTypeRadioGroup({ value, onChange }: SessionTypeRadioGroupProps) 
   const [advancedOpen, setAdvancedOpen] = useState(() => ADVANCED_VALUES.has(value));
 
   const visibleTypes = advancedOpen ? [...PRIMARY_TYPES, ...ADVANCED_TYPES] : PRIMARY_TYPES;
-  const currentIndex = visibleTypes.findIndex((t) => t.value === value);
-  const hasSelection = currentIndex !== -1;
-
-  function handleKeyDown(e: KeyboardEvent) {
-    const fromIndex = hasSelection ? currentIndex : 0;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      const next = (fromIndex + 1) % visibleTypes.length;
-      onChange(visibleTypes[next].value);
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const prev = (fromIndex - 1 + visibleTypes.length) % visibleTypes.length;
-      onChange(visibleTypes[prev].value);
-    }
-  }
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Session type"
-      className={styles.radioGroup}
-      onKeyDown={handleKeyDown}
-    >
-      {PRIMARY_TYPES.map((type, idx) => (
+    <RadioGroup
+      options={visibleTypes}
+      value={value}
+      onChange={onChange}
+      groupLabel="Session Type"
+      groupLabelId="omnibar-session-type-label"
+      hintForValue={(v) => SESSION_TYPES.find((t) => t.value === v)?.description}
+      trailingContent={
         <button
-          key={type.value}
-          role="radio"
-          aria-checked={value === type.value}
-          tabIndex={value === type.value ? 0 : (!hasSelection && idx === 0 ? 0 : -1)}
           type="button"
-          onClick={() => onChange(type.value)}
-          className={[styles.radioBtn, value === type.value ? styles.radioBtnActive : ""]
-            .filter(Boolean)
-            .join(" ")}
+          tabIndex={-1}
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((o) => !o)}
+          className={styles.radioBtn}
+          style={{ opacity: 0.65, fontSize: "0.75em" }}
         >
-          {type.label}
+          {advancedOpen ? "▴ Less" : "▾ More"}
         </button>
-      ))}
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-expanded={advancedOpen}
-        onClick={() => setAdvancedOpen((o) => !o)}
-        className={styles.radioBtn}
-        style={{ opacity: 0.65, fontSize: "0.75em" }}
-      >
-        {advancedOpen ? "▴ Less" : "▾ More"}
-      </button>
-      {advancedOpen && ADVANCED_TYPES.map((type) => (
-        <button
-          key={type.value}
-          role="radio"
-          aria-checked={value === type.value}
-          tabIndex={value === type.value ? 0 : -1}
-          type="button"
-          onClick={() => onChange(type.value)}
-          className={[styles.radioBtn, value === type.value ? styles.radioBtnActive : ""]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          {type.label}
-        </button>
-      ))}
-    </div>
+      }
+    />
   );
 }
 
@@ -130,6 +119,8 @@ export interface OmnibarCreationPanelProps {
   onCancel: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
+  /** Set when the worktree list request failed or timed out — shown as a hint. */
+  worktreesError?: string | null;
   isSubmitting: boolean;
   canSubmit: boolean;
   error: string | null;
@@ -165,6 +156,7 @@ export function OmnibarCreationPanel({
   onCancel,
   worktrees,
   isWorktreesLoading = false,
+  worktreesError = null,
   isSubmitting,
   canSubmit,
   error,
@@ -180,6 +172,7 @@ export function OmnibarCreationPanel({
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
+    autonomousMode,
   } = formState;
 
   // Slash command autocomplete for the firstPrompt textarea.
@@ -459,22 +452,27 @@ export function OmnibarCreationPanel({
 
         {/* Session Type — ARIA radio group (ADR-003: arrow keys cycle) */}
         <div className={field}>
-          <label className={labelClass} id="omnibar-session-type-label">
-            Session Type
-          </label>
           <SessionTypeRadioGroup
             value={sessionType}
             onChange={(v) => setFormField("sessionType", v)}
           />
-          <span className={hint}>
-            {sessionType === "new_worktree" && "Creates an isolated branch and working directory for this session"}
-            {sessionType === "existing_worktree" && "Opens a session in an existing checked-out branch"}
-            {sessionType === "directory" && "Works directly in a folder without branch isolation"}
-            {sessionType === "one_off" && "A fresh temporary directory will be created automatically — no path needed"}
-            {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
-            {sessionType === "autonomous" && "The agent runs fully autonomously — risky tool calls are approved by an LLM reviewer rather than queued for you. You will be notified on completion. To stop it, delete or hibernate the session."}
-          </span>
         </div>
+
+        {/* Autonomous mode — an orthogonal flag, not a session type: it composes with
+            whichever type is selected above instead of forcing a scratch directory. */}
+        {sessionType !== "one_off" && (
+          <div className={field}>
+            <label className={checkboxClass}>
+              <input
+                type="checkbox"
+                checked={autonomousMode}
+                onChange={(e) => setFormField("autonomousMode", e.target.checked)}
+              />
+              🤖 Autonomous mode (Beta)
+            </label>
+            <span className={hint}>{AUTONOMOUS_MODE_HINT}</span>
+          </div>
+        )}
 
         {/* One-off informational banner */}
         {sessionType === "one_off" && (
@@ -663,6 +661,8 @@ export function OmnibarCreationPanel({
             <span className={hint}>
               {isWorktreesLoading
                 ? "Scanning for git worktrees…"
+                : worktreesError
+                ? `${worktreesError} — enter the path manually below`
                 : worktrees.length > 0
                 ? "Select an existing git worktree for this repository"
                 : "Absolute path to an existing git worktree"}
@@ -671,7 +671,7 @@ export function OmnibarCreationPanel({
         )}
 
         {/* Working Directory */}
-        {sessionType !== "one_off" && sessionType !== "new_project" && sessionType !== "autonomous" && (
+        {sessionType !== "one_off" && sessionType !== "new_project" && (
           <div className={field}>
             <label className={labelClass} htmlFor="omnibar-working-dir">
               Working Directory

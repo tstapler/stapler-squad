@@ -26,8 +26,8 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -41,6 +41,16 @@ import (
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
+// createSessionTimeout bounds the synchronous portion of CreateSession (path
+// resolution, GitHub URL clone). It must stay comfortably above the slowest
+// known synchronous sub-operation — GitHub URL resolution can shell out to
+// `git clone`, which research puts at up to ~120s for large repos — so a
+// legitimate slow-but-successful create still completes. NOTE: this is
+// decoupled from the tmux startup poll (~10s), which runs in a background
+// goroutine *after* the RPC returns and is intentionally not bound by this
+// deadline; if that internal bound is retuned, revisit this value too.
+const createSessionTimeout = 150 * time.Second
+
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -122,9 +132,13 @@ type SessionService struct {
 	// for checkpoint creation. May be nil if not wired (seq defaults to 0).
 	scrollbackMgr ScrollbackSequencer
 
-	// mcpServerURL is the URL of the stapler-squad HTTP MCP endpoint.
-	// When non-empty, passed to new sessions via InstanceOptions.MCPServerURL.
-	mcpServerURL string
+	// mcpServerURLFn lazily resolves the URL of the stapler-squad HTTP MCP
+	// endpoint. It is invoked (not read as a stored string) at the point of
+	// use so it always reflects the server's real bound address, even when
+	// the listener was constructed before Start() resolved an OS-assigned
+	// port (PORT=0). When non-nil, its result is passed to new sessions via
+	// InstanceOptions.MCPServerURL.
+	mcpServerURLFn func() string
 
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
@@ -399,8 +413,8 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		// wired up. Without this, buildLaunchCommand omits --mcp-config entirely and
 		// the Claude process restarts without a session UUID or MCP connection.
 		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
-		if inst.MCPServerURL == "" && s.mcpServerURL != "" {
-			inst.SetMCPServerURL(s.mcpServerURL)
+		if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
+			inst.SetMCPServerURL(mcpURL)
 		}
 	}
 
@@ -479,6 +493,26 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 	return s.reviewQueuePoller.FindInstance(id)
 }
 
+// ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the
+// session.SessionArchiver interface (implemented here so both BacklogService and
+// session.BacklogLifecycleListener can soft-archive backlog work sessions without
+// reinventing the ArchiveSession RPC's logic — see ArchiveSession above).
+// No-op (not an error) if the session isn't tracked live or is already archived, so
+// callers can invoke this unconditionally from a sweep without extra existence checks.
+func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone / never tracked
+	}
+	if !inst.SetArchivedAtIfNil(time.Now()) {
+		return nil // already archived
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
+	}
+	return nil
+}
+
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
 // It kills the live tmux session identified by UUID (best-effort; errors are non-fatal).
 func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID string) error {
@@ -497,6 +531,37 @@ func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID stri
 // It returns true if the session UUID is currently tracked in the live in-memory poller.
 func (s *SessionService) IsSessionLive(sessionUUID string) bool {
 	return s.FindLiveInstance(sessionUUID) != nil
+}
+
+// TimeSinceLastMeaningfulOutput satisfies the BacklogService.SessionStopper
+// interface. It reports how long it has been since sessionUUID's live
+// Instance last produced meaningful terminal output. ok is false when the
+// session isn't currently tracked live (mirrors IsSessionLive's "not found"
+// case) — callers must not use dur in that case.
+func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time.Duration, bool) {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return 0, false
+	}
+	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
+// KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
+// It closes the tmux pane only (Instance.KillSession), leaving the worktree
+// intact — unlike StopSessionByUUID (Instance.Kill/Destroy), which also runs
+// CleanupWorktree and would delete a worktree still in use by the next rework
+// round. Best-effort: errors are logged, not returned, since this runs as
+// cleanup alongside a new spawn that should proceed regardless.
+func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone
+	}
+	if err := inst.KillSession(); err != nil {
+		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // KillTmuxSessionByTitle satisfies the BacklogService.SessionStopper interface.
@@ -665,10 +730,23 @@ func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
 	s.reviewQueueSvc.SetReactiveQueueManager(mgr)
 }
 
-// SetMCPServerURL configures the HTTP MCP endpoint URL passed to new sessions.
-// Call this during server startup after the listen address is known.
-func (s *SessionService) SetMCPServerURL(url string) {
-	s.mcpServerURL = url
+// SetMCPServerURL configures a lazily-invoked provider for the HTTP MCP
+// endpoint URL passed to new sessions. Unlike a stored string, fn is called
+// fresh at each point of use, so it can be wired up during server
+// construction (before the listener has bound a real address) and still
+// always observe the real bound address once Start() has resolved it, even
+// under PORT=0.
+func (s *SessionService) SetMCPServerURL(fn func() string) {
+	s.mcpServerURLFn = fn
+}
+
+// resolveMCPServerURL invokes the lazily-configured MCP URL provider, if any,
+// returning "" if it has not yet been configured.
+func (s *SessionService) resolveMCPServerURL() string {
+	if s.mcpServerURLFn == nil {
+		return ""
+	}
+	return s.mcpServerURLFn()
 }
 
 // SetRegistry wires the Registry into this service. Called during server startup after
@@ -691,8 +769,8 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 	s.wireClaudeSessionIDCallback(inst.Instance)
 	s.wireAutoArchiveCallback(inst.Instance)
 	s.wireSessionExitedPublisher(inst.Instance)
-	if inst.MCPServerURL == "" && s.mcpServerURL != "" {
-		inst.SetMCPServerURL(s.mcpServerURL)
+	if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
+		inst.SetMCPServerURL(mcpURL)
 	}
 }
 
@@ -702,11 +780,44 @@ func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycle
 	s.backlogLifecycleListener = l
 }
 
+// GetBacklogLifecycleListener returns the wired BacklogLifecycleListener (nil if
+// SetBacklogLifecycleListener was never called). Exported for the pointer-equality
+// integration test proving BacklogService and BacklogLifecycleListener share a single
+// PipelineEngine instance (Story 1.5.1) — see server/dependencies_test.go.
+func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycleListener {
+	return s.backlogLifecycleListener
+}
+
+// SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
+// service so that completed work sessions immediately kick off headless review.
+func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
+	s.autonomousSvc.SetReviewGateTrigger(t)
+}
+
+// SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
+// service so a turn-cap-stopped work session gets a fresh turn budget instead of
+// being forced into review.
+func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	s.autonomousSvc.SetAutonomousStuckRespawner(r)
+}
+
+// TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
+// Satisfies mcp.ReviewTrigger so request_review can spawn a review gate immediately
+// instead of waiting for the next ReconcileStuck tick.
+func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
+	s.autonomousSvc.TriggerReviewForSession(sessionUUID)
+}
+
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
-func (s *SessionService) SpawnReviewSession(ctx context.Context, item *ent.BacklogItem, itemSessionID string, prompt string) (*session.Instance, error) {
-	return s.CreateDirectorySession(ctx, "review:"+item.ID.String()[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
+	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+	if err != nil {
+		return nil, err
+	}
+	inst.SetCategory(session.CategoryBacklog)
+	return inst, nil
 }
 
 // CreateDirectorySession satisfies the services.SessionCreator interface so that
@@ -726,7 +837,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		Tags:            tags,
 		OneShot:         oneShot,
 		Hidden:          hidden,
-		MCPServerURL:    s.mcpServerURL,
+		MCPServerURL:    s.resolveMCPServerURL(),
 		CreateIfMissing: true,
 	}
 	instance, err := session.NewInstance(opts)
@@ -775,7 +886,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoP
 		Tags:             tags,
 		OneShot:          oneShot,
 		Hidden:           hidden,
-		MCPServerURL:     s.mcpServerURL,
+		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  false,
 	}
 	instance, err := session.NewInstance(opts)
@@ -1070,6 +1181,9 @@ func (s *SessionService) CreateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateSessionRequest],
 ) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, createSessionTimeout)
+	defer cancel()
+
 	// Validate required fields
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
@@ -1134,8 +1248,16 @@ func (s *SessionService) CreateSession(
 
 	if session.IsGitHubURL(req.Msg.Path) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
-		localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
+
+		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
+		// timeout genuinely cancels the subprocess instead of abandoning it
+		// to keep running in the background after the RPC returns.
+		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
+			}
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
 		}
 		resolvedPath = localPath
@@ -1143,8 +1265,8 @@ func (s *SessionService) CreateSession(
 		clonedRepoPath = localPath
 
 		// Use branch from GitHub URL if not explicitly provided
-		if branch == "" && ref.Branch != "" {
-			branch = ref.Branch
+		if branch == "" && gitHubRef.Branch != "" {
+			branch = gitHubRef.Branch
 		}
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
@@ -1288,7 +1410,7 @@ func (s *SessionService) CreateSession(
 		ResumeId:         req.Msg.ResumeId,
 		OneShot:          req.Msg.OneShot,
 		ProjectID:        req.Msg.ProjectId,
-		MCPServerURL:     s.mcpServerURL,
+		MCPServerURL:     s.resolveMCPServerURL(),
 		CreateIfMissing:  req.Msg.CreateIfMissing,
 		AllowedTools:     req.Msg.AllowedTools,
 		PermissionMode:   req.Msg.PermissionMode,
@@ -1846,20 +1968,6 @@ func (s *SessionService) DeleteSession(
 		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
 	}
 
-	// Cancel any pending approvals BEFORE deleting from storage, so blocked
-	// approval-hook goroutines can exit cleanly while the session still exists.
-	// Non-fatal: log at warn and continue even if there are no pending approvals.
-	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
-		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
-	}
-
-	// Cancel any pending approvals BEFORE deleting from storage, so blocked
-	// approval-hook goroutines can exit cleanly while the session still exists.
-	// Non-fatal: log at warn and continue even if there are no pending approvals.
-	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
-		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
-	}
-
 	// Delete from storage using Title (the storage key), not the client-supplied ID which may be a UUID.
 	if err := s.storage.DeleteInstance(sessionTitle); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
@@ -1994,10 +2102,16 @@ func (s *SessionService) WatchSessions(
 	}
 }
 
-// StreamTerminal provides bidirectional streaming for terminal I/O with delta compression.
+// StreamTerminal provides bidirectional streaming for terminal I/O.
 // Implements bidirectional streaming where:
 // - Client sends: terminal input and resize events
-// - Server sends: terminal deltas (compressed output) or raw output (fallback)
+// - Server sends: raw terminal output
+//
+// NOTE: browser clients never reach this method directly — the WebSocket
+// handler (connectrpc_websocket.go) intercepts StreamTerminal calls made
+// over its custom websocket transport before they reach here. This handler
+// exists to satisfy the ConnectRPC service interface and could be used by
+// non-browser gRPC/Connect clients.
 func (s *SessionService) StreamTerminal(
 	ctx context.Context,
 	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
@@ -2059,6 +2173,21 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", err))
 	}
 
+	// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
+	// shared with the instance's own internal consumers (response stream,
+	// command executor), so calling SetReadDeadline directly on it would
+	// mutate poll.FD state those other readers depend on. A dup'd fd gets
+	// its own independent *os.File/poll.FD — closing or setting a deadline
+	// on readFile has no effect on ptyFile or its other readers, since the
+	// underlying open file description is only released once every fd
+	// referencing it is closed. dupPTYFile is platform-specific
+	// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+	// on Windows.
+	readFile, err := dupPTYFile(ptyFile)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err)
+	}
+
 	// Create context for managing goroutines
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -2066,9 +2195,33 @@ func (s *SessionService) StreamTerminal(
 	// Channel for errors from goroutines
 	errCh := make(chan error, 2)
 
-	// Initialize terminal state for MOSH-style state synchronization (default 80x25)
-	// Will be resized when client sends first resize message
-	terminalState := session.NewTerminalState(25, 80)
+	// wg tracks both goroutines below so the handler never returns (letting
+	// Connect close the underlying stream) while either might still be
+	// calling stream.Send/stream.Receive — doing so races with Connect's own
+	// end-of-stream write. See BUG-025 follow-up: caught by -race under a
+	// real PTY-backed StreamTerminal test.
+	var wg sync.WaitGroup
+
+	// sendMu serializes every stream.Send() call across the two goroutines
+	// below. connect-go's BidiStream.Send() is documented as unsafe for
+	// concurrent use from multiple goroutines: goroutine 1 continuously sends
+	// PTY output while goroutine 2 can, on error, send an error message back
+	// to the client (WRITE_ERROR / RESIZE_ERROR) — those two goroutines are
+	// otherwise independent (one pumps PTY->client, the other pumps
+	// client->PTY), so without a shared lock a PTY-output Send() and an
+	// input-goroutine error-reply Send() can execute at the same instant on
+	// the same stream. Caught by -race under a real PTY-backed StreamTerminal
+	// test. Single-writer-via-channel was considered but would require
+	// funneling ALL sends (including the hot PTY-output path) through an
+	// extra hop; a mutex is the minimal change here since sends are already
+	// synchronous, best-effort calls with no ordering requirements beyond
+	// mutual exclusion.
+	var sendMu sync.Mutex
+	sendLocked := func(msg *sessionv1.TerminalData) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(msg)
+	}
 
 	// Flow control state for backpressure management
 	// Reference: https://xtermjs.org/docs/guides/flowcontrol/
@@ -2076,7 +2229,10 @@ func (s *SessionService) StreamTerminal(
 	var ptyPaused bool            // Current PTY pause state
 
 	// Goroutine 1: Read from PTY and send deltas to client (terminal output)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
 		defer func() {
 			if r := recover(); r != nil {
 				errCh <- fmt.Errorf("panic in output goroutine: %v", r)
@@ -2107,44 +2263,46 @@ func (s *SessionService) StreamTerminal(
 					log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
 				}
 			default:
-
-				n, readErr := ptyFile.Read(buf)
+				// A short deadline on our own dup'd fd (see readFile above)
+				// bounds how long Read can block, so this goroutine notices
+				// streamCtx cancellation promptly instead of potentially
+				// blocking until the next real PTY output — which could
+				// arrive well after the handler has returned and Connect has
+				// closed the stream. Safe to set here because readFile is
+				// exclusively ours; it does not touch ptyFile's poll.FD.
+				_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+				n, readErr := readFile.Read(buf)
 				if n > 0 {
 					// Update terminal activity timestamps with the output content
 					// This ensures LastMeaningfulOutput reflects web UI viewing activity
 					instance.UpdateTerminalTimestamps(string(buf[:n]), true)
 
-					// Process PTY output through terminal state
-					if processErr := terminalState.ProcessOutput(buf[:n]); processErr != nil {
-						log.Warn("failed to process terminal output", "err", processErr)
-						// Fallback to raw output on parse errors
-						outputMsg := &sessionv1.TerminalData{
-							SessionId: initialMsg.SessionId,
-							Data: &sessionv1.TerminalData_Output{
-								Output: &sessionv1.TerminalOutput{
-									Data: buf[:n],
-								},
-							},
-						}
-						if sendErr := stream.Send(outputMsg); sendErr != nil {
-							errCh <- fmt.Errorf("failed to send output: %w", sendErr)
-							return
-						}
-						continue
+					select {
+					case <-streamCtx.Done():
+						return
+					default:
 					}
 
-					// Generate complete terminal state (MOSH-style)
-					stateMsg := terminalState.GenerateState()
-					stateMsg.SessionId = initialMsg.SessionId
-
-					// Send state to client
-					if sendErr := stream.Send(stateMsg); sendErr != nil {
-						errCh <- fmt.Errorf("failed to send state: %w", sendErr)
+					outputMsg := &sessionv1.TerminalData{
+						SessionId: initialMsg.SessionId,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: buf[:n],
+							},
+						},
+					}
+					if sendErr := sendLocked(outputMsg); sendErr != nil {
+						errCh <- fmt.Errorf("failed to send output: %w", sendErr)
 						return
 					}
 				}
 
 				if readErr != nil {
+					if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+						// Expected: the deadline above elapsed with no data.
+						// Loop back around to re-check streamCtx/pauseCh.
+						continue
+					}
 					// EOF or other read error
 					if readErr.Error() != "EOF" {
 						errCh <- fmt.Errorf("PTY read error: %w", readErr)
@@ -2156,7 +2314,9 @@ func (s *SessionService) StreamTerminal(
 	}()
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				errCh <- fmt.Errorf("panic in input goroutine: %v", r)
@@ -2210,7 +2370,7 @@ func (s *SessionService) StreamTerminal(
 								},
 							},
 						}
-						_ = stream.Send(errorMsg) // Best effort
+						_ = sendLocked(errorMsg) // Best effort
 						errCh <- writeErr
 						return
 					}
@@ -2223,7 +2383,7 @@ func (s *SessionService) StreamTerminal(
 					))
 
 				case *sessionv1.TerminalData_Resize:
-					// Handle terminal resize - update both PTY and terminal state
+					// Handle terminal resize
 					cols := int(data.Resize.Cols)
 					rows := int(data.Resize.Rows)
 
@@ -2238,12 +2398,10 @@ func (s *SessionService) StreamTerminal(
 								},
 							},
 						}
-						_ = stream.Send(errorMsg) // Best effort
+						_ = sendLocked(errorMsg) // Best effort
 						// Don't return on resize errors, they're not fatal
 					} else {
-						// Also resize terminal state to match
-						terminalState.Resize(rows, cols)
-						log.Info("resized terminal state", "cols", cols, "rows", rows, "session", msg.SessionId)
+						log.Info("resized terminal", "cols", cols, "rows", rows, "session", msg.SessionId)
 					}
 
 				case *sessionv1.TerminalData_FlowControl:
@@ -2285,14 +2443,90 @@ func (s *SessionService) StreamTerminal(
 		}
 	}()
 
-	// Wait for either context cancellation or error
+	// Wait for either context cancellation or error, then wait for both
+	// goroutines to actually stop before returning. Returning early lets
+	// Connect close the underlying HTTP/2 stream (write trailers/end-stream);
+	// if either goroutine is still mid-Send/Receive when that happens, the
+	// concurrent writes to the same connection race — caught by -race even
+	// with sendLocked in place, because sendLocked only serializes OUR two
+	// goroutines against each other, not against Connect's own teardown write
+	// once this function returns. Goroutine 1 is reliably bounded (its dup'd
+	// fd's 250ms read deadline means it notices streamCtx.Done() promptly
+	// regardless of PTY activity). Goroutine 2's stream.Receive() has no
+	// equivalent deadline (connect-go's BidiStream doesn't expose one), so it
+	// can genuinely still be blocked here — an earlier version of this code
+	// gave up waiting after a short timeout and returned anyway, which is
+	// exactly what let the race happen. logSlowShutdown never gives up: it
+	// blocks until wg is actually done (so the race is structurally
+	// impossible), merely logging if that's taking unusually long so a client
+	// that never disconnects is still visible in logs rather than silently
+	// leaking the goroutine.
+	const shutdownWarnAfter = 2 * time.Second
 	select {
 	case <-streamCtx.Done():
 		log.Info("StreamTerminal: context done", "session", initialMsg.SessionId)
+		logSlowShutdown(&wg, shutdownWarnAfter, initialMsg.SessionId, "context done")
 		return nil // Clean shutdown
 	case err := <-errCh:
 		log.Error("StreamTerminal error", "session", initialMsg.SessionId, "err", err)
+		cancel() // streamCtx.Done() wasn't otherwise closed on this path; signal both goroutines to stop.
+		logSlowShutdown(&wg, shutdownWarnAfter, initialMsg.SessionId, "error")
 		return connect.NewError(connect.CodeInternal, err)
+	}
+}
+
+// waitWithTimeout waits for wg to complete, returning true if it did so
+// within timeout and false if the timeout elapsed first. On timeout, this
+// bookkeeping goroutine itself is harmlessly leaked (it will eventually
+// complete and close the now-unread done channel) — but the caller's own
+// tracked goroutines may still be running and may still touch shared state
+// (e.g. a stream) after this function returns false. Callers on the false
+// path must treat that as a real, logged condition, not a no-op.
+//
+// StreamTerminal itself does NOT use this — see logSlowShutdown below for why
+// "give up and return anyway" is unsafe there. Kept for its own direct test
+// coverage (TestWaitWithTimeout) and as a building block other bounded-wait
+// callers can use where returning on timeout doesn't race a shared resource.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// logSlowShutdown blocks until wg completes — unconditionally, with no
+// give-up. StreamTerminal's two goroutines both call stream.Send()/Receive();
+// once this function's caller returns, Connect writes the stream's
+// end-of-stream trailers on the same connection, which races with either
+// goroutine if it's still mid-Send/Receive. The only way to make that
+// structurally impossible is to never return while wg is incomplete — unlike
+// waitWithTimeout, this cannot give up and let the caller proceed anyway.
+//
+// warnAfter only controls a one-time log line so a client that never
+// disconnects (holding goroutine 2's stream.Receive() open indefinitely,
+// since connect-go's BidiStream has no per-call read deadline to bound it)
+// is visible in logs as a real leak, rather than either silently hanging
+// forever unnoticed or racing the stream teardown.
+func logSlowShutdown(wg *sync.WaitGroup, warnAfter time.Duration, sessionID, reason string) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(warnAfter):
+		log.Warn("StreamTerminal: goroutines still running past warn threshold, waiting for them before returning (not giving up, to avoid racing Connect's stream teardown)",
+			"session", sessionID, "reason", reason)
+		<-done
 	}
 }
 
@@ -3024,6 +3258,23 @@ func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
 }
 
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save (server/dependencies.go uses this to
+// trigger an immediate backlog-queue dequeue sweep when the concurrency limit
+// is raised).
+func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
+	s.defaultsSvc.SetOnGlobalDefaultsUpdated(fn)
+}
+
+// SetSharedBacklogConfig wires the *config.Config instance (and its guarding
+// mutex) BacklogService reads its concurrency fields from into this
+// SessionService's DefaultsService, so UpdateGlobalDefaults can propagate a
+// Settings change into BacklogService's live view without a process restart
+// (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
+func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
@@ -3287,7 +3538,7 @@ func (s *SessionService) RunOneShot(
 	if s.headlessPool != nil {
 		// Use headless pool for improved streaming and session reuse.
 		var callErr error
-		outputStr, callErr = s.headlessPool.CallBlockingWithOptions(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
+		outputStr, _, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1
@@ -3328,6 +3579,18 @@ func (s *SessionService) RunOneShot(
 		} else {
 			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url", "github_pr_number"}))
 		}
+
+		// This RunOneShot call may have been the Review Queue's manual "Create
+		// PR" button for a backlog-linked session — that flow creates the PR
+		// entirely outside the automated pushAndCreatePR path, which is the
+		// only other place that ever moves a backlog item to pr_pending. Without
+		// this call the item is silently left in "review" forever, invisible to
+		// ReconcilePRPending (see RecordPRCreatedOutOfBand's doc comment in
+		// session/backlog_lifecycle.go for the full root-cause trace). No-op for
+		// non-backlog sessions.
+		if s.backlogLifecycleListener != nil {
+			s.backlogLifecycleListener.RecordPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.RunOneShotResponse{
@@ -3337,6 +3600,27 @@ func (s *SessionService) RunOneShot(
 		PrUrl:                  prURL,
 		BranchDivergedFromBase: branchDiverged,
 	}), nil
+}
+
+// RunOneShotForSession runs a one-shot prompt against a session's worktree without
+// the ConnectRPC request/response wrapper, for automation callers. It reuses
+// RunOneShot's exact logic (same PR-URL extraction, same PR persistence) so
+// automated and manual PR creation share one code path — currently used by the
+// opt-in AutoCreatePR review-queue policy (server.ReactiveQueueManager).
+// Returns the extracted PR URL, or an error if the prompt failed.
+func (s *SessionService) RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error) {
+	resp, err := s.RunOneShot(ctx, connect.NewRequest(&sessionv1.RunOneShotRequest{
+		SessionId:      sessionID,
+		Prompt:         prompt,
+		TimeoutSeconds: timeoutSeconds,
+	}))
+	if err != nil {
+		return "", err
+	}
+	if resp.Msg.Error != "" {
+		return "", fmt.Errorf("one-shot prompt failed: %s", resp.Msg.Error)
+	}
+	return resp.Msg.PrUrl, nil
 }
 
 // extractPRURL scans the last 10 non-empty lines of output for a GitHub PR URL
@@ -4033,6 +4317,11 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
 
 	return nil
+}
+
+// SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver into the search service.
+func (s *SessionService) SetResolveConversationUUID(fn func(ctx context.Context, tmuxUUID string) (string, error)) {
+	s.searchSvc.SetResolveConversationUUID(fn)
 }
 
 // SetTokenStoreReader wires the global parsed token store into the capacity monitor.

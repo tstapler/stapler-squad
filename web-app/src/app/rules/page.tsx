@@ -6,6 +6,7 @@ import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { ApprovalRulesPanel } from "@/components/sessions/ApprovalRulesPanel";
 import { ApprovalAnalyticsPanel } from "@/components/sessions/ApprovalAnalyticsPanel";
+import { HookStatusPanel } from "@/components/sessions/HookStatusPanel";
 import { decodePrefill, type RuleBuilderPrefill } from "@/lib/ruleBuilderPrefill";
 import * as styles from "./page.css";
 
@@ -31,6 +32,7 @@ function RulesPageInner() {
   return (
     <div className={styles.page}>
       <main id="main-content" className={styles.main}>
+        <HookStatusPanel />
         <ApprovalRulesPanel prefill={prefill} />
         <ApprovalAnalyticsPanel />
       </main>

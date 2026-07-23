@@ -17,13 +17,13 @@ type fakeHeadlessPool struct {
 	capturedKeys []headless.FeatureKey
 }
 
-func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
 	if idx < len(f.responses) {
-		return f.responses[idx], nil
+		return f.responses[idx], 0, nil
 	}
-	return "NEXT_MESSAGE: keep going", nil
+	return "NEXT_MESSAGE: keep going", 0, nil
 }
 
 func TestParseOrchestrationResponse_NextMessage(t *testing.T) {
@@ -139,7 +139,7 @@ func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 
 	inst := &Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -183,7 +183,7 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 
 	inst := &Instance{Title: "test-done", UUID: "abcdefgh-5678"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -227,7 +227,7 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 
 	inst := &Instance{Title: "test-idempotent", UUID: "abcdefgh-9999"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -258,7 +258,7 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 
 	inst := &Instance{Title: "test-channel", UUID: "abcdefgh-7777"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -295,7 +295,7 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 
 	inst := &Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -323,7 +323,7 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -359,7 +359,7 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 // panicPool panics on the first call to simulate a driver panic.
 type panicPool struct{}
 
-func (p *panicPool) CallBlockingWithOptions(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	panic("simulated panic in headless pool")
 }
 
@@ -368,7 +368,7 @@ func (p *panicPool) CallBlockingWithOptions(_ context.Context, _ headless.Featur
 func TestAutonomousDriver_NilPool_Start(t *testing.T) {
 	inst := &Instance{Title: "test-nil-pool", UUID: "abcdef12-nil"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -390,7 +390,7 @@ func TestAutonomousDriver_ShortUUID(t *testing.T) {
 	}
 	inst := &Instance{Title: "short-uuid-test", UUID: "abc"} // 3 chars, less than 8
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -447,7 +447,7 @@ func TestNewAutonomousDriver_ConfigurableStartupTimeout(t *testing.T) {
 	pool := &fakeHeadlessPool{}
 	inst := &Instance{Title: "test-timeout", UUID: "abcdefgh-tout"}
 	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller = cc
+	inst.controllerManager.controller.Store(cc)
 
 	// Custom timeout
 	d := NewAutonomousDriver(inst, pool, "goal", 0, WithStartupTimeout(5*time.Minute))

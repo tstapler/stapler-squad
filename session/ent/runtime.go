@@ -9,7 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
@@ -18,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
@@ -154,20 +157,48 @@ func init() {
 	backlogitemDescSkipPlanning := backlogitemFields[8].Descriptor()
 	// backlogitem.DefaultSkipPlanning holds the default value on creation for the skip_planning field.
 	backlogitem.DefaultSkipPlanning = backlogitemDescSkipPlanning.Default.(bool)
+	// backlogitemDescAutoSpawnSession is the schema descriptor for auto_spawn_session field.
+	backlogitemDescAutoSpawnSession := backlogitemFields[9].Descriptor()
+	// backlogitem.DefaultAutoSpawnSession holds the default value on creation for the auto_spawn_session field.
+	backlogitem.DefaultAutoSpawnSession = backlogitemDescAutoSpawnSession.Default.(bool)
+	// backlogitemDescAutoCreatePr is the schema descriptor for auto_create_pr field.
+	backlogitemDescAutoCreatePr := backlogitemFields[10].Descriptor()
+	// backlogitem.DefaultAutoCreatePr holds the default value on creation for the auto_create_pr field.
+	backlogitem.DefaultAutoCreatePr = backlogitemDescAutoCreatePr.Default.(bool)
+	// backlogitemDescPipelineMode is the schema descriptor for pipeline_mode field.
+	backlogitemDescPipelineMode := backlogitemFields[11].Descriptor()
+	// backlogitem.DefaultPipelineMode holds the default value on creation for the pipeline_mode field.
+	backlogitem.DefaultPipelineMode = backlogitemDescPipelineMode.Default.(string)
 	// backlogitemDescPlanApproved is the schema descriptor for plan_approved field.
-	backlogitemDescPlanApproved := backlogitemFields[9].Descriptor()
+	backlogitemDescPlanApproved := backlogitemFields[12].Descriptor()
 	// backlogitem.DefaultPlanApproved holds the default value on creation for the plan_approved field.
 	backlogitem.DefaultPlanApproved = backlogitemDescPlanApproved.Default.(bool)
+	// backlogitemDescQueuedAutonomous is the schema descriptor for queued_autonomous field.
+	backlogitemDescQueuedAutonomous := backlogitemFields[15].Descriptor()
+	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
+	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[18].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[23].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
+	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
+	backlogitemDescShippedApprovedCount := backlogitemFields[25].Descriptor()
+	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
+	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
+	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
+	backlogitemDescShippedChangesReqCount := backlogitemFields[26].Descriptor()
+	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
+	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
+	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[29].Descriptor()
+	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
+	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[19].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[20].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[32].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -176,6 +207,20 @@ func init() {
 	backlogitemDescID := backlogitemFields[0].Descriptor()
 	// backlogitem.DefaultID holds the default value on creation for the id field.
 	backlogitem.DefaultID = backlogitemDescID.Default.(func() uuid.UUID)
+	backlogprogressnoteFields := schema.BacklogProgressNote{}.Fields()
+	_ = backlogprogressnoteFields
+	// backlogprogressnoteDescCriterionIndex is the schema descriptor for criterion_index field.
+	backlogprogressnoteDescCriterionIndex := backlogprogressnoteFields[2].Descriptor()
+	// backlogprogressnote.CriterionIndexValidator is a validator for the "criterion_index" field. It is called by the builders before save.
+	backlogprogressnote.CriterionIndexValidator = backlogprogressnoteDescCriterionIndex.Validators[0].(func(int) error)
+	// backlogprogressnoteDescCreatedAt is the schema descriptor for created_at field.
+	backlogprogressnoteDescCreatedAt := backlogprogressnoteFields[5].Descriptor()
+	// backlogprogressnote.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogprogressnote.DefaultCreatedAt = backlogprogressnoteDescCreatedAt.Default.(func() time.Time)
+	// backlogprogressnoteDescID is the schema descriptor for id field.
+	backlogprogressnoteDescID := backlogprogressnoteFields[0].Descriptor()
+	// backlogprogressnote.DefaultID holds the default value on creation for the id field.
+	backlogprogressnote.DefaultID = backlogprogressnoteDescID.Default.(func() uuid.UUID)
 	backlogstatuseventFields := schema.BacklogStatusEvent{}.Fields()
 	_ = backlogstatuseventFields
 	// backlogstatuseventDescTriggeredBy is the schema descriptor for triggered_by field.
@@ -190,6 +235,24 @@ func init() {
 	backlogstatuseventDescID := backlogstatuseventFields[0].Descriptor()
 	// backlogstatusevent.DefaultID holds the default value on creation for the id field.
 	backlogstatusevent.DefaultID = backlogstatuseventDescID.Default.(func() uuid.UUID)
+	backlogstuckstateFields := schema.BacklogStuckState{}.Fields()
+	_ = backlogstuckstateFields
+	// backlogstuckstateDescFirstDetectedAt is the schema descriptor for first_detected_at field.
+	backlogstuckstateDescFirstDetectedAt := backlogstuckstateFields[3].Descriptor()
+	// backlogstuckstate.DefaultFirstDetectedAt holds the default value on creation for the first_detected_at field.
+	backlogstuckstate.DefaultFirstDetectedAt = backlogstuckstateDescFirstDetectedAt.Default.(func() time.Time)
+	// backlogstuckstateDescLastCheckedAt is the schema descriptor for last_checked_at field.
+	backlogstuckstateDescLastCheckedAt := backlogstuckstateFields[4].Descriptor()
+	// backlogstuckstate.DefaultLastCheckedAt holds the default value on creation for the last_checked_at field.
+	backlogstuckstate.DefaultLastCheckedAt = backlogstuckstateDescLastCheckedAt.Default.(func() time.Time)
+	// backlogstuckstateDescRemediationAttempts is the schema descriptor for remediation_attempts field.
+	backlogstuckstateDescRemediationAttempts := backlogstuckstateFields[9].Descriptor()
+	// backlogstuckstate.DefaultRemediationAttempts holds the default value on creation for the remediation_attempts field.
+	backlogstuckstate.DefaultRemediationAttempts = backlogstuckstateDescRemediationAttempts.Default.(int32)
+	// backlogstuckstateDescID is the schema descriptor for id field.
+	backlogstuckstateDescID := backlogstuckstateFields[0].Descriptor()
+	// backlogstuckstate.DefaultID holds the default value on creation for the id field.
+	backlogstuckstate.DefaultID = backlogstuckstateDescID.Default.(func() uuid.UUID)
 	classificationanalyticsFields := schema.ClassificationAnalytics{}.Fields()
 	_ = classificationanalyticsFields
 	// classificationanalyticsDescAnalyticsID is the schema descriptor for analytics_id field.
@@ -296,16 +359,24 @@ func init() {
 	escapeevent.IDValidator = escapeeventDescID.Validators[0].(func(string) error)
 	itemsessionFields := schema.ItemSession{}.Fields()
 	_ = itemsessionFields
+	// itemsessionDescPipelineModeSnapshot is the schema descriptor for pipeline_mode_snapshot field.
+	itemsessionDescPipelineModeSnapshot := itemsessionFields[6].Descriptor()
+	// itemsession.DefaultPipelineModeSnapshot holds the default value on creation for the pipeline_mode_snapshot field.
+	itemsession.DefaultPipelineModeSnapshot = itemsessionDescPipelineModeSnapshot.Default.(string)
+	// itemsessionDescPipelineModeSnapshotHash is the schema descriptor for pipeline_mode_snapshot_hash field.
+	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[7].Descriptor()
+	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
+	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[10].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[13].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[13].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[16].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[14].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[17].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.
@@ -332,6 +403,34 @@ func init() {
 	itemsourceDescID := itemsourceFields[0].Descriptor()
 	// itemsource.DefaultID holds the default value on creation for the id field.
 	itemsource.DefaultID = itemsourceDescID.Default.(func() uuid.UUID)
+	pipelinemodeFields := schema.PipelineMode{}.Fields()
+	_ = pipelinemodeFields
+	// pipelinemodeDescSlug is the schema descriptor for slug field.
+	pipelinemodeDescSlug := pipelinemodeFields[1].Descriptor()
+	// pipelinemode.SlugValidator is a validator for the "slug" field. It is called by the builders before save.
+	pipelinemode.SlugValidator = pipelinemodeDescSlug.Validators[0].(func(string) error)
+	// pipelinemodeDescName is the schema descriptor for name field.
+	pipelinemodeDescName := pipelinemodeFields[2].Descriptor()
+	// pipelinemode.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	pipelinemode.NameValidator = pipelinemodeDescName.Validators[0].(func(string) error)
+	// pipelinemodeDescEnabled is the schema descriptor for enabled field.
+	pipelinemodeDescEnabled := pipelinemodeFields[4].Descriptor()
+	// pipelinemode.DefaultEnabled holds the default value on creation for the enabled field.
+	pipelinemode.DefaultEnabled = pipelinemodeDescEnabled.Default.(bool)
+	// pipelinemodeDescCreatedAt is the schema descriptor for created_at field.
+	pipelinemodeDescCreatedAt := pipelinemodeFields[14].Descriptor()
+	// pipelinemode.DefaultCreatedAt holds the default value on creation for the created_at field.
+	pipelinemode.DefaultCreatedAt = pipelinemodeDescCreatedAt.Default.(func() time.Time)
+	// pipelinemodeDescUpdatedAt is the schema descriptor for updated_at field.
+	pipelinemodeDescUpdatedAt := pipelinemodeFields[15].Descriptor()
+	// pipelinemode.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	pipelinemode.DefaultUpdatedAt = pipelinemodeDescUpdatedAt.Default.(func() time.Time)
+	// pipelinemode.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	pipelinemode.UpdateDefaultUpdatedAt = pipelinemodeDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// pipelinemodeDescID is the schema descriptor for id field.
+	pipelinemodeDescID := pipelinemodeFields[0].Descriptor()
+	// pipelinemode.DefaultID holds the default value on creation for the id field.
+	pipelinemode.DefaultID = pipelinemodeDescID.Default.(func() uuid.UUID)
 	projectFields := schema.Project{}.Fields()
 	_ = projectFields
 	// projectDescName is the schema descriptor for name field.

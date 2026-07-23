@@ -252,7 +252,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 				UUID:   "test-uuid",
 				Status: Running,
 			}
-			inst.started = true
+			inst.started.Store(true)
 			// Set a sensible default so staleness doesn't fire unexpectedly
 			if inst.LastMeaningfulOutput.IsZero() {
 				inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
@@ -264,6 +264,12 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			if tt.instSetup != nil {
 				tt.instSetup(inst)
 			}
+			// Keep the lock-free atomic shadows (lastMeaningfulOutputNs, lastAcknowledgedNs)
+			// in sync with the plain fields set directly above — production writers always
+			// update both together (UpdateTimestamps, MarkAcknowledged); this test bypasses
+			// that discipline via direct field assignment, so it must sync explicitly before
+			// calling Determine(), which reads the atomic-only accessors on the live Instance.
+			inst.SyncAtomicTimestamps()
 
 			result := determiner.Determine(inst, tt.content, tt.statusInfo, detector)
 
@@ -289,8 +295,9 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -315,8 +322,9 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	customContext := "tool use blocked by policy xyz"
 	statusInfo := InstanceStatusInfo{
@@ -339,8 +347,9 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -361,8 +370,9 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -388,8 +398,9 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -416,9 +427,10 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	// Fresh output — below staleness threshold and idle threshold
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -441,8 +453,9 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
 	statusInfo := InstanceStatusInfo{

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
 	"github.com/tstapler/stapler-squad/cmd/commands"
@@ -26,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -60,17 +62,39 @@ var (
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// MCP mode: initialize logging to stderr, load storage, run MCP server.
+			// MCP mode: initialize logging to stderr, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
+			//
+			// Thin-client fast path: if the main stapler-squad HTTP server is already
+			// running (it almost always is — this binary is spawned per Claude Code
+			// subagent via .mcp.json, once per subagent process), proxy stdio tool
+			// calls to its existing /mcp endpoint instead of opening a second
+			// ent/SQLite connection + EventBus + ReviewQueue in this subprocess. Only
+			// falls back to the fully-local path (buildMCPDeps) when the HTTP server
+			// isn't reachable, e.g. before the daemon has started.
 			if mcpFlag {
 				mcpserver.InitMCPLogging()
 				cfg := config.LoadConfig()
-				_ = cfg // config loaded for side effects (e.g. workspace detection)
+				if proxyURL := mcpProxyURL(cfg.ListenAddress); proxyURL != "" {
+					proxyErr := mcpserver.RunProxyServer(ctx, proxyURL, mcpserver.ProxyHeaders())
+					if proxyErr == nil {
+						return nil
+					}
+					if errors.Is(proxyErr, mcpserver.ErrProxyUnavailable) {
+						log.Warn("mcp: thin-client proxy unavailable, falling back to embedded storage", "err", proxyErr, "url", proxyURL)
+					} else {
+						return proxyErr
+					}
+				}
 				store, svc, sbMgr, storage, mcpErr := buildMCPDeps()
 				if mcpErr != nil {
 					return fmt.Errorf("mcp: init deps: %w", mcpErr)
 				}
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil)
+				// The stdio MCP server is a short-lived subprocess per session, so a
+				// load-time read of the flag (rather than a live BacklogController,
+				// which BuildCoreDeps doesn't construct) is sufficient.
+				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
 			}
 
 			// Enable test mode if flag is set
@@ -182,7 +206,7 @@ var (
 			}
 			defer stopProfiling()
 
-			// Determine listen address: flag > config > PORT env > default
+			// Determine listen address: flag > PORT env > config > default
 			address := cfg.ListenAddress
 			if address == "" {
 				address = "localhost:8543"
@@ -282,6 +306,21 @@ var (
 
 				localOrigin := fmt.Sprintf("http://%s", address)
 				srv.SetOrigins([]string{localOrigin})
+
+				// STAPLER_SQUAD_EXTRA_ORIGINS lets an isolated DevStack's next-dev frontend past
+				// CORS. Only honored when STAPLER_SQUAD_INSTANCE is also explicitly set — the
+				// default/systemd instance never sets a custom instance name, so this env var is
+				// a structural no-op there regardless of its value (ADR-001 §2, pre-mortem.md
+				// Failure #3). Each entry must be an exact http(s)://localhost:<port> or
+				// http(s)://127.0.0.1:<port> origin — anything else is rejected and logged, never
+				// silently trusted.
+				if os.Getenv("STAPLER_SQUAD_INSTANCE") != "" {
+					if extraOriginsRaw := os.Getenv("STAPLER_SQUAD_EXTRA_ORIGINS"); extraOriginsRaw != "" {
+						validExtraOrigins, _ := parseExtraOrigins(extraOriginsRaw)
+						srv.SetOrigins(append(srv.GetOrigins(), validExtraOrigins...))
+					}
+					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
+				}
 
 				// Start a second HTTPS server with passkey auth for remote access.
 				if remoteAccessFlag || cfg.PasskeyEnabled {
@@ -661,6 +700,30 @@ func init() {
 	rootCmd.AddCommand(commands.GetSessionCmd)
 }
 
+// extraOriginPattern matches an exact http(s)://localhost:<port> or
+// http(s)://127.0.0.1:<port> origin — no path, query, wildcard, or other host.
+var extraOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1):\d+$`)
+
+// parseExtraOrigins splits raw on commas and strings.TrimSpace's each entry,
+// validating it against extraOriginPattern. Entries that pass are returned in
+// valid; entries that fail are logged via log.Warn (naming the offending entry)
+// and returned in rejected — they are never silently included in valid.
+func parseExtraOrigins(raw string) (valid []string, rejected []string) {
+	for _, entry := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if extraOriginPattern.MatchString(trimmed) {
+			valid = append(valid, trimmed)
+		} else {
+			log.Warn("Rejected invalid STAPLER_SQUAD_EXTRA_ORIGINS entry", "entry", trimmed)
+			rejected = append(rejected, trimmed)
+		}
+	}
+	return valid, rejected
+}
+
 // resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID
 // or TLS SANs. It collects all identifiable hostnames from various sources.
 func resolveLANHostnames(lanIPStr string) []string {
@@ -939,6 +1002,23 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		FileEnabled:    true,
 		FileLevel:      log.DEBUG,
 	}
+}
+
+// mcpProxyURL builds the /mcp endpoint URL for the configured HTTP listen
+// address, normalizing wildcard/empty hosts (used for remote-access mode) to
+// "localhost" since the MCP proxy always dials the server on the same host.
+// Mirrors the URL shape SessionService.SetMCPServerURL builds for the
+// --mcp-config flag passed to newly launched sessions (server/server.go).
+// Returns "" if listenAddr has no parseable host:port.
+func mcpProxyURL(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/mcp"
 }
 
 // buildMCPDeps creates the minimal server dependencies needed by the MCP server.

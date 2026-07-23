@@ -1717,6 +1717,13 @@ message SessionDefaultsConfig {
   string one_off_base_dir = 8;
   // Base directory where new project folders are created. Defaults to ~/Projects.
   string new_project_base_dir = 9;
+  // Max automated rework iterations before a backlog item's auto-reopen loop
+  // leaves it in review for manual action. 0 in a request means "use the
+  // server default (3)"; the response always echoes the resolved value.
+  int32 max_auto_rework_iterations = 10;
+  // Max backlog items that may be in_progress at once. 0 in a request means
+  // "use the server default (2)"; the response always echoes the resolved value.
+  int32 max_concurrent_backlog_work_items = 11;
 }
 
 // GetSessionDefaults
@@ -1758,6 +1765,10 @@ message UpdateGlobalDefaultsRequest {
   string one_off_base_dir = 6;
   // Base directory where new project folders are created. Defaults to ~/Projects.
   string new_project_base_dir = 7;
+  // 0 = use the server default (3). See SessionDefaultsConfig.max_auto_rework_iterations.
+  int32 max_auto_rework_iterations = 8;
+  // 0 = use the server default (2). See SessionDefaultsConfig.max_concurrent_backlog_work_items.
+  int32 max_concurrent_backlog_work_items = 9;
 }
 
 message UpdateGlobalDefaultsResponse {

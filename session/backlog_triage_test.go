@@ -211,7 +211,7 @@ func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 
 func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 	// ParseAcCriteria expects JSON-encoded criteria.
-	acJSON := `[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`
+	acJSON := AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
 	item := &BacklogItemData{
 		Title:              "AC Test",
 		ID:                 "id-2",

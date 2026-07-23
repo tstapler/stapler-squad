@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -138,6 +139,91 @@ func TestServeLocalFile_Directory(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for directory path, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestListLocalDirectory_SymlinkedDirectory verifies that a symlink pointing at a
+// real directory is reported as IsDir == true so the frontend can navigate into it.
+func TestListLocalDirectory_SymlinkedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-subdir")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link-to-subdir")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling symlink must not error the whole listing or be reported as a directory.
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist"), filepath.Join(dir, "broken-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	list, _ := newLocalFileServiceHandlers()
+	req := httptest.NewRequest(http.MethodGet, "/?path="+dir, nil)
+	w := httptest.NewRecorder()
+	list.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp listDirectoryResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	var sawLink, sawBroken bool
+	for _, e := range resp.Entries {
+		switch e.Name {
+		case "link-to-subdir":
+			sawLink = true
+			if !e.IsDir {
+				t.Errorf("link-to-subdir: IsDir = false, want true")
+			}
+		case "broken-link":
+			sawBroken = true
+			if e.IsDir {
+				t.Errorf("broken-link: IsDir = true, want false")
+			}
+		}
+	}
+	if !sawLink {
+		t.Error("link-to-subdir entry not found in listing")
+	}
+	if !sawBroken {
+		t.Error("broken-link entry not found in listing")
+	}
+}
+
+// TestListLocalDirectory_Truncation verifies the >2000-entry cap sets HasMore and Total
+// accurately, with an off-by-one boundary at exactly maxLocalDirEntries.
+func TestListLocalDirectory_Truncation(t *testing.T) {
+	dir := t.TempDir()
+	const count = maxLocalDirEntries + 1
+	for i := 0; i < count; i++ {
+		name := filepath.Join(dir, "file-"+strconv.Itoa(i))
+		if err := os.WriteFile(name, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, _ := newLocalFileServiceHandlers()
+	req := httptest.NewRequest(http.MethodGet, "/?path="+dir, nil)
+	w := httptest.NewRecorder()
+	list.ServeHTTP(w, req)
+
+	var resp listDirectoryResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Total != count {
+		t.Errorf("Total = %d, want %d", resp.Total, count)
+	}
+	if !resp.HasMore {
+		t.Error("HasMore = false, want true")
+	}
+	if len(resp.Entries) != maxLocalDirEntries {
+		t.Errorf("len(Entries) = %d, want %d", len(resp.Entries), maxLocalDirEntries)
 	}
 }
 

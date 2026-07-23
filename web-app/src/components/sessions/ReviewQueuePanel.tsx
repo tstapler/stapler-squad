@@ -3,13 +3,16 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { create } from "@bufbuild/protobuf";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
+import { useFilterState } from "@/lib/hooks/useFilterState";
+import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
-import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource } from "@/gen/session/v1/types_pb";
+import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import {
   panel,
@@ -69,6 +72,11 @@ import {
   modalContent,
   ruleModalContent,
   divergedBadge,
+  searchInput,
+  sortRow,
+  sortSelect,
+  groupSection,
+  groupHeading,
 } from "./ReviewQueuePanel.css";
 import { Button } from "@/components/ui";
 
@@ -101,7 +109,86 @@ interface ReviewQueuePanelProps {
  * />
  * ```
  */
-const DEFAULT_PR_PROMPT = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made.";
+// Mirrors autoCreatePRPrompt (server/review_queue_manager.go) and shipPRPrompt
+// (server/services/backlog_service_ship.go) — kept in sync manually; see
+// autoCreatePRPrompt's doc comment for why the format is spelled out
+// explicitly rather than left to the agent's judgment.
+const DEFAULT_PR_PROMPT =
+  "Create a pull request for the changes in this session. Title: use Conventional Commits format (fix:, feat:, etc.). Body: structure as ## Summary (1-3 sentences on why this change was made, tied to the backlog item's problem statement in .backlog-context.md if present), ## What Changed (a short bullet list, not a line-by-line diff restatement), and ## Test plan (a checklist of concrete verification steps such as specific commands or manual checks — not an unqualified claim that tests pass). Keep it concise, no scratch notes.";
+
+type SortField = "default" | "priority" | "age" | "diffSize" | "name";
+
+// URL query param keys, persisted/restored via useFilterState for shareable/bookmarkable filter state.
+const FILTER_URL_KEYS = ["priority", "reason", "program", "category", "tag", "pr", "diverged", "q", "sort", "dir", "group"] as const;
+
+// Grouping strategies that map onto fields ReviewItem actually carries (no project/workflow/session-type data).
+const REVIEW_GROUPING_STRATEGIES = [
+  GroupingStrategy.None,
+  GroupingStrategy.Category,
+  GroupingStrategy.Tag,
+  GroupingStrategy.Branch,
+  GroupingStrategy.Program,
+  GroupingStrategy.Status,
+];
+
+const SORT_FIELDS: SortField[] = ["priority", "age", "diffSize", "name"];
+
+function joinSet(set: Set<string> | Set<number>): string | undefined {
+  return set.size > 0 ? [...set].join(",") : undefined;
+}
+
+function parseNumSet(v: string | undefined): Set<number> {
+  return new Set(
+    v
+      ? v
+          .split(",")
+          .filter(Boolean)
+          .map(Number)
+          .filter((n) => Number.isFinite(n))
+      : []
+  );
+}
+
+function parseStrSet(v: string | undefined): Set<string> {
+  return new Set(v ? v.split(",").filter(Boolean) : []);
+}
+
+// Minimal Session shape for groupSessions() — only the fields grouping strategies read.
+function reviewItemToSession(item: ReviewItem): Session {
+  return create(SessionSchema, {
+    id: item.sessionId,
+    title: item.sessionName,
+    path: item.path,
+    branch: item.branch,
+    status: item.status,
+    program: item.program,
+    tags: item.tags,
+    category: item.category,
+  });
+}
+
+function toggleInSet<T>(set: Set<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}
+
+// Counts distinct non-empty values of `pick(item)` (string or string[]) across items, sorted by frequency desc.
+function countByField(items: ReviewItem[], pick: (item: ReviewItem) => string | string[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const values = pick(item);
+    for (const v of Array.isArray(values) ? values : [values]) {
+      if (!v) continue;
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
 
 export function ReviewQueuePanel({
   onSessionClick,
@@ -124,11 +211,29 @@ export function ReviewQueuePanel({
   const [activeRuleItemId, setActiveRuleItemId] = useState<string | null>(null);
   const [ruleSaved, setRuleSaved] = useState(false);
   const { suggestions, loading: ruleLoading, error: ruleError, generate: generateRule, clear: clearRule } = useGenerateRule();
-  const [priorityFilter, setPriorityFilter] = useState<Priority | undefined>(
-    undefined
+  // Filter/sort/group state is persisted to URL query params (shareable/bookmarkable),
+  // seeded once from the URL on mount; local state is the source of truth thereafter.
+  const { filterState: urlFilters, setFilter: setUrlFilter, clearFilters: clearUrlFilters } = useFilterState(FILTER_URL_KEYS);
+
+  // Combinable multi-select filters — each dimension is a Set; empty Set = "no filter applied".
+  const [priorityFilter, setPriorityFilter] = useState<Set<Priority>>(() => parseNumSet(urlFilters.priority) as Set<Priority>);
+  const [reasonFilter, setReasonFilter] = useState<Set<AttentionReason>>(() => parseNumSet(urlFilters.reason) as Set<AttentionReason>);
+  const [programFilter, setProgramFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.program));
+  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.category));
+  const [tagFilter, setTagFilter] = useState<Set<string>>(() => parseStrSet(urlFilters.tag));
+  const [prFilter, setPrFilter] = useState<"all" | "has-pr" | "no-pr">(() =>
+    urlFilters.pr === "has-pr" || urlFilters.pr === "no-pr" ? urlFilters.pr : "all"
   );
-  const [reasonFilter, setReasonFilter] = useState<AttentionReason | undefined>(
-    undefined
+  const [divergedOnly, setDivergedOnly] = useState(() => urlFilters.diverged === "1");
+  const [searchText, setSearchText] = useState(() => urlFilters.q ?? "");
+  const [sortField, setSortField] = useState<SortField>(() =>
+    urlFilters.sort && (SORT_FIELDS as string[]).includes(urlFilters.sort) ? (urlFilters.sort as SortField) : "default"
+  );
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(() => (urlFilters.dir === "desc" ? "desc" : "asc"));
+  const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
+    urlFilters.group && REVIEW_GROUPING_STRATEGIES.includes(urlFilters.group as GroupingStrategy)
+      ? (urlFilters.group as GroupingStrategy)
+      : GroupingStrategy.None
   );
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   // Track whether queue ever had items so we can show "all done" vs generic empty state
@@ -220,14 +325,78 @@ export function ReviewQueuePanel({
       }
       return true;
     });
-    if (priorityFilter !== undefined) {
-      filtered = filtered.filter((item) => item.priority === priorityFilter);
+    if (priorityFilter.size > 0) {
+      filtered = filtered.filter((item) => priorityFilter.has(item.priority));
     }
-    if (reasonFilter !== undefined) {
-      filtered = filtered.filter((item) => item.reason === reasonFilter);
+    if (reasonFilter.size > 0) {
+      filtered = filtered.filter((item) => reasonFilter.has(item.reason));
     }
+    if (programFilter.size > 0) {
+      filtered = filtered.filter((item) => programFilter.has(item.program));
+    }
+    if (categoryFilter.size > 0) {
+      filtered = filtered.filter((item) => categoryFilter.has(item.category));
+    }
+    if (tagFilter.size > 0) {
+      filtered = filtered.filter((item) => item.tags.some((t) => tagFilter.has(t)));
+    }
+    if (prFilter === "has-pr") {
+      filtered = filtered.filter((item) => !!item.githubPrUrl);
+    } else if (prFilter === "no-pr") {
+      filtered = filtered.filter((item) => !item.githubPrUrl);
+    }
+    if (divergedOnly) {
+      filtered = filtered.filter((item) => item.branchDivergedFromBase);
+    }
+    const search = searchText.trim().toLowerCase();
+    if (search) {
+      filtered = filtered.filter((item) =>
+        [item.sessionName, item.context, item.patternName, item.branch, item.program]
+          .some((field) => field?.toLowerCase().includes(search))
+      );
+    }
+
+    if (sortField !== "default") {
+      const dir = sortDirection === "asc" ? 1 : -1;
+      filtered = [...filtered].sort((a, b) => {
+        switch (sortField) {
+          case "priority":
+            return (a.priority - b.priority) * dir;
+          case "age":
+            return (Number(a.lastActivity?.seconds ?? 0) - Number(b.lastActivity?.seconds ?? 0)) * dir;
+          case "diffSize":
+            return (
+              ((a.diffStats?.added ?? 0) + (a.diffStats?.removed ?? 0)) -
+              ((b.diffStats?.added ?? 0) + (b.diffStats?.removed ?? 0))
+            ) * dir;
+          case "name":
+            return a.sessionName.localeCompare(b.sessionName) * dir;
+          default:
+            return 0;
+        }
+      });
+    }
+
     return filtered;
-  }, [allItems, priorityFilter, reasonFilter]);
+  }, [
+    allItems,
+    priorityFilter,
+    reasonFilter,
+    programFilter,
+    categoryFilter,
+    tagFilter,
+    prFilter,
+    divergedOnly,
+    searchText,
+    sortField,
+    sortDirection,
+  ]);
+
+  // Distinct values available for the Program/Category/Tag multi-select filters,
+  // with counts computed from the full (unfiltered) queue.
+  const availablePrograms = useMemo(() => countByField(allItems, (i) => i.program), [allItems]);
+  const availableCategories = useMemo(() => countByField(allItems, (i) => i.category), [allItems]);
+  const availableTags = useMemo(() => countByField(allItems, (i) => i.tags), [allItems]);
 
   // Items that are in the snapshot (stable ordered list for the main queue)
   const items = useMemo(() => {
@@ -240,6 +409,38 @@ export function ReviewQueuePanel({
     if (reviewingIdsSnapshot === null) return 0;
     return allFilteredItems.filter((item) => !reviewingIdsSnapshot.has(item.sessionId)).length;
   }, [allFilteredItems, reviewingIdsSnapshot]);
+
+  // Position of each item within the flat `items` array — used so grouped rendering can still
+  // highlight the keyboard-nav "current item" at its real index.
+  const indexById = useMemo(() => new Map(items.map((it, i) => [it.sessionId, i])), [items]);
+
+  // ReviewItem -> Session conversion cache for grouping, keyed on the stable unfiltered
+  // `allItems` array (only changes on queue refresh) rather than the post-filter/sort `items`
+  // array (changes on every keystroke/filter toggle). Avoids rebuilding protobuf Session
+  // messages for the whole queue on every search keystroke when grouping is enabled.
+  const sessionByItemId = useMemo(() => {
+    const map = new Map<string, Session>();
+    for (const item of allItems) {
+      map.set(item.sessionId, reviewItemToSession(item));
+    }
+    return map;
+  }, [allItems]);
+
+  // Reuses groupSessions() (the same grouping engine SessionList uses) by bridging each
+  // ReviewItem to a minimal Session — avoids building a parallel grouping implementation.
+  const groupedItems = useMemo(() => {
+    if (groupingStrategy === GroupingStrategy.None) return null;
+    const sessions = items.map((it) => sessionByItemId.get(it.sessionId) ?? reviewItemToSession(it));
+    const groups = groupSessions(sessions, groupingStrategy);
+    const bySessionId = new Map(items.map((it) => [it.sessionId, it]));
+    return groups
+      .map((g) => ({
+        groupKey: g.groupKey,
+        displayName: g.displayName,
+        items: g.sessions.map((s) => bySessionId.get(s.id)).filter((it): it is ReviewItem => !!it),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [items, groupingStrategy, sessionByItemId]);
 
   // Approval actions for APPROVAL_PENDING items
   const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
@@ -346,15 +547,102 @@ export function ReviewQueuePanel({
     }
   };
 
-  const handleFilterByPriority = (priority: Priority | undefined) => {
-    setPriorityFilter(priority);
-    setReasonFilter(undefined); // Clear reason filter when changing priority
+  const handleFilterByPriority = (priority: Priority) => {
+    const next = toggleInSet(priorityFilter, priority);
+    setPriorityFilter(next);
+    setUrlFilter("priority", joinSet(next));
   };
 
-  const handleFilterByReason = (reason: AttentionReason | undefined) => {
-    setReasonFilter(reason);
-    setPriorityFilter(undefined); // Clear priority filter when changing reason
+  const handleFilterByReason = (reason: AttentionReason) => {
+    const next = toggleInSet(reasonFilter, reason);
+    setReasonFilter(next);
+    setUrlFilter("reason", joinSet(next));
   };
+
+  const handleFilterByProgram = (program: string) => {
+    const next = toggleInSet(programFilter, program);
+    setProgramFilter(next);
+    setUrlFilter("program", joinSet(next));
+  };
+
+  const handleFilterByCategory = (category: string) => {
+    const next = toggleInSet(categoryFilter, category);
+    setCategoryFilter(next);
+    setUrlFilter("category", joinSet(next));
+  };
+
+  const handleFilterByTag = (tagValue: string) => {
+    const next = toggleInSet(tagFilter, tagValue);
+    setTagFilter(next);
+    setUrlFilter("tag", joinSet(next));
+  };
+
+  const handlePrFilterChange = (value: "all" | "has-pr" | "no-pr") => {
+    setPrFilter(value);
+    setUrlFilter("pr", value === "all" ? undefined : value);
+  };
+
+  const handleDivergedOnlyChange = (value: boolean) => {
+    setDivergedOnly(value);
+    setUrlFilter("diverged", value ? "1" : undefined);
+  };
+
+  // Local `searchText` state updates immediately so filtering stays responsive on every
+  // keystroke, but the URL write (which triggers router.replace()) is debounced to avoid
+  // a history/navigation update per character typed.
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSearchTextChange = (value: string) => {
+    setSearchText(value);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setUrlFilter("q", value || undefined);
+    }, 300);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const handleSortFieldChange = (value: SortField) => {
+    setSortField(value);
+    setUrlFilter("sort", value === "default" ? undefined : value);
+  };
+
+  const handleSortDirectionChange = (value: "asc" | "desc") => {
+    setSortDirection(value);
+    setUrlFilter("dir", value === "asc" ? undefined : value);
+  };
+
+  const handleGroupingStrategyChange = (value: GroupingStrategy) => {
+    setGroupingStrategy(value);
+    setUrlFilter("group", value === GroupingStrategy.None ? undefined : value);
+  };
+
+  const clearAllFilters = useCallback(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+    setPriorityFilter(new Set());
+    setReasonFilter(new Set());
+    setProgramFilter(new Set());
+    setCategoryFilter(new Set());
+    setTagFilter(new Set());
+    setPrFilter("all");
+    setDivergedOnly(false);
+    setSearchText("");
+    setSortField("default");
+    setSortDirection("asc");
+    setGroupingStrategy(GroupingStrategy.None);
+    clearUrlFilters();
+  }, [clearUrlFilters]);
 
   const summaryCount = useMemo(() => {
     const parts: string[] = [];
@@ -376,13 +664,231 @@ export function ReviewQueuePanel({
     return parts.join(", ");
   }, [byReason]);
 
-  const activeFilterLabel = useMemo(() => {
-    if (priorityFilter !== undefined) return `Filter: ${getPriorityLabel(priorityFilter)}`;
-    if (reasonFilter !== undefined) return `Filter: ${getReasonLabel(reasonFilter)}`;
-    return "Filter";
-  }, [priorityFilter, reasonFilter]);
+  const activeFilterCount =
+    priorityFilter.size +
+    reasonFilter.size +
+    programFilter.size +
+    categoryFilter.size +
+    tagFilter.size +
+    (prFilter !== "all" ? 1 : 0) +
+    (divergedOnly ? 1 : 0) +
+    (searchText.trim() ? 1 : 0) +
+    (sortField !== "default" ? 1 : 0) +
+    (groupingStrategy !== GroupingStrategy.None ? 1 : 0);
 
-  const hasActiveFilter = priorityFilter !== undefined || reasonFilter !== undefined;
+  const activeFilterLabel = activeFilterCount > 0 ? `Filter (${activeFilterCount})` : "Filter";
+
+  const hasActiveFilter = activeFilterCount > 0;
+
+  const renderQueueItem = (queueItem: ReviewItem, index: number) => (
+    <div
+      key={queueItem.sessionId}
+      className={item}
+      data-testid={index === currentIndex ? "current-item" : "review-item"}
+      data-session-id={queueItem.sessionId}
+    >
+      <div
+        className={`${itemClickable} ${index === currentIndex ? currentItem : ""}`}
+        onClick={() => onSessionClick?.(queueItem.sessionId)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSessionClick?.(queueItem.sessionId);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        data-testid={`review-item-${queueItem.sessionId}`}
+        data-current={index === currentIndex ? "true" : undefined}
+      >
+        <div className={itemHeader}>
+          <h3 className={itemTitle}>{queueItem.sessionName}</h3>
+          <ReviewQueueBadge
+            priority={queueItem.priority}
+            reason={queueItem.reason}
+            compact={true}
+          />
+        </div>
+        <div className={itemBody}>
+          <ReviewQueueBadge
+            priority={queueItem.priority}
+            reason={queueItem.reason}
+            compact={false}
+          />
+          {queueItem.context && !queueItem.metadata?.["pending_approval_id"] && (
+            <p className={itemContext}>{queueItem.context}</p>
+          )}
+          {queueItem.patternName && (
+            <span className={itemPattern}>
+              Pattern: {queueItem.patternName}
+            </span>
+          )}
+          {queueItem.metadata?.["pending_approval_id"] && (
+            <>
+              {(queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]) && (
+                <pre className={commandPreview}>
+                  {queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]}
+                </pre>
+              )}
+              {queueItem.metadata["cwd"] && (
+                <div className={detailRow}>
+                  <span className={detailLabel}>Directory:</span>
+                  <span className={detailValue}>{queueItem.metadata["cwd"]}</span>
+                </div>
+              )}
+              {queueItem.metadata["orphaned"] === "true" && (
+                <span className={expiredBadge}>Expired</span>
+              )}
+            </>
+          )}
+          {/* Session details */}
+          <div className={sessionDetails}>
+            <div className={detailRow}>
+              <span className={detailLabel}>Program:</span>
+              <span className={detailValue}>{queueItem.program}</span>
+            </div>
+            <div className={detailRow}>
+              <span className={detailLabel}>Branch:</span>
+              <span className={detailValue}>{queueItem.branch}</span>
+            </div>
+            <div className={detailRow}>
+              <span className={detailLabel}>Path:</span>
+              <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
+            </div>
+            {queueItem.tags && queueItem.tags.length > 0 && (
+              <div className={detailRow}>
+                <span className={detailLabel}>Tags:</span>
+                <div className={tags}>
+                  {queueItem.tags.map((t, idx) => (
+                    <span key={idx} className={tag}>{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className={itemFooter}>
+          <span className={itemAge}>
+            Last Activity: {formatTimestamp(queueItem.lastActivity?.seconds ?? BigInt(0))}{" "}
+            ago
+          </span>
+          {queueItem.diffStats && (queueItem.diffStats.added > 0 || queueItem.diffStats.removed > 0) && (
+            <span className={diffStats}>
+              <span className={diffAdded}>+{queueItem.diffStats.added}</span>
+              <span className={diffRemoved}>-{queueItem.diffStats.removed}</span>
+            </span>
+          )}
+        </div>
+      </div>
+      <div className={itemActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {queueItem.metadata?.["pending_approval_id"] && (
+          <>
+            <Button
+              intent="primary"
+              size="lg"
+              onClick={(e) => {
+                e.stopPropagation();
+                approveRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                  acknowledgeSession(queueItem.sessionId);
+                  onAcknowledged?.(queueItem.sessionId);
+                });
+              }}
+              title="Approve this tool-use request"
+              aria-label="Approve"
+              data-testid={`approve-${queueItem.sessionId}`}
+            >
+              ✓ Approve
+            </Button>
+            <Button
+              intent="danger"
+              size="lg"
+              onClick={(e) => {
+                e.stopPropagation();
+                denyRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
+                  acknowledgeSession(queueItem.sessionId);
+                  onAcknowledged?.(queueItem.sessionId);
+                });
+              }}
+              title="Deny this tool-use request"
+              aria-label="Deny"
+              data-testid={`deny-${queueItem.sessionId}`}
+            >
+              ✗ Deny
+            </Button>
+            {queueItem.metadata?.["tool_input_command"] && (
+              <Button
+                intent="ghost"
+                size="md"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRuleSaved(false);
+                  setActiveRuleItemId(queueItem.sessionId);
+                  void generateRule({
+                    source: SuggestionSource.COMMAND_SAMPLE,
+                    commandSample: queueItem.metadata!["tool_input_command"],
+                    toolNameFilter: queueItem.metadata?.["tool_name"] ?? "",
+                  });
+                }}
+                title="Generate an auto-approval rule from this command"
+                aria-label="Create Rule"
+                data-testid={`create-rule-${queueItem.sessionId}`}
+              >
+                ✦ Create Rule
+              </Button>
+            )}
+          </>
+        )}
+        {/* Skip button: only shown for non-approval items.
+            Approval items already have explicit ✓ Approve / ✗ Deny buttons above. */}
+        {!queueItem.metadata?.["pending_approval_id"] && (
+          <Button
+            intent="ghost"
+            size="md"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onSkipSession) {
+                onSkipSession(queueItem.sessionId);
+              } else {
+                acknowledgeSession(queueItem.sessionId);
+              }
+              onAcknowledged?.(queueItem.sessionId);
+            }}
+            title="Acknowledge session (remove from queue)"
+            aria-label="Acknowledge session"
+            data-testid={`acknowledge-${queueItem.sessionId}`}
+          >
+            ⏭ Skip
+          </Button>
+        )}
+        {/* S3-3: Create PR button — only for TASK_COMPLETE items without an existing PR URL */}
+        {queueItem.reason === AttentionReason.TASK_COMPLETE &&
+          !queueItem.githubPrUrl &&
+          onRunOneShot && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              {queueItem.branchDivergedFromBase && (
+                <span className={divergedBadge}>
+                  ⚠ Diverged from main
+                </span>
+              )}
+              <Button
+                intent="primary"
+                size="md"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPrResult(null);
+                  setPrModal({ sessionId: queueItem.sessionId, prompt: DEFAULT_PR_PROMPT });
+                }}
+                title="Create a pull request for this session"
+                aria-label="Create PR"
+                data-testid={`create-pr-${queueItem.sessionId}`}
+              >
+                🔀 Create PR
+              </Button>
+            </div>
+          )}
+      </div>
+    </div>
+  );
 
   if (error) {
     return (
@@ -481,7 +987,7 @@ export function ReviewQueuePanel({
           {hasActiveFilter && (
             <button
               className={filterClear}
-              onClick={() => { setPriorityFilter(undefined); setReasonFilter(undefined); }}
+              onClick={clearAllFilters}
               aria-label="Clear active filter"
             >
               ✕ Clear
@@ -493,25 +999,31 @@ export function ReviewQueuePanel({
       {isFiltersOpen && (
         <div id="review-queue-filters" className={filters}>
           <div className={filterGroup}>
-            <label className={filterLabel}>Priority:</label>
+            <label className={filterLabel} htmlFor="review-queue-search">Search:</label>
+            <input
+              id="review-queue-search"
+              type="text"
+              className={searchInput}
+              placeholder="Search name, context, branch, program…"
+              value={searchText}
+              onChange={(e) => handleSearchTextChange(e.target.value)}
+              data-testid="review-queue-search"
+            />
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel}>Priority (any):</label>
             <div className={filterButtons}>
-              <button
-                className={`${filterButton} ${priorityFilter === undefined ? filterButtonActive : ""}`}
-                onClick={() => handleFilterByPriority(undefined)}
-                aria-pressed={priorityFilter === undefined}
-              >
-                All ({totalItems})
-              </button>
               {[Priority.URGENT, Priority.HIGH, Priority.MEDIUM, Priority.LOW].map(
                 (priority) => {
                   const priorityCount = byPriority.get(priority) ?? 0;
                   return (
                     <button
                       key={priority}
-                      className={`${filterButton} ${priorityFilter === priority ? filterButtonActive : ""}`}
+                      className={`${filterButton} ${priorityFilter.has(priority) ? filterButtonActive : ""}`}
                       onClick={() => handleFilterByPriority(priority)}
                       disabled={priorityCount === 0}
-                      aria-pressed={priorityFilter === priority}
+                      aria-pressed={priorityFilter.has(priority)}
                     >
                       {getPriorityLabel(priority)} ({priorityCount})
                     </button>
@@ -522,15 +1034,8 @@ export function ReviewQueuePanel({
           </div>
 
           <div className={filterGroup}>
-            <label className={filterLabel}>Reason:</label>
+            <label className={filterLabel}>Reason (any):</label>
             <div className={filterButtons}>
-              <button
-                className={`${filterButton} ${reasonFilter === undefined ? filterButtonActive : ""}`}
-                onClick={() => handleFilterByReason(undefined)}
-                aria-pressed={reasonFilter === undefined}
-              >
-                All ({totalItems})
-              </button>
               {[
                 AttentionReason.APPROVAL_PENDING,
                 AttentionReason.INPUT_REQUIRED,
@@ -548,16 +1053,136 @@ export function ReviewQueuePanel({
                 return (
                   <button
                     key={reason}
-                    className={`${filterButton} ${reasonFilter === reason ? filterButtonActive : ""}`}
+                    className={`${filterButton} ${reasonFilter.has(reason) ? filterButtonActive : ""}`}
                     onClick={() => handleFilterByReason(reason)}
                     disabled={reasonCount === 0}
-                    aria-pressed={reasonFilter === reason}
+                    aria-pressed={reasonFilter.has(reason)}
                   >
                     {getReasonLabel(reason)} ({reasonCount})
                   </button>
                 );
               })}
             </div>
+          </div>
+
+          {availablePrograms.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Program (any):</label>
+              <div className={filterButtons}>
+                {availablePrograms.map(([program, n]) => (
+                  <button
+                    key={program}
+                    className={`${filterButton} ${programFilter.has(program) ? filterButtonActive : ""}`}
+                    onClick={() => handleFilterByProgram(program)}
+                    aria-pressed={programFilter.has(program)}
+                  >
+                    {program} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {availableCategories.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Category (any):</label>
+              <div className={filterButtons}>
+                {availableCategories.map(([category, n]) => (
+                  <button
+                    key={category}
+                    className={`${filterButton} ${categoryFilter.has(category) ? filterButtonActive : ""}`}
+                    onClick={() => handleFilterByCategory(category)}
+                    aria-pressed={categoryFilter.has(category)}
+                  >
+                    {category} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {availableTags.length > 0 && (
+            <div className={filterGroup}>
+              <label className={filterLabel}>Tags (any):</label>
+              <div className={filterButtons}>
+                {availableTags.map(([t, n]) => (
+                  <button
+                    key={t}
+                    className={`${filterButton} ${tagFilter.has(t) ? filterButtonActive : ""}`}
+                    onClick={() => handleFilterByTag(t)}
+                    aria-pressed={tagFilter.has(t)}
+                  >
+                    {t} ({n})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className={filterGroup}>
+            <label className={filterLabel}>Pull Request:</label>
+            <div className={filterButtons}>
+              {(["all", "has-pr", "no-pr"] as const).map((v) => (
+                <button
+                  key={v}
+                  className={`${filterButton} ${prFilter === v ? filterButtonActive : ""}`}
+                  onClick={() => handlePrFilterChange(v)}
+                  aria-pressed={prFilter === v}
+                >
+                  {v === "all" ? "All" : v === "has-pr" ? "Has PR" : "No PR"}
+                </button>
+              ))}
+              <button
+                className={`${filterButton} ${divergedOnly ? filterButtonActive : ""}`}
+                onClick={() => handleDivergedOnlyChange(!divergedOnly)}
+                aria-pressed={divergedOnly}
+              >
+                Diverged from base
+              </button>
+            </div>
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel} htmlFor="review-queue-sort">Sort by:</label>
+            <div className={sortRow}>
+              <select
+                id="review-queue-sort"
+                className={sortSelect}
+                value={sortField}
+                onChange={(e) => handleSortFieldChange(e.target.value as SortField)}
+              >
+                <option value="default">Queue order</option>
+                <option value="priority">Priority</option>
+                <option value="age">Last activity</option>
+                <option value="diffSize">Diff size</option>
+                <option value="name">Name</option>
+              </select>
+              {sortField !== "default" && (
+                <button
+                  className={filterButton}
+                  onClick={() => handleSortDirectionChange(sortDirection === "asc" ? "desc" : "asc")}
+                  aria-label={`Sort direction: ${sortDirection === "asc" ? "ascending" : "descending"}`}
+                >
+                  {sortDirection === "asc" ? "↑ Asc" : "↓ Desc"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className={filterGroup}>
+            <label className={filterLabel} htmlFor="review-queue-group">Group by:</label>
+            <select
+              id="review-queue-group"
+              className={sortSelect}
+              value={groupingStrategy}
+              onChange={(e) => handleGroupingStrategyChange(e.target.value as GroupingStrategy)}
+            >
+              {REVIEW_GROUPING_STRATEGIES.map((strategy) => (
+                <option key={strategy} value={strategy}>
+                  {GroupingStrategyLabels[strategy]}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       )}
@@ -575,7 +1200,7 @@ export function ReviewQueuePanel({
               <Button
                 intent="secondary"
                 size="md"
-                onClick={() => { setPriorityFilter(undefined); setReasonFilter(undefined); }}
+                onClick={clearAllFilters}
               >
                 Clear filter
               </Button>
@@ -599,215 +1224,20 @@ export function ReviewQueuePanel({
         ) : (
           <>
             {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
-            {items.map((queueItem, index) => (
-              <div
-                key={queueItem.sessionId}
-                className={item}
-                data-testid={index === currentIndex ? "current-item" : "review-item"}
-                data-session-id={queueItem.sessionId}
-              >
-                <div
-                  className={`${itemClickable} ${index === currentIndex ? currentItem : ""}`}
-                  onClick={() => onSessionClick?.(queueItem.sessionId)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onSessionClick?.(queueItem.sessionId);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  data-testid={`review-item-${queueItem.sessionId}`}
-                  data-current={index === currentIndex ? "true" : undefined}
-                >
-                  <div className={itemHeader}>
-                    <h3 className={itemTitle}>{queueItem.sessionName}</h3>
-                    <ReviewQueueBadge
-                      priority={queueItem.priority}
-                      reason={queueItem.reason}
-                      compact={true}
-                    />
-                  </div>
-                  <div className={itemBody}>
-                    <ReviewQueueBadge
-                      priority={queueItem.priority}
-                      reason={queueItem.reason}
-                      compact={false}
-                    />
-                    {queueItem.context && !queueItem.metadata?.["pending_approval_id"] && (
-                      <p className={itemContext}>{queueItem.context}</p>
-                    )}
-                    {queueItem.patternName && (
-                      <span className={itemPattern}>
-                        Pattern: {queueItem.patternName}
-                      </span>
-                    )}
-                    {queueItem.metadata?.["pending_approval_id"] && (
-                      <>
-                        {(queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]) && (
-                          <pre className={commandPreview}>
-                            {queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]}
-                          </pre>
-                        )}
-                        {queueItem.metadata["cwd"] && (
-                          <div className={detailRow}>
-                            <span className={detailLabel}>Directory:</span>
-                            <span className={detailValue}>{queueItem.metadata["cwd"]}</span>
-                          </div>
-                        )}
-                        {queueItem.metadata["orphaned"] === "true" && (
-                          <span className={expiredBadge}>Expired</span>
-                        )}
-                      </>
-                    )}
-                    {/* Session details */}
-                    <div className={sessionDetails}>
-                      <div className={detailRow}>
-                        <span className={detailLabel}>Program:</span>
-                        <span className={detailValue}>{queueItem.program}</span>
-                      </div>
-                      <div className={detailRow}>
-                        <span className={detailLabel}>Branch:</span>
-                        <span className={detailValue}>{queueItem.branch}</span>
-                      </div>
-                      <div className={detailRow}>
-                        <span className={detailLabel}>Path:</span>
-                        <span className={detailValue} title={queueItem.path}>{queueItem.path}</span>
-                      </div>
-                      {queueItem.tags && queueItem.tags.length > 0 && (
-                        <div className={detailRow}>
-                          <span className={detailLabel}>Tags:</span>
-                          <div className={tags}>
-                            {queueItem.tags.map((t, idx) => (
-                              <span key={idx} className={tag}>{t}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className={itemFooter}>
-                    <span className={itemAge}>
-                      Last Activity: {formatTimestamp(queueItem.lastActivity?.seconds ?? BigInt(0))}{" "}
-                      ago
-                    </span>
-                    {queueItem.diffStats && (queueItem.diffStats.added > 0 || queueItem.diffStats.removed > 0) && (
-                      <span className={diffStats}>
-                        <span className={diffAdded}>+{queueItem.diffStats.added}</span>
-                        <span className={diffRemoved}>-{queueItem.diffStats.removed}</span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className={itemActions} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {queueItem.metadata?.["pending_approval_id"] && (
-                    <>
-                      <Button
-                        intent="primary"
-                        size="lg"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          approveRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
-                            acknowledgeSession(queueItem.sessionId);
-                            onAcknowledged?.(queueItem.sessionId);
-                          });
-                        }}
-                        title="Approve this tool-use request"
-                        aria-label="Approve"
-                        data-testid={`approve-${queueItem.sessionId}`}
-                      >
-                        ✓ Approve
-                      </Button>
-                      <Button
-                        intent="danger"
-                        size="lg"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          denyRequest(queueItem.metadata!["pending_approval_id"]).finally(() => {
-                            acknowledgeSession(queueItem.sessionId);
-                            onAcknowledged?.(queueItem.sessionId);
-                          });
-                        }}
-                        title="Deny this tool-use request"
-                        aria-label="Deny"
-                        data-testid={`deny-${queueItem.sessionId}`}
-                      >
-                        ✗ Deny
-                      </Button>
-                      {queueItem.metadata?.["tool_input_command"] && (
-                        <Button
-                          intent="ghost"
-                          size="md"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRuleSaved(false);
-                            setActiveRuleItemId(queueItem.sessionId);
-                            void generateRule({
-                              source: SuggestionSource.COMMAND_SAMPLE,
-                              commandSample: queueItem.metadata!["tool_input_command"],
-                              toolNameFilter: queueItem.metadata?.["tool_name"] ?? "",
-                            });
-                          }}
-                          title="Generate an auto-approval rule from this command"
-                          aria-label="Create Rule"
-                          data-testid={`create-rule-${queueItem.sessionId}`}
-                        >
-                          ✦ Create Rule
-                        </Button>
-                      )}
-                    </>
+            {groupedItems ? (
+              groupedItems.map((group) => (
+                <div key={group.groupKey} className={groupSection} data-testid={`review-group-${group.groupKey}`}>
+                  <h4 className={groupHeading}>
+                    {group.displayName} ({group.items.length})
+                  </h4>
+                  {group.items.map((queueItem) =>
+                    renderQueueItem(queueItem, indexById.get(queueItem.sessionId) ?? -1)
                   )}
-                  {/* Skip button: only shown for non-approval items.
-                      Approval items already have explicit ✓ Approve / ✗ Deny buttons above. */}
-                  {!queueItem.metadata?.["pending_approval_id"] && (
-                    <Button
-                      intent="ghost"
-                      size="md"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onSkipSession) {
-                          onSkipSession(queueItem.sessionId);
-                        } else {
-                          acknowledgeSession(queueItem.sessionId);
-                        }
-                        onAcknowledged?.(queueItem.sessionId);
-                      }}
-                      title="Acknowledge session (remove from queue)"
-                      aria-label="Acknowledge session"
-                      data-testid={`acknowledge-${queueItem.sessionId}`}
-                    >
-                      ⏭ Skip
-                    </Button>
-                  )}
-                  {/* S3-3: Create PR button — only for TASK_COMPLETE items without an existing PR URL */}
-                  {queueItem.reason === AttentionReason.TASK_COMPLETE &&
-                    !queueItem.githubPrUrl &&
-                    onRunOneShot && (
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        {queueItem.branchDivergedFromBase && (
-                          <span className={divergedBadge}>
-                            ⚠ Diverged from main
-                          </span>
-                        )}
-                        <Button
-                          intent="primary"
-                          size="md"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPrResult(null);
-                            setPrModal({ sessionId: queueItem.sessionId, prompt: DEFAULT_PR_PROMPT });
-                          }}
-                          title="Create a pull request for this session"
-                          aria-label="Create PR"
-                          data-testid={`create-pr-${queueItem.sessionId}`}
-                        >
-                          🔀 Create PR
-                        </Button>
-                      </div>
-                    )}
                 </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              items.map((queueItem, index) => renderQueueItem(queueItem, index))
+            )}
           </>
         )}
       </div>

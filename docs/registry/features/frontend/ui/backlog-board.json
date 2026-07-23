@@ -4,7 +4,12 @@
   "component": "BacklogBoard",
   "path": "web-app/src/components/backlog/BacklogBoard.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "BacklogBoard_should_FadeCardOutOfOriginAndFlashIntoDestination_When_StatusChangesViaGenuineLiveUpdate",
+    "BacklogBoard_should_MoveCardInstantly_When_ColumnChangeIsFromBulkResnapshotNotLiveEvent",
+    "BacklogBoard_should_CollapseToInstantMove_When_ReducedMotionIsPreferred",
+    "BacklogBoard_should_SettleInDestinationColumn_When_ItemFlapsBackToOriginDuringExitTransition"
+  ],
+  "lastModified": "2026-07-22T00:00:00Z"
 }

@@ -29,6 +29,10 @@ var knownFeatureFlags = []struct {
 		name:        "backlog:conversation-view",
 		description: "Show JSONL conversation messages in the session monitor (default: terminal scrollback view)",
 	},
+	{
+		name:        "unfinished:mmap-index",
+		description: "Use the mmap-backed pack-index loader for the /unfinished scanner's git storage (session/unfinished/gogitstore) instead of the copy-based loader. See session/unfinished/design/mmap-activation-runbook.md before enabling.",
+	},
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.

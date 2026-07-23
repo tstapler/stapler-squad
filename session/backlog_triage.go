@@ -23,10 +23,11 @@ type TriageTask struct {
 
 // HeadlessTriageResult is the parsed output from a headless triage LLM call.
 type HeadlessTriageResult struct {
-	Title       string             `json:"title"`
-	Summary     string             `json:"summary"`
-	Suggestions []TriageSuggestion `json:"suggestions"`
-	Tasks       []TriageTask       `json:"tasks,omitempty"`
+	Title              string             `json:"title"`
+	Summary            string             `json:"summary"`
+	Suggestions        []TriageSuggestion `json:"suggestions"`
+	Tasks              []TriageTask       `json:"tasks,omitempty"`
+	AcceptanceCriteria []AcCriterion      `json:"acceptance_criteria,omitempty"`
 	// Iteration and Feedback are not part of the LLM's JSON output — the caller
 	// sets them after parsing, from server-tracked state, before persisting.
 	Iteration int    `json:"iteration,omitempty"`
@@ -83,10 +84,11 @@ Write %s/validation.md containing:
 
 ### Step 4 — Output
 After all files are written, output ONLY a JSON object (no other text before or after):
-{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
+{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","acceptance_criteria":[{"index":0,"text":"Clear, testable criterion","status":"pending"}],"suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
 - title: short kebab-case session name (3-5 words, imperative verb first, e.g. "fix-session-rename" or "add-pr-status-badge")
 - summary: 2-3 sentence executive summary
-- suggestions: AC gaps, open questions, improvement ideas (questions use rationale="question")
+- acceptance_criteria: full list of testable acceptance criteria (replace any existing ones). Each has index (0-based), text (one clear testable statement), status ("pending"). Merge with existing criteria: keep unchanged ones, add new ones, update clarified ones.
+- suggestions: additional open questions or improvement ideas beyond the ACs (questions use rationale="question")
 - tasks: implementation task breakdown from plan.md (max 12)
 - Do NOT call submit_triage_result. Do NOT write any source code.
 `, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath)

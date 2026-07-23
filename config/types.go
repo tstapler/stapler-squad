@@ -27,6 +27,30 @@ type HibernationConfig struct {
 	RetentionDays int `json:"retention_days"`
 }
 
+// TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
+// against one tmux server, across every process on the machine (the main
+// daemon and every --mcp process) — tmux's server is single-threaded, so
+// unbounded concurrent subprocess spawns degrade it for everyone.
+type TmuxExecGateConfig struct {
+	// Slots is the number of concurrent tmux subprocess execution slots.
+	// Zero or unset means "use the default" — see SlotsOrDefault. Default: 8.
+	Slots int `json:"slots"`
+}
+
+// defaultTmuxExecGateSlots is used whenever Slots is unset (zero), including
+// for configs saved before this field existed.
+const defaultTmuxExecGateSlots = 8
+
+// SlotsOrDefault returns Slots, falling back to defaultTmuxExecGateSlots when
+// unset (covers both a fresh zero-value struct and a config.json saved before
+// this field existed, which unmarshals the same way).
+func (c TmuxExecGateConfig) SlotsOrDefault() int {
+	if c.Slots <= 0 {
+		return defaultTmuxExecGateSlots
+	}
+	return c.Slots
+}
+
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
 // Protocol screencast stream. All fields default to zero (use CDPConfigOrDefault
 // to apply canonical defaults).

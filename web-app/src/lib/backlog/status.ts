@@ -6,6 +6,7 @@ export const STATUS_LABELS: Record<string, string> = {
   idea: "Idea",
   refining: "Refining",
   ready: "Ready",
+  queued: "Queued",
   in_progress: "In Progress",
   review: "Review",
   done: "Done",

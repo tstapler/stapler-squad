@@ -1,7 +1,9 @@
 "use client";
 // +feature: backlog:list-page
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
 import { resizeHandle as resizeHandleCss } from "@/styles/pane/resizeHandle.css";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAnalytics } from "@/lib/analytics";
@@ -14,25 +16,34 @@ import { VaguenessPromptModal } from "@/components/backlog/VaguenessPromptModal"
 import { BacklogTourModal } from "@/components/backlog/BacklogTourModal";
 import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import { GitHubIssuePicker } from "@/components/backlog/GitHubIssuePicker";
+import { ConnectionIndicator } from "@/components/backlog/ConnectionIndicator";
+import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { BacklogService } from "@/gen/session/v1/backlog_pb";
 import {
   useBacklogService,
   type BacklogItem,
   type BacklogItemStatus,
   type BacklogItemInput,
 } from "@/lib/hooks/useBacklogService";
+import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
+import { useAppDispatch } from "@/lib/store";
+import { upsertItem } from "@/lib/store/backlogItemsSlice";
 import { getStatusLabel } from "@/lib/backlog/status";
+import { compareByRepoPath, groupByRepoPath } from "@/lib/backlog/sortGroup";
 import * as styles from "./backlog.css";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type SortColumn = "title" | "status" | "priority" | "updatedAt";
+type SortColumn = "title" | "status" | "priority" | "updatedAt" | "repoPath";
+type GroupBy = "none" | "repoPath";
 
 const ALL_STATUSES: BacklogItemStatus[] = [
   "idea",
   "refining",
   "ready",
+  "queued",
   "in_progress",
   "review",
   "pr_pending",
@@ -44,6 +55,7 @@ const STATUS_CSS: Record<string, string> = {
   idea: styles.statusIdea,
   refining: styles.statusRefining,
   ready: styles.statusReady,
+  queued: styles.statusQueued,
   in_progress: styles.statusInProgress,
   review: styles.statusReview,
   pr_pending: styles.statusReview,
@@ -52,6 +64,12 @@ const STATUS_CSS: Record<string, string> = {
 };
 
 const getStatusClass = (s: string): string => STATUS_CSS[s] ?? styles.statusArchived;
+
+// Epic 6.3 (backlog-event-driven-updates): how long a row's fade-out plays
+// before it's removed from the DOM after dropping out of the active filter
+// (ux.md §7 — "~200ms"). Under `prefers-reduced-motion: reduce` this is
+// bypassed to 0ms (instant removal) at the call site.
+const EXIT_TRANSITION_MS = 200;
 
 const PRIORITY_LABELS: Record<number, string> = {
   1: "P1",
@@ -149,6 +167,99 @@ function PriorityFilterChips({
   );
 }
 
+// Sweep fix (backlog-event-driven-updates Phase 5 compliance sweep,
+// 2026-07-22): ux.md UX AC #6 requires the list row itself to play "a
+// background flash that fades within ~1 second" on a genuine live update —
+// the page previously only tracked `item.liveVersion` for the Epic 6.3 exit
+// transition, never applying the Epic 6.1 in-place flash BacklogItemCard.tsx
+// (used by the Kanban board) already has. Extracted into its own component,
+// mirroring BacklogItemCard's exact flash-tracking hook, since a plain row
+// function has no hook of its own to track the previous liveVersion.
+function BacklogTableRow({
+  item,
+  isActive,
+  isExiting,
+  onRowClick,
+}: {
+  item: BacklogItem;
+  isActive: boolean;
+  isExiting: boolean;
+  onRowClick: (itemId: string) => void;
+}) {
+  const acDone = item.acCriteria.filter((c) => c.status === "done").length;
+
+  const prevLiveVersionRef = useRef(item.liveVersion);
+  const [justChanged, setJustChanged] = useState(false);
+
+  useEffect(() => {
+    const prev = prevLiveVersionRef.current;
+    const next = item.liveVersion;
+    prevLiveVersionRef.current = next;
+    if (prev === undefined || next === undefined || next === prev) return;
+
+    setJustChanged(true);
+    const timer = setTimeout(() => setJustChanged(false), 250);
+    return () => clearTimeout(timer);
+  }, [item.liveVersion]);
+
+  return (
+    <tr
+      className={`${styles.tableRow} ${isActive ? styles.tableRowActive : ""} ${isExiting ? styles.tableRowExiting : ""} ${justChanged ? styles.tableRowJustChanged : ""}`}
+      tabIndex={isExiting ? -1 : 0}
+      role="row"
+      aria-selected={isActive}
+      aria-hidden={isExiting || undefined}
+      data-testid="backlog-table-row"
+      data-item-id={item.id}
+      data-exiting={isExiting ? "true" : undefined}
+      onClick={() => {
+        if (isExiting) return;
+        onRowClick(item.id);
+      }}
+      onKeyDown={(e) => {
+        if (isExiting) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onRowClick(item.id);
+        }
+      }}
+    >
+      <td className={`${styles.tableCell} ${styles.titleCell}`}>
+        {item.title}
+      </td>
+      <td className={styles.tableCell}>
+        <span
+          className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
+          aria-label={`Status: ${getStatusLabel(item.status)}`}
+          data-testid={item.status === "queued" ? "backlog-status-queued" : undefined}
+        >
+          {getStatusLabel(item.status)}
+        </span>
+      </td>
+      <td className={styles.tableCell}>
+        <span
+          className={styles.priorityBadge}
+          data-testid="priority-badge"
+          aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
+        >
+          {PRIORITY_LABELS[item.priority] ?? "P?"}
+        </span>
+      </td>
+      <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
+        {item.acCriteria.length > 0
+          ? `${acDone}/${item.acCriteria.length}`
+          : "—"}
+      </td>
+      <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
+        {formatDateShort(item.updatedAt)}
+      </td>
+      <td className={`${styles.tableCell} ${styles.repoPathCell}`} data-testid="backlog-repo-path-cell">
+        {item.repoPath || "—"}
+      </td>
+    </tr>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
@@ -156,23 +267,43 @@ function PriorityFilterChips({
 function BacklogPageInner() {
   usePageView();
   const { track } = useAnalytics();
-  const { listBacklogItems, createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
+  const { createBacklogItem, importGitHubIssue, triggerTriage } = useBacklogService();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const dispatch = useAppDispatch();
 
   const selectedItemId = searchParams.get("item");
 
-  const [items, setItems] = useState<BacklogItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Epic 5.1 (backlog-event-driven-updates): live-updating list, replacing
+  // the former fetch-once-on-mount pattern. useWatchBacklogItems streams
+  // every backlog item unfiltered — per design/ux.md Surface 1's interaction
+  // flow ("subscribes ... unfiltered ... then filters client-side same as
+  // today") — so status/priority/search/archived filtering below is purely
+  // client-side and never tears down/reconnects the stream when a filter
+  // chip changes. The hook already returns domain-shaped BacklogItem[]
+  // (mapped internally, see useWatchBacklogItems.ts's file-header note 3),
+  // so no further proto->domain mapping is needed here.
+  const { items, connectionState } = useWatchBacklogItems();
+  // Only the very first connect (before any items have ever loaded) shows a
+  // loading state — a reconnect must keep showing last-known data, not blank
+  // or spinner out (design/ux.md Surface 1 "Error / edge cases").
+  const loading = connectionState === "connecting" && items.length === 0;
 
   // Filters
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<BacklogItemStatus[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<number[]>([]);
+  // showArchived: archived items are excluded client-side by default (Epic
+  // 5.1 — see filteredItems below); enabling this reveals them from the
+  // already-loaded live store. Mirrors SessionList's "Show Archived" toggle.
+  const [showArchived, setShowArchived] = useState(false);
 
   // Sort
   const [sortCol, setSortCol] = useState<SortColumn>("updatedAt");
   const [sortAsc, setSortAsc] = useState(false);
+
+  // Group by
+  const [groupBy, setGroupBy] = useState<GroupBy>("none");
 
   // Detail pane resize
   const [detailWidth, setDetailWidth] = useState(420);
@@ -208,27 +339,154 @@ function BacklogPageInner() {
   // Vagueness prompt modal state
   const [vaguenessItem, setVaguenessItem] = useState<BacklogItem | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await listBacklogItems({
-        statuses: statusFilter.length > 0 ? statusFilter : undefined,
-        priorities: priorityFilter.length > 0 ? priorityFilter : undefined,
-        search: search.trim() || undefined,
-        includeTerminal: true, // show done items by default; user can filter them out
-      });
-      setItems(result);
-    } finally {
-      setLoading(false);
-    }
-  }, [listBacklogItems, statusFilter, priorityFilter, search]);
+  // Raw (unmapped) ConnectRPC client — used only to hydrate a just-created
+  // item into the shared backlogItemsSlice store immediately. The
+  // WatchBacklogItems event stream (Phases 1-3) has no "item created" oneof
+  // variant (see plan.md's BacklogItemEvent oneof: status_changed /
+  // verdict_recorded / session_attached / item_updated / item_archived /
+  // item_removed only), so a freshly created/imported item would not
+  // otherwise appear in this live list until some other event touches it.
+  // This is a known gap in the event proto's scope, not something Epic 5.1
+  // can fix on its own — flagged here rather than silently worked around by
+  // re-adding a full listBacklogItems fetch-on-every-mutation path.
+  const rawClientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
+  useEffect(() => {
+    const transport = createConnectTransport({
+      baseUrl: getApiBaseUrl(),
+      interceptors: [createAuthInterceptor()],
+    });
+    rawClientRef.current = createClient(BacklogService, transport);
+  }, []);
+
+  const hydrateItemIntoStore = useCallback(
+    async (itemId: string) => {
+      if (!rawClientRef.current) return;
+      try {
+        const resp = await rawClientRef.current.getBacklogItem({ itemId });
+        if (resp.item) dispatch(upsertItem(resp.item));
+      } catch (err) {
+        console.error("[BacklogPage] failed to hydrate newly created item into the live store:", err);
+      }
+    },
+    [dispatch]
+  );
+
+  // Epic 5.1: client-side filtering (search/status/priority/archived),
+  // mirroring what the server-side listBacklogItems filter used to do before
+  // this page moved to the shared live stream (design/ux.md Surface 1).
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items.filter((item) => {
+      if (!showArchived && item.status === "archived") return false;
+      if (statusFilter.length > 0 && !statusFilter.includes(item.status)) return false;
+      if (priorityFilter.length > 0 && !priorityFilter.includes(item.priority)) return false;
+      if (q && !item.title.toLowerCase().includes(q) && !(item.description ?? "").toLowerCase().includes(q)) {
+        return false;
+      }
+      return true;
+    });
+  }, [items, search, statusFilter, priorityFilter, showArchived]);
+
+  // Epic 6.3 (backlog-event-driven-updates): when an item's fields change
+  // such that it no longer matches the active filter, keep rendering it
+  // briefly with a fade-out instead of letting it vanish in the same render
+  // the filter re-evaluates (ux.md §7 "reads as moved, not vanished"). Only
+  // genuinely live, one-at-a-time departures animate — gated on
+  // `item.liveVersion` advancing (the same signal BacklogItemCard's flash
+  // uses), so a bulk resnapshot on reconnect (liveVersion never advances for
+  // a snapshot-flagged event, per backlogItemsSlice.ts) or the user simply
+  // toggling a filter chip (no liveVersion change at all) both fall through
+  // to an ordinary instant removal, matching ux.md's edge cases.
+  const [exitingItems, setExitingItems] = useState<Map<string, BacklogItem>>(new Map());
+  const exitingMapRef = useRef<Map<string, BacklogItem>>(new Map());
+  const prevMatchedIdsRef = useRef<Set<string> | null>(null);
+  const prevLiveVersionsRef = useRef<Map<string, number | undefined>>(new Map());
+  const exitTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const reducedMotionRef = useRef(false);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reducedMotionRef.current = mq.matches;
+    const onChange = () => {
+      reducedMotionRef.current = mq.matches;
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // useLayoutEffect (not useEffect): runs before the browser paints, so a
+  // departing row is re-added to the exiting set within the same commit it
+  // was excluded from `filteredItems` — no visible blank frame in between.
+  useLayoutEffect(() => {
+    const currentMatchedIds = new Set(filteredItems.map((i) => i.id));
+    const prevMatchedIds = prevMatchedIdsRef.current;
+    const itemsById = new Map(items.map((i) => [i.id, i]));
+    const exitingMap = exitingMapRef.current;
+    let changed = false;
+
+    if (prevMatchedIds) {
+      // Flap protection: if a pending exit's item re-matches the filter
+      // before its timer fires, cancel the exit and let it settle back to a
+      // normal in-place row (ux.md §7 "Error / edge cases").
+      for (const id of Array.from(exitingMap.keys())) {
+        if (currentMatchedIds.has(id)) {
+          const timer = exitTimersRef.current.get(id);
+          if (timer) clearTimeout(timer);
+          exitTimersRef.current.delete(id);
+          exitingMap.delete(id);
+          changed = true;
+        }
+      }
+
+      for (const id of prevMatchedIds) {
+        if (currentMatchedIds.has(id) || exitingMap.has(id)) continue;
+        const fullItem = itemsById.get(id);
+        if (!fullItem) continue; // item removed entirely -- not a filter departure
+
+        const prevVersion = prevLiveVersionsRef.current.get(id);
+        const isGenuineLiveChange =
+          fullItem.liveVersion !== undefined && fullItem.liveVersion !== prevVersion;
+        if (!isGenuineLiveChange) continue; // bulk resnapshot / manual filter change -> instant
+
+        exitingMap.set(id, fullItem);
+        changed = true;
+        const duration = reducedMotionRef.current ? 0 : EXIT_TRANSITION_MS;
+        const timer = setTimeout(() => {
+          if (exitingMapRef.current.delete(id)) {
+            setExitingItems(new Map(exitingMapRef.current));
+          }
+          exitTimersRef.current.delete(id);
+        }, duration);
+        exitTimersRef.current.set(id, timer);
+      }
+    }
+
+    prevMatchedIdsRef.current = currentMatchedIds;
+    for (const item of items) {
+      prevLiveVersionsRef.current.set(item.id, item.liveVersion);
+    }
+    if (changed) setExitingItems(new Map(exitingMap));
+  }, [filteredItems, items]);
+
+  // Clear any in-flight exit timers on unmount.
+  useEffect(() => {
+    return () => {
+      for (const timer of exitTimersRef.current.values()) clearTimeout(timer);
+    };
+  }, []);
+
+  // Re-merge still-fading items into the visible set so they keep sorting
+  // into a natural position instead of jumping to the end of the list.
+  const visibleItems = useMemo(() => {
+    if (exitingItems.size === 0) return filteredItems;
+    const presentIds = new Set(filteredItems.map((i) => i.id));
+    const extra = Array.from(exitingItems.values()).filter((i) => !presentIds.has(i.id));
+    return extra.length === 0 ? filteredItems : [...filteredItems, ...extra];
+  }, [filteredItems, exitingItems]);
 
   // Sort items client-side
-  const sortedItems = [...items].sort((a, b) => {
+  const sortedItems = [...visibleItems].sort((a, b) => {
     let cmp = 0;
     if (sortCol === "title") {
       cmp = a.title.localeCompare(b.title);
@@ -238,9 +496,15 @@ function BacklogPageInner() {
       cmp = a.priority - b.priority;
     } else if (sortCol === "updatedAt") {
       cmp = (a.updatedAt ?? "").localeCompare(b.updatedAt ?? "");
+    } else if (sortCol === "repoPath") {
+      cmp = compareByRepoPath(a, b);
     }
     return sortAsc ? cmp : -cmp;
   });
+
+  // Grouping is applied after sorting so items within each group keep the
+  // currently selected sort order (mirrors SessionList's sort-then-group).
+  const groups = groupBy === "repoPath" ? groupByRepoPath(sortedItems) : null;
 
   const handleSortClick = (col: SortColumn) => {
     if (sortCol === col) {
@@ -268,21 +532,22 @@ function BacklogPageInner() {
     async (data: BacklogItemInput) => {
       const result = await createBacklogItem(data);
       setShowForm(false);
-      await load();
+      if (!result) return;
+      await hydrateItemIntoStore(result.item.id);
       // Show vagueness prompt if item was created with skip_triage=true
-      if (result && data.skipTriage) {
+      if (data.skipTriage) {
         setVaguenessItem(result.item);
         // Navigate to the new item
         const params = new URLSearchParams(searchParams.toString());
         params.set("item", result.item.id);
         router.push(`/backlog?${params.toString()}`);
-      } else if (result) {
+      } else {
         const params = new URLSearchParams(searchParams.toString());
         params.set("item", result.item.id);
         router.push(`/backlog?${params.toString()}`);
       }
     },
-    [createBacklogItem, load, router, searchParams]
+    [createBacklogItem, hydrateItemIntoStore, router, searchParams]
   );
 
   const handleImportGitHubIssue = useCallback(
@@ -296,7 +561,7 @@ function BacklogPageInner() {
         if (result) {
           setShowForm(false);
           setGithubIssueUrl("");
-          await load();
+          await hydrateItemIntoStore(result.item.id);
           const params = new URLSearchParams(searchParams.toString());
           params.set("item", result.item.id);
           router.push(`/backlog?${params.toString()}`);
@@ -309,7 +574,7 @@ function BacklogPageInner() {
         setGithubImporting(false);
       }
     },
-    [githubIssueUrl, importGitHubIssue, load, router, searchParams]
+    [githubIssueUrl, importGitHubIssue, hydrateItemIntoStore, router, searchParams]
   );
 
   const handlePickerSelect = useCallback(
@@ -318,18 +583,32 @@ function BacklogPageInner() {
       setShowForm(false);
       const result = await importGitHubIssue(url.trim());
       if (result) {
-        await load();
+        await hydrateItemIntoStore(result.item.id);
         const params = new URLSearchParams(searchParams.toString());
         params.set("item", result.item.id);
         router.push(`/backlog?${params.toString()}`);
       }
     },
-    [importGitHubIssue, load, router, searchParams]
+    [importGitHubIssue, hydrateItemIntoStore, router, searchParams]
   );
 
   const sortIndicator = (col: SortColumn) => {
     if (sortCol !== col) return null;
     return sortAsc ? " ↑" : " ↓";
+  };
+
+  const renderItemRow = (item: BacklogItem) => {
+    const isActive = selectedItemId === item.id;
+    const isExiting = exitingItems.has(item.id);
+    return (
+      <BacklogTableRow
+        key={item.id}
+        item={item}
+        isActive={isActive}
+        isExiting={isExiting}
+        onRowClick={handleRowClick}
+      />
+    );
   };
 
   return (
@@ -338,6 +617,7 @@ function BacklogPageInner() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Backlog</h1>
         <div className={styles.headerActions}>
+          <ConnectionIndicator connectionState={connectionState} />
           <button
             className={styles.helpButton}
             onClick={() => { track({ name: "backlog_open_tour", category: "user_action", component: "BacklogPage" }); resetTour(); }}
@@ -389,6 +669,31 @@ function BacklogPageInner() {
         />
         <StatusFilterChips selected={statusFilter} onChange={setStatusFilter} />
         <PriorityFilterChips selected={priorityFilter} onChange={setPriorityFilter} />
+        {/* Archived items are excluded from the default view client-side
+            (Epic 5.1); enabling this re-includes them from the live store. */}
+        <label className={styles.showArchivedLabel}>
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            aria-label="Show archived items"
+            data-testid="backlog-show-archived-toggle"
+          />
+          Show Archived
+        </label>
+        <label className={styles.groupByLabel}>
+          Group by:{" "}
+          <select
+            className={styles.groupBySelect}
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+            aria-label="Group by"
+            data-testid="backlog-group-by-select"
+          >
+            <option value="none">None</option>
+            <option value="repoPath">Repository</option>
+          </select>
+        </label>
       </div>
 
       {/* Content */}
@@ -399,7 +704,7 @@ function BacklogPageInner() {
               Loading…
             </div>
           ) : sortedItems.length === 0 && items.length === 0 ? (
-            <BacklogEmptyState onCreateItem={handleCreateItem} />
+            <BacklogEmptyState onCreateItem={() => { setFormMode("manual"); setShowForm(true); }} />
           ) : sortedItems.length === 0 ? (
             <FilterZeroState onClearFilters={() => { setStatusFilter([]); setPriorityFilter([]); setSearch(""); }} />
           ) : (
@@ -445,64 +750,39 @@ function BacklogPageInner() {
                   >
                     Updated{sortIndicator("updatedAt")}
                   </th>
+                  <th
+                    scope="col"
+                    className={styles.tableHeaderCell}
+                    onClick={() => handleSortClick("repoPath")}
+                    style={{ cursor: "pointer" }}
+                    aria-sort={sortCol === "repoPath" ? (sortAsc ? "ascending" : "descending") : "none"}
+                    data-testid="backlog-col-repo-path"
+                  >
+                    Repository{sortIndicator("repoPath")}
+                  </th>
                 </tr>
               </thead>
-              <tbody>
-                {sortedItems.map((item) => {
-                  const acDone = item.acCriteria.filter((c) => c.status === "done").length;
-                  const isActive = selectedItemId === item.id;
-                  return (
-                    <tr
-                      key={item.id}
-                      className={`${styles.tableRow} ${isActive ? styles.tableRowActive : ""}`}
-                      tabIndex={0}
-                      role="row"
-                      aria-selected={isActive}
-                      data-testid="backlog-table-row"
-                      data-item-id={item.id}
-                      onClick={() => handleRowClick(item.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleRowClick(item.id);
-                        }
-                      }}
-                    >
-                      <td className={`${styles.tableCell} ${styles.titleCell}`}>
-                        {item.title}
-                      </td>
-                      <td className={styles.tableCell}>
-                        <span
-                          className={`${styles.statusBadge} ${getStatusClass(item.status)}`}
-                          aria-label={`Status: ${getStatusLabel(item.status)}`}
-                        >
-                          {getStatusLabel(item.status)}
-                        </span>
-                      </td>
-                      <td className={styles.tableCell}>
-                        <span
-                          className={styles.priorityBadge}
-                          data-testid="priority-badge"
-                          aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
-                        >
-                          {PRIORITY_LABELS[item.priority] ?? "P?"}
-                        </span>
-                      </td>
-                      <td className={`${styles.tableCell} ${styles.acProgressCell}`}>
-                        {item.acCriteria.length > 0
-                          ? `${acDone}/${item.acCriteria.length}`
-                          : "—"}
-                      </td>
-                      <td className={styles.tableCell} style={{ whiteSpace: "nowrap" }}>
-                        {formatDateShort(item.updatedAt)}
+              {groups ? (
+                groups.map((group) => (
+                  <tbody key={group.groupKey}>
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className={styles.groupHeaderCell}
+                        data-testid="backlog-group-header"
+                      >
+                        {group.displayName} ({group.items.length})
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
+                    {group.items.map((item) => renderItemRow(item))}
+                  </tbody>
+                ))
+              ) : (
+                <tbody>{sortedItems.map((item) => renderItemRow(item))}</tbody>
+              )}
             </table>
           )}
-          {items.length > 0 && !items.some((i) => i.status === "in_progress") && <FooterNudge />}
+          {filteredItems.length > 0 && !filteredItems.some((i) => i.status === "in_progress") && <FooterNudge />}
         </div>
 
         {/* Detail pane */}
@@ -523,6 +803,7 @@ function BacklogPageInner() {
               aria-label="Item detail"
             >
               <BacklogItemDetail
+                key={selectedItemId}
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
               />

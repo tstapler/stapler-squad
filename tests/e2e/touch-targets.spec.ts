@@ -77,6 +77,21 @@ test.describe('Touch targets — sessions list page (mobile)', () => {
     expect(box!.width).toBeGreaterThanOrEqual(MIN_PX);
     expect(box!.height).toBeGreaterThanOrEqual(MIN_PX);
   });
+
+  test('category collapse toggle is ≥44×44px', async ({ page }) => {
+    // Multiple group headers can be on screen at once, each with its own toggle —
+    // assertTouchTarget() assumes a single match, so check the first one directly.
+    const toggle = page.getByTestId('category-collapse-toggle').first();
+    const visible = await toggle.isVisible().catch(() => false);
+    if (!visible) {
+      test.skip(true, 'No category header toggle visible — session list may be grouped as "None" or empty');
+      return;
+    }
+    const box = await toggle.boundingBox();
+    expect(box, 'Category collapse toggle not found in DOM').not.toBeNull();
+    expect(box!.width, `Category collapse toggle width ${box!.width}px < ${MIN_PX}px`).toBeGreaterThanOrEqual(MIN_PX);
+    expect(box!.height, `Category collapse toggle height ${box!.height}px < ${MIN_PX}px`).toBeGreaterThanOrEqual(MIN_PX);
+  });
 });
 
 // ─── Session detail page (mobile) ────────────────────────────────────────────

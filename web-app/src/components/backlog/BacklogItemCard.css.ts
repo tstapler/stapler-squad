@@ -1,5 +1,22 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+
+const spinKeyframes = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+export const buttonSpinner = style({
+  display: "inline-block",
+  width: 12,
+  height: 12,
+  border: `2px solid currentColor`,
+  borderTopColor: "transparent",
+  borderRadius: vars.radii.full,
+  animation: `${spinKeyframes} 0.7s linear infinite`,
+  opacity: 0.7,
+  flexShrink: 0,
+});
 
 export const card = style({
   display: "flex",
@@ -18,6 +35,33 @@ export const card = style({
   ":focus-visible": {
     outline: `2px solid ${vars.color.primary}`,
     outlineOffset: "2px",
+  },
+});
+
+// Epic 6.1 (backlog-event-driven-updates): brief background-tint pulse when
+// a genuine live event updates this card's item (ux.md §1 — "Linear/Jira-
+// style", ~250ms, fading). Composed with `card` at the call site the same
+// way `actionButtonDone` overrides `actionButton` above — a later-declared
+// single-class rule, so its `backgroundColor` wins over `card`'s.
+const flashKeyframes = keyframes({
+  "0%": { backgroundColor: vars.color.accentHover },
+  "100%": { backgroundColor: vars.color.cardBackground },
+});
+
+export const justChanged = style({
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: flashKeyframes,
+      animationDuration: "250ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: no animation/transition — just an instant, flat tint.
+    // The class itself is still removed by BacklogItemCard's timeout, so
+    // the background still "sets then clears," just without a keyframe.
+    "(prefers-reduced-motion: reduce)": {
+      backgroundColor: vars.color.accentHover,
+    },
   },
 });
 
@@ -57,10 +101,20 @@ export const priorityBadge = style({
   border: `1px solid ${vars.color.borderMuted}`,
 });
 
+export const statusLabel = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  color: vars.color.textMuted,
+  flexShrink: 0,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+});
+
 export const cardFooter = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
+  flexWrap: "wrap",
   gap: vars.space["2"],
 });
 
