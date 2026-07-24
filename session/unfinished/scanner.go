@@ -140,6 +140,7 @@ func ParseAllWorktrees(output string) []WorktreeInfo {
 // scanTask is an item to process in the worker pool.
 type scanTask struct {
 	repoPath string
+	force    bool
 }
 
 // Scanner is the central coordinator for the unfinished-work background scan.
@@ -456,7 +457,7 @@ func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 	}
 
 	select {
-	case s.scanQueue <- scanTask{repoPath: repoPath}:
+	case s.scanQueue <- scanTask{repoPath: repoPath, force: force}:
 	default:
 		log.Warn("scan queue full, dropping repo", "repo", repoPath)
 	}
@@ -472,14 +473,14 @@ func (s *Scanner) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			results := s.scanRepo(task.repoPath)
+			results := s.scanRepo(task.repoPath, task.force)
 			s.publishResults(results)
 		}
 	}
 }
 
 // scanRepo enumerates all worktrees in the given repo root and scans each one.
-func (s *Scanner) scanRepo(repoPath string) []ScanResult {
+func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 	worktrees, err := s.reader.ListWorktrees(repoPath)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -505,7 +506,7 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 		if wt.Branch == "" {
 			continue
 		}
-		result := s.scanWorktree(wt, defaultBranch, repoPath)
+		result := s.scanWorktree(wt, defaultBranch, repoPath, force)
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
 			// Worktree went clean (e.g. the only uncommitted file was deleted) —
 			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
@@ -523,7 +524,7 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 }
 
 // scanWorktree produces a ScanResult for a single git worktree.
-func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) ScanResult {
+func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
 	result := ScanResult{
 		RepoPath:      repoPath,
 		Branch:        wt.Branch,
@@ -549,10 +550,14 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 		result.LastModified = fi.ModTime()
 	}
 
-	// Check cache.
+	// Check cache — skipped when force is set, so a user-initiated scan (Refresh
+	// button, ScanUnfinishedWork RPC) always re-reads live git state instead of
+	// returning up-to-30s-stale data.
 	cache := s.getOrCreateCache(wt.Path)
-	if cached, ok := cache.Get(); ok {
-		return cached
+	if !force {
+		if cached, ok := cache.Get(); ok {
+			return cached
+		}
 	}
 
 	uncommitted, err := s.reader.HasUncommitted(wt.Path)

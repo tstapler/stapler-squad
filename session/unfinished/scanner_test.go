@@ -285,7 +285,7 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 	sub, _ := bus.Subscribe(ctx)
 
 	// First scan: dirty worktree is stored as an unfinished result.
-	results := s.scanRepo(repoPath)
+	results := s.scanRepo(repoPath, false)
 	require.Len(t, results, 1)
 	s.publishResults(results)
 	key := repoPath + "|feature-x"
@@ -307,7 +307,7 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 	reader.hasUncommitted = false
 	s.InvalidateCache(repoPath)
 
-	results = s.scanRepo(repoPath)
+	results = s.scanRepo(repoPath, false)
 	assert.Empty(t, results, "clean worktree should not be returned")
 
 	_, ok = s.resultStore.Load(key)
@@ -320,6 +320,42 @@ func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected EventUnfinishedWorkRemoved to be published")
 	}
+}
+
+// TestScanRepo_ForceBypassesPerWorktreeCache guards against a regression where
+// force=true bypassed EnqueueRepo's repo-level TTL gate but scanWorktree kept
+// reading its own independent per-worktree cache anyway — leaving a
+// user-triggered scan (Refresh button) queued but still returning stale data.
+func TestScanRepo_ForceBypassesPerWorktreeCache(t *testing.T) {
+	repoPath := t.TempDir()
+	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)
+
+	results := s.scanRepo(repoPath, false)
+	require.Len(t, results, 1)
+	require.True(t, results[0].HasUncommitted)
+
+	// Underlying state changes, but the per-worktree cache is still warm —
+	// an unforced scan must keep returning the stale (dirty) cached entry.
+	reader.hasUncommitted = false
+	results = s.scanRepo(repoPath, false)
+	require.Len(t, results, 1, "unforced scan should return the stale cached (still-dirty) entry")
+	assert.True(t, results[0].HasUncommitted)
+
+	// A forced scan must bypass the cache and observe the real clean state
+	// (and refresh the cache to match).
+	results = s.scanRepo(repoPath, true)
+	require.Empty(t, results, "forced scan should re-read live state, which is now clean")
+
+	// Flip back to dirty: an unforced scan should still return the
+	// now-stale clean cache entry the forced call above just wrote.
+	reader.hasUncommitted = true
+	results = s.scanRepo(repoPath, false)
+	require.Empty(t, results, "unforced scan should still return the stale clean cache entry")
+
+	results = s.scanRepo(repoPath, true)
+	require.Len(t, results, 1, "forced scan must bypass the per-worktree cache and observe the new dirty state")
+	assert.True(t, results[0].HasUncommitted)
 }
 
 // TestNewScannerWithReader_RegistersGoGitVCSReaderForDebugSnapshot asserts
