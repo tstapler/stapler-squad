@@ -35,9 +35,10 @@ async function rpc(service: string, method: string, body: object): Promise<Respo
   });
 }
 
-async function addPinnedRepoViaApi(repoPath: string): Promise<void> {
+async function addPinnedRepoViaApi(repoPath: string | string[]): Promise<void> {
+  const pinnedRepos = Array.isArray(repoPath) ? repoPath : [repoPath];
   const res = await rpc('session.v1.UnfinishedWorkService', 'UpdateUnfinishedWorkConfig', {
-    config: { autoSpiderSessions: false, watchDirs: [], pinnedRepos: [repoPath] },
+    config: { autoSpiderSessions: false, watchDirs: [], pinnedRepos },
   });
   if (!res.ok) throw new Error(`UpdateUnfinishedWorkConfig failed: ${res.status} ${await res.text()}`);
 }
@@ -68,6 +69,22 @@ async function triggerScanAndWait(timeoutMs = 15000): Promise<void> {
     if (res.ok) {
       const data = await res.json();
       if (data.worktrees && data.worktrees.length > 0) return;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+
+// Like triggerScanAndWait, but waits for a specific branch to appear — needed when a
+// worktree is added after the initial fixture, since ListUnfinishedWork already being
+// non-empty from the shared fixture would make triggerScanAndWait return immediately.
+async function triggerScanAndWaitForBranch(branch: string, timeoutMs = 15000): Promise<void> {
+  await rpc('session.v1.UnfinishedWorkService', 'ScanUnfinishedWork', {});
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await rpc('session.v1.UnfinishedWorkService', 'ListUnfinishedWork', {});
+    if (res.ok) {
+      const data = await res.json();
+      if (data.worktrees?.some((w: { branch?: string }) => w.branch === branch)) return;
     }
     await new Promise(r => setTimeout(r, 500));
   }
@@ -187,20 +204,49 @@ test.describe('unfinished-work', () => {
   });
 
   test('unfinished-work > Open Session button navigates to home with worktree prefill params', async ({ page }) => {
-    await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    // testWorktreeDir (the shared fixture) always has a matching session, so it shows
+    // "Reattach Session" — pin a second, freshly-scanned repo (not just a second worktree
+    // of the same repo: the scanner's per-repo TTL cache skips a repo entirely if ANY of
+    // its worktrees was scanned recently, so a same-repo worktree added after the initial
+    // scan is silently never picked up) with no matching session, so "Open Session" (shown
+    // only when sessionIds is empty) has a real item to appear on. The original pinned repo
+    // stays pinned alongside it so later tests are unaffected.
+    const noSessionRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-repo-nosession-'));
+    const noSessionSeedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-e2e-seed-nosession-'));
+    execSync(`git init --bare "${noSessionRepoDir}"`);
+    execSync(`git clone "${noSessionRepoDir}" "${noSessionSeedDir}"`);
+    execSync('git config user.email "test@example.com"', { cwd: noSessionSeedDir });
+    execSync('git config user.name "Test"', { cwd: noSessionSeedDir });
+    fs.writeFileSync(path.join(noSessionSeedDir, 'README.md'), 'init\n');
+    execSync('git add . && git commit -m "init"', { cwd: noSessionSeedDir });
+    execSync('git push origin main', { cwd: noSessionSeedDir });
+    fs.writeFileSync(path.join(noSessionSeedDir, 'wip-open-session.ts'), 'export const wip = true;\n');
+    try {
+      await addPinnedRepoViaApi([testSeedDir, noSessionSeedDir]);
+      await triggerScanAndWaitForBranch('main');
 
-    // Wait for our seeded item (which has no session)
-    const item = page.locator('[data-testid="unfinished-item"]').first();
-    await expect(item).toBeVisible({ timeout: 10000 });
-    await item.click();
+      await page.goto(UNFINISHED_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-    // "Open Session" appears when sessionIds is empty
-    const openBtn = page.getByRole('button', { name: 'Open Session' });
-    await expect(openBtn).toBeVisible({ timeout: 5000 });
+      const repoName = path.basename(noSessionSeedDir);
+      const item = page
+        .getByRole('region', { name: new RegExp(`Repository: ${repoName}`) })
+        .locator('[data-testid="unfinished-item"]')
+        .first();
+      await expect(item).toBeVisible({ timeout: 10000 });
+      await item.click();
 
-    await openBtn.click();
-    // Should navigate to home with ?worktree= param to pre-fill wizard
-    await expect(page).toHaveURL(/[?&]worktree=/, { timeout: 5000 });
+      // "Open Session" appears when sessionIds is empty
+      const openBtn = page.getByRole('button', { name: 'Open Session' });
+      await expect(openBtn).toBeVisible({ timeout: 5000 });
+
+      await openBtn.click();
+      // Should navigate to home with ?worktree= param to pre-fill wizard
+      await expect(page).toHaveURL(/[?&]worktree=/, { timeout: 5000 });
+    } finally {
+      await addPinnedRepoViaApi(testSeedDir);
+      fs.rmSync(noSessionRepoDir, { recursive: true, force: true });
+      fs.rmSync(noSessionSeedDir, { recursive: true, force: true });
+    }
   });
 
   test('unfinished-work > Commit & Push button opens commit modal', async ({ page }) => {
@@ -214,8 +260,9 @@ test.describe('unfinished-work', () => {
     await expect(commitBtn).toBeVisible({ timeout: 5000 });
     await commitBtn.click();
 
-    // Modal with commit message input should appear
-    await expect(page.getByRole('dialog').or(page.locator('[class*="modal"]'))).toBeVisible({ timeout: 3000 });
+    // Modal with commit message input should appear. Scope to the Commit & Push dialog by
+    // name — a bare role('dialog') query also matches the always-present Notification Panel.
+    await expect(page.getByRole('dialog', { name: /Commit.*Push/i })).toBeVisible({ timeout: 3000 });
   });
 
   test('unfinished-work > Dismiss button calls DismissWorktree RPC', async ({ page }) => {
@@ -230,7 +277,10 @@ test.describe('unfinished-work', () => {
     );
 
     await item.hover();
-    const dismissBtn = page.getByRole('button', { name: /Dismiss/i });
+    // Exact match: the item card itself is also role="button" and its computed accessible
+    // name includes the nested Dismiss button's label, so a substring/regex match on
+    // "Dismiss" resolves to both elements (strict-mode violation).
+    const dismissBtn = item.getByRole('button', { name: 'Dismiss this worktree' });
     await expect(dismissBtn).toBeVisible({ timeout: 3000 });
     await dismissBtn.click();
 

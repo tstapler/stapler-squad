@@ -296,9 +296,9 @@ func (s *Scanner) coordinator(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			s.enqueueAll()
+			s.enqueueAll(false)
 		case <-s.triggerCh:
-			s.enqueueAll()
+			s.enqueueAll(true)
 		}
 	}
 }
@@ -395,17 +395,24 @@ func (s *Scanner) fsnotifyLoop(ctx context.Context) {
 	}
 }
 
-// enqueueAll sends all known repos to the scan queue.
-func (s *Scanner) enqueueAll() {
+// enqueueAll sends all known repos to the scan queue. force=true bypasses the
+// per-worktree TTL cache — used for a user-initiated scan (button click or RPC
+// call), where "nothing changed in the last 30s" is not a reason to no-op a
+// request the user just explicitly made.
+func (s *Scanner) enqueueAll(force bool) {
 	s.repoSet.Range(func(key, _ any) bool {
 		repoPath, _ := key.(string)
-		s.EnqueueRepo(repoPath)
+		s.enqueueRepo(repoPath, force)
 		return true
 	})
 }
 
 // EnqueueRepo queues a repo for scanning if it's not cached recently.
 func (s *Scanner) EnqueueRepo(repoPath string) {
+	s.enqueueRepo(repoPath, false)
+}
+
+func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 	// Check circuit breaker first.
 	if !s.shouldScan(repoPath) {
 		return
@@ -444,7 +451,7 @@ func (s *Scanner) EnqueueRepo(repoPath string) {
 		}
 		return true
 	})
-	if recent {
+	if recent && !force {
 		return
 	}
 
