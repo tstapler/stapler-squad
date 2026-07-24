@@ -1,5 +1,6 @@
 import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { detailPaneBase } from "@/styles/pane/detailPaneShell.css";
 
 export const pageWrapper = style({
   display: "flex",
@@ -203,25 +204,8 @@ export const listPane = style({
   padding: vars.space["4"],
 });
 
-export const detailPane = style({
-  // width is set via inline style (resizable)
-  minWidth: "240px",
-  maxWidth: "800px",
-  borderLeft: `1px solid ${vars.color.borderColor}`,
-  flexShrink: 0,
-  overflow: "hidden",
-  display: "flex",
-  flexDirection: "column",
-  "@media": {
-    "(max-width: 768px)": {
-      position: "fixed",
-      inset: 0,
-      width: "100% !important" as "inherit",
-      zIndex: "500",
-      background: vars.color.modalBackground,
-    },
-  },
-});
+// width is set via inline style (resizable) on top of the shared base.
+export const detailPane = detailPaneBase;
 
 export const table = style({
   width: "100%",

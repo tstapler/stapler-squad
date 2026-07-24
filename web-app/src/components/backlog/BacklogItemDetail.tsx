@@ -103,14 +103,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
-  const handleCopy = useCallback((field: "id" | "link", value: string) => {
-    void copyToClipboard(value).then((ok) => {
-      if (!ok) return;
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 1500);
-    });
-  }, []);
-
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
   // to resolve a session's frozen pipelineModeSnapshot slug to a
   // human-readable name (and to detect content drift). Fetch failure
@@ -126,6 +118,27 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     };
   }, []);
 
+  // copyTimerRef cancels a still-pending prior confirmation timeout so
+  // clicking Copy ID then Copy Link within the 1.5s window doesn't let the
+  // first timer clear the second button's confirmation state early.
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback((field: "id" | "link", value: string) => {
+    void copyToClipboard(value).then((ok) => {
+      if (!ok || !mountedRef.current) return;
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      setCopiedField(field);
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setCopiedField(null);
+        copyTimerRef.current = null;
+      }, 1500);
+    });
+  }, []);
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);

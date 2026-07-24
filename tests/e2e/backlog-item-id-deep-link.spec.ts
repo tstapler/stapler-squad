@@ -17,8 +17,13 @@ test.describe('Backlog item ID + deep link', () => {
     await disableBacklogFeatureFlag(request);
   });
 
-  test.beforeEach(async ({ context }) => {
+  test.beforeEach(async ({ context, page }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    // Suppress the first-visit walkthrough modal so it never intercepts
+    // clicks on the header's copy buttons.
+    await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+    });
   });
 
   test('detail view shows the item ID as visible, selectable text', async ({ page, request }) => {
@@ -55,6 +60,35 @@ test.describe('Backlog item ID + deep link', () => {
 
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
     expect(clipboardText).toBe(`${BASE_URL}/backlog?item=${itemId}`);
+  });
+
+  test('clicking Copy ID then Copy Link within the confirmation window keeps the second button confirmed (no stale-timer race)', async ({ page, request }) => {
+    const itemId = await createBacklogItemDirect(request, { title: `e2e-copy-race-${Date.now()}` });
+
+    // Uses page.clock (not waitForTimeout, per e2e-test-conventions.md) to
+    // deterministically control the two copy buttons' 1.5s confirmation
+    // timers rather than racing against real wall-clock time.
+    await page.clock.install();
+    await page.goto(`/backlog?item=${itemId}`, { waitUntil: 'domcontentloaded' });
+    const copyIdButton = page.getByTestId('copy-item-id-button');
+    const copyLinkButton = page.getByTestId('copy-item-link-button');
+    await expect(copyIdButton).toBeVisible();
+
+    await copyIdButton.click();
+    await expect(copyIdButton).toHaveText(/Copied/);
+
+    await page.clock.fastForward(500);
+    await copyLinkButton.click();
+    await expect(copyLinkButton).toHaveText(/Copied/);
+
+    // At t=1500ms from the FIRST click, its old timer used to fire and clear
+    // copiedField to null — dropping Copy Link's confirmation ~500ms early.
+    await page.clock.fastForward(1000);
+    await expect(copyLinkButton).toHaveText(/Copied/);
+    await expect(copyIdButton).not.toHaveText(/Copied/);
+
+    await page.clock.fastForward(600);
+    await expect(copyLinkButton).not.toHaveText(/Copied/);
   });
 
   test('visiting /backlog?item=<id> opens the matching item detail pane directly', async ({ page, request }) => {

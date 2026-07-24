@@ -41,7 +41,9 @@ function BacklogBoardPageInner() {
   const handleAction = useCallback(
     async (action: string, itemId: string) => {
       if (action === "view_session" || action === "view_review") {
-        router.push(`/backlog?item=${itemId}`);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("item", itemId);
+        router.push(`/backlog/board?${params.toString()}`);
         return;
       }
       setPending((prev) => ({ ...prev, [itemId]: action }));
@@ -84,7 +86,7 @@ function BacklogBoardPageInner() {
         }
       }
     },
-    [transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, router, showActionToast]
+    [transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, router, searchParams, showActionToast]
   );
 
   const handleItemClick = useCallback(
