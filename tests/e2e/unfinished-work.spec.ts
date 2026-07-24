@@ -144,7 +144,8 @@ test.describe('unfinished-work', () => {
     const link = page.getByRole('link', { name: 'Configure scan sources' });
     await expect(link).toBeVisible();
     await link.click();
-    await expect(page).toHaveURL(/\/settings\/unfinished$/, { timeout: 5000 });
+    // next.config trailingSlash:true means the app always renders a trailing slash.
+    await expect(page).toHaveURL(/\/settings\/unfinished\/?$/, { timeout: 5000 });
     await expect(page.getByRole('heading', { name: 'Watch Directories' })).toBeVisible();
   });
 
