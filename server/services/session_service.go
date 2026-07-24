@@ -106,6 +106,12 @@ type SessionService struct {
 	// databaseSvc handles workspace/database switcher RPCs.
 	databaseSvc *DatabaseService
 
+	// tmuxStreamerManager caches ExternalTmuxStreamer instances per tmux session
+	// name (main sessions and shell siblings alike). Wired in so StopShell can
+	// evict a shell's streamer on close instead of letting a stale/degraded one
+	// persist across shell restarts.
+	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
 	fileSvc *FileService
 
@@ -1011,6 +1017,13 @@ func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSession
 	s.externalDiscovery = discovery
 	s.checkpointSvc.SetExternalDiscovery(discovery)
 	s.terminalSvc.SetExternalDiscovery(discovery)
+}
+
+// SetTmuxStreamerManager wires the shared ExternalTmuxStreamerManager so StopShell
+// can evict a shell's streamer when the shell closes. Must be called during server
+// startup with the same instance passed to NewConnectRPCWebSocketHandler.
+func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreamerManager) {
+	s.tmuxStreamerManager = mgr
 }
 
 // SetNotificationStore sets the notification history store for the notification history RPCs

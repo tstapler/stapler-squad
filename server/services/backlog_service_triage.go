@@ -1849,21 +1849,58 @@ func (s *BacklogService) TriggerReReview(
 	// 5. Note: We don't need to delete the old verdict; a new one will overwrite it when the re-review
 	// session submits its findings via the MCP tool.
 
-	// 6. Get git diff from the most recent work session's worktree using its base SHA.
-	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions.
-	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
-
-	// 7. Deserialize AC snapshot (from most recent work session or item AC).
+	// 5b. Deserialize AC snapshot (from most recent work session or item AC) — needed
+	// ahead of step 6 so the branch-drift precondition below (5c) can record a blocked
+	// verdict against it without a second lookup.
 	acSnapshot := resolveACSnapshot(mostRecentWorkSession, item.AcceptanceCriteria)
+	acSnapshotJSON, _ := json.Marshal(acSnapshot)
+
+	// 5c. Precondition of review, not a best-effort side effect of the reactive PR-fix
+	// path (BUG-044): this is the entry point AutoRespawnReview uses to re-review an
+	// item abandoned in review — exactly the path that let backlog item 693c2700's
+	// branch drift 289 commits behind main across repeated abandoned-review cycles
+	// before ever being caught. Checked/synced here, before any diff is computed, so a
+	// clean auto-sync never even reaches the reviewer, and a real conflict blocks with
+	// an explicit, actionable reason instead of a misleading "no related work" verdict.
+	if mostRecentWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
+			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
+				log.WarningLog.Printf("[TriggerReReview] branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+				if createErr != nil {
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
+				}
+				log.InfoLog.Printf("[TriggerReReview] branch drift blocked for item %s — verdict recorded (session %s)", item.ID, is.ID)
+				if s.eventBus != nil {
+					// itemID as sessionID — see comment in notifyReworkCapHit above.
+					s.eventBus.Publish(events.NewNotificationEvent(
+						item.ID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+						int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+						"Review blocked — branch drifted too far behind main",
+						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
+						map[string]string{"item_id": item.ID},
+					))
+				}
+				return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
+				}), nil
+			}
+		}
+	}
+
+	// 6. Get git diff from the most recent work session's worktree using its base SHA.
+	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions. Read AFTER
+	// the drift precondition above (5c) so a just-synced branch's diff reflects the
+	// merge rather than the stale pre-sync state.
+	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
 
 	verificationNotes := ""
 	if mostRecentWorkSession != nil {
 		verificationNotes = mostRecentWorkSession.VerificationNotes
 	}
 
-	// 8. Build re-review prompt.
-	acSnapshotJSON, _ := json.Marshal(acSnapshot)
-
+	// 8. Build re-review prompt. acSnapshotJSON was already computed in step 5c above.
 	priorVerdictSection := ""
 	if mostRecentReviewSession != nil && mostRecentReviewSession.ReviewVerdict != nil {
 		rv := mostRecentReviewSession.ReviewVerdict

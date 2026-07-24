@@ -51,7 +51,7 @@ export const NAV_GROUP_SORT_ORDER: NavGroup[] = ["settings", "work", "automation
 export const NAV_PAGES: NavPage[] = [
   { href: routes.home,          label: "Sessions",      icon: LayoutGrid,     bottomNavPrimary: true, group: "work" },
   { href: routes.backlog,       label: "Backlog",       icon: LayoutList,     bottomNavPrimary: true, featureFlag: "backlog", group: "work" },
-  { href: routes.unfinished,    label: "Unfinished",    icon: Clock4,         bottomNavPrimary: true, group: "work" },
+  { href: routes.unfinished,    label: "Up Next",       icon: Clock4,         bottomNavPrimary: true, group: "work" },
   { href: routes.reviewQueue,   label: "Review Queue",  shortLabel: "Review", icon: ClipboardCheck, bottomNavPrimary: true, group: "work" },
   // Notifications is custom-rendered in BottomNav (badge logic) — marked primary to keep it out of the More sheet
   { href: routes.notifications, label: "Notifications", shortLabel: "Alerts", icon: Bell, bottomNavPrimary: true, group: "work" },

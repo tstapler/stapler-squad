@@ -2076,3 +2076,77 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 		t.Fatal("expected an operator notification when the review is blocked")
 	}
 }
+
+// TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict is the
+// regression guard for BUG-044's actual live entry point: AutoRespawnReview (the
+// abandoned-review self-heal path — see BUG-043) re-drives review via TriggerReReview,
+// not the fresh work-session-exit path. Backlog item 693c2700 drifted 289 commits
+// behind main across repeated abandoned-review cycles through exactly this call before
+// ever being caught, and its review then failed with a misleading "no code related to
+// the feature at all" verdict driven by drift noise, not the item's actual (complete)
+// work. This reproduces the drifted-and-conflicting shape and verifies TriggerReReview
+// blocks with an explicit UNVERIFIABLE verdict — naming the real cause — before ever
+// spending a headless call on a diff that would have been dominated by upstream drift.
+func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict(t *testing.T) {
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	// origin/work mirror production: item.RepoPath (origin) is the shared checkout,
+	// work is the item's dedicated worktree clone with a real "origin" remote — the
+	// same shape setupPRFixSyncRepo already builds for syncPRBranchWithMain's tests.
+	origin, work := setupPRFixSyncRepo(t)
+
+	itemID := setupItemInReview(t, svc, origin)
+
+	// This response would (falsely) confirm the original bug if the pool were ever
+	// actually invoked with the drift-inflated diff — asserting callCount()==0 below
+	// proves the fix short-circuits before spending a headless call.
+	pool := &fakeHeadlessPool{response: `{"overall":"FAIL","summary":"the diff contains no code related to the feature at all","tool_reads":[],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	runGitTestCmd(t, work, "checkout", "-b", "feature")
+
+	// The feature branch made its own real, complete edit.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
+	runGitTestCmd(t, work, "add", "README.md")
+	runGitTestCmd(t, work, "commit", "-m", "feature: complete the work")
+
+	// Main diverges on the same line AND drifts well past the default threshold — the
+	// exact shape that made 693c2700's diff unreviewable.
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGitTestCmd(t, origin, "add", "README.md")
+	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	for i := 0; i < 55; i++ {
+		fname := fmt.Sprintf("upstream-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
+		runGitTestCmd(t, origin, "add", fname)
+		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+	}
+
+	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},
+		"branch-drift-rereview-uuid", origin, work, "feature")
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.Equal(t, 0, pool.callCount(), "must block before ever calling the headless pool with a drift-inflated diff")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
+		"must record an explicit blocked verdict, not the misleading FAIL the headless pool was primed to return")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator notification when the review is blocked")
+	}
+}

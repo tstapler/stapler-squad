@@ -136,6 +136,49 @@ func BranchAheadBehind(repoPath, branchName, mainBranch string) (BranchStatus, e
 	return BranchStatus{BranchExists: true, AheadOfMain: ahead, BehindMain: behind}, nil
 }
 
+// BehindOriginMain fetches mainBranch from origin into worktreePath and reports how
+// many commits origin/mainBranch has that worktreePath's currently checked-out HEAD
+// does not — i.e. how far the checked-out branch has drifted behind main. Unlike
+// BranchAheadBehind (which reads repoPath's LOCAL mainBranch ref and does no fetch of
+// its own — fine for a UI badge computed against a repo some other process keeps
+// fresh, but silently stale otherwise), this always fetches first, so the count can
+// never be stale the way a check against an unfetched local branch ref would be.
+// MergeMainIntoWorktree already fetches and merges against this exact
+// origin/mainBranch ref, so this reuses the same reference point rather than
+// introducing a second, possibly inconsistent notion of "how far behind" (BUG-044).
+func BehindOriginMain(worktreePath, mainBranch string) (int, error) {
+	if err := FetchBranch(worktreePath, mainBranch); err != nil {
+		return 0, fmt.Errorf("failed to fetch %s: %w", mainBranch, err)
+	}
+
+	repo, err := git.PlainOpenWithOptions(worktreePath, &git.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return 0, fmt.Errorf("failed to open git repo at %s: %w", worktreePath, err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve HEAD in %s: %w", worktreePath, err)
+	}
+	headCommit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve HEAD commit: %w", err)
+	}
+	mainRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", mainBranch), true)
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve origin/%s: %w", mainBranch, err)
+	}
+	mainCommit, err := repo.CommitObject(mainRef.Hash())
+	if err != nil {
+		return 0, fmt.Errorf("failed to resolve commit for origin/%s: %w", mainBranch, err)
+	}
+
+	behind, err := countCommitsNotAncestorOf(mainCommit, headCommit)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count commits behind origin/%s: %w", mainBranch, err)
+	}
+	return behind, nil
+}
+
 // countCommitsNotAncestorOfCap bounds the walk in countCommitsNotAncestorOf so a
 // long-diverged pair of branches can't turn a status check into an unbounded scan;
 // a UI badge only ever needs to distinguish "a few commits" from "many".

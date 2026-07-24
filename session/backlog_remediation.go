@@ -192,6 +192,40 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 	}
 }
 
+// RemediationBlocked is a read-only peek at whether reason's own remediation
+// gate is currently closed (parked at the attempt cap, or mid-backoff) for
+// itemID — unlike RemediationDue, it never mutates the row or consumes an
+// attempt. Built for callers whose remediation action's entire value depends
+// on a DIFFERENT reason's gate letting a downstream step through: producing a
+// fresh review verdict is pointless if the reopen that verdict would trigger
+// (autoReopenWithBackoffGate, gated on StuckReasonBouncing) is itself closed
+// right now — the diff hasn't changed, so a respawn's outcome would be
+// identical to the last one. Spending an attempt on a foregone conclusion
+// wastes that budget for zero forward progress and, once it repeats enough
+// times, silently parks the caller's OWN reason with a "use Reset to retry"
+// notification that doesn't mention the real blocker (BUG-043) — the caller
+// should check this FIRST and skip the attempt entirely when true, logging
+// why, rather than spend it on a call that cannot help.
+//
+// Returns false (not blocked) when no open row exists for (itemID, reason):
+// nothing is gating yet, same "ungated until first detected" default
+// RemediationDue documents.
+func (s *Storage) RemediationBlocked(ctx context.Context, itemID string, reason domain.StuckReason) (blocked bool, err error) {
+	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, reason)
+	if err != nil {
+		return false, fmt.Errorf("remediation blocked %s/%s: %w", itemID, reason, err)
+	}
+	if !ok {
+		return false, nil
+	}
+	switch evaluateRemediation(row, time.Now(), serverStartTime) {
+	case remediationSkippedParked, remediationSkippedNotDue:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 // RecordRemediationAttempt is a thin passthrough to *EntRepository, mirroring
 // MarkStuck/ResolveStuck's rationale: callers outside package session cannot
 // reach the unexported repo field. Returns false, nil (never an error) when

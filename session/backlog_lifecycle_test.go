@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	stdlog "log"
 	"os"
 	"os/exec"
@@ -654,15 +655,31 @@ func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
 
 // fakePRFixSpawner is a test double implementing PRFixSpawner, recording
 // whether/how AutoReopenForPRFix was called. Same shape as mockReviewGateSpawner.
+//
+// err and onCall let a test simulate AutoReopenForPRFix's three real outcomes
+// (BUG-040 regression coverage for ReconcilePRPending's closed-PR branch,
+// which must only clear the item's PR fields once a reopen is CONFIRMED to
+// have moved the item off pr_pending):
+//   - success: onCall performs the real transition (e.g. via
+//     storage.TransitionBacklogItemStatus to in_progress) and err is nil.
+//   - no-op guard (active work session / rework cap): onCall is nil (or does
+//     nothing) and err is nil — mirrors AutoReopenForPRFix returning nil
+//     without transitioning anything.
+//   - error: err is non-nil; onCall is typically nil.
 type fakePRFixSpawner struct {
 	spawnCalled    bool
 	lastFixContext string
+	err            error
+	onCall         func()
 }
 
 func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
 	f.spawnCalled = true
 	f.lastFixContext = fixContext
-	return nil
+	if f.onCall != nil {
+		f.onCall()
+	}
+	return f.err
 }
 
 // fakeReviewRespawner is a test double implementing ReviewRespawner. Calls are
@@ -1008,6 +1025,64 @@ func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status)
 }
 
+// TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue is a BUG-043
+// regression test. Live trace (2026-07-23, three real backlog items) found
+// that a respawned review's FAIL verdict only leads anywhere via
+// handleReviewSessionExited's autoReopenWithBackoffGate, which is gated on
+// the SEPARATE StuckReasonBouncing backoff clock — not the abandoned_review
+// one markAbandonedReview itself checks. When bouncing's own gate is mid
+// backoff (already tripped by earlier bounce cycles), every abandoned_review
+// respawn keeps producing a correct-but-discarded verdict, silently burning
+// through the 5-attempt cap for zero forward progress, until abandoned_review
+// itself parks with a "use Reset to retry" notification that never mentions
+// bouncing was the real blocker. markAbandonedReview must check whether
+// bouncing is currently blocking a reopen BEFORE spending an abandoned_review
+// attempt on a respawn that cannot possibly help.
+func TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
+
+	listener := NewBacklogLifecycleListener(storage)
+	respawner := newFakeReviewRespawner()
+	listener.SetReviewRespawner(respawner)
+
+	er := storage.repo.(*EntRepository)
+
+	// Seed a "bouncing" stuck row for this item that already consumed an
+	// attempt and is mid-backoff (next_remediation_at well in the future) —
+	// mirrors the live DB state found on all three affected items (BUG-043):
+	// a prior bounce cycle already tripped this gate independently of
+	// abandoned_review's own schedule.
+	_, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, BacklogStatusReview, "bounced previously")
+	require.NoError(t, err)
+	future := time.Now().Add(2 * time.Hour)
+	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
+	require.NoError(t, err)
+
+	// First tick opens the abandoned_review row (still within grace).
+	listener.reconcileStuckReviewItems(ctx, er)
+	// Past grace: normally respawn-worthy.
+	backdateStuckFirstDetected(t, er, item.ID, domain.StuckReasonAbandonedReview, time.Now().Add(-20*time.Minute))
+
+	listener.reconcileStuckReviewItems(ctx, er)
+	select {
+	case id := <-respawner.calls:
+		t.Fatalf("must not respawn while the bouncing reopen gate is not due — the resulting verdict could not be acted on, got call for item=%s", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// The abandoned_review attempt budget must be untouched — the whole point
+	// is not to waste it on a foregone conclusion.
+	rows, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	require.True(t, ok, "abandoned_review row must still be open")
+	assert.Equal(t, int32(0), row.RemediationAttempts, "must not consume an abandoned_review attempt on a respawn blocked downstream by the bouncing gate")
+}
+
 // TestMarkAbandonedReview_NoRespawn_WhenNoReviewRespawnerConfigured verifies
 // markAbandonedReview degrades gracefully (notification only, no panic) when no
 // ReviewRespawner has been wired — the same nil-safe default every other
@@ -1229,11 +1304,18 @@ func TestReconcilePRPending_NoSpawn_WhenAllSignalsFalse(t *testing.T) {
 // TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens verifies that
 // a PR closed without merging (state=CLOSED, not caught by IsPRMerged since that
 // only returns true for MERGED) does not stall forever as a "healthy open PR" —
-// it must clear the cached PrNumber/PrURL (so the next pushAndCreatePR creates a
-// fresh PR instead of reusing the closed one) and spawn a fix session.
+// it must spawn a fix session and, once that reopen is CONFIRMED to have moved
+// the item off pr_pending, clear the cached PrNumber/PrURL (so the next
+// pushAndCreatePR creates a fresh PR instead of reusing the closed one).
+//
+// fakeSpawner.onCall performs the real transition AutoReopenForPRFix would
+// perform on success (pr_pending -> in_progress), mirroring production
+// behavior — this is what distinguishes "reopen succeeded" from BUG-040's
+// no-op/error cases below, which must NOT clear the fields.
 func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
+	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 152)
 
@@ -1242,18 +1324,101 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 		merged: false,
 		status: &git.PRStatus{IsClosed: true},
 	})
+	fakeSpawner := &fakePRFixSpawner{
+		onCall: func() {
+			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, transErr)
+		},
+	}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled, "a closed-without-merge PR must trigger a fix-session spawn")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
+	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
+}
+
+// TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenNoOps
+// is the regression test for BUG-040: a live incident where an item ended up
+// pr_pending with pr_number=0 and pr_url="" — a permanent dead end, since
+// FindPRPendingItems' PrNumberGT(0) filter then structurally excludes the item
+// from every future tick of ReconcilePRPending (and everything downstream of
+// it), with nothing left to retry.
+//
+// Before the fix, this branch cleared PrURL/PrNumber unconditionally BEFORE
+// calling AutoReopenForPRFix. AutoReopenForPRFix has legitimate no-op guard
+// paths (an active work session already running, the rework cap) that return
+// nil without transitioning the item off pr_pending — exactly what the fake
+// spawner here simulates (no onCall, no err: the real AutoReopenForPRFix
+// contract for those guards). After the fix, the fields must stay intact
+// whenever the item is still observed in pr_pending after the call, so the
+// item remains visible/retryable on the next tick instead of vanishing.
+func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenNoOps(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 173)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	// No onCall, no err: simulates AutoReopenForPRFix's no-op guard paths
+	// (hasActiveWorkSession / rework cap), which return nil without
+	// transitioning the item off pr_pending.
 	fakeSpawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(fakeSpawner)
 
 	er := storage.repo.(*EntRepository)
-	listener.ReconcilePRPending(context.Background(), er)
+	listener.ReconcilePRPending(ctx, er)
 
-	assert.True(t, fakeSpawner.spawnCalled, "a closed-without-merge PR must trigger a fix-session spawn")
+	assert.True(t, fakeSpawner.spawnCalled, "AutoReopenForPRFix must still be attempted")
 
-	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
-	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "item must remain pr_pending when the reopen no-ops")
+	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when the reopen never actually happened (BUG-040)")
+	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when the reopen never actually happened (BUG-040)")
+}
+
+// TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenErrors
+// covers the sibling BUG-040 shape: AutoReopenForPRFix returns a genuine error
+// (e.g. a storage failure) rather than a no-op. The fields must stay intact
+// here too — an error means nothing was transitioned, so clearing the PR
+// reference would produce the same dead end as the no-op case.
+func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenErrors(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 173)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	fakeSpawner := &fakePRFixSpawner{err: errors.New("simulated spawn failure")}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
+	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
 }
 
 // TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_LastCommitAlreadyOnMain
@@ -1707,6 +1872,93 @@ func TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.titles(), "PR creation failed")
+}
+
+// dbClosingPRCreator wraps a *fakePRCreator, closing the given EntRepository's
+// underlying DB connection immediately after CreatePR returns — simulating a
+// storage failure that arrives exactly between "PR created on GitHub" and
+// "PR fields persisted on the item" (BUG-040 root cause #1). Storage-level
+// helpers that shortcut straight to the concrete *EntRepository via a type
+// assertion (e.g. GetWorktreeDataBySessionUUID, and MarkStuck reached through
+// stayInReviewAndNotify) must keep working right up to this point — which
+// rules out swapping storage.repo for a wrapper type, since that assertion
+// would then fail for the entire call, not just the one write this test
+// targets. Closing the real repository's connection at the right moment
+// preserves its concrete type while still making the very next write fail.
+type dbClosingPRCreator struct {
+	*fakePRCreator
+	repo *EntRepository
+}
+
+func (f *dbClosingPRCreator) CreatePR(title, body string) (string, int, error) {
+	url, num, err := f.fakePRCreator.CreatePR(title, body)
+	f.repo.Close()
+	return url, num, err
+}
+
+// TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies is the
+// regression test for BUG-040 root cause #1: pushAndCreatePR previously only
+// logged a WARNING when the UpdateBacklogItem call caching a freshly created
+// PR's PrURL/PrNumber failed, then proceeded unconditionally to
+// resolveToPRPending anyway — landing the item in pr_pending with
+// pr_number=0/pr_url="", a permanent dead end invisible to every downstream
+// reconciler (FindPRPendingItems' PrNumberGT(0) filter structurally excludes
+// it). After the fix, a persist failure here must be treated exactly like a
+// push/PR-creation failure: the item stays in review, never silently
+// entering pr_pending with no way to look the PR back up.
+//
+// The underlying DB connection is closed (via dbClosingPRCreator) right after
+// CreatePR succeeds, so the PR-fields UpdateBacklogItem call — and every
+// other DB call after it, including stayInReviewAndNotify's own MarkStuck —
+// genuinely fails, exactly like a real transient storage outage would. That
+// means the durable push_failed row (and the notification gated on it) also
+// doesn't get written in this specific scenario — a real, pre-existing,
+// narrower gap in stayInReviewAndNotify's own error handling, not something
+// this fix introduces or is scoped to close. What this test asserts is the
+// invariant BUG-040 is actually about: the item must never silently reach
+// pr_pending with an empty PR reference.
+func TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "storage-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
+
+	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	storage, err := NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	creator := &dbClosingPRCreator{
+		fakePRCreator: &fakePRCreator{createURL: "https://github.com/owner/repo/pull/999", createNumber: 999},
+		repo:          repo,
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return creator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	assert.True(t, creator.pushCalled)
+	assert.True(t, creator.createCalled, "CreatePR must still be attempted — the failure is in caching its result")
+
+	// Re-open a fresh connection to the same on-disk DB to inspect final
+	// state — the original repo/client was closed above to force the
+	// PR-fields persist to fail.
+	repo2, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	defer repo2.Close()
+	storage2, err := NewStorageWithRepository(repo2)
+	require.NoError(t, err)
+
+	fetched, err := storage2.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+		"item must stay in review when the PR-fields persist fails (BUG-040) — must never silently enter pr_pending with pr_number=0")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must remain unset since the persist failed")
+	assert.Empty(t, fetched.PrURL, "PrURL must remain unset since the persist failed")
 }
 
 // TestPushAndCreatePR_AutoMergeFails_StillTransitionsButNotifies verifies the fix for

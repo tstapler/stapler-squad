@@ -20,10 +20,11 @@ import (
 // (steps 6/6b of BuildRuntimeDeps), so there is no risk of killing a session that
 // is mid-adoption.
 //
-// Identification strategy (two-tier):
+// Identification strategy:
 //  1. Tmux session has STAPLER_SESSION_UUID env var → compare against known UUIDs.
-//  2. No env var (pre-UUID sessions) → compare the tmux session name against known
-//     sanitized titles. If neither matches, the session is an orphan.
+//  2. No env var (pre-UUID sessions, and all shell sibling sessions) → compare the
+//     tmux session name against known instance tmux names and known shell tmux
+//     names. If none of the above match, the session is an orphan.
 //
 // The staplersquad_keepalive sentinel is always preserved — it keeps the tmux
 // server alive between sessions and is never tracked in the DB.
@@ -44,6 +45,14 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 		}
 		if name := inst.GetTmuxSessionName(); name != "" {
 			knownTmuxNames[name] = struct{}{}
+		}
+		// Shells are independent sibling tmux sessions (see instance_shells.go) with
+		// no Instance-level identity of their own — without this, every shell is
+		// unconditionally treated as an orphan and killed on the next sweep/restart.
+		for _, shell := range inst.shells.List() {
+			if shell.TmuxSessionName != "" {
+				knownTmuxNames[shell.TmuxSessionName] = struct{}{}
+			}
 		}
 	}
 

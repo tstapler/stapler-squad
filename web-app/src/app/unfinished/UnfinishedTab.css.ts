@@ -129,3 +129,18 @@ export const repoList = style({
   flexDirection: "column",
   gap: vars.space["6"],
 });
+
+export const groupHeading = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  margin: `${vars.space["2"]} 0 0 0`,
+});
+
+export const group = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
+});

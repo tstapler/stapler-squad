@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
@@ -11,9 +12,11 @@ import {
 } from "@/gen/session/v1/unfinished_pb";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { routes } from "@/lib/routes";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
 import { UnfinishedRepoGroup } from "@/components/unfinished/UnfinishedRepoGroup";
 import { GitHubPRsSection } from "@/components/unfinished/GitHubPRsSection";
+import { BacklogQueueSection } from "@/components/unfinished/BacklogQueueSection";
 import { StuckItemsSection } from "@/components/backlog-stuck/StuckItemsSection";
 import * as styles from "./UnfinishedTab.css";
 
@@ -103,7 +106,7 @@ export function UnfinishedTab() {
       {/* Toolbar */}
       <div className={styles.toolbar}>
         <div className={styles.toolbarLeft}>
-          <h1 className={styles.title}>Unfinished Work</h1>
+          <h1 className={styles.title}>Up Next</h1>
           <div className={styles.scanInfo}>
             {isScanning ? (
               <>
@@ -118,6 +121,9 @@ export function UnfinishedTab() {
           </div>
         </div>
         <div className={styles.toolbarRight}>
+          <Link href={routes.settingsUnfinished} className={styles.btn} aria-label="Configure scan sources">
+            Sources
+          </Link>
           <button
             className={styles.btn}
             onClick={triggerScan}
@@ -144,33 +150,38 @@ export function UnfinishedTab() {
       </div>
 
       {/* Stuck Backlog Items — sits directly below the filter-chip row and
-          above GitHubPRsSection/repo groups, per design/ux.md Surface 2:
-          it's the first thing that answers "what needs me". */}
+          above the In Progress section, per design/ux.md Surface 2: it's
+          the first thing that answers "what needs me". */}
       <StuckItemsSection />
 
-      {/* GitHub PRs */}
-      <GitHubPRsSection />
+      {/* In Progress: active worktrees + open PRs */}
+      <section className={styles.group} aria-label="In Progress">
+        <h2 className={styles.groupHeading}>In Progress</h2>
+        <GitHubPRsSection />
 
-      {/* Repo groups */}
-      {groups.size === 0 ? (
-        <div className={styles.empty}>
-          {worktrees.length === 0
-            ? "No unfinished work found. All repos are clean."
-            : "No items match the current filter."}
-        </div>
-      ) : (
-        <div className={styles.repoList}>
-          {Array.from(groups.entries()).map(([repoName, wts]) => (
-            <UnfinishedRepoGroup
-              key={repoName}
-              repoName={repoName}
-              worktrees={wts}
-              onDismiss={handleDismiss}
-              onSnooze={handleSnooze}
-            />
-          ))}
-        </div>
-      )}
+        {groups.size === 0 ? (
+          <div className={styles.empty}>
+            {worktrees.length === 0
+              ? "No unfinished work found. All repos are clean."
+              : "No items match the current filter."}
+          </div>
+        ) : (
+          <div className={styles.repoList}>
+            {Array.from(groups.entries()).map(([repoName, wts]) => (
+              <UnfinishedRepoGroup
+                key={repoName}
+                repoName={repoName}
+                worktrees={wts}
+                onDismiss={handleDismiss}
+                onSnooze={handleSnooze}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Up Next: queued backlog items + GitHub issue import (self-titled section) */}
+      <BacklogQueueSection />
     </div>
   );
 }

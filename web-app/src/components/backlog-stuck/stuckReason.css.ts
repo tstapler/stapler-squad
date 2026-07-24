@@ -95,6 +95,24 @@ export const chipSpawnFailed = style([
   },
 ]);
 
+export const chipPlanNotApproved = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
+export const chipPrPendingNoPR = style([
+  chip,
+  {
+    background: vars.color.errorBg,
+    color: vars.color.errorText,
+    border: `1px solid ${vars.color.error}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {

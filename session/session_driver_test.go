@@ -307,6 +307,62 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	}
 }
 
+// BUG-041: TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime verifies that a
+// failed SendKeys still produces a non-zero timestamp for the caller to record as
+// nudgeSentAt. Before the fix, nudgeSentAt was only assigned in the success branch, so
+// on failure the driver loop's guard (nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay)
+// stayed true forever and retried the identical send on every subsequent tick — live
+// evidence was 392 consecutive failed sends over ~13 minutes against one dead-pane session.
+func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
+	// An Instance that was never started (SetTmuxSession was never called, so the
+	// internal `started` atomic.Bool is false) makes SendKeys deterministically fail
+	// with "cannot send keys to instance that has not been started or is paused" —
+	// the same shape of permanent, non-retryable failure as a dead tmux pane.
+	inst := &Instance{
+		Title:  "test-nudge-failed-send",
+		Status: Ready,
+	}
+
+	before := time.Now()
+	got := attemptBacklogNudge(inst, 6*time.Minute)
+
+	if got.IsZero() {
+		t.Fatal("attemptBacklogNudge returned zero time on failed send — this reproduces BUG-041: " +
+			"the caller's nudgeSentAt guard would stay zero, causing the identical send to retry every driver tick")
+	}
+	if got.Before(before) {
+		t.Errorf("attemptBacklogNudge returned a time before the call started: got %v, want >= %v", got, before)
+	}
+}
+
+// BUG-041 regression: TestAttemptBacklogNudge_FailedSend_RateLimitsRetry asserts the
+// actual driver-loop guard condition (`nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay`)
+// no longer re-fires on the very next tick after a failed send, since nudgeSentAt is now
+// non-zero regardless of send outcome.
+func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
+	inst := &Instance{
+		Title:  "test-nudge-rate-limit",
+		Status: Ready,
+	}
+
+	var nudgeSentAt time.Time
+	idle := driverBacklogNudgeDelay + time.Minute
+
+	// First tick: guard should be open (no nudge sent yet, idle past the delay).
+	if !nudgeSentAt.IsZero() || idle <= driverBacklogNudgeDelay {
+		t.Fatal("test setup invalid: nudge guard should be open before the first attempt")
+	}
+	nudgeSentAt = attemptBacklogNudge(inst, idle)
+
+	// Second tick (simulating the very next driver poll, "idle" recomputed relative to the
+	// just-set nudgeSentAt so it is effectively ~0): guard must now be closed even though
+	// the send failed, or the driver would retry the identical send immediately — the bug.
+	if nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
+		t.Fatal("nudge guard re-opened immediately after a failed send — the driver would retry " +
+			"the identical SendKeys call on every subsequent tick forever (BUG-041)")
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

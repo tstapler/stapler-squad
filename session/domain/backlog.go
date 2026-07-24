@@ -74,6 +74,29 @@ const (
 	// logged it) — invisible to every other stuck detector, since none of them
 	// check "in_progress with zero live sessions and no error surfaced."
 	StuckReasonSpawnFailed StuckReason = "spawn_failed"
+	// StuckReasonPlanNotApproved: DequeueNextQueuedItems' planning gate
+	// (SkipPlanning=false, PlanApproved=false) refuses to claim a queued item
+	// indefinitely — by design (see that function's doc comment) — with only a
+	// per-tick WARNING log and no durable, human-visible signal. Confirmed live
+	// 2026-07-22: three items sat queued for days, silently re-blocked on every
+	// 60s tick, invisible on the kanban board (BUG-037) and with no "Approve
+	// Plan" action anywhere in the UI to unblock them.
+	StuckReasonPlanNotApproved StuckReason = "plan_not_approved"
+	// StuckReasonPRPendingNoPR: an item is in pr_pending status but has no PR
+	// reference (pr_number == 0, pr_url == ""). Every downstream reconciler
+	// (ReconcilePRPending's FindPRPendingItems query, EnablePRAutoMerge, etc.)
+	// requires a real PrNumber, so an item in this shape is invisible to
+	// everything else and sits in pr_pending permanently with nothing left to
+	// poll or retry (BUG-040). Detection-only backstop: two write-ordering
+	// bugs (pushAndCreatePR's best-effort field persist; ReconcilePRPending's
+	// closed-PR branch clearing fields before confirming the reopen actually
+	// succeeded) were found and fixed as the direct cause of the live incident
+	// this reason was added for, but this detector exists so any *future*
+	// mistake with the same shape — "a write silently doesn't happen or
+	// happens out of order, and nothing detects the resulting dead end" — is
+	// still visible and retryable from /unfinished rather than a silent
+	// permanent stall.
+	StuckReasonPRPendingNoPR StuckReason = "pr_pending_no_pr"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -87,6 +110,8 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonOrphanedTriage,
 	StuckReasonAutonomousStuck,
 	StuckReasonSpawnFailed,
+	StuckReasonPlanNotApproved,
+	StuckReasonPRPendingNoPR,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -94,7 +119,8 @@ func (r StuckReason) IsValid() bool {
 	switch r {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
-		StuckReasonAutonomousStuck, StuckReasonSpawnFailed:
+		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
+		StuckReasonPRPendingNoPR:
 		return true
 	}
 	return false

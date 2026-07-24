@@ -1,5 +1,5 @@
 "use client";
-// +feature: session-list session-search session-filter session-groupby
+// +feature: session-list session-search session-filter session-groupby session-list-collapse-groups
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";

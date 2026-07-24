@@ -64,6 +64,17 @@ func (i *Instance) shellTmuxSessionName(shellID string) string {
 	return fmt.Sprintf("%s_shell_%s", parentName, shellID)
 }
 
+// GetShellTmuxSessionName returns the sibling tmux session name for a running shell,
+// for callers outside this package (e.g. the WebSocket streaming handler) that need
+// to target the shell's isolated PTY instead of the parent session's.
+func (i *Instance) GetShellTmuxSessionName(shellID string) (string, bool) {
+	shell, ok := i.shells.Get(shellID)
+	if !ok {
+		return "", false
+	}
+	return shell.TmuxSessionName, true
+}
+
 // SpawnShell creates and starts a new shell as an independent sibling tmux session.
 // It persists the shell to the ent repository, registers it in memory, and launches
 // the watchShellExit goroutine.

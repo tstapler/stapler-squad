@@ -45,6 +45,10 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_AUTONOMOUS_STUCK
 	case domain.StuckReasonSpawnFailed:
 		return sessionv1.StuckReason_STUCK_REASON_SPAWN_FAILED
+	case domain.StuckReasonPlanNotApproved:
+		return sessionv1.StuckReason_STUCK_REASON_PLAN_NOT_APPROVED
+	case domain.StuckReasonPRPendingNoPR:
+		return sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -74,6 +78,10 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonAutonomousStuck
 	case sessionv1.StuckReason_STUCK_REASON_SPAWN_FAILED:
 		return domain.StuckReasonSpawnFailed
+	case sessionv1.StuckReason_STUCK_REASON_PLAN_NOT_APPROVED:
+		return domain.StuckReasonPlanNotApproved
+	case sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR:
+		return domain.StuckReasonPRPendingNoPR
 	default:
 		return ""
 	}
@@ -240,6 +248,10 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 		return s.AutoRespawnAutonomousWork
 	case domain.StuckReasonStaleWork:
 		return s.RemediateStaleWorkSession
+	case domain.StuckReasonPRPendingNoPR:
+		return func(ctx context.Context, itemID string) error {
+			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered reopen — item was stuck in pr_pending with no PR reference (BUG-040)")
+		}
 	default:
 		return nil
 	}
