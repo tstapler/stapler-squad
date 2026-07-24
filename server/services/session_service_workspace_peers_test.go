@@ -25,11 +25,11 @@ func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_Anoth
 		Status: session.Active, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(peer))
-	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", session.GoalStatusWorking, nil, "")
+	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", session.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 
-	block := svc.workspacePeersBlockFor(repoPath)
+	block := svc.workspacePeersBlockFor(t.Context(), repoPath)
 
 	assert.Contains(t, block, "Other Active Sessions In This Workspace")
 	assert.Contains(t, block, "peer-session")
@@ -43,12 +43,12 @@ func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExi
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 
-	assert.Empty(t, svc.workspacePeersBlockFor(repoPath))
+	assert.Empty(t, svc.workspacePeersBlockFor(t.Context(), repoPath))
 }
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_RepoPathIsEmpty(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 
-	assert.Empty(t, svc.workspacePeersBlockFor(""))
+	assert.Empty(t, svc.workspacePeersBlockFor(t.Context(), ""))
 }

@@ -50,6 +50,11 @@ func TestWorkspaceKey_emptyWhenNothingIsSet(t *testing.T) {
 	assert.Equal(t, "", WorkspaceKey("", "", "", ""))
 }
 
+func TestWorkspaceKey_fallsBackToBarePathWithoutGitHubOrMainRepoPath(t *testing.T) {
+	key := WorkspaceKey("", "", "", "/repos/widgets")
+	assert.Equal(t, "path:/repos/widgets", key)
+}
+
 // ─── ListWorkspacePeers (AC0, AC1, AC2, AC3, AC7) ─────────────────────────────
 
 func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
@@ -106,7 +111,7 @@ func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
 	crashed := &Instance{Title: "crashed", UUID: "crashed-uuid", Path: "/repos/widgets", Status: Stopped, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, crashed)
-	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", GoalStatusWorking, nil, "")
+	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "crashed-uuid", crashed.WorkspaceKey()))
 
@@ -148,7 +153,7 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 	inst := &Instance{Title: "skewed", UUID: "skewed-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, inst)
-	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", GoalStatusWorking, nil, "")
+	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "skewed-uuid", inst.WorkspaceKey()))
 
@@ -188,6 +193,33 @@ func TestApplyTmuxLiveness_confirmsDeathEvenWhenStatusSaysActive(t *testing.T) {
 	assert.True(t, peers[0].StaleGoal, "goal is an hour old, should be stale")
 	assert.False(t, peers[1].InstanceLive, "not in the live set — confirmed dead")
 	assert.False(t, peers[1].StaleGoal, "dead sessions aren't 'stuck', they're 'gone'")
+}
+
+func TestApplyTmuxLiveness_staleGoalBoundaryIsExclusive(t *testing.T) {
+	// A 1s margin on each side of the threshold, not an exact boundary hit: time.Since is
+	// evaluated inside ApplyTmuxLiveness, strictly later than time.Now() here, so testing
+	// "elapsed == goalStaleThreshold exactly" is inherently racy against the wall clock.
+	const margin = time.Second
+	peers := []WorkspacePeer{
+		{SessionUUID: "just-under-threshold", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold + margin)}},
+		{SessionUUID: "just-over-threshold", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold - margin)}},
+	}
+	live := map[string]struct{}{"just-under-threshold": {}, "just-over-threshold": {}}
+	ApplyTmuxLiveness(peers, live)
+
+	assert.False(t, peers[0].StaleGoal, "elapsed just under the threshold is not yet stale")
+	assert.True(t, peers[1].StaleGoal, "elapsed just past the threshold is stale")
+}
+
+func TestApplyTmuxLiveness_leavesStaleGoalUnchangedForLivePeerWithNoGoal(t *testing.T) {
+	peers := []WorkspacePeer{
+		{SessionUUID: "live-no-goal", InstanceLive: false, StaleGoal: true, Goal: nil},
+	}
+	ApplyTmuxLiveness(peers, map[string]struct{}{"live-no-goal": {}})
+
+	assert.True(t, peers[0].InstanceLive)
+	assert.Nil(t, peers[0].Goal)
+	assert.True(t, peers[0].StaleGoal, "no Goal to recompute staleness from — prior value is left untouched")
 }
 
 // ─── BuildWorkspacePeersBlock (AC5) ────────────────────────────────────────────

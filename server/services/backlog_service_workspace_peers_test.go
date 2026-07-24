@@ -29,7 +29,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_PeersExistOnSam
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(peer))
-	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "refactor the widget loader", session.GoalStatusWorking, nil, "")
+	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "refactor the widget loader", session.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 
@@ -41,7 +41,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_PeersExistOnSam
 		RepoPath:           repoPath,
 	}
 
-	prompt := svc.initialPromptFor(item, nil)
+	prompt := svc.initialPromptFor(t.Context(), item, nil)
 
 	assert.Contains(t, prompt, "Other Active Sessions In This Workspace")
 	assert.Contains(t, prompt, "peer-session")
@@ -63,7 +63,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *te
 		RepoPath:           repoPath,
 	}
 
-	prompt := svc.initialPromptFor(item, nil)
+	prompt := svc.initialPromptFor(t.Context(), item, nil)
 
 	assert.NotContains(t, prompt, "Other Active Sessions In This Workspace")
 }
@@ -80,7 +80,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t 
 		RepoPath:           "",
 	}
 
-	prompt := svc.initialPromptFor(item, nil)
+	prompt := svc.initialPromptFor(t.Context(), item, nil)
 
 	assert.NotContains(t, prompt, "Other Active Sessions In This Workspace")
 }
@@ -103,6 +103,6 @@ func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testin
 	}
 	require.NoError(t, storage.AddInstance(peerOnRepoB))
 
-	block := svc.workspacePeersBlockFor(repoA)
+	block := svc.workspacePeersBlockFor(t.Context(), repoA)
 	assert.Empty(t, block)
 }

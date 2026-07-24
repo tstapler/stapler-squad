@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -161,7 +162,9 @@ func LiveTmuxSessionUUIDs(ctx context.Context) map[string]struct{} {
 	socketArgs := tmux.ResolveSocket("").Args
 	live := make(map[string]struct{})
 
-	out, err := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("list-sessions", "-F", "#{session_name}")...).Output()
+	listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer listCancel()
+	out, err := safeexec.CommandContext(listCtx, tmux.Binary(), socketArgs("list-sessions", "-F", "#{session_name}")...).Output()
 	if err != nil {
 		return live // tmux not running or no sessions
 	}
@@ -171,7 +174,9 @@ func LiveTmuxSessionUUIDs(ctx context.Context) map[string]struct{} {
 		if name == "" || !strings.HasPrefix(name, tmux.TmuxPrefix) {
 			continue
 		}
-		envOut, envErr := safeexec.CommandContext(ctx, tmux.Binary(), socketArgs("show-environment", "-t", name, "STAPLER_SESSION_UUID")...).Output()
+		envCtx, envCancel := context.WithTimeout(ctx, 5*time.Second)
+		envOut, envErr := safeexec.CommandContext(envCtx, tmux.Binary(), socketArgs("show-environment", "-t", name, "STAPLER_SESSION_UUID")...).Output()
+		envCancel()
 		if envErr != nil {
 			continue
 		}
@@ -216,6 +221,39 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	}
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// WorkspacePeersBlockForPath resolves repoPath's workspace identity, looks up its peers
+// with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge
+// (AC5/AC6). Shared by both SessionService.CreateSession and BacklogService's
+// initialPromptFor so the two callers can't drift on how the nudge is built. Returns "" on
+// any detection/lookup failure, when storage is nil, or when repoPath is empty — this is a
+// best-effort convenience nudge, not required session context, so failures are logged and
+// swallowed rather than blocking session creation.
+func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath string) string {
+	if repoPath == "" || storage == nil {
+		return ""
+	}
+	info, err := DetectWorktree(repoPath)
+	if err != nil {
+		log.Warn("WorkspacePeersBlockForPath: failed to detect worktree info", "repo_path", repoPath, "err", err)
+		return ""
+	}
+	mainRepoPath := repoPath
+	if info.IsWorktree && info.MainRepoRoot != "" {
+		mainRepoPath = info.MainRepoRoot
+	}
+	workspaceKey := WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
+	if workspaceKey == "" {
+		return ""
+	}
+	peers, err := storage.ListWorkspacePeers(ctx, workspaceKey, "")
+	if err != nil {
+		log.Warn("WorkspacePeersBlockForPath: failed to list workspace peers", "workspace_key", workspaceKey, "err", err)
+		return ""
+	}
+	ApplyTmuxLiveness(peers, LiveTmuxSessionUUIDs(ctx))
+	return BuildWorkspacePeersBlock(peers)
 }
 
 // ApplyTmuxLiveness overrides InstanceLive on each peer using an authoritative set of live

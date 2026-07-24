@@ -1068,7 +1068,9 @@ func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]Item
 
 // SetSessionGoal upserts the goal for a session (1:1 per session_uuid).
 // If a goal already exists for the session, it is replaced.
-func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []TaskNode, setBy string) (*SessionGoalData, error) {
+// workspaceKey, when non-empty, is stamped in the same upsert as the goal write (rather
+// than a separate follow-up UPDATE) so the two never diverge on a crash between writes.
+func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []TaskNode, setBy string, workspaceKey string) (*SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return nil, fmt.Errorf("goal storage not supported by this backend")
@@ -1085,7 +1087,8 @@ func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal s
 		SetGoal(goal).
 		SetStatus(status).
 		SetSetBy(setBy).
-		SetTasks(tasksJSON)
+		SetTasks(tasksJSON).
+		SetNillableWorkspaceKey(nonEmptyPtr(workspaceKey))
 	err = create.
 		OnConflictColumns("session_uuid").
 		Update(func(u *ent.SessionGoalUpsert) {
@@ -1094,12 +1097,23 @@ func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal s
 			u.SetSetBy(setBy)
 			u.SetTasks(tasksJSON)
 			u.SetUpdatedAt(time.Now())
+			if workspaceKey != "" {
+				u.SetWorkspaceKey(workspaceKey)
+			}
 		}).
 		Exec(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert session goal: %w", err)
 	}
 	return s.GetSessionGoal(ctx, sessionUUID)
+}
+
+// nonEmptyPtr returns nil for "" and &s otherwise, for SetNillableX ent builder calls.
+func nonEmptyPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // GetSessionGoal retrieves the goal for a session by session UUID.

@@ -19,8 +19,9 @@ import {
 } from "./WorkspacePeersPanel.css";
 
 // Mirrors session.goalStaleThreshold (session/workspace_peers.go) — a goal is
-// considered stale (peer "stuck") after this long without an update.
-const GOAL_STALE_THRESHOLD_MS = 30 * 60 * 1000;
+// considered stale (peer "stuck") after this long without an update. Exported for direct
+// unit testing of the boundary in peerLifecycle.
+export const GOAL_STALE_THRESHOLD_MS = 30 * 60 * 1000;
 
 export type PeerLifecycle = "active" | "stuck" | "gone";
 

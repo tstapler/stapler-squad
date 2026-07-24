@@ -1185,29 +1185,10 @@ func (s *SessionService) GetSession(
 // nudge for a new session being created at repoPath, or "" on any detection/lookup
 // failure, when there's no concrete storage backing this service, or when there are no
 // peers (AC5). Best-effort: this is a convenience nudge, not required session context.
-func (s *SessionService) workspacePeersBlockFor(repoPath string) string {
-	if repoPath == "" || s.concStorage == nil {
-		return ""
-	}
-	info, err := session.DetectWorktree(repoPath)
-	if err != nil {
-		log.Warn("workspacePeersBlockFor: failed to detect worktree info", "repo_path", repoPath, "err", err)
-		return ""
-	}
-	mainRepoPath := repoPath
-	if info.IsWorktree && info.MainRepoRoot != "" {
-		mainRepoPath = info.MainRepoRoot
-	}
-	workspaceKey := session.WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
-	if workspaceKey == "" {
-		return ""
-	}
-	peers, err := s.concStorage.ListWorkspacePeers(context.Background(), workspaceKey, "")
-	if err != nil {
-		log.Warn("workspacePeersBlockFor: failed to list workspace peers", "workspace_key", workspaceKey, "err", err)
-		return ""
-	}
-	return session.BuildWorkspacePeersBlock(peers)
+// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
+// initialPromptFor so the two callers can't drift on how the nudge is built.
+func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
+	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
@@ -1432,7 +1413,7 @@ func (s *SessionService) CreateSession(
 	// Best-effort: any detection/lookup failure just omits the nudge.
 	initialPrompt := req.Msg.InitialPrompt
 	if req.Msg.ResumeId == "" {
-		initialPrompt += s.workspacePeersBlockFor(resolvedPath)
+		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
 	}
 
 	// Build instance options

@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
-import { WorkspacePeersPanel, peerLifecycle } from "./WorkspacePeersPanel";
+import { WorkspacePeersPanel, peerLifecycle, GOAL_STALE_THRESHOLD_MS } from "./WorkspacePeersPanel";
 import sessionsReducer from "@/lib/store/sessionsSlice";
 import type { Session, SessionGoalSummary } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
@@ -113,5 +113,21 @@ describe("peerLifecycle", () => {
   it("returns active when live with no goal set at all", () => {
     const peer = makeSession({ status: SessionStatus.ACTIVE });
     expect(peerLifecycle(peer, now)).toBe("active");
+  });
+
+  it("treats elapsed exactly equal to the stale threshold as not yet stale", () => {
+    const peer = makeSession({
+      status: SessionStatus.ACTIVE,
+      goal: makeGoal({ goalText: "x", updatedAt: timestampFromDate(new Date(now - GOAL_STALE_THRESHOLD_MS)) }),
+    });
+    expect(peerLifecycle(peer, now)).toBe("active");
+  });
+
+  it("treats elapsed one ms past the stale threshold as stuck", () => {
+    const peer = makeSession({
+      status: SessionStatus.ACTIVE,
+      goal: makeGoal({ goalText: "x", updatedAt: timestampFromDate(new Date(now - GOAL_STALE_THRESHOLD_MS - 1)) }),
+    });
+    expect(peerLifecycle(peer, now)).toBe("stuck");
   });
 });

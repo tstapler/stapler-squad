@@ -28,7 +28,7 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	require.NoError(t, h.storage.AddInstance(caller))
 	require.NoError(t, h.storage.AddInstance(peer))
 	require.NoError(t, h.storage.AddInstance(unrelated))
-	_, err := h.storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", session.GoalStatusWorking, nil, "")
+	_, err := h.storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", session.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, h.storage.SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
 
@@ -44,6 +44,12 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	peerMap := peers[0].(map[string]interface{})
 	assert.Equal(t, "peer-session", peerMap["title"])
 	assert.Equal(t, "fix the bug", peerMap["goal_text"])
+	// No real tmux server is running in this test process, so LiveTmuxSessionUUIDs
+	// authoritatively reports every peer as not-live — documents current (tmux-absent)
+	// test-environment behavior for the two-signal lifecycle fields this tool exists to
+	// expose (AC6), rather than leaving them unasserted.
+	assert.Equal(t, "gone", peerMap["lifecycle"])
+	assert.False(t, peerMap["instance_live"].(bool))
 }
 
 func TestListWorkspacePeersMCP_returnsEmptyWhenCallerHasNoWorkspace(t *testing.T) {

@@ -10,7 +10,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -149,25 +148,29 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 	}
 
 	setBy := targetUUID // record who set it
-	goalData, err := h.storage.SetSessionGoal(ctx, targetUUID, goal, status, tasks, setBy)
+
+	// Resolve the instance up front (if not already resolved via session_id) so
+	// workspace_key can be stamped in the same upsert as the goal write, instead of a
+	// separate follow-up UPDATE that could diverge from it on a crash between writes.
+	// Prefer the already-resolved instance to avoid a second LoadInstances call.
+	if resolvedInst == nil {
+		resolvedInst, _ = h.findInstanceByUUID(targetUUID)
+	}
+	var workspaceKey string
+	if resolvedInst != nil {
+		workspaceKey = resolvedInst.WorkspaceKey()
+	}
+
+	goalData, err := h.storage.SetSessionGoal(ctx, targetUUID, goal, status, tasks, setBy, workspaceKey)
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to set goal: %v", err), ""), nil
 	}
 
 	// Update in-memory cache if the instance is loaded.
-	// Prefer the already-resolved instance to avoid a second LoadInstances call.
-	if resolvedInst == nil {
-		resolvedInst, _ = h.findInstanceByUUID(targetUUID)
-	}
 	if resolvedInst != nil {
 		resolvedInst.SetSessionGoalCached(goalData)
 		if h.eventBus != nil {
 			h.eventBus.Publish(events.NewSessionUpdatedEvent(resolvedInst, []string{"goal"}))
-		}
-		if wk := resolvedInst.WorkspaceKey(); wk != "" {
-			if err := h.storage.SetSessionGoalWorkspaceKey(ctx, targetUUID, wk); err != nil {
-				log.Warn("setSessionGoal: failed to stamp workspace_key", "session_uuid", targetUUID, "err", err)
-			}
 		}
 	}
 
