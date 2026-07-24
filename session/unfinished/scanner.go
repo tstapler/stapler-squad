@@ -152,6 +152,12 @@ type Scanner struct {
 	cacheStore   sync.Map // map[string]*worktreeCache (key = worktreePath)
 	breakerStore sync.Map // map[string]*circuitBreaker (key = repoPath)
 
+	// inFlight tracks repos currently queued or being scanned (key = repoPath)
+	// so a burst of triggers (fsnotify + manual Refresh + periodic tick landing
+	// close together) coalesces into one scan per repo instead of queuing a
+	// redundant concurrent scanRepo call for each trigger.
+	inFlight sync.Map // map[string]struct{}
+
 	eventBus   *pkgevents.EventBus
 	stateStore *StateStore
 
@@ -456,9 +462,17 @@ func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 		return
 	}
 
+	// Coalesce: if this repo is already queued or being scanned, don't stack
+	// another task behind it — the in-flight scan will already pick up
+	// current state by the time it runs.
+	if _, alreadyQueued := s.inFlight.LoadOrStore(repoPath, struct{}{}); alreadyQueued {
+		return
+	}
+
 	select {
 	case s.scanQueue <- scanTask{repoPath: repoPath, force: force}:
 	default:
+		s.inFlight.Delete(repoPath)
 		log.Warn("scan queue full, dropping repo", "repo", repoPath)
 	}
 }
@@ -475,6 +489,7 @@ func (s *Scanner) worker(ctx context.Context) {
 			}
 			results := s.scanRepo(task.repoPath, task.force)
 			s.publishResults(results)
+			s.inFlight.Delete(task.repoPath)
 		}
 	}
 }
