@@ -57,10 +57,17 @@ export const chip = style({
 });
 
 export const chipActive = style({
-  background: vars.color.primary,
-  color: vars.color.textInverse,
-  borderColor: vars.color.primary,
+  // primary+textInverse fails WCAG AA (4.43:1 in the clean theme, needs
+  // 4.5:1) — primaryActive+primaryText is the existing "pressed state" token
+  // pair and passes with margin (6.29:1) without touching primary's much
+  // broader usage across the app.
+  background: vars.color.primaryActive,
+  color: vars.color.primaryText,
+  borderColor: vars.color.primaryActive,
   ":hover": {
+    // primaryHover (#818cf8) is a light indigo — textInverse (dark) is the
+    // correct pairing here, not primaryText (white), which would fail
+    // contrast against this specific background.
     background: vars.color.primaryHover,
     color: vars.color.textInverse,
   },

@@ -634,7 +634,8 @@ export const cleanTheme = createTheme(vars, {
     primaryDark: "#3730a3",
     primaryText: "#ffffff",
 
-    success: "#10b981",
+    // was #10b981 — 3.83:1 on successBg fails WCAG AA; #34d399 = 5.06:1 ✅
+    success: "#34d399",
     successBg: "#064e3b",
     warning: "#f59e0b",
     warningBg: "#78350f",
