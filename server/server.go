@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -302,6 +303,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.ExternalDiscovery.Start(5 * time.Second)
 	deps.ExternalApprovalMonitor.Start()
 	deps.ExternalApprovalMonitor.IntegrateWithDiscoveryTmux(deps.ExternalDiscovery, deps.TmuxStreamerManager)
+
+	// Wire the shared streamer manager into SessionService so StopShell can evict a
+	// shell's streamer on close, before it's handed to the WebSocket handler below.
+	deps.SessionService.SetTmuxStreamerManager(deps.TmuxStreamerManager)
 
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
 	wsHandler := services.NewConnectRPCWebSocketHandler(
@@ -687,6 +692,80 @@ func (s *Server) RegisterHTTPHandler(pattern string, handler http.Handler) {
 	log.Info("Registered HTTP handler", "pattern", pattern)
 }
 
+// listenLoopbackAware binds addr for the HTTP server. When addr's host is
+// "localhost", it binds both loopback address families (127.0.0.1 and ::1)
+// explicitly instead of relying on net.Listen("tcp", "localhost:port"), which
+// only ever binds whichever single address the resolver returns first. On
+// dual-stack machines (macOS resolves "localhost" to both 127.0.0.1 and ::1)
+// that gap means a browser WebSocket upgrade that resolves to the address we
+// didn't bind gets ECONNREFUSED, even though plain HTTP requests succeed by
+// falling back across addresses. Any other host is bound as before.
+func listenLoopbackAware(addr string) (net.Listener, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "localhost" {
+		return net.Listen("tcp", addr)
+	}
+
+	ln4, err := net.Listen("tcp4", "127.0.0.1:"+port)
+	if err != nil {
+		return nil, err
+	}
+	ln6, err := net.Listen("tcp6", "[::1]:"+port)
+	if err != nil {
+		log.Warn("IPv6 loopback listener unavailable, continuing on IPv4 only", "error", err)
+		return ln4, nil
+	}
+	return &dualStackListener{ln4: ln4, ln6: ln6, accepted: make(chan acceptResult)}, nil
+}
+
+// acceptResult carries the outcome of one net.Listener.Accept call across a
+// goroutine boundary.
+type acceptResult struct {
+	conn net.Conn
+	err  error
+}
+
+// dualStackListener presents two underlying loopback listeners (IPv4 and
+// IPv6) as a single net.Listener, so the http.Server can Serve() over both
+// with one call.
+type dualStackListener struct {
+	ln4, ln6 net.Listener
+	accepted chan acceptResult
+	once     sync.Once
+}
+
+func (d *dualStackListener) relay(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		d.accepted <- acceptResult{conn: conn, err: err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (d *dualStackListener) Accept() (net.Conn, error) {
+	d.once.Do(func() {
+		go d.relay(d.ln4)
+		go d.relay(d.ln6)
+	})
+	res := <-d.accepted
+	return res.conn, res.err
+}
+
+func (d *dualStackListener) Close() error {
+	err4 := d.ln4.Close()
+	err6 := d.ln6.Close()
+	if err4 != nil {
+		return err4
+	}
+	return err6
+}
+
+func (d *dualStackListener) Addr() net.Addr {
+	return d.ln4.Addr()
+}
+
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
@@ -727,7 +806,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
 			err = s.httpServer.ListenAndServeTLS("", "")
 		} else {
-			ln, lerr := net.Listen("tcp", s.GetAddr())
+			ln, lerr := listenLoopbackAware(s.GetAddr())
 			if lerr != nil {
 				errCh <- lerr
 				return

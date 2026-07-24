@@ -995,6 +995,9 @@ enum StuckReason {
   STUCK_REASON_PUSH_FAILED = 6;
   STUCK_REASON_ORPHANED_TRIAGE = 7;
   STUCK_REASON_AUTONOMOUS_STUCK = 8;
+  STUCK_REASON_SPAWN_FAILED = 9;
+  STUCK_REASON_PLAN_NOT_APPROVED = 10;
+  STUCK_REASON_PR_PENDING_NO_PR = 11;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

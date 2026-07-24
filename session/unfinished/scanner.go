@@ -159,8 +159,11 @@ type Scanner struct {
 
 	tickInterval time.Duration // default 30s, overridable in tests
 
-	// sessionRepos tracks repos discovered via auto-spider (session paths).
-	sessionRepos sync.Map // map[string]string  sessionID -> repoPath
+	// sessionRepos tracks repos discovered via auto-spider (session paths),
+	// keyed by session UUID — not Title — so a later EventSessionDeleted
+	// (which only carries SessionID, the UUID; Session is nil for delete
+	// events) can look up which repo the deleted session owned (BUG-034).
+	sessionRepos sync.Map // map[string]string  sessionUUID -> repoPath
 
 	// autoSpiderEnabled controls whether SessionCreated/Updated events trigger scans.
 	autoSpiderEnabled atomic.Bool
@@ -233,6 +236,7 @@ func (s *Scanner) Start(ctx context.Context) {
 	}
 	go s.coordinator(ctx)
 	go s.subscribeToSessionEvents(ctx)
+	go s.pruneMissingRepos(ctx)
 
 	if w, err := fsnotify.NewWatcher(); err != nil {
 		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
@@ -742,6 +746,47 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 	})
 }
 
+// pruneRepoInterval is a var (not a const) so tests can shrink it instead of
+// waiting out the real 5-minute cadence.
+var pruneRepoInterval = 5 * time.Minute
+
+// pruneMissingRepos is a backstop, independent of the explicit RemoveRepo
+// call sites (BacklogService.cleanupItemWorktreesExcept,
+// subscribeToSessionEvents's EventSessionDeleted handling): periodically
+// checks every currently-registered repo path still exists on disk and
+// removes any that don't. Catches any worktree/repo removal path — present
+// or future — that doesn't explicitly call RemoveRepo, so this class of bug
+// (BUG-034: a repo watched forever after the session/worktree that owned it
+// is long gone) can't silently reappear the next time a new cleanup path is
+// added without remembering to wire this in. Cheap: one os.Stat per
+// registered repo, once per tick, no scan/allocation work.
+func (s *Scanner) pruneMissingRepos(ctx context.Context) {
+	tick := time.NewTicker(pruneRepoInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			var stale []string
+			s.repoSet.Range(func(key, _ any) bool {
+				repoPath, _ := key.(string)
+				if repoPath == "" {
+					return true
+				}
+				if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+					stale = append(stale, repoPath)
+				}
+				return true
+			})
+			for _, repoPath := range stale {
+				log.Info("pruning repo removed from disk", "path", repoPath)
+				s.RemoveRepo(repoPath)
+			}
+		}
+	}
+}
+
 // AddPinnedRepo validates that path is a git repo, then adds it.
 func (s *Scanner) AddPinnedRepo(repoPath string) error {
 	if _, err := os.Stat(repoPath); err != nil {
@@ -765,7 +810,15 @@ func (s *Scanner) SetAutoSpider(enabled bool) {
 	s.autoSpiderEnabled.Store(enabled)
 }
 
-// subscribeToSessionEvents listens for SessionCreated/Updated events and enqueues repos.
+// subscribeToSessionEvents listens for SessionCreated/Updated events and
+// auto-spiders their repo into the scan set, and for SessionDeleted events to
+// remove it again (BUG-034) — without this half of the symmetry, every
+// auto-spidered repo stayed watched forever, even long after its session
+// (and the worktree it pointed at) was gone. A repo is only actually removed
+// once no other tracked session still references it (sessionRepos is checked
+// for any other entry pointing at the same repoRoot first), so two sessions
+// sharing one repo root (e.g. two non-worktree sessions in the same project)
+// don't have their scanning cut out from under the surviving one.
 func (s *Scanner) subscribeToSessionEvents(ctx context.Context) {
 	if s.eventBus == nil {
 		return
@@ -781,23 +834,53 @@ func (s *Scanner) subscribeToSessionEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if !s.autoSpiderEnabled.Load() {
-				continue
+			switch evt.Type {
+			case pkgevents.EventSessionCreated, pkgevents.EventSessionUpdated:
+				if !s.autoSpiderEnabled.Load() {
+					continue
+				}
+				if evt.Session == nil || evt.Session.Path == "" {
+					continue
+				}
+				repoRoot := findGitRepoRootSimple(evt.Session.Path)
+				if repoRoot == "" {
+					continue
+				}
+				s.sessionRepos.Store(evt.Session.UUID, repoRoot)
+				s.AddRepo(repoRoot)
+			case pkgevents.EventSessionDeleted:
+				s.forgetSessionRepo(evt.SessionID)
 			}
-			if evt.Type != pkgevents.EventSessionCreated && evt.Type != pkgevents.EventSessionUpdated {
-				continue
-			}
-			if evt.Session == nil || evt.Session.Path == "" {
-				continue
-			}
-			repoRoot := findGitRepoRootSimple(evt.Session.Path)
-			if repoRoot == "" {
-				continue
-			}
-			sessionID := evt.Session.Title
-			s.sessionRepos.Store(sessionID, repoRoot)
-			s.AddRepo(repoRoot)
 		}
+	}
+}
+
+// forgetSessionRepo drops sessionUUID's entry from sessionRepos and, if no
+// other tracked session still references the same repo root, tells the
+// scanner to stop watching it (BUG-034). No-op if sessionUUID was never
+// auto-spidered (e.g. a pinned repo, or auto-spider was disabled).
+func (s *Scanner) forgetSessionRepo(sessionUUID string) {
+	if sessionUUID == "" {
+		return
+	}
+	v, loaded := s.sessionRepos.LoadAndDelete(sessionUUID)
+	if !loaded {
+		return
+	}
+	repoRoot, _ := v.(string)
+	if repoRoot == "" {
+		return
+	}
+	stillReferenced := false
+	s.sessionRepos.Range(func(_, other any) bool {
+		if otherRepo, _ := other.(string); otherRepo == repoRoot {
+			stillReferenced = true
+			return false
+		}
+		return true
+	})
+	if !stillReferenced {
+		s.RemoveRepo(repoRoot)
 	}
 }
 

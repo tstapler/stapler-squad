@@ -1,8 +1,12 @@
 # BUG-018: Gob Encoding Dominates Session Persistence Memory [SEVERITY: Medium]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (superseded — verified 2026-07-22)
 **Discovered**: 2026-04-24
 **Impact**: Session persistence layer allocates 35MB (20% of heap) via gob deserialization. Grows with session count, degrading memory efficiency over time.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `session/storage.go`'s session persistence layer no longer uses `encoding/gob` at all — it is backed by the ent ORM / SQLite (`session/ent/`, `Storage.GetEntClient()`, `AddInstance`/`LoadInstances` go through ent queries). `grep -rn "encoding/gob"` across the repo finds exactly one remaining call site, `session/search/index_store.go` — the search-index cache, an unrelated subsystem never in scope for this bug. This was resolved by the broader ent/SQLite migration (not a targeted fix for this bug specifically), so no further action is needed. Closing without a regression test since there's no gob-based code path left to regress.
 
 ## Problem Description
 

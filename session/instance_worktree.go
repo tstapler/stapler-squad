@@ -126,21 +126,38 @@ func (i *Instance) resolveStartPath(basePath string) string {
 	startPath := i.WorkingDir
 	if !filepath.IsAbs(i.WorkingDir) {
 		startPath = filepath.Join(basePath, i.WorkingDir)
-	} else if i.gitManager.HasWorktree() {
+	} else if i.gitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
 		// For worktree sessions, an absolute WorkingDir must be within the worktree.
 		// CaptureCurrentState() can persist the process CWD (e.g. the main repo path
-		// when Claude cd's there), which would otherwise bypass worktree isolation.
-		rel, err := filepath.Rel(basePath, startPath)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			log.Warn("working dir is outside worktree, using worktree path", "path", startPath, "worktree", basePath)
-			return basePath
-		}
+		// when Claude cd's there) — this is a read-side backstop for that; see
+		// pathEscapesRoot's doc comment for the write-side gate that now also exists
+		// (BUG-033) and for why this check alone isn't sufficient on its own: it only
+		// fires when i.gitManager.HasWorktree() is already true at the moment a
+		// session (re)starts, which is not guaranteed on every restart ordering.
+		log.Warn("working dir is outside worktree, using worktree path", "path", startPath, "worktree", basePath)
+		return basePath
 	}
 	if _, err := os.Stat(startPath); os.IsNotExist(err) {
 		log.Warn("working directory doesn't exist, using fallback", "path", startPath, "fallback", basePath)
 		return basePath
 	}
 	return startPath
+}
+
+// pathEscapesRoot reports whether candidate is outside root (or root/candidate
+// can't be compared at all, treated as escaped — fail closed). Shared by
+// resolveStartPath (read-side backstop) and CaptureCurrentState (write-side
+// gate, BUG-033) so a worktree session's persisted WorkingDir can never
+// silently point outside its own isolated worktree in the first place —
+// see CaptureCurrentState's doc comment for the live incident this closes:
+// an agent that `cd`s into the parent repo (e.g. to "mirror" a branch) had
+// that path captured and persisted with no validation, and depending on
+// gitManager's re-initialization ordering on the next restart, resolveStartPath's
+// own guard could be bypassed, starting the session's next run directly in the
+// shared parent checkout instead of its worktree.
+func pathEscapesRoot(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err != nil || strings.HasPrefix(rel, "..")
 }
 
 // GetEffectiveRootDir returns the root directory where this session operates.

@@ -1,8 +1,12 @@
 # BUG-019: compress/flate Writers Not Pooled [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-04-24
 **Impact**: HTTP response compression allocates a new flate writer per request. At 12MB resident and being the top active CPU consumer (18% of CPU samples), this wastes memory and adds latency on every compressed response.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `server/middleware/gzip.go` already pools both gzip and zstd writers via `sync.Pool` (`zstdPool`, `gzipPool` module-level vars, with a `pool *sync.Pool` field on the wrapper tracking which pool a writer was borrowed from for return-on-close). No `flate.NewWriter` call remains unpooled in the compression middleware. Already fixed by prior work; closing without further changes.
 
 ## Problem Description
 

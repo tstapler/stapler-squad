@@ -1,10 +1,10 @@
-# Unfinished Work
+# Up Next
 
 **ID**: `unfinished-work`  
 **Status**: stable  
 **Since**: v1.0.0
 
-Surfaces pending changes across git worktrees.
+Surfaces pending changes across git worktrees, open PRs, and queued backlog items.
 
 ## RPCs
 

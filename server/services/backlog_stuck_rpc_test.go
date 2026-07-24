@@ -45,6 +45,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonStaleWork, sessionv1.StuckReason_STUCK_REASON_STALE_WORK},
 		{domain.StuckReasonBouncing, sessionv1.StuckReason_STUCK_REASON_BOUNCING},
 		{domain.StuckReasonPushFailed, sessionv1.StuckReason_STUCK_REASON_PUSH_FAILED},
+		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {

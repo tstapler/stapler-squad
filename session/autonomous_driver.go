@@ -238,8 +238,21 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// appends "\n", producing "\r\n". In Claude Code's TUI input, "\r\n" inserts
 		// text into the multiline buffer without submitting — identical to steer_session
 		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
-		if sendErr := d.inst.SendKeys(nextMsg + "\r"); sendErr != nil {
+		//
+		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
+		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
+		// paste-detection window for sufficiently long prompts, folding it into the
+		// pasted block instead of submitting — live-confirmed via a stuck session
+		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
+		// waitForPaneSettle gives the TUI's paste detector a chance to close before
+		// the submit keystroke arrives as its own write.
+		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
 			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+			break
+		}
+		waitForPaneSettle(ctx, d.inst)
+		if sendErr := d.inst.SendKeys("\r"); sendErr != nil {
+			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
@@ -262,6 +275,49 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		outcome = AutonomousDriverOutcome{Stuck: true, Reason: reason, Turns: d.maxTurns}
 	}
 	d.fireCompletion(sessionName, outcome)
+}
+
+// paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
+// by *Instance's existing HasUpdated method.
+type paneSettleChecker interface {
+	HasUpdated() (updated bool, hasPrompt bool)
+}
+
+// paneSettlePollInterval and paneSettleMaxWait are vars (not consts) so tests
+// can shrink them instead of waiting out real timers.
+var (
+	paneSettlePollInterval = 150 * time.Millisecond
+	paneSettleMaxWait      = 2 * time.Second
+)
+
+// waitForPaneSettle polls inst until its pane content stops changing for two
+// consecutive polls, or paneSettleMaxWait elapses — whichever first. Used
+// between writing a turn's content and sending the submit keystroke (BUG-031):
+// a large paste can still be landing/rendering in the TUI's paste-detection
+// window when a follow-up "\r" arrives, so giving the pane a chance to settle
+// first shrinks the race that folds the submit keystroke into the paste block
+// instead of ending it. Best-effort: a pane that never settles (e.g. a
+// permanently busy session) is left alone once the deadline passes — the
+// caller still sends "\r" either way.
+func waitForPaneSettle(ctx context.Context, inst paneSettleChecker) {
+	deadline := time.Now().Add(paneSettleMaxWait)
+	stableCount := 0
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(paneSettlePollInterval):
+		}
+		updated, _ := inst.HasUpdated()
+		if updated {
+			stableCount = 0
+			continue
+		}
+		stableCount++
+		if stableCount >= 2 {
+			return
+		}
+	}
 }
 
 // maxRateLimitWait caps how long waitForRateLimitClear will block in total.

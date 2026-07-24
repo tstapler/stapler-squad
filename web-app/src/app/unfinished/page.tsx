@@ -5,8 +5,8 @@ import { UnfinishedTab } from "./UnfinishedTab";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 
 export const metadata: Metadata = {
-  title: "Unfinished Work - Stapler Squad",
-  description: "Git worktrees with uncommitted changes or unpushed commits.",
+  title: "Up Next - Stapler Squad",
+  description: "Work in progress, queued backlog items, and importable GitHub issues.",
 };
 
 export default function UnfinishedPage() {

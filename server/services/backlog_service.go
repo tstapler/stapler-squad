@@ -76,6 +76,19 @@ type SessionStopper interface {
 	TimeSinceLastMeaningfulOutput(sessionUUID string) (dur time.Duration, ok bool)
 }
 
+// RepoWatchRemover lets BacklogService tell the background unfinished-changes
+// scanner (session/unfinished.Scanner) to stop watching a repo path once its
+// worktree has been removed from disk — see BUG-034. Without this, the
+// scanner's watch list only ever grows: every worktree it was ever told about
+// (via session auto-spider) keeps getting rescanned on every tick forever,
+// even long after the session/item that created it finished and its worktree
+// was deleted. Nil-safe: BacklogService degrades gracefully (the repo just
+// stays watched a little longer, until the scanner's own self-pruning
+// backstop catches it) when not wired.
+type RepoWatchRemover interface {
+	RemoveRepo(repoPath string)
+}
+
 // itemSourceBackend is a narrow interface for item source persistence; satisfied by *session.Storage.
 type itemSourceBackend interface {
 	CreateItemSource(ctx context.Context, data session.ItemSourceData) (*session.ItemSourceData, error)
@@ -89,6 +102,10 @@ type BacklogService struct {
 	sessionCreator    SessionCreator
 	sessionStopper    SessionStopper
 	autonomousStarter AutonomousDriverStarter
+	// repoWatchRemover tells the unfinished-changes scanner to stop watching a
+	// worktree path once it's removed from disk (BUG-034). nil-safe — wired via
+	// SetRepoWatchRemover.
+	repoWatchRemover RepoWatchRemover
 	// oneShotRunner drives TriggerShipPR (backlog_service_ship.go) — the
 	// self-service "Ship PR" action on the item detail page. nil (the default)
 	// makes TriggerShipPR return CodeUnimplemented; wired via SetOneShotRunner.
@@ -365,6 +382,12 @@ func (s *BacklogService) Shutdown() {
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
+// to stop watching a worktree path once it's cleaned up (BUG-034).
+func (s *BacklogService) SetRepoWatchRemover(remover RepoWatchRemover) {
+	s.repoWatchRemover = remover
 }
 
 // SetAutonomousDriverStarter wires the optional autonomous driver starter.
@@ -760,6 +783,14 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
 		if cleanErr := g.Cleanup(); cleanErr != nil {
 			log.WarningLog.Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+			continue
+		}
+		// The worktree directory is gone — stop the unfinished-changes scanner
+		// from rescanning it forever (BUG-034). Only after Cleanup succeeds: a
+		// failed cleanup means the path may still be a real worktree worth
+		// watching.
+		if s.repoWatchRemover != nil {
+			s.repoWatchRemover.RemoveRepo(wt.WorktreePath)
 		}
 	}
 }

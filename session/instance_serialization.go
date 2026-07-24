@@ -301,6 +301,11 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize TagManager backed by the Instance.Tags slice
 	instance.tagManager = NewTagManager(&instance.Tags)
 
+	// Shell registry is not part of InstanceData and defaults to nil; initialize
+	// it so restored instances can spawn/track shells (see ShellRegistry's
+	// nil-receiver-safe methods, which otherwise silently no-op).
+	instance.initShellRegistry()
+
 	// Sync atomic shadow fields so lock-free readers see the correct initial values.
 	instance.SyncAtomicTimestamps()
 

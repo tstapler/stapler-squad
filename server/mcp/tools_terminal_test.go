@@ -383,3 +383,82 @@ func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
 		t.Errorf("steerSession returned validation error %q after valid message; expected SendKeys to be reached", code)
 	}
 }
+
+// --- BUG-035: findInstance must prefer the live instance over LoadInstances() ---
+
+// fakeLiveInstanceFinder is a test double implementing liveInstanceFinder,
+// returning a scripted instance (or nil) per session ID.
+type fakeLiveInstanceFinder struct {
+	instances map[string]*session.Instance
+}
+
+func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+	return f.instances[id]
+}
+
+// TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt is the
+// direct regression test for BUG-035: every MCP tool that mutates a
+// session's terminal (write_to_session, send_control, run_command,
+// steer_session) called Storage.LoadInstances() on every single invocation
+// via findInstance — but LoadInstances() always defers Start() ("so a bulk
+// load (server startup) doesn't block"), so the Instance handed back was
+// never the live one and SendKeys deterministically failed with "instance
+// has not been started", regardless of how long the server had actually
+// been running. findInstance must now prefer th.live (the real live
+// instance) over the LoadInstances()-reconstructed one when both exist —
+// proven here by returning two distinguishable instances (different
+// WorkingDir) for the same session ID from each source and asserting the
+// live one wins.
+func TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt(t *testing.T) {
+	liveInst := &session.Instance{Title: "s1", WorkingDir: "/live/path"}
+	staleInst := &session.Instance{Title: "s1", WorkingDir: "/stale/reconstructed/path"}
+
+	th := &terminalHandlers{
+		store: &stubStore{instances: []*session.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"s1": liveInst}},
+	}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != liveInst {
+		t.Errorf("expected the live instance (WorkingDir=%q) to be returned, got WorkingDir=%q", liveInst.WorkingDir, got.WorkingDir)
+	}
+}
+
+// TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt
+// verifies the fallback path: a session th.live doesn't track (e.g. outside
+// the review queue poller's scope) must still be found via the pre-fix
+// LoadInstances() path rather than returning SESSION_NOT_FOUND.
+func TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt(t *testing.T) {
+	staleInst := &session.Instance{Title: "s1"}
+	th := &terminalHandlers{
+		store: &stubStore{instances: []*session.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{}}, // wired, but doesn't have "s1"
+	}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != staleInst {
+		t.Error("expected fallback to the LoadInstances()-sourced instance when the live finder doesn't have it")
+	}
+}
+
+// TestFindInstance_should_fallBackToStore_When_LiveFinderNil verifies the
+// nil-safety guard — th.live unset (as in every pre-existing test in this
+// file) must behave exactly as before this fix, not panic.
+func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
+	staleInst := &session.Instance{Title: "s1"}
+	th := &terminalHandlers{store: &stubStore{instances: []*session.Instance{staleInst}}}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != staleInst {
+		t.Error("expected the LoadInstances()-sourced instance when th.live is nil")
+	}
+}

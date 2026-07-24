@@ -1,10 +1,14 @@
 # BUG-022: ETagCache Uses sync.RWMutex Over Map Instead of sync.Map [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-06-24
 **Impact**: ETagCache is a read-mostly cache where entries are written once and read on every poll
 tick. `sync.RWMutex` over `map[string]etagEntry` forces readers to acquire a shared lock;
 replacing with `sync.Map` (or `xsync.MapOf`) gives lock-free reads in the steady state.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `ETagCache` (`github/etag_cache.go`) already stores entries in `store sync.Map`, with a doc comment explicitly citing this exact rationale: "sync.Map gives lock-free reads in the steady state — entries are written once on first PR discovery and then read on every subsequent poll tick." Already fixed by prior work; closing without further changes.
 
 ## Problem Description
 

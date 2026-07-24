@@ -83,6 +83,15 @@ Combine into one gap list, bucketed:
 2. **Manual gates** — places a human must act that a policy/config could replace
 3. **Non-configurable pipeline steps** — hardcoded skill/command choice, no hook for user-supplied instructions (e.g. "use my SDD skills for this item type") — the core ask; start from `BacklogItemData` needing a per-item skill/command-list field
 
+For bucket 1 findings specifically, also name the **recurring shape**, not just the instance —
+this project's reconciliation bugs keep recurring in a small number of shapes across audit
+passes (2026-07-14 through present): a spawn call silently no-ops instead of erroring, a
+crash-recovery sweep's own exclusion guard defeats the exact case it should catch, an event
+(exit callback, status transition) is lost across a service restart with no catch-up path,
+notify-once state that's marked but never resolved automatically. If a new finding matches
+one of these shapes, say so explicitly — it's evidence the systemic fix from a prior pass
+didn't actually close the class, only patched the instance.
+
 Write the raw findings to `docs/tasks/backlog-feature-improvement.md` (Implementation-Plan format, per this repo's task-doc convention) as the audit record, then route each bucket per Phase 5.
 
 ## Phase 5 — Route Fixes Through SDD
@@ -98,3 +107,24 @@ Don't hand-implement fixes directly off the audit — route each bucket through 
 For bucket 3, write `project_plans/backlog-configurable-pipeline/requirements.md` directly from the Phase 4 findings — skip the `sdd:1-ideate` interview, since the audit already answered *what* and *why* — then start SDD at `sdd:2-research`. Keep each requirement traceable back to the specific hotspot/UI/architecture finding that motivated it.
 
 Per `.claude/rules/sdd-planning-artifacts-commit.md`: commit `project_plans/backlog-configurable-pipeline/` before the session ends, even if implementation hasn't started yet.
+
+### Prefer systemic fixes over instance patches
+
+This feature has been audited repeatedly (see the dated `## Update` sections in
+`docs/tasks/backlog-feature-improvement.md`) and the same bug *shapes* keep resurfacing under
+new item IDs — a strong signal that prior fixes closed the instance, not the class. Every
+`sdd:fix-bug` run against a bucket-1 finding now includes a mandatory Phase D
+("Reflect — fix the class, not the instance") that classifies the root cause via
+`quality:reflect-and-fix`'s taxonomy and implements enforcement at the earliest achievable
+level (type → lint → test), not just a regression test for that one item. When routing a
+finding here:
+
+- Check whether it matches a shape already named in this doc's prior updates before treating
+  it as new — if so, the fix must explain why the earlier attempt didn't close the class, and
+  address that gap, not just this occurrence.
+- Prefer a fix that removes the failure mode structurally (e.g. a shared spawn helper that
+  can't silently no-op, a sweep whose exclusion guard is unit-tested against the exact
+  self-defeating case found here) over a targeted patch at the one call site the audit
+  happened to find.
+- If a bucket-1 fix ships without closing the class, note that explicitly in the next audit
+  pass rather than silently re-discovering the same shape as a "new" bug.

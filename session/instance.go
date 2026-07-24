@@ -77,6 +77,14 @@ const (
 	// EventExited fires when the underlying program exits unexpectedly (not via an
 	// operator-initiated Kill/Stop). Callers may use this to drive auto-restart logic.
 	EventExited
+	// EventStopped fires when Destroy() tears down the instance via an explicit
+	// operator-initiated Kill/Stop (e.g. the stop_session MCP tool, DeleteSession
+	// RPC, or backlog stale-work remediation). Kept distinct from EventExited so a
+	// future auto-restart listener can still ignore deliberate stops, while
+	// listeners that only care "is this session now gone" (e.g.
+	// BacklogLifecycleListener's ItemSession.EndedAt bookkeeping) can subscribe to
+	// both.
+	EventStopped
 )
 
 // LifecycleListener is implemented by any component that wants to receive Instance
@@ -1231,8 +1239,13 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
-// Destroy completely destroys the instance - both tmux session and worktree
+// Destroy completely destroys the instance - both tmux session and worktree.
+// Fires EventStopped unconditionally (even if the instance was never started)
+// so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
+// ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+
 	if !i.started.Load() {
 		// If instance was never started, just return success
 		return nil

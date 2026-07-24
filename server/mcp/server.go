@@ -34,8 +34,18 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 
 	registerDiscoveryTools(s, &discoveryHandlers{store: store})
 	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc})
+	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
+	// interface would produce a non-nil interface value around a nil pointer —
+	// th.live != nil would then be true, and calling FindLiveInstance on it
+	// would panic on the nil receiver. Guard explicitly so the classic Go
+	// nil-interface trap can't reintroduce this.
+	var liveFinder liveInstanceFinder
+	if svc != nil {
+		liveFinder = svc
+	}
 	registerTerminalTools(s, &terminalHandlers{
 		store:      store,
+		live:       liveFinder,
 		scrollback: sbMgr,
 		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
 	})

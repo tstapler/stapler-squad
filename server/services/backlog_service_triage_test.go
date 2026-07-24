@@ -115,6 +115,57 @@ func TestNotifyReworkCapHit_should_persistRowSurvivingRestart_When_CapHit(t *tes
 	assert.Equal(t, domain.StuckReasonReworkCap, open[0].Reason)
 }
 
+// --- BUG-030: AutoReopenAfterFailedReview's swallowed rollback failure ---
+
+// TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called is the
+// regression test for BUG-030: live incident on backlog item 54e5aa1f
+// ("The camera dialog freezes forever on picture capture") — AutoReopenAfterFailedReview
+// transitioned the item review->in_progress, its SpawnSessionFromItem call then
+// failed, and the scoped rollback to "review" ALSO failed (its precondition no
+// longer matched). Before this fix, that double failure was only
+// log.ErrorLog.Printf'd — the item was left silently stranded in_progress with
+// no work session and no operator-visible signal anywhere, invisible to every
+// stuck detector (none of them check "in_progress with zero live sessions").
+// notifySpawnAndRollbackFailed is the fix: a durable StuckReasonSpawnFailed row
+// plus an operator notification, mirroring notifyReworkCapHit's structure.
+func TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Camera dialog freezes test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	svc.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title,
+		fmt.Errorf("failed to spawn session: worktree setup failed"),
+		fmt.Errorf("precondition failed: item already updated"))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonSpawnFailed, open[0].Reason,
+		"the item must be durably marked stuck, not left silently stranded in_progress with no session")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "rework session failed to spawn")
+	assert.NotNil(t, open[0].NotifiedAt, "dedup must be pre-set since the notification already fired")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when spawn and rollback both fail")
+	}
+}
+
 // --- Backlog work-item queue: DequeueNextQueuedItems ---
 
 // TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst verifies that once a
@@ -1071,6 +1122,90 @@ func createTestStorageWithRepo(t *testing.T) (*session.Storage, *session.EntRepo
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	return storage, repo
+}
+
+// fakeRepoWatchRemover is a test double implementing services.RepoWatchRemover,
+// recording every call so a test can assert on which repo paths were told to
+// stop being watched.
+type fakeRepoWatchRemover struct {
+	removed []string
+}
+
+func (f *fakeRepoWatchRemover) RemoveRepo(repoPath string) {
+	f.removed = append(f.removed, repoPath)
+}
+
+// TestCleanupItemWorktreesExcept_should_tellScannerToStopWatching_When_WorktreeCleanupSucceeds
+// is the regression test for BUG-034: cleaning up a completed backlog rework
+// round's worktree (the highest-volume real path removing worktrees from
+// disk — every reopen/rework cycle calls this) must also tell the
+// unfinished-changes scanner to stop watching that path, so it doesn't keep
+// rescanning a directory that no longer exists forever.
+func TestCleanupItemWorktreesExcept_should_tellScannerToStopWatching_When_WorktreeCleanupSucceeds(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/cleanup-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	remover := &fakeRepoWatchRemover{}
+	svc.SetRepoWatchRemover(remover)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Cleanup test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "cleanup-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, "")
+
+	require.Len(t, remover.removed, 1, "RemoveRepo must be called exactly once after the worktree is actually cleaned up")
+	assert.Equal(t, workWT, remover.removed[0])
+	_, statErr := os.Stat(workWT)
+	assert.True(t, os.IsNotExist(statErr), "sanity: the worktree directory must actually be gone")
+}
+
+// TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_PathIsExempted
+// verifies the exceptPath skip (a reopen/rework spawn reusing the same
+// worktree across revisions) also skips telling the scanner to stop watching
+// it — that worktree is still in active use, not actually gone.
+func TestCleanupItemWorktreesExcept_should_notTellScannerToStopWatching_When_PathIsExempted(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	const workBranch = "backlog/cleanup-except-test"
+	workWT := filepath.Join(t.TempDir(), "work-wt")
+	runGitTestCmd(t, repoPath, "worktree", "add", "-b", workBranch, workWT)
+
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
+	remover := &fakeRepoWatchRemover{}
+	svc.SetRepoWatchRemover(remover)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Cleanup except-path test item",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	attachPRFixWorkSession(t, storage, repo, item, "cleanup-except-work-uuid", repoPath, workWT, workBranch)
+
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+
+	svc.cleanupItemWorktreesExcept(context.Background(), sessions, workWT)
+
+	assert.Empty(t, remover.removed, "the exempted, still-in-use worktree must not be reported as removed")
+	_, statErr := os.Stat(workWT)
+	assert.NoError(t, statErr, "sanity: the exempted worktree directory must still exist")
 }
 
 // TestAutoReopenForPRFix_should_MergeAndPushMain_When_BranchIsStaleButMergesCleanly

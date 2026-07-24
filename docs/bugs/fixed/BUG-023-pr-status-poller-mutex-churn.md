@@ -1,11 +1,15 @@
 # BUG-023: PRStatusPoller Has Excessive Mutex Churn; Auth State Should Use atomic.Value [SEVERITY: Medium]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-06-24
 **Impact**: `session/pr_status_poller.go` uses a single `sync.Mutex` that serializes
 instance-list reads, auth state reads, and poll-result writes. Auth state should be an
 `atomic.Value` storing an immutable snapshot; instance list should use `sync.RWMutex`
 or `atomic.Value` snapshot to allow lock-free reads during the poll tick.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `PRStatusPoller.authState` is already `atomic.Value` (doc comment: "stores pollerAuthResult atomically; readers are lock-free"). `instances`/`noPRPollAfter` are guarded by a `deadlock.RWMutex` (`p.mu`), not a single blocking `sync.Mutex` — `SetInstances` takes the write lock, `GetInstances` takes only the read lock and returns a defensive copy, matching the fix approach's explicitly-acceptable alternative ("instance list should use sync.RWMutex... to allow lock-free reads"). Already fixed by prior work; closing without further changes.
 
 ## Problem Description
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	stdlog "log"
 	"os"
 	"os/exec"
@@ -486,6 +487,63 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "EventStarted should trigger UpdateItemSessionStarted")
 }
 
+// TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToReview
+// is the BUG-027 regression test: a session torn down via an explicit operator
+// stop (Instance.Destroy(), as called by the stop_session MCP tool,
+// SessionService.DeleteSession, and BacklogService.SessionStopper) must drive
+// the same in_progress→review transition and ItemSession.EndedAt bookkeeping
+// as a natural process exit — not silently strand the backlog item.
+func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToReview(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+
+	inst := &Instance{UUID: uuid.New().String()}
+	listener.WireToInstance(inst)
+
+	itemData := BacklogItemData{
+		Title:              "EventStopped test item",
+		Description:        "Testing operator-stop reconciliation",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		SkipReviewGate:     false,
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	isData := ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: "work",
+	}
+	createdIS, err := storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	// Simulate Destroy()'s deferred fire — an operator-initiated stop, not a
+	// natural exit — through the exact shim wired by WireToInstance.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		inst.fireLifecycleEvent(EventStopped, "operator-destroy")
+	}()
+	waitWithTimeout(t, done)
+
+	require.Eventually(t, func() bool {
+		fetchedItem, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
+		return ferr == nil && fetchedItem.Status == string(BacklogStatusReview)
+	}, 2*time.Second, 20*time.Millisecond, "EventStopped should trigger the same in_progress->review transition as EventExited")
+
+	repo := storage.repo.(*EntRepository)
+	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedIS.EndedAt, "EventStopped should set ItemSession.EndedAt, same as a natural exit")
+}
+
 // TestBacklogLifecycleListener_NewBacklogLifecycleListener creates a listener
 // without a spawner and verifies it's initialized correctly.
 func TestBacklogLifecycleListener_NewBacklogLifecycleListener(t *testing.T) {
@@ -573,6 +631,11 @@ type fakePRPendingChecker struct {
 	mergedErr error
 	status    *git.PRStatus
 	statusErr error
+
+	closeCalled  bool
+	closedPR     int
+	closeComment string
+	closeErr     error
 }
 
 func (f *fakePRPendingChecker) IsPRMerged(prNumber int) (bool, error) {
@@ -583,17 +646,40 @@ func (f *fakePRPendingChecker) GetPRStatus(prNumber int) (*git.PRStatus, error) 
 	return f.status, f.statusErr
 }
 
+func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
+	f.closeCalled = true
+	f.closedPR = prNumber
+	f.closeComment = comment
+	return f.closeErr
+}
+
 // fakePRFixSpawner is a test double implementing PRFixSpawner, recording
 // whether/how AutoReopenForPRFix was called. Same shape as mockReviewGateSpawner.
+//
+// err and onCall let a test simulate AutoReopenForPRFix's three real outcomes
+// (BUG-040 regression coverage for ReconcilePRPending's closed-PR branch,
+// which must only clear the item's PR fields once a reopen is CONFIRMED to
+// have moved the item off pr_pending):
+//   - success: onCall performs the real transition (e.g. via
+//     storage.TransitionBacklogItemStatus to in_progress) and err is nil.
+//   - no-op guard (active work session / rework cap): onCall is nil (or does
+//     nothing) and err is nil — mirrors AutoReopenForPRFix returning nil
+//     without transitioning anything.
+//   - error: err is non-nil; onCall is typically nil.
 type fakePRFixSpawner struct {
 	spawnCalled    bool
 	lastFixContext string
+	err            error
+	onCall         func()
 }
 
 func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
 	f.spawnCalled = true
 	f.lastFixContext = fixContext
-	return nil
+	if f.onCall != nil {
+		f.onCall()
+	}
+	return f.err
 }
 
 // fakeReviewRespawner is a test double implementing ReviewRespawner. Calls are
@@ -1160,11 +1246,18 @@ func TestReconcilePRPending_NoSpawn_WhenAllSignalsFalse(t *testing.T) {
 // TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens verifies that
 // a PR closed without merging (state=CLOSED, not caught by IsPRMerged since that
 // only returns true for MERGED) does not stall forever as a "healthy open PR" —
-// it must clear the cached PrNumber/PrURL (so the next pushAndCreatePR creates a
-// fresh PR instead of reusing the closed one) and spawn a fix session.
+// it must spawn a fix session and, once that reopen is CONFIRMED to have moved
+// the item off pr_pending, clear the cached PrNumber/PrURL (so the next
+// pushAndCreatePR creates a fresh PR instead of reusing the closed one).
+//
+// fakeSpawner.onCall performs the real transition AutoReopenForPRFix would
+// perform on success (pr_pending -> in_progress), mirroring production
+// behavior — this is what distinguishes "reopen succeeded" from BUG-040's
+// no-op/error cases below, which must NOT clear the fields.
 func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
+	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 152)
 
@@ -1173,18 +1266,310 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 		merged: false,
 		status: &git.PRStatus{IsClosed: true},
 	})
+	fakeSpawner := &fakePRFixSpawner{
+		onCall: func() {
+			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, transErr)
+		},
+	}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled, "a closed-without-merge PR must trigger a fix-session spawn")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
+	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
+}
+
+// TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenNoOps
+// is the regression test for BUG-040: a live incident where an item ended up
+// pr_pending with pr_number=0 and pr_url="" — a permanent dead end, since
+// FindPRPendingItems' PrNumberGT(0) filter then structurally excludes the item
+// from every future tick of ReconcilePRPending (and everything downstream of
+// it), with nothing left to retry.
+//
+// Before the fix, this branch cleared PrURL/PrNumber unconditionally BEFORE
+// calling AutoReopenForPRFix. AutoReopenForPRFix has legitimate no-op guard
+// paths (an active work session already running, the rework cap) that return
+// nil without transitioning the item off pr_pending — exactly what the fake
+// spawner here simulates (no onCall, no err: the real AutoReopenForPRFix
+// contract for those guards). After the fix, the fields must stay intact
+// whenever the item is still observed in pr_pending after the call, so the
+// item remains visible/retryable on the next tick instead of vanishing.
+func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenNoOps(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 173)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	// No onCall, no err: simulates AutoReopenForPRFix's no-op guard paths
+	// (hasActiveWorkSession / rework cap), which return nil without
+	// transitioning the item off pr_pending.
 	fakeSpawner := &fakePRFixSpawner{}
 	listener.SetPRFixSpawner(fakeSpawner)
 
 	er := storage.repo.(*EntRepository)
-	listener.ReconcilePRPending(context.Background(), er)
+	listener.ReconcilePRPending(ctx, er)
 
-	assert.True(t, fakeSpawner.spawnCalled, "a closed-without-merge PR must trigger a fix-session spawn")
+	assert.True(t, fakeSpawner.spawnCalled, "AutoReopenForPRFix must still be attempted")
 
-	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
-	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status, "item must remain pr_pending when the reopen no-ops")
+	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when the reopen never actually happened (BUG-040)")
+	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when the reopen never actually happened (BUG-040)")
+}
+
+// TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenErrors
+// covers the sibling BUG-040 shape: AutoReopenForPRFix returns a genuine error
+// (e.g. a storage failure) rather than a no-op. The fields must stay intact
+// here too — an error means nothing was transitioned, so clearing the PR
+// reference would produce the same dead end as the no-op case.
+func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenErrors(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 173)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	fakeSpawner := &fakePRFixSpawner{err: errors.New("simulated spawn failure")}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
+	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
+}
+
+// TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_LastCommitAlreadyOnMain
+// is the regression test for BUG-036: a live incident where a work session
+// closed its own PR directly (via `gh pr close`, bypassing this reconciler
+// entirely) because the item's work had already shipped through another
+// path — but ReconcilePRPending's "closed without merging" branch didn't
+// carry the same closeIfSupersededByMain check its CI-failing/blocked/
+// conflicting sibling branch already had (BUG-032), so it unconditionally
+// spawned another wasted rework cycle instead of recognizing the item was
+// already done. Mirrors TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain
+// but with prStatus.IsClosed=true (the "closed" branch) instead of
+// CIFailing=true (the "still open" branch).
+func TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_LastCommitAlreadyOnMain(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shipped.txt"), []byte("already shipped\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "shipped.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "the fix, already on main via a different PR")
+	shippedSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Closed-PR superseded test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/173"
+	prNumber := 173
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, shippedSHA, "the fix", time.Now(), 1))
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.False(t, fakeSpawner.spawnCalled, "a closed PR whose work already shipped must not trigger another rework cycle")
+	assert.True(t, checker.closeCalled, "the stale closed PR should still get an explanatory close comment")
+	assert.Equal(t, 173, checker.closedPR)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared")
+	assert.Empty(t, fetched.PrURL, "PrURL must be cleared")
+}
+
+// TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain is the
+// regression test for BUG-032's live incident: an item's PR was CI-failing/
+// conflicting purely because it had drifted stale behind an already-shipped
+// fix (the real work landed on main via a different PR entirely) — not
+// because its own code was wrong. Before the fix, ReconcilePRPending would
+// spawn yet another rework+review cycle against an empty/irrelevant diff
+// every time this happened. After the fix, when the item's last work
+// session's commit is already an ancestor of main, the stale PR is closed as
+// superseded and the item transitions straight to done — no fix-session spawn.
+func TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// A tiny real repo whose "main" branch already contains a commit —
+	// standing in for the live incident where the item's actual fix had
+	// already landed on main via a different PR.
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shipped.txt"), []byte("already shipped\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "shipped.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "the fix, already on main via a different PR")
+	shippedSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Superseded PR test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/173"
+	prNumber := 173
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	// A work session whose last commit is the one already on main — the same
+	// shape as the live incident (this item's own branch's work already
+	// shipped, but its stale PR still references it).
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, shippedSHA, "the fix", time.Now(), 1))
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: "## Failing CI checks\n- build FAILED\n",
+		},
+	}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.False(t, fakeSpawner.spawnCalled, "a superseded PR must not trigger another fix-session spawn")
+	assert.True(t, checker.closeCalled, "the stale PR must be closed")
+	assert.Equal(t, 173, checker.closedPR)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared")
+	assert.Empty(t, fetched.PrURL, "PrURL must be cleared")
+}
+
+// TestReconcilePRPending_SpawnsFixSession_When_LastCommitNotOnMain verifies
+// the new BUG-032 check doesn't over-trigger: a genuinely broken PR (its last
+// commit is real work that simply hasn't reached main) must still go through
+// the normal fix-session spawn path, not get treated as superseded.
+func TestReconcilePRPending_SpawnsFixSession_When_LastCommitNotOnMain(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+
+	// Unmerged feature work — never reached main.
+	runGitTestCmd(t, dir, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("wip\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature work, not yet on main")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+	runGitTestCmd(t, dir, "checkout", "main")
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Genuinely broken PR test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/174"
+	prNumber := 174
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, featureSHA, "feature work", time.Now(), 1))
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: "## Failing CI checks\n- build FAILED\n",
+		},
+	}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+
+	assert.True(t, fakeSpawner.spawnCalled, "a genuinely broken PR (commit not on main) must still spawn a fix session")
+	assert.False(t, checker.closeCalled, "a genuinely broken PR must not be closed as superseded")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
 }
 
 // TestBackfillMissingPRNumbers_ParsesNumberFromURL is a regression test for a
@@ -1429,6 +1814,93 @@ func TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.titles(), "PR creation failed")
+}
+
+// dbClosingPRCreator wraps a *fakePRCreator, closing the given EntRepository's
+// underlying DB connection immediately after CreatePR returns — simulating a
+// storage failure that arrives exactly between "PR created on GitHub" and
+// "PR fields persisted on the item" (BUG-040 root cause #1). Storage-level
+// helpers that shortcut straight to the concrete *EntRepository via a type
+// assertion (e.g. GetWorktreeDataBySessionUUID, and MarkStuck reached through
+// stayInReviewAndNotify) must keep working right up to this point — which
+// rules out swapping storage.repo for a wrapper type, since that assertion
+// would then fail for the entire call, not just the one write this test
+// targets. Closing the real repository's connection at the right moment
+// preserves its concrete type while still making the very next write fail.
+type dbClosingPRCreator struct {
+	*fakePRCreator
+	repo *EntRepository
+}
+
+func (f *dbClosingPRCreator) CreatePR(title, body string) (string, int, error) {
+	url, num, err := f.fakePRCreator.CreatePR(title, body)
+	f.repo.Close()
+	return url, num, err
+}
+
+// TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies is the
+// regression test for BUG-040 root cause #1: pushAndCreatePR previously only
+// logged a WARNING when the UpdateBacklogItem call caching a freshly created
+// PR's PrURL/PrNumber failed, then proceeded unconditionally to
+// resolveToPRPending anyway — landing the item in pr_pending with
+// pr_number=0/pr_url="", a permanent dead end invisible to every downstream
+// reconciler (FindPRPendingItems' PrNumberGT(0) filter structurally excludes
+// it). After the fix, a persist failure here must be treated exactly like a
+// push/PR-creation failure: the item stays in review, never silently
+// entering pr_pending with no way to look the PR back up.
+//
+// The underlying DB connection is closed (via dbClosingPRCreator) right after
+// CreatePR succeeds, so the PR-fields UpdateBacklogItem call — and every
+// other DB call after it, including stayInReviewAndNotify's own MarkStuck —
+// genuinely fails, exactly like a real transient storage outage would. That
+// means the durable push_failed row (and the notification gated on it) also
+// doesn't get written in this specific scenario — a real, pre-existing,
+// narrower gap in stayInReviewAndNotify's own error handling, not something
+// this fix introduces or is scoped to close. What this test asserts is the
+// invariant BUG-040 is actually about: the item must never silently reach
+// pr_pending with an empty PR reference.
+func TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "storage-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
+
+	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	storage, err := NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	item, is := newPushAndCreatePRTestFixture(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	creator := &dbClosingPRCreator{
+		fakePRCreator: &fakePRCreator{createURL: "https://github.com/owner/repo/pull/999", createNumber: 999},
+		repo:          repo,
+	}
+	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
+		return creator
+	})
+
+	listener.pushAndCreatePR(context.Background(), item, is)
+
+	assert.True(t, creator.pushCalled)
+	assert.True(t, creator.createCalled, "CreatePR must still be attempted — the failure is in caching its result")
+
+	// Re-open a fresh connection to the same on-disk DB to inspect final
+	// state — the original repo/client was closed above to force the
+	// PR-fields persist to fail.
+	repo2, err := NewEntRepository(WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	defer repo2.Close()
+	storage2, err := NewStorageWithRepository(repo2)
+	require.NoError(t, err)
+
+	fetched, err := storage2.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+		"item must stay in review when the PR-fields persist fails (BUG-040) — must never silently enter pr_pending with pr_number=0")
+	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must remain unset since the persist failed")
+	assert.Empty(t, fetched.PrURL, "PrURL must remain unset since the persist failed")
 }
 
 // TestPushAndCreatePR_AutoMergeFails_StillTransitionsButNotifies verifies the fix for

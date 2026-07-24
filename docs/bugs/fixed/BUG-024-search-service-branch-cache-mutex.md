@@ -1,11 +1,15 @@
 # BUG-024: SearchService branchCache and historyCache Use sync.RWMutex; Should Use singleflight + atomic.Value [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-06-24
 **Impact**: `server/services/search_service.go` uses `branchCacheMu sync.RWMutex` and
 `historyCacheMu sync.RWMutex` to protect map caches. The lock is not held across I/O
 (correct pattern), but concurrent cache misses for the same key cause redundant git
 subprocess calls. Replacing with `singleflight + atomic.Value` eliminates the duplicate
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `SearchService` (`server/services/search_service.go`) now uses `branchCache sync.Map` for the branch cache and `historyGroup singleflight.Group` + `atomic.Value`-style COW snapshot for the history cache — the doc comment states the model directly: "Concurrency model: atomic.Value (COW) + singleflight for the history cache." No `sync.RWMutex` remains guarding either cache. Already fixed by prior work; closing without further changes.
 calls and the mutex.
 
 ## Problem Description

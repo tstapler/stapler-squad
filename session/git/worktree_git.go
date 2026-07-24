@@ -662,6 +662,25 @@ func (g *GitWorktree) EnablePRAutoMerge(prNumber int) error {
 	return nil
 }
 
+// ClosePR closes prNumber without merging, posting comment as an explanatory
+// PR comment first. Used when a PR is discovered to be superseded (its
+// branch's work already landed on main through a different path) rather than
+// genuinely broken — see BUG-032.
+func (g *GitWorktree) ClosePR(prNumber int, comment string) error {
+	if err := checkGHCLI(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "gh", "pr", "close", strconv.Itoa(prNumber), "--comment", comment)
+	cmd.Dir = g.worktreePath
+	out, err := g.runCombinedOutput(cmd)
+	if err != nil {
+		return fmt.Errorf("gh pr close failed: %s (%w)", out, err)
+	}
+	return nil
+}
+
 // IsPRMerged reports whether the given PR number has been merged.
 func (g *GitWorktree) IsPRMerged(prNumber int) (bool, error) {
 	if err := checkGHCLI(); err != nil {

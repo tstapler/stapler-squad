@@ -7,7 +7,21 @@ import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import type { StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { BacklogItemCard } from "./BacklogItemCard";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { deriveStageDisplay, type Stage } from "./detail/StageTracker";
 import * as styles from "./BacklogBoard.css";
+
+// The board's 5 columns are exactly StageTracker's 5 stages — reuse the same
+// pure status->stage mapping the item-detail pipeline stepper already uses,
+// so a "queued"/"pr_pending"/"refining" item folds into its mapped column
+// (In Progress / Review / Idea respectively) instead of silently matching no
+// column at all (BUG-037: those items rendered nowhere on the board — no
+// error, no count, no way to tell they existed short of opening item
+// detail). Archived items are excluded from the board, same as before this
+// fix (archived never matched any of the 5 literal statuses either).
+function stageOf(status: BacklogItemStatus): Stage | null {
+  const { activeStage, archived } = deriveStageDisplay(status);
+  return archived ? null : activeStage;
+}
 
 interface BacklogBoardProps {
   onAction: (action: string, itemId: string) => void;
@@ -28,8 +42,6 @@ const COLUMNS: { status: BacklogItemStatus; label: string }[] = [
   { status: "review", label: "Review" },
   { status: "done", label: "Done" },
 ];
-
-const COLUMN_STATUSES = new Set<BacklogItemStatus>(COLUMNS.map((c) => c.status));
 
 // Epic 6.4 (backlog-event-driven-updates): how long a card's exit fade plays
 // in its origin column before it's removed from the DOM, and how long the
@@ -199,7 +211,7 @@ export function BacklogBoard({
     const flappedIds = new Set<string>();
     for (const item of items) {
       const pendingExit = exitingMap.get(item.id);
-      if (pendingExit && pendingExit.fromStatus === item.status) {
+      if (pendingExit && stageOf(pendingExit.fromStatus) === stageOf(item.status)) {
         const timer = exitTimersRef.current.get(item.id);
         if (timer) clearTimeout(timer);
         exitTimersRef.current.delete(item.id);
@@ -224,9 +236,9 @@ export function BacklogBoard({
         !flappedIds.has(item.id) &&
         isGenuineLiveChange &&
         prevStatus !== undefined &&
-        prevStatus !== item.status
+        stageOf(prevStatus) !== stageOf(item.status)
       ) {
-        if (COLUMN_STATUSES.has(prevStatus) && !exitingMap.has(item.id)) {
+        if (stageOf(prevStatus) !== null && !exitingMap.has(item.id)) {
           exitingMap.set(item.id, { item: { ...item, status: prevStatus }, fromStatus: prevStatus });
           exitingChanged = true;
           const duration = reducedMotionRef.current ? 0 : EXIT_TRANSITION_MS;
@@ -239,7 +251,7 @@ export function BacklogBoard({
           exitTimersRef.current.set(item.id, timer);
         }
 
-        if (COLUMN_STATUSES.has(item.status)) {
+        if (stageOf(item.status) !== null) {
           enteringSet.add(item.id);
           enteringChanged = true;
           const existingTimer = enterTimersRef.current.get(item.id);
@@ -287,10 +299,10 @@ export function BacklogBoard({
         data-testid="backlog-board"
       >
         {COLUMNS.map((column) => {
-          const baseItems = items.filter((i) => i.status === column.status);
+          const baseItems = items.filter((i) => stageOf(i.status) === column.status);
           const baseIds = new Set(baseItems.map((i) => i.id));
           const exitingForColumn = Array.from(exitingItems.values()).filter(
-            (e) => e.fromStatus === column.status && !baseIds.has(e.item.id)
+            (e) => stageOf(e.fromStatus) === column.status && !baseIds.has(e.item.id)
           );
           const displayItems =
             exitingForColumn.length === 0

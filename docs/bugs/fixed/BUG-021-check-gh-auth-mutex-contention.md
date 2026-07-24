@@ -1,8 +1,12 @@
 # BUG-021: CheckGHAuth Holds Mutex During External Auth Check [SEVERITY: Low]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-04-24
 **Impact**: GitHub auth check runs under a mutex, adding ~21% of total mutex delay (2.02s cumulative). Blocks concurrent requests during what should be a read-only, lock-free operation.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `CheckGHAuth` (`github/client.go`) now uses `ghAuthState` (an `atomic.Value` storing an immutable `authResult` snapshot, loaded/stored with no mutex) plus `ghAuthGroup` (`singleflight.Group`) to coalesce concurrent cache-miss callers into a single outbound request. Doc comment confirms: "No subprocess is invoked — avoids forkExec lock contention. Results are cached for 5 minutes. Concurrent callers share a single inflight call via singleflight." Already fixed by prior work; closing without further changes.
 
 ## Problem Description
 

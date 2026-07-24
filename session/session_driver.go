@@ -407,19 +407,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			// This preserves conversational context when Claude finishes but forgets to
 			// call /backlog/review or report_progress.
 			if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
-				nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
-					"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
-					"then submit with `/backlog/review` once all are done."
-				if sendErr := inst.SendKeys(nudge + "\r"); sendErr != nil {
-					log.Warn("SessionDriver: failed to send backlog nudge",
-						"session", inst.Title, "err", sendErr)
-				} else {
-					log.Info("SessionDriver: sent backlog nudge",
-						"session", inst.Title,
-						"idle", idle.Round(time.Second),
-					)
-					nudgeSentAt = time.Now()
-				}
+				nudgeSentAt = attemptBacklogNudge(inst, idle)
 				continue
 			}
 
@@ -478,6 +466,36 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			}
 		}
 	}
+}
+
+// attemptBacklogNudge sends a backlog work session the "you appear to have paused"
+// task-reminder nudge and returns the value the caller should record as nudgeSentAt.
+//
+// It always returns a non-zero, current timestamp — on a failed send exactly the same
+// as on a successful one. BUG-041: previously nudgeSentAt was only set in the success
+// case, so an identical failing SendKeys call retried on every subsequent driver tick
+// forever (live evidence: 392 consecutive failed sends over ~13 minutes against one
+// dead-pane session). A SendKeys failure here (e.g. tmux "invalid argument") is very
+// likely a dead/gone pane that retrying cannot fix, so this deliberately does not retry
+// the nudge itself. Returning a non-zero time makes the caller's graceTimeout/idle check
+// (which already fires once nudgeSentAt is non-zero) take over: after
+// driverBacklogNudgeGrace of continued silence it logs "session stuck" and calls
+// handleDriverFailure, which restarts the session once and marks it for human attention
+// on a second failure — the give-up signal this nudge path previously lacked.
+func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
+	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
+		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
+		"then submit with `/backlog/review` once all are done."
+	if sendErr := inst.SendKeys(nudge + "\r"); sendErr != nil {
+		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
+			"session", inst.Title, "err", sendErr)
+	} else {
+		log.Info("SessionDriver: sent backlog nudge",
+			"session", inst.Title,
+			"idle", idle.Round(time.Second),
+		)
+	}
+	return time.Now()
 }
 
 // handleDriverFailure is called when the driver detects a stuck or crashed session.

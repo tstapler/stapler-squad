@@ -182,6 +182,18 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // CaptureCurrentState records the pane's current working directory into WorkingDir.
 // Called during graceful shutdown so cold restore can restart in the right directory.
 // No-op if the session is not started, paused, or the tmux session is dead.
+//
+// For a worktree session, a captured path outside the worktree is refused rather
+// than persisted (BUG-033): live-confirmed on an autonomous backlog session whose
+// own isolated worktree was created successfully and never touched, while its agent
+// ran real work — two feature commits and a branch checkout — directly in the
+// shared parent repo checkout instead, apparently after `cd`-ing there mid-task.
+// resolveStartPath already had a read-side backstop against a stale out-of-worktree
+// WorkingDir, but that guard only fires when i.gitManager.HasWorktree() happens to
+// already be true at the moment a session (re)starts — not guaranteed on every
+// restart ordering — so a bad path could still be captured here, persisted, and
+// later used unguarded. Gating the write itself closes the gap at its source
+// instead of only defending against it on read.
 func (i *Instance) CaptureCurrentState() error {
 	if !i.started.Load() || i.Paused() {
 		return nil
@@ -205,6 +217,12 @@ func (i *Instance) CaptureCurrentState() error {
 	}
 	if path == "" {
 		return nil
+	}
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
+			log.Warn("refusing to persist working dir outside worktree", "session", i.Title, "path", path, "worktree", worktreePath)
+			return nil
+		}
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()

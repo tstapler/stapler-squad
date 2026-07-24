@@ -1,8 +1,12 @@
 # BUG-020: GetVCSStatus and GetSessionDiff Run Git Under Lock [SEVERITY: Medium]
 
-**Status**: 🐛 Open
+**Status**: ✅ RESOLVED (verified 2026-07-22)
 **Discovered**: 2026-04-24
 **Impact**: Git subprocess calls in VCS status and diff RPCs are executed while holding a mutex, serializing all concurrent callers and adding latency to every session diff/status request.
+
+## Resolution (2026-07-22)
+
+Verified against current code while triaging the open-bug backlog: `Instance.UpdateDiffStats` (`session/instance_worktree.go`) has an explicit doc comment "Performs I/O (git diff) outside the lock, then updates state under the write lock," and reads confirm it releases `i.mu.RLock()` before calling `i.gitManager.ComputeDiffIfReady()`/`computeDirDiffStats`, re-acquiring only to write the result. `WorkspaceService.GetVCSStatus` (`server/services/workspace_service.go`) uses a `sync.Map`-backed `vcsStatusCache` with no mutex wrapping `provider.GetStatus()` at all. Already fixed by prior work; closing without further changes.
 
 ## Problem Description
 

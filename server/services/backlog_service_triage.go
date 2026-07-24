@@ -172,6 +172,40 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	))
 }
 
+// notifySpawnAndRollbackFailed publishes an operator-facing notification and durable
+// BacklogStuckState row (StuckReasonSpawnFailed) when AutoReopenAfterFailedReview's
+// SpawnSessionFromItem call fails AND the subsequent scoped rollback to "review" also
+// fails — previously this left the item silently stranded at in_progress with no work
+// session and no visible error anywhere (BUG-030). Mirrors notifyReworkCapHit's
+// structure: a MarkStuck/MarkStuckNotified failure is logged but never suppresses the
+// notification itself.
+func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemID, itemTitle string, spawnErr, rollbackErr error) {
+	if s.storage != nil {
+		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusInProgress,
+			fmt.Sprintf("a rework session failed to spawn (%v) and the automatic rollback to review also failed (%v) — the item is in_progress with no active session. Click \"Reopen for Revision\" or \"Run Autonomously\" to retry.", spawnErr, rollbackErr))
+		if err != nil {
+			log.WarningLog.Printf("[notifySpawnAndRollbackFailed] MarkStuck item=%s: %v", itemID, err)
+		} else if applied {
+			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonSpawnFailed); notifyErr != nil {
+				log.WarningLog.Printf("[notifySpawnAndRollbackFailed] MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			}
+		}
+	}
+
+	if s.eventBus == nil {
+		return
+	}
+	// itemID as sessionID — see comment in notifyReworkCapHit above.
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		"Rework failed to start",
+		fmt.Sprintf("%s — a rework session failed to spawn and the automatic rollback also failed. The item is stranded in_progress with no active session; needs manual action.", itemTitle),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // notifyTriagePersistFailure publishes an operator-facing notification when one or more of
 // the post-triage persistence steps (saving the triage result, saving the plan artifacts
 // path, or transitioning the item to Ready) fails. These failures previously only reached
@@ -1083,6 +1117,11 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		}
 		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenAfterFailedReview] rollback to review failed for item %s: %v", itemID, rollbackErr)
+			// The item is now stranded in_progress with no active session and no
+			// visible error anywhere else (BUG-030) — a log line nobody reads.
+			// Mark it durably stuck so the reconciliation sweep and the operator
+			// both see it, instead of it sitting invisible forever.
+			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}

@@ -705,6 +705,14 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 //
 // The session must already exist in tmux. Call AttachToExisting() after creation to establish the PTY connection.
 func NewTmuxSessionFromExisting(exactSessionName string) *TmuxSession {
+	return NewTmuxSessionFromExistingWithServerSocket(exactSessionName, "")
+}
+
+// NewTmuxSessionFromExistingWithServerSocket is like NewTmuxSessionFromExisting but targets an
+// isolated tmux server socket (e.g. a shell session's TmuxServerSocket) instead of the default
+// server. serverSocket is resolved through ResolveSocket, so test-mode isolation still applies
+// when the caller passes "".
+func NewTmuxSessionFromExistingWithServerSocket(exactSessionName string, serverSocket string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	key := "tmux-ext-" + exactSessionName
@@ -712,7 +720,7 @@ func NewTmuxSessionFromExisting(exactSessionName string) *TmuxSession {
 	s := &TmuxSession{
 		sanitizedName:    exactSessionName, // Use exact name - no prefix transformation
 		program:          "",               // Unknown - external session
-		serverSocket:     "",               // Use default server
+		serverSocket:     ResolveSocket(serverSocket).String(),
 		ptyFactory:       MakePtyFactory(),
 		cmdExec:          cbExec,
 		registryKey:      key,

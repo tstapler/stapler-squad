@@ -893,3 +893,188 @@ when a pass has budget for the full swarm).
 5. **`sdd:quick` — batch the 3 UX findings above** (duplicate toast dedup, View Changes
    modal diffing the PR/commit instead of only the live worktree, Config Files loading
    state) — small, independent, batchable.
+
+## Update — 2026-07-22: only 1 item actually stuck now (down from 11) — but its root cause is a dead review pane whose exit was never observed
+
+Targeted re-check triggered by "several backlog items look frozen." Good news first: the
+07-19 bounce-loop fix apparently landed — `ListStuckBacklogItems` now returns only **1**
+stuck item (down from 18 rows / 11 items on 07-19). Of the other 2 in-flight items:
+
+- `e99d3f4a` (omnibar hang) is correctly parked at `queued` status by the WIP cap
+  (`maxConcurrentBacklogWorkItems = 2`, `backlog_service_triage.go:72-97`) — working as
+  designed, not a bug. It has a genuinely live, actively-running work session
+  (`stapler-squad-fix-omnibar-async-hang-timeouts-r2`, `Active`, fresh `last_activity_at`)
+  from before the WIP cap parked it, still legitimately mid-rework.
+- `54e5aa1f` (camera dialog) is **not** fine — it's a second, not-yet-flagged instance of the
+  same underlying class of bug as `9264efe7` below, just on the work-spawn side instead of
+  the review-spawn side. Its status flipped `review→in_progress` (rework) at
+  2026-07-22T02:01:47 after its review session (`6b8fc4fc`, tmux `staplersquad_review_54e5aa1f`,
+  same dead-pane pattern: verdict **PARTIAL** submitted, pane died Jul 20 21:23, `endedAt`
+  still `null` in the DB right now) — but **no new work session was ever spawned** for this
+  rework. `search_sessions("camera")` and a `backlog:work`-tagged search of the stelekit repo
+  both return zero live sessions for this item. It has been sitting `in_progress` with
+  nothing actually working on it since the transition. `ListStuckBacklogItems` doesn't catch
+  this yet — its detectors evidently don't have an "`in_progress` with no live/attached work
+  session" condition, only the review-side dead-pane and bounce-count checks. Same repro
+  value as `9264efe7` for the fix below; worth including as a second regression case since it
+  exercises the work-spawn path rather than the review-spawn path.
+
+### The one real stuck item: `9264efe7` "Backlog History feature Broken" (PR #173, still open/unmerged)
+
+`ListStuckBacklogItems` flags it `STUCK_REASON_BOUNCING` ("bounced in_progress<->review 3x
+in 24h, no PASS verdict") and `STUCK_REASON_AUTONOMOUS_STUCK` ("driver stopped after 20
+turns, no DONE signal"). Root-caused via tmux forensics, not just DB inspection:
+
+1. The item's dedicated review `Instance` (tmux session `staplersquad_review_9264efe7`,
+   deterministic title `"review:" + item.ID[:8]` from `SpawnReviewSession`,
+   `server/services/session_service.go:814-821`) ran a real review on 2026-07-19, called
+   `submit_review_verdict` with outcome **FAIL** (verdict correctly persisted — confirmed by
+   reading the pane's captured JSON result), and its underlying process then exited —
+   `tmux capture-pane` on that session today shows **`Pane is dead (status 0, Sun Jul 19
+   11:27:21 2026)`**, i.e. dead for 3 days straight.
+2. Despite that, `get_session`/`list_sessions` **still reports this Instance as `Active`
+   today** — the tmux control-mode exit callback that's supposed to flip `Status→Stopped`
+   and fire `handleReviewSessionExited` (`instanceOnExitCallback`, `session/instance.go:777`)
+   never ran for this pane death. `handleReviewSessionExited` is the *only* place that acts
+   on a FAIL verdict (`server/mcp/tools_backlog.go:509-516`'s explicit "deliberately no status
+   transition here" design) — so a verdict that's saved but never actioned leaves the item
+   parked in `review` forever, which is exactly what's observed.
+3. Two more review-role `item_sessions` rows were created afterward for this same item
+   (`0e8079fc`, created 2026-07-20T20:54, **`endedAt: null` to this moment**; a
+   `headless-re-review` row on 2026-07-22T03:09 that started/ended instantly) — but the
+   `staplersquad_review_9264efe7` tmux session's *creation timestamp* never changed from
+   Jul 19. Whatever `SpawnReviewSession` did for those two later cycles, it did not result in
+   a new live process actually running a review — so `0e8079fc` is an open DB row with
+   nothing behind it, guaranteed to sit there forever.
+4. A crash-recovery sweep already exists for exactly this class of bug —
+   `reconcileUnprocessedReviewVerdicts` (`session/backlog_lifecycle.go:1493-1585`, doc
+   comment literally describes "review session submitted its verdict... but died — crash,
+   OOM, **server restart** — before its exit event ever reached `handleReviewSessionExited`").
+   It is evidently not resolving this item. Two candidate reasons, not yet distinguished
+   (needs a live trace, not just reading): (a) its "verdict belongs to a prior review cycle"
+   guard (line 1558-1562, compares `latest.CreatedAt` against
+   `GetMostRecentStatusEventAt(..., BacklogStatusReview)`) may be excluding the original FAIL
+   verdict because the item has since re-entered "review" status via the later, process-less
+   cycles — a chicken-and-egg exclusion where the fix for reprocessing stale verdicts ends up
+   protecting the very row it should reprocess; or (b) the sweep isn't running on schedule at
+   all for this item.
+5. Corroborating evidence for *why* the exit event was likely dropped in the first place:
+   `~/.stapler-squad/logs/staplersquad*.log` shows at least 2 `"Shutting down HTTP
+   server..."` events today alone (08:08:50 and 08:44:27 local), consistent with repeated
+   `make install-service` restarts during active development (one is visible mid-command in
+   the captured pane scrollback of the `stapler-squad-bklg` session). `--tmux-keep-server`
+   correctly preserves tmux panes across these restarts (confirmed: all 3 review panes
+   examined survived with their pre-restart content intact), but the control-mode exit-watch
+   connection is in-process and does not — a pane that exits in the gap between a restart's
+   shutdown and the reattachment on the next startup has no listener to observe it die,
+   and nothing then rescans "already-dead panes with a saved-but-unactioned verdict" as part
+   of startup, only the periodic `reconcileUnprocessedReviewVerdicts` sweep — which per point
+   4 isn't closing this particular gap.
+
+### Answering "were any sessions marked done prematurely closed?"
+
+No evidence of that — the opposite problem is what's actually happening. No human or
+automated path force-closed anything; PR #173 is still open and unmerged (`gh pr view 173`:
+`state: OPEN`, last updated 2026-07-19, matching the last real push). The two `done→review`
+reversions seen today on unrelated items (`54e5aa1f`, `e99d3f4a`, both around 2026-07-21
+16:20–16:47) are the *review-gate correctly catching and reverting incorrect `done`
+transitions* — the system self-correcting, not premature/incorrect closure. The actual defect
+is sessions that **are** done (verdict submitted, process exited) never getting marked done
+in the backend — they linger as phantom `Active` records indefinitely, which is what
+confuses the reconciler into bouncing the item forever instead of ever reopening it.
+
+### Recommended next action (routing per skill Phase 5)
+
+**`sdd:fix-bug`**, scoped narrowly: "review Instance exit events lost across a service
+restart leave FAIL/PARTIAL verdicts permanently unactioned." Concrete repro is item
+`9264efe7` / PR #173 — use it as the regression case. Start the trace at
+`reconcileUnprocessedReviewVerdicts` (`session/backlog_lifecycle.go:1517`) to determine which
+of the two candidates in point 4 above is actually blocking it, since the fix differs
+(loosen/reorder the "prior review cycle" guard vs. fix the sweep's invocation). This is a
+`bucket 1` reconciliation bug per the skill's routing table — independent of the 07-19
+bounce-loop fix (already shipped) and independent of the 07-19 `autonomous_stuck`-orphaned-row
+fix (#4 above, still open) — can run as its own parallel `sdd:fix-bug` session.
+
+## Update — 2026-07-22 (night, full skill re-run): dead-review-pane fix confirmed shipped; same item now stuck in a new way (BUG-040), remediation-with-backoff system confirmed live and healthy
+
+Full re-run triggered by `/backlog-feature-improvement`. `git log` shows this project shipped
+substantial work since the last entry above, all same-day: `410db67b`/`3789a545` (auto-remediate
+stale work sessions), `7c3508a0`/`3bd2847c` (automated `push_failed` remediation with backoff
+gate), `b0f26785` (**Phase A stuck-item auto-remediation with exponential backoff**, #185),
+`2ec298d3`+`c9a4f336` (manual `TriggerRemediationNow`/`ResetStuckRemediation`/
+`BulkResetStuckRemediation` RPCs + `/unfinished` UI controls), `1c310eb5`/`11748379` (ship
+PASS-verdict PRs via a headless agent run — `shipViaAgentOrFallback` — before the mechanical
+`pushAndCreatePR` fallback), `ce4783c2`/`e71cb67d` (TOCTOU race on stale reopens),
+`d99875d1` (stop flagging bouncing items whose PR already merged), plus the three fixes visible
+at `HEAD` (`c2a419be`/`341d1a48`/`5d77b70b` — fresh-worktree-base false-positive-shipped,
+queued-blocked-by-planning-gate, kanban board hiding queued/pr_pending/refining items — see
+BUG-037/038/039, all now in `docs/bugs/fixed/`). This is the busiest single-day span this audit
+doc has recorded.
+
+### Live State
+
+`ListStuckBacklogItems`: 7 rows / 5 unique items (up slightly from the 1-item low on 07-22
+daytime, but structurally different — see below):
+
+| Item | Reason(s) | Detail |
+|---|---|---|
+| `693c2700` "Expose ID functionality in Backlog" | `BOUNCING` + `AUTONOMOUS_STUCK` | `remediationAttempts: 1-2`, `nextRemediationAt` ~15-100min out — **actively in a bounded backoff cycle**, not a runaway loop |
+| `61684863` "collapse session-list categories" | `AUTONOMOUS_STUCK` | `remediationAttempts: 1`, backoff scheduled |
+| `40cf8885` "Rebrand the unfinished page" | `BOUNCING` + `AUTONOMOUS_STUCK` | same shape as `693c2700` |
+| `e99d3f4a` "Omnibar creation hangs" | `PLAN_NOT_APPROVED` | queued, parked by the (now-surfaced, per BUG-038) planning gate — working as designed |
+| `9264efe7` "Backlog History feature Broken" | `AUTONOMOUS_STUCK` (stale) | **the real problem — see BUG-040 below** |
+
+**Good news, verified not just claimed**: the `remediationAttempts`/`nextRemediationAt` fields
+are new since the 07-19 audit entry and back a genuinely bounded system —
+`session/backlog_remediation.go`'s `MaxRemediationAttempts` (`= len(remediationBackoffSchedule)`,
+a hard cap) plus `evaluateRemediation`'s attempt-cap check (line 97) mean a bouncing item now
+provably cannot loop forever the way the 07-19 CRITICAL bounce-loop bug did — it either
+converges or parks with `justParked=true` for a human/operator reset via the new
+`ResetStuckRemediation`/`TriggerRemediationNow` RPCs and `/unfinished` UI buttons. This is a
+real, structural fix for that finding's root cause (a proper capped-backoff state machine, not
+just a patch to the one code path that was looping) — closes the 07-19 update's recommendation
+#1 as **done**, not just mitigated.
+
+### [1, NEW] BUG-040: `pr_pending` item loses its PR reference, becomes permanently unreconcilable
+
+Filed as `docs/bugs/open/BUG-040-pr-pending-item-loses-pr-reference-dead-end.md` — full
+root-cause writeup there. Summary: item `9264efe7` (the same item flagged as this doc's "one
+real stuck item" on 2026-07-22 daytime, after its dead-review-pane fix landed and it
+progressed to `pr_pending` off the back of PR #173) is now sitting at `status = pr_pending`
+with `pr_url = ""` and `pr_number = 0`, live-verified via direct sqlite query against
+`~/.stapler-squad/workspaces/d685c4b1a423cca3/sessions.db` — a shape that
+`ReconcilePRPending` structurally cannot act on (every code path in that function requires a
+real `PrNumber`), and that `ListStuckBacklogItems` doesn't specifically detect (only the
+unrelated, stale `AUTONOMOUS_STUCK` reason fires). Two candidate root causes identified by
+reading `session/backlog_lifecycle.go`, not yet distinguished by a live trace (this session's
+window had already rotated out of the log retention by the time it was investigated):
+`pushAndCreatePR`'s PR-field persist is best-effort/non-blocking before it unconditionally
+transitions to `pr_pending` (lines 2716-2747), and separately `ReconcilePRPending`'s closed-PR
+branch clears `PrURL`/`PrNumber` *before* confirming `AutoReopenForPRFix` actually reopened the
+item (lines 3320-3359) — either produces the exact observed dead end. **This is another
+instance of this doc's recurring bucket-1 shape**: a write silently doesn't happen (or happens
+out of order), and nothing detects the resulting terminal state. Routed to `sdd:fix-bug`
+(kicked off as a parallel worktree agent — see below); the bug doc's suggested fix direction
+adds a dedicated `StuckReason` for `pr_pending` items with no `PrNumber` so this shape is at
+least visible even before the write-ordering root cause is nailed down.
+
+### Bucket [3] — no material change this pass
+
+Not re-audited in full this run (the last two passes, 07-18 and 07-19, already found and
+tracked the concrete remaining gaps: pipeline-mode selector UI still not wired into
+`BacklogItemForm.tsx`, automatic review-gate prompt still bypasses `PipelineEngine`). Spot
+check: `web-app/src/app/settings/pipeline-modes/` still exists; not re-verified whether the
+Settings nav link or the item-level picker landed since 07-19 — flag for the next full pass
+rather than re-deriving here.
+
+### Recommended Next Actions (routing per skill Phase 5)
+
+1. **`sdd:fix-bug` — BUG-040** (above). Started as a parallel `Agent(isolation: worktree)`
+   session per this repo's standing preference for Agent-tool-driven parallel fix work over
+   `create_session`.
+2. Re-verify the 07-18/07-19 pipeline-mode-selector-UI and automatic-review-gate
+   `PipelineEngine`-coverage gaps are still open (or close them out if they landed unnoticed
+   in today's busy commit span) — next full pass, not started here.
+3. Nothing else newly actionable this pass — the remediation-backoff system landing is a
+   genuine, verified structural win and the is-it-ready verdict would likely improve from
+   `FIX-THEN-SHIP` once BUG-040 is closed, contingent on re-confirming bucket [3]'s status.

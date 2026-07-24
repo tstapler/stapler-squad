@@ -311,21 +311,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
 
-  // Theme detection
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleThemeChange = (e: MediaQueryListEvent) => setTheme(e.matches ? "dark" : "light");
-    mediaQuery.addEventListener("change", handleThemeChange);
-    return () => mediaQuery.removeEventListener("change", handleThemeChange);
-  }, []);
+  // The terminal chrome (tabs, header) always uses the dark VS Code-style
+  // palette defined in terminalTokens (styles/theme.css.ts), independent of
+  // the app's selectable UI theme. xterm.js must match that fixed palette —
+  // deriving it from prefers-color-scheme instead caused the terminal canvas
+  // to render solid white whenever the OS/browser preference was light while
+  // the surrounding chrome stayed dark.
+  const theme = "dark" as const;
 
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
@@ -891,6 +883,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               if (!hasInitiatedConnectionRef.current && !isConnected && isMountedRef.current && !isXtermDefault) {
                 hasInitiatedConnectionRef.current = true;
                 setIsWaitingForStableSize(false);
+                // Grow the xterm buffer to preCols/preRows BEFORE connecting — otherwise the
+                // terminal is still at its 80x24 constructor default and the capture-pane
+                // snapshot's cursor-positioning sequences for rows beyond 24 are silently
+                // dropped, leaving them unpainted until a later resize forces a full repaint.
+                xtermRef.current?.resize(preCols, preRows);
                 connect(preCols, preRows);
               }
             } else {

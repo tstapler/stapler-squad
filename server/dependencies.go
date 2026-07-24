@@ -930,6 +930,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetEventBus(eventBus)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
+	if unfinishedScanner != nil {
+		backlogSvc.SetRepoWatchRemover(unfinishedScanner)
+	}
 	// Wires the self-service "Ship PR" action (TriggerShipPR) — sessionService
 	// is available this early (constructed in BuildCoreDepsWithOptions, aliased
 	// above), so no setter-injection race window, mirroring
