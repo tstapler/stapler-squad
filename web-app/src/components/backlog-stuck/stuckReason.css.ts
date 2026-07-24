@@ -18,7 +18,7 @@ export const chipPrReady = style([
   chip,
   {
     background: vars.color.successBg,
-    color: vars.color.success,
+    color: vars.color.successText,
     border: `1px solid ${vars.color.success}`,
   },
 ]);

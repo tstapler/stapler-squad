@@ -57,11 +57,15 @@ export const chip = style({
 });
 
 export const chipActive = style({
-  background: vars.color.primary,
+  // primary + primaryText is 4.46:1 in the clean theme (its default primary,
+  // #6366f1, sits in a luminance range too mid-tone for either black or white
+  // text to clear 4.5:1) — primaryActive is a materially darker shade that
+  // clears WCAG AA with primaryText.
+  background: vars.color.primaryActive,
   color: vars.color.primaryText,
-  borderColor: vars.color.primary,
+  borderColor: vars.color.primaryActive,
   ":hover": {
-    background: vars.color.primaryHover,
+    background: vars.color.primary,
     color: vars.color.primaryText,
   },
 });
