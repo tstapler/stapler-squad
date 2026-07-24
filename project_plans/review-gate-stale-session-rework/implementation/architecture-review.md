@@ -1,0 +1,42 @@
+# Architecture Review: review-gate-stale-session-rework
+
+**Date**: 2026-07-24
+**Verdict**: CONCERNS — 0 blockers, 3 concerns, 2 nitpicks
+
+**Process note**: `docs/adr/ADR-000-architecture-constitution.md` does not exist in this repository — no constitution check applies.
+
+**Process note (methodology)**: No subagent-dispatch tool was available in this environment for this planning run (no `Task`/`Agent` tool surfaced). This review was performed as a dedicated critical pass over the finished plan by the same planner, rather than by an independently-instantiated reviewer agent — flagged here for transparency about review independence. One genuine architectural defect was found and corrected *during* planning itself (see "Issue caught and fixed during planning" below) before this review pass began; this review's job was to find anything that survived that correction.
+
+## Issue caught and fixed during planning (not a current finding — recorded for traceability)
+
+The first draft of Story 2.1.2 (resolve pass) proposed adding a direct liveness-checker dependency (`sessionStopper`-equivalent) to `session.BacklogLifecycleListener`. This would have violated this codebase's established layering: `session` is the lower package, `server/services.BacklogService` owns the `SessionStopper` dependency, and every existing precedent for "session-package orchestration needs a server/services-layer, liveness-aware action" (`StaleWorkRemediator`, `AutoReopenSpawner`, `PRFixSpawner`) uses a narrow interface defined in `session`, implemented by `BacklogService`, injected via a `Set*` setter — never a direct dependency added to the listener. The plan was corrected to introduce `ReworkBlockStaleResolver` following that exact precedent (`session/backlog_lifecycle.go:70-77`'s `StaleWorkRemediator` as the template) before this review pass. Current plan.md already reflects the fix.
+
+## Lens 1 — Structural integrity
+
+1. **SOLID / layer coupling**: No violations found in the current plan. `ReworkBlockStaleResolver`'s introduction (Story 2.1.2) is a textbook Dependency Inversion application — `session` package depends on an abstraction it defines, not on `server/services` concretely, and `BacklogService` satisfies it without `session` importing `server/services` (which would cycle, per the existing `headlessTriageSessionUUIDPrefix` comment's own note about this import direction).
+2. **DDD aggregate boundaries**: `StuckReason`/`BacklogStuckState` are already an established, correctly-scoped aggregate — this plan adds one enum value and reuses the existing repository methods (`MarkStuck`, `ResolveStuck`, `FindOpenStuckStates`) without introducing a new aggregate or blurring the existing one. Appropriate.
+3. **Testability**: Each new unit (the `MarkStuck` call site, the new resolver interface implementation, the new orchestration function, the new UI map entries) is testable in isolation per its Acceptance Criteria's Given-When-Then examples, using this codebase's existing test-double conventions rather than requiring new integration-only test infrastructure.
+
+## Lens 2 — Type-level design
+
+4. **Primitive obsession**: None introduced. The plan continues the codebase's existing (deliberate, documented) choice of a validated string-backed enum for `StuckReason` rather than introducing a Go sum type for this one new value — correctly flagged in Pattern Decisions as "consistency over local type-safety improvement," which is the right call for a single addition to an 11-member family already committed to this style. Introducing a sealed-interface pattern for just the 12th value would fragment the codebase's own idiom.
+5. **Illegal states**: `MarkStuck`'s `expectedStatus` precondition already prevents the plan's one identified illegal-state risk (marking a row against a status the item has since left) — reused correctly, not reinvented.
+6. **Parse-at-boundary**: Not applicable — no new external input boundary in this plan (internal reconcile-tick and event-driven flows only).
+
+## Lens 3 — Pattern selection
+
+7. **PoEAA pattern fit**: The "Inline check at existing call site" (Transaction Script) decision for detection, vs. a Domain-Model-flavored standalone detector, is appropriately matched to this problem's complexity — there is no multi-step business rule here beyond "compare a duration to a threshold and persist a row," and Transaction Script is the right-sized tool per Fowler's own guidance not to reach for heavier patterns on simple logic.
+8. **GoF pattern appropriateness**: No new creational/structural/behavioral pattern is proposed beyond the interface-based delegation already discussed above (which is itself minimal — one method, one implementer, matching `.claude/rules/interface-pollution-checklist.md`'s "define where consumed, scoped to only what's needed" guidance, not a speculative multi-method interface).
+9. **API contract design**: `ReworkBlockStaleResolver`'s single-method shape is stable and narrow; unlikely to need a breaking change if the implementation detail changes.
+10. **Consistency with build-vs-buy.md**: Full alignment — build-vs-buy.md's recommendation ("build nothing new at the infrastructure level... any implementation plan that proposes new persistence mechanisms, new UI component families, or a new notification pipeline should be treated as a scope-creep red flag") is honored: no new persistence mechanism (reuses `MarkStuck`/`ResolveStuck`), no new UI component family (reuses the generic `backlog-stuck` renderer), no new notification pipeline (the existing `eventBus.Publish` call is preserved unchanged, only supplemented).
+
+## Concerns
+
+- [ ] **Story 2.2.1 (label/icon copy)** — The exact label text ("Rework blocked — session stalled") and icon glyph are left as "final choice deferred to implementation... constrained only by must not duplicate an existing icon." For an 11-member enum where every existing entry's copy was evidently chosen deliberately (the two existing toast messages already use meaningfully different, carefully-worded language), leaving this fully open risks an implementer picking hasty copy inconsistent with the set's tone. **Recommendation**: not a blocker, but the implementing task should re-read all 11 existing `STUCK_REASON_LABELS` entries for tone/length consistency before finalizing new copy, not just avoid icon collision.
+- [ ] **Story 1.1.1/2.1.2 (threshold reuse across mark and resolve)** — `maxReworkBlockStaleness` is used both to mark (Story 1.1.1) and to un-mark (Story 2.1.2) — using the same constant for both directions is correct and intentional (noted in the constant's doc comment per Task 1.1.1a), but the plan doesn't explicitly test the boundary-symmetric case (an item marked stuck at `idle=16min` that later ticks down to exactly `idle=14min` due to new output — does it resolve on the very next tick, or is there any hysteresis/debounce needed to avoid rapid mark/resolve flapping right at the threshold edge if output arrives in a trickle?). **Recommendation**: not a blocker — `reconcileStaleWorkSessions` has no debounce either and this hasn't been a reported problem for it — but worth a one-line note in Story 2.1.2 acknowledging flapping-at-the-boundary is accepted, not overlooked.
+- [ ] **Epic 3.1 (task-protocol cadence text)** — Purely additive prose change with no test coverage requirement (Task 3.1.1b explicitly says not to add a test "purely for a text-content assertion"). This is reasonable given the content is prose, not logic, but means a future refactor of `taskProtocolBlock` has no guardrail preventing an accidental cadence-number regression. **Recommendation**: acceptable as scoped; not worth blocking on for a single hardcoded interval in prose.
+
+## Nitpicks
+
+- Task 2.1.2b's doc comment guidance ("mirrors `notifyIfActiveWorkSessionStale`... in reverse") is a good implementation hint but could be read as requiring literal code duplication rather than shared helper extraction — the implementer should feel free to extract a shared `isReworkBlockStale(idle, live)` predicate if it keeps both directions in sync, rather than copy-pasting the threshold comparison.
+- The Dependency Visualization ASCII diagram's Phase 1/Phase 2 columns don't show the cross-phase dependency introduced by Task 1.1.1a moving to `backlog_service_triage.go` and being reused by Task 2.1.2b — cosmetic only, doesn't affect task ordering correctness (Task 1.1.1a is still upstream of both).
