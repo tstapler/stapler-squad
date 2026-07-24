@@ -66,6 +66,10 @@ export class TestServer {
       env: {
         ...process.env,
         PORT: this.config.port.toString(),
+        // Registers the /api/debug/backlog/* test-only routes (server.go,
+        // gated on this exact value) that createBacklogItemDirect and its
+        // siblings in BacklogMutations.ts depend on.
+        STAPLER_SQUAD_INSTANCE: 'e2e-local',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
