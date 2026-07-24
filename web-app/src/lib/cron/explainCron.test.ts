@@ -1,3 +1,4 @@
+import cronstrue from "cronstrue";
 import { explainCron } from "./explainCron";
 
 describe("explainCron", () => {
@@ -42,5 +43,13 @@ describe("explainCron", () => {
 
   it("flags Quartz syntax as invalid", () => {
     expect(explainCron("0 9 * * 1L")).toMatch(/^Invalid:/);
+  });
+
+  it("falls back to a generic message when cronstrue throws on a grammar-valid expression", () => {
+    const spy = jest.spyOn(cronstrue, "toString").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    expect(explainCron("0 9 * * *")).toBe("Unable to explain this expression");
+    spy.mockRestore();
   });
 });

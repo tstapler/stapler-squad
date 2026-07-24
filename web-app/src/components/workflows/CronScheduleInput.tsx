@@ -170,7 +170,7 @@ export function CronScheduleInput({ id, labelId, value, onChange }: CronSchedule
         <input
           className={styles.rawInput}
           type="text"
-          aria-label="Cron expression"
+          aria-label="Advanced cron expression"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="0 9 * * 1-5"
@@ -183,7 +183,7 @@ export function CronScheduleInput({ id, labelId, value, onChange }: CronSchedule
         {explanation}
       </div>
       {showError && (
-        <div id={errorId} role="alert" className={styles.error}>
+        <div id={errorId} role="alert" data-testid="wf-cron-error" className={styles.error}>
           {validation.error}
         </div>
       )}

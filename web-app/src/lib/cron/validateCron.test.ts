@@ -52,4 +52,22 @@ describe("validateCron", () => {
   it("accepts a TZ= prefix by stripping it before field validation", () => {
     expect(validateCron("TZ=America/New_York 0 9 * * *").valid).toBe(true);
   });
+
+  it("treats a bare start/step as start-through-max per robfig/cron semantics", () => {
+    expect(validateCron("10/5 9 * * *")).toEqual({ valid: true });
+  });
+
+  it("rejects a second slash and a second hyphen", () => {
+    expect(validateCron("1/2/3 9 * * *").valid).toBe(false);
+    expect(validateCron("1-2-3 9 * * *").valid).toBe(false);
+  });
+
+  it("rejects an invalid or zero step", () => {
+    expect(validateCron("5/x 9 * * *").valid).toBe(false);
+    expect(validateCron("5/0 9 * * *").valid).toBe(false);
+  });
+
+  it("rejects an empty item in a comma list", () => {
+    expect(validateCron("0 9,,13 * * *").valid).toBe(false);
+  });
 });

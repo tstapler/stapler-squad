@@ -42,4 +42,8 @@ describe("parseCronToSimple", () => {
     expect(parseCronToSimple("")).toBeNull();
     expect(parseCronToSimple("not a cron")).toBeNull();
   });
+
+  it("returns null when the month field is restricted (not representable by Simple)", () => {
+    expect(parseCronToSimple("0 9 1 6 *")).toBeNull();
+  });
 });

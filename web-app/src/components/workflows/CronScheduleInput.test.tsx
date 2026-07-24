@@ -57,6 +57,44 @@ describe("CronScheduleInput", () => {
     expect(rawInput.value).toBe("*/15 9-17 * * 1-5");
   });
 
+  it("Advanced -> Simple adopts the parsed schedule when the expression is representable", () => {
+    // "30 14 * * 5" is itself representable, so land in Simple by default, then force
+    // into Advanced first so clicking "Simple" exercises the actual click-handler
+    // re-parse path (handleModeChange), not just the initial-render computation.
+    render(<Controlled initial="30 14 * * 5" />);
+    expect(screen.getByLabelText("Simple")).toBeChecked();
+    fireEvent.click(screen.getByLabelText("Advanced"));
+    expect(screen.getByLabelText("Advanced")).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText("Simple"));
+
+    expect(screen.getByLabelText("Simple")).toBeChecked();
+    expect(screen.getByLabelText("Frequency")).toHaveValue("weekly");
+    expect(screen.getByLabelText("Time")).toHaveValue("14:30");
+  });
+
+  it("Advanced -> Simple with a blank expression defaults to daily 09:00 and emits it", () => {
+    render(<Controlled initial="" />);
+    fireEvent.click(screen.getByLabelText("Advanced"));
+
+    fireEvent.click(screen.getByLabelText("Simple"));
+
+    expect(screen.getByLabelText("Simple")).toBeChecked();
+    expect(explanationRegion().getByText(/09:00 AM/)).toBeInTheDocument();
+  });
+
+  it("clamps day-of-month input to 1-31 and falls back to 1 when cleared", () => {
+    render(<Controlled initial="" />);
+    fireEvent.change(screen.getByLabelText("Frequency"), { target: { value: "monthly" } });
+    const dom = screen.getByLabelText("Day of month");
+
+    fireEvent.change(dom, { target: { value: "99" } });
+    expect(explanationRegion().getByText(/day 31 of the month/)).toBeInTheDocument();
+
+    fireEvent.change(dom, { target: { value: "" } });
+    expect(explanationRegion().getByText(/day 1 of the month/)).toBeInTheDocument();
+  });
+
   it("Simple -> Advanced preserves the exact cron string the builder computed", () => {
     render(<Controlled initial="" />);
     fireEvent.change(screen.getByLabelText("Frequency"), { target: { value: "weekly" } });

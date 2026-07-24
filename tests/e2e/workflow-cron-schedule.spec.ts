@@ -11,10 +11,10 @@ test.describe("workflow-cron-schedule-input", () => {
   });
 
   async function fillRequiredFields(page: import("@playwright/test").Page, slug: string) {
-    await page.locator("#wf-slug").fill(slug);
-    await page.locator("#wf-name").fill(`Cron e2e ${slug}`);
-    await page.locator("#wf-command").fill("echo hello");
-    await page.locator("#wf-target-dir").fill("/tmp");
+    await page.getByLabel("Slug", { exact: false }).fill(slug);
+    await page.getByLabel("Name", { exact: false }).fill(`Cron e2e ${slug}`);
+    await page.getByLabel("Command / Prompt", { exact: false }).fill("echo hello");
+    await page.getByLabel("Target Directory", { exact: false }).fill("/tmp");
   }
 
   test("workflow-cron-schedule-input_should_acceptRawCronText_When_powerUserTypesInAdvancedMode", async ({ page }) => {
@@ -22,11 +22,11 @@ test.describe("workflow-cron-schedule-input", () => {
 
     // Simple mode is the default; switch to Advanced to type raw cron directly.
     await page.getByLabel("Advanced").check();
-    const rawInput = page.locator('input[placeholder="0 9 * * 1-5"]');
+    const rawInput = page.getByLabel("Advanced cron expression");
     await rawInput.fill("0 9 * * 1-5");
 
     await expect(page.getByText(/Monday through Friday/i)).toBeVisible();
-    await expect(page.locator("#wf-cron-error")).toHaveCount(0);
+    await expect(page.getByTestId("wf-cron-error")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Create Workflow" }).click();
     await expect(page.getByRole("heading", { name: "New Workflow" })).toHaveCount(0, { timeout: 10000 });
@@ -51,8 +51,8 @@ test.describe("workflow-cron-schedule-input", () => {
     await fillRequiredFields(page, `cron-e2e-invalid-${Date.now()}`);
 
     await page.getByLabel("Advanced").check();
-    await page.locator('input[placeholder="0 9 * * 1-5"]').fill("99 9 * * *");
-    await expect(page.locator("#wf-cron-error")).toBeVisible();
+    await page.getByLabel("Advanced cron expression").fill("99 9 * * *");
+    await expect(page.getByTestId("wf-cron-error")).toBeVisible();
 
     await page.getByRole("button", { name: "Create Workflow" }).click();
     // Still on the form — submission was blocked client-side, no backend round-trip.
