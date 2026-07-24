@@ -58,11 +58,11 @@ export const chip = style({
 
 export const chipActive = style({
   background: vars.color.primary,
-  color: vars.color.textInverse,
+  color: vars.color.primaryText,
   borderColor: vars.color.primary,
   ":hover": {
     background: vars.color.primaryHover,
-    color: vars.color.textInverse,
+    color: vars.color.primaryText,
   },
 });
 
