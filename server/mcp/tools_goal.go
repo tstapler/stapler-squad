@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -70,6 +71,13 @@ func registerGoalTools(s *mcpserver.MCPServer, h *goalHandlers) {
 			),
 		),
 		h.updateSessionTask,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("list_workspace_peers",
+			mcpgo.WithDescription("List other active sessions sharing this session's workspace (same GitHub repo, or same repo root for non-GitHub repos), across worktrees and branches. Excludes the calling session. Must be called from within a Stapler Squad session."),
+		),
+		h.listWorkspacePeers,
 	)
 }
 
@@ -140,16 +148,25 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 	}
 
 	setBy := targetUUID // record who set it
-	goalData, err := h.storage.SetSessionGoal(ctx, targetUUID, goal, status, tasks, setBy)
+
+	// Resolve the instance up front (if not already resolved via session_id) so
+	// workspace_key can be stamped in the same upsert as the goal write, instead of a
+	// separate follow-up UPDATE that could diverge from it on a crash between writes.
+	// Prefer the already-resolved instance to avoid a second LoadInstances call.
+	if resolvedInst == nil {
+		resolvedInst, _ = h.findInstanceByUUID(targetUUID)
+	}
+	var workspaceKey string
+	if resolvedInst != nil {
+		workspaceKey = resolvedInst.WorkspaceKey()
+	}
+
+	goalData, err := h.storage.SetSessionGoal(ctx, targetUUID, goal, status, tasks, setBy, workspaceKey)
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to set goal: %v", err), ""), nil
 	}
 
 	// Update in-memory cache if the instance is loaded.
-	// Prefer the already-resolved instance to avoid a second LoadInstances call.
-	if resolvedInst == nil {
-		resolvedInst, _ = h.findInstanceByUUID(targetUUID)
-	}
 	if resolvedInst != nil {
 		resolvedInst.SetSessionGoalCached(goalData)
 		if h.eventBus != nil {
@@ -267,6 +284,84 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 		NewStatus:  newStatus,
 		TasksDone:  updatedGoal.TasksDone(),
 		TasksTotal: updatedGoal.TasksTotal(),
+	}), nil
+}
+
+// --- list_workspace_peers ---
+
+// WorkspacePeerResult is the wire representation of a session.WorkspacePeer for MCP callers.
+type WorkspacePeerResult struct {
+	SessionUUID   string `json:"session_uuid"`
+	Title         string `json:"title"`
+	Branch        string `json:"branch"`
+	Path          string `json:"path"`
+	Status        string `json:"status"`
+	Lifecycle     string `json:"lifecycle"` // active | stuck | gone
+	InstanceLive  bool   `json:"instance_live"`
+	GoalText      string `json:"goal_text,omitempty"`
+	GoalStatus    string `json:"goal_status,omitempty"`
+	GoalUpdatedAt string `json:"goal_updated_at,omitempty"`
+}
+
+type ListWorkspacePeersResult struct {
+	MCPResult
+	WorkspaceKey string                `json:"workspace_key"`
+	Peers        []WorkspacePeerResult `json:"peers"`
+}
+
+func (h *goalHandlers) listWorkspacePeers(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "This tool can only be called from within a Stapler Squad session."), nil
+	}
+
+	data, err := h.store.ListInstanceData()
+	if err != nil {
+		return errResult(ErrInternalError, "failed to list sessions", ""), nil
+	}
+	var workspaceKey string
+	for _, d := range data {
+		if d.UUID == callerUUID {
+			workspaceKey = d.WorkspaceKey()
+			break
+		}
+	}
+	if workspaceKey == "" {
+		return okResult(ListWorkspacePeersResult{MCPResult: MCPResult{Success: true}, Peers: []WorkspacePeerResult{}}), nil
+	}
+
+	peers, err := h.storage.ListWorkspacePeers(ctx, workspaceKey, callerUUID)
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to list workspace peers: %v", err), ""), nil
+	}
+	session.ApplyTmuxLiveness(peers, session.LiveTmuxSessionUUIDs(ctx))
+
+	out := make([]WorkspacePeerResult, 0, len(peers))
+	for _, p := range peers {
+		r := WorkspacePeerResult{
+			SessionUUID:  p.SessionUUID,
+			Title:        p.Title,
+			Branch:       p.Branch,
+			Path:         p.Path,
+			Status:       p.Status.String(),
+			Lifecycle:    p.Lifecycle(),
+			InstanceLive: p.InstanceLive,
+		}
+		if p.Goal != nil {
+			r.GoalText = p.Goal.Goal
+			r.GoalStatus = p.Goal.Status
+			r.GoalUpdatedAt = p.Goal.UpdatedAt.Format(time.RFC3339)
+		}
+		out = append(out, r)
+	}
+
+	return okResult(ListWorkspacePeersResult{
+		MCPResult:    MCPResult{Success: true},
+		WorkspaceKey: workspaceKey,
+		Peers:        out,
 	}), nil
 }
 

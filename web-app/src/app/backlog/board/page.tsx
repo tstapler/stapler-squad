@@ -2,12 +2,14 @@
 "use client";
 // +feature: backlog:board-page
 
-import { useState, useCallback, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useRef, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BacklogBoard } from "@/components/backlog/BacklogBoard";
+import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import * as styles from "./board.css";
 
 const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   mark_ready: "Marked ready.",
@@ -16,10 +18,12 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   cancel_triage: "Triage cancelled.",
 };
 
-export default function BacklogBoardPage() {
+function BacklogBoardPageInner() {
   const { transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage } = useBacklogService();
   const { showActionToast } = useNotifications();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const selectedItemId = searchParams.get("item");
   /** itemId -> action key currently in flight for that card. */
   const [pending, setPending] = useState<Record<string, string>>({});
   // Called once here (not per-card) so every card shares one poll instead of
@@ -37,7 +41,9 @@ export default function BacklogBoardPage() {
   const handleAction = useCallback(
     async (action: string, itemId: string) => {
       if (action === "view_session" || action === "view_review") {
-        router.push(`/backlog?item=${itemId}`);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("item", itemId);
+        router.push(`/backlog/board?${params.toString()}`);
         return;
       }
       setPending((prev) => ({ ...prev, [itemId]: action }));
@@ -80,22 +86,46 @@ export default function BacklogBoardPage() {
         }
       }
     },
-    [transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, router, showActionToast]
+    [transitionStatus, triggerTriage, spawnSessionFromItem, cancelTriage, router, searchParams, showActionToast]
   );
 
   const handleItemClick = useCallback(
     (itemId: string) => {
-      router.push(`/backlog?item=${itemId}`);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("item", itemId);
+      router.push(`/backlog/board?${params.toString()}`);
     },
-    [router]
+    [router, searchParams]
   );
 
+  const handleDetailClose = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("item");
+    const qs = params.toString();
+    router.push(qs ? `/backlog/board?${qs}` : "/backlog/board");
+  }, [router, searchParams]);
+
   return (
-    <BacklogBoard
-      onAction={handleAction}
-      onItemClick={handleItemClick}
-      pending={pending}
-      stuckItems={stuckItems}
-    />
+    <div className={styles.contentArea}>
+      <BacklogBoard
+        onAction={handleAction}
+        onItemClick={handleItemClick}
+        pending={pending}
+        stuckItems={stuckItems}
+      />
+      {selectedItemId && (
+        <aside className={styles.detailPane} aria-label="Item detail">
+          <BacklogItemDetail key={selectedItemId} itemId={selectedItemId} onClose={handleDetailClose} />
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export default function BacklogBoardPage() {
+  return (
+    <Suspense>
+      <BacklogBoardPageInner />
+    </Suspense>
   );
 }

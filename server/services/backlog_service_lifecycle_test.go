@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -81,6 +82,68 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Item.PipelineMode)
 	assert.Equal(t, "quick", *resp.Msg.Item.PipelineMode)
+}
+
+// ─── backlog:sdd-default-pipeline flag (project_plans/backlog-sdd-default-pipeline) ──
+
+// TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted
+// is the positive case for the opt-in default: with the flag on and no explicit
+// pipeline_mode on the request, a brand-new item defaults to "sdd" instead of "".
+func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
+	svc := newBacklogService(t)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with no explicit pipeline mode",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.PipelineMode)
+	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *resp.Msg.Item.PipelineMode)
+}
+
+// TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled is the
+// default-behavior guard: with the flag left at its default (off), an item
+// created with no explicit pipeline_mode still gets "" — zero behavior change
+// for every item until an operator deliberately opts in.
+func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	svc := newBacklogService(t)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with no explicit pipeline mode, flag off",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.PipelineMode)
+	assert.Equal(t, "", *resp.Msg.Item.PipelineMode)
+}
+
+// TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet
+// proves the flag never overrides an explicit caller choice — including an
+// explicit empty string, which must still mean "flat default pipeline", not
+// "unset, please apply the sdd default".
+func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(sddDefaultPipelineFlagName, true))
+	svc := newBacklogService(t)
+
+	quick := "quick"
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "item explicitly using quick mode",
+		PipelineMode: &quick,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.PipelineMode)
+	assert.Equal(t, "quick", *resp.Msg.Item.PipelineMode, "explicit pipeline_mode must never be overridden by the sdd-default flag")
+
+	empty := ""
+	resp2, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "item explicitly requesting the flat default pipeline",
+		PipelineMode: &empty,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp2.Msg.Item.PipelineMode)
+	assert.Equal(t, "", *resp2.Msg.Item.PipelineMode, "explicit empty pipeline_mode must mean the flat default, not the sdd default")
 }
 
 // ─── auto_create_pr policy flag (opt-in "auto-create PR on Complete") ─────────

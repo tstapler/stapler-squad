@@ -24,6 +24,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
+import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
@@ -1231,6 +1232,8 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+            {/* Other sessions sharing this workspace — shown when peers exist */}
+            <WorkspacePeersPanel session={session} />
           </div>
         )}
         {activeTab === "artifacts" && (

@@ -232,6 +232,11 @@ message Session {
   // Structured artifacts extracted from the session's JSONL conversation history.
   // Populated asynchronously by ArtifactExtractor; nil until first scan completes.
   SessionArtifacts artifacts = 70;
+
+  // Canonical workspace/repo identity (e.g. "gh:owner/repo", or "path:<main repo path>"
+  // when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
+  // when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
+  string workspace_key = 71;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
@@ -261,6 +266,9 @@ message SessionGoalSummary {
   // JSON-encoded []TaskNode; "[]" when no tasks have been set.
   // Parse client-side to render the full recursive task tree.
   string tasks_json = 5;
+  // When the goal was last set/updated. Used client-side to detect a stale goal
+  // independently of session liveness (workspace peer awareness).
+  google.protobuf.Timestamp updated_at = 6;
 }
 
 // VNCStatus represents the operational state of the VNC subsystem for a session.

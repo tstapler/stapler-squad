@@ -929,11 +929,23 @@ func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testin
 // but is confirmed dead (no live tmux/CLI process) must be tombstoned so the
 // respawn can proceed, rather than blocking forever like the pr_pending live
 // bug this mirrors (docs/tasks/backlog-feature-improvement.md).
+//
+// This fixture's "dead" work session never had an Instance/Worktree row recorded
+// for it at all (matching a session that died before its worktree was ever
+// persisted) — i.e. exactly the "no real per-item worktree" shape BUG-045 fixed
+// resolveCodebaseWorkDir to refuse rather than silently fall back to repoPath (the
+// shared main checkout). So "respawns" here means the tombstone unblocks
+// AutoRespawnReview from skipping via hasActiveWorkSession and it actually drives
+// a re-review attempt through to a recorded verdict — not that the headless pool
+// gets a real evidence-backed call, which BUG-045 correctly refuses to spend here.
 func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{}} // nothing is live
 	svc.SetSessionStopper(stopper)
+	// This response would (falsely) confirm a BUG-045 regression if the pool were
+	// ever actually invoked against repoPath for a dead session with no resolvable
+	// worktree — asserting callCount()==0 below proves it is not.
 	pool := &fakeHeadlessPool{response: `{"overall":"UNVERIFIABLE","summary":"no evidence","verdicts":[]}`}
 	svc.SetHeadlessPool(pool)
 
@@ -954,12 +966,17 @@ func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) 
 	require.NoError(t, err)
 
 	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
-	require.NoError(t, respawnErr)
-	assert.NotEmpty(t, pool.calls, "respawn must proceed once the dead work session is cleared, not block forever")
+	require.NoError(t, respawnErr, "respawn must proceed (not error/hang) once the dead work session is cleared")
+	assert.Equal(t, 0, pool.callCount(), "must not spend a headless call against repoPath when the dead session has no resolvable worktree (BUG-045)")
 
 	deadFetched, err := storage.GetItemSession(context.Background(), deadIS.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, deadFetched.EndedAt, "the dead work session must be tombstoned")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
+		"must record an explicit UNVERIFIABLE verdict rather than silently reviewing the shared checkout")
 }
 
 // TestAutoRespawnReview_NoActiveSession_TriggersReReview verifies the success
@@ -2068,6 +2085,191 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 	require.NoError(t, err)
 	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
 		"must not record a false FAIL when the codebase-read directory does not exist")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator notification when the review is blocked")
+	}
+}
+
+// TestResolveCodebaseWorkDir_should_RefuseFallback_When_WorkSessionWorktreeUnresolvable
+// is a direct unit regression for BUG-045's root cause: resolveCodebaseWorkDir used to
+// fall back to repoPath and report exists=true whenever a work session's worktree data
+// could not be resolved at all (the underlying session/worktree row itself reaped, not
+// merely its directory) — silently treating the shared main checkout as a stand-in for
+// the item's own state. This asserts the fallback is now refused (exists=false) in that
+// exact scenario, even though repoPath itself is a perfectly real, existing directory.
+func TestResolveCodebaseWorkDir_should_RefuseFallback_When_WorkSessionWorktreeUnresolvable(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	// repoPath is a real, existing directory — simulating the shared main checkout,
+	// which always exists. The bug was conflating "repoPath exists" with "repoPath is
+	// safe to use as this session's own state."
+	repoPath := t.TempDir()
+
+	const reapedSessionUUID = "reaped-session-no-worktree-row"
+	// Deliberately do NOT create any Instance/Worktree row for reapedSessionUUID —
+	// GetWorktreeDataBySessionUUID will return an empty GitWorktreeData with a nil
+	// error (ent.IsNotFound path), exactly reproducing "the worktree has been reaped."
+	dir, exists := svc.resolveCodebaseWorkDir(t.Context(), repoPath, &session.ItemSessionSummary{SessionUUID: reapedSessionUUID})
+	assert.False(t, exists, "must refuse the codebase-read fallback when a work session's worktree cannot be resolved, even though repoPath itself exists on disk")
+	assert.Equal(t, repoPath, dir, "returned dir is still repoPath for logging purposes, but exists must be false")
+}
+
+// TestResolveCodebaseWorkDir_should_AllowFallback_When_NoWorkSessionAtAll guards the
+// companion, still-legitimate case this fix must not regress: an item with no work
+// session at all (e.g. reviewed before any session ever ran) has nothing item-specific
+// to fall back from, so repoPath remains the only — and correct — directory to use.
+func TestResolveCodebaseWorkDir_should_AllowFallback_When_NoWorkSessionAtAll(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+
+	dir, exists := svc.resolveCodebaseWorkDir(t.Context(), repoPath, nil)
+	assert.True(t, exists, "must still allow the repoPath fallback when there was never a work session to begin with")
+	assert.Equal(t, repoPath, dir)
+}
+
+// TestTriggerReReview_should_BlockInsteadOfReviewingSharedCheckout_When_WorktreeRowReaped
+// reproduces BUG-045 end to end at TriggerReReview's actual live entry point: item
+// 693c2700's review fell into the codebase-read fallback because its dedicated
+// worktree had been reaped, and resolveCodebaseWorkDir silently granted the reviewer
+// live Read/Grep/Glob access to the shared main checkout instead — which happened to
+// contain unrelated, uncommitted work at that moment, producing a plausible-sounding
+// but completely wrong FAIL verdict describing that unrelated work.
+//
+// Here, repoPath is a real directory containing content that would prove the bug if
+// ever handed to the reviewer (a marker file + a scripted pool response naming it) —
+// the work session's worktree cannot be resolved (row reaped) and no primary diff
+// exists either. TriggerReReview must refuse the fallback and record an explicit
+// UNVERIFIABLE verdict before ever spending a headless call, never silently reviewing
+// repoPath's arbitrary contents and calling the result a real verdict on this item.
+func TestTriggerReReview_should_BlockInsteadOfReviewingSharedCheckout_When_WorktreeRowReaped(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	// repoPath stands in for the shared main checkout: it's a real git repo, and it
+	// contains content totally unrelated to this item — exactly the shape of the live
+	// incident (an operator's unrelated, uncommitted work sitting in the checkout).
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "unrelated-in-progress-work.txt"), []byte("someone else's uncommitted work\n"), 0o644))
+
+	itemID := setupItemInReview(t, svc, repoPath)
+
+	// This response would (falsely) confirm the original bug if the pool were ever
+	// actually invoked against repoPath — asserting callCount()==0 below proves the fix
+	// short-circuits before a headless call is ever spent reading the wrong directory.
+	pool := &fakeHeadlessPool{response: `{"overall":"FAIL","summary":"found unrelated-in-progress-work.txt, not the item's own work","tool_reads":["unrelated-in-progress-work.txt"],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	const reapedSessionUUID = "reaped-worktree-693c2700-shape"
+	workIS, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: reapedSessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
+	// Deliberately no corresponding Instance/Worktree row is ever created for
+	// reapedSessionUUID — simulating the item's dedicated worktree (and its DB row)
+	// having been reaped by the time this review runs, exactly as confirmed live on
+	// item 693c2700.
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.Equal(t, 0, pool.callCount(), "must block before ever calling the headless pool against the shared checkout")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
+		"must not silently review the shared main checkout's arbitrary contents and record a verdict on this item")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator notification when the review is blocked")
+	}
+}
+
+// TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict is the
+// regression guard for BUG-044's actual live entry point: AutoRespawnReview (the
+// abandoned-review self-heal path — see BUG-043) re-drives review via TriggerReReview,
+// not the fresh work-session-exit path. Backlog item 693c2700 drifted 289 commits
+// behind main across repeated abandoned-review cycles through exactly this call before
+// ever being caught, and its review then failed with a misleading "no code related to
+// the feature at all" verdict driven by drift noise, not the item's actual (complete)
+// work. This reproduces the drifted-and-conflicting shape and verifies TriggerReReview
+// blocks with an explicit UNVERIFIABLE verdict — naming the real cause — before ever
+// spending a headless call on a diff that would have been dominated by upstream drift.
+func TestTriggerReReview_should_BlockOnBranchDriftInsteadOfMisleadingFailVerdict(t *testing.T) {
+	storage, repo := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	// origin/work mirror production: item.RepoPath (origin) is the shared checkout,
+	// work is the item's dedicated worktree clone with a real "origin" remote — the
+	// same shape setupPRFixSyncRepo already builds for syncPRBranchWithMain's tests.
+	origin, work := setupPRFixSyncRepo(t)
+
+	itemID := setupItemInReview(t, svc, origin)
+
+	// This response would (falsely) confirm the original bug if the pool were ever
+	// actually invoked with the drift-inflated diff — asserting callCount()==0 below
+	// proves the fix short-circuits before spending a headless call.
+	pool := &fakeHeadlessPool{response: `{"overall":"FAIL","summary":"the diff contains no code related to the feature at all","tool_reads":[],"verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	runGitTestCmd(t, work, "checkout", "-b", "feature")
+
+	// The feature branch made its own real, complete edit.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
+	runGitTestCmd(t, work, "add", "README.md")
+	runGitTestCmd(t, work, "commit", "-m", "feature: complete the work")
+
+	// Main diverges on the same line AND drifts well past the default threshold — the
+	// exact shape that made 693c2700's diff unreviewable.
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGitTestCmd(t, origin, "add", "README.md")
+	runGitTestCmd(t, origin, "commit", "-m", "main: unrelated edit")
+	for i := 0; i < 55; i++ {
+		fname := fmt.Sprintf("upstream-%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(origin, fname), []byte("content\n"), 0o644))
+		runGitTestCmd(t, origin, "add", fname)
+		runGitTestCmd(t, origin, "commit", "-m", fmt.Sprintf("upstream commit %d", i))
+	}
+
+	attachPRFixWorkSession(t, storage, repo, &session.BacklogItemData{ID: itemID},
+		"branch-drift-rereview-uuid", origin, work, "feature")
+
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.ItemSession)
+
+	assert.Equal(t, 0, pool.callCount(), "must block before ever calling the headless pool with a drift-inflated diff")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome,
+		"must record an explicit blocked verdict, not the misleading FAIL the headless pool was primed to return")
 
 	select {
 	case ev := <-ch:

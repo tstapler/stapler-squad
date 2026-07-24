@@ -64,8 +64,8 @@ jobs:
 
       - name: Start test server
         run: |
-          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=ux-${{ github.run_id }} \
-            ./stapler-squad --tmux-keep-server &
+          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local \
+            ./stapler-squad --tmux-keep-server > /tmp/server.log 2>&1 &
           echo $! > /tmp/server.pid
 
           for i in $(seq 1 30); do
@@ -75,6 +75,12 @@ jobs:
             fi
             sleep 1
           done
+
+          echo "--- debug mutate-create smoke test ---"
+          curl -s -X POST http://localhost:8543/api/debug/backlog/mutate-create \
+            -H "Content-Type: application/json" \
+            -d '{"title":"ci-smoke-test","status":"idea","priority":3}' \
+            -w "\nHTTP_STATUS:%{http_code}\n"
 
       - name: Run Axe accessibility tests
         id: axe
@@ -133,10 +139,12 @@ jobs:
       - name: Stop test server
         if: always()
         run: |
+          echo "--- server.log (last 200 lines) ---"
+          tail -n 200 /tmp/server.log 2>/dev/null || echo "(no server.log)"
           if [ -f /tmp/server.pid ]; then
             kill "$(cat /tmp/server.pid)" 2>/dev/null || true
           fi
-          pkill -f "stapler-squad.*ux-${{ github.run_id }}" 2>/dev/null || true
+          pkill -f "stapler-squad.*e2e-local" 2>/dev/null || true
 
       - name: Post UX analysis PR comment
         if: always() && github.event_name == 'pull_request'

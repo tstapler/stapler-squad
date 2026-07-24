@@ -21,6 +21,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { BacklogItemForm } from "./BacklogItemForm";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { PipelineMode } from "@/lib/hooks/useBacklogService";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 
 // RepoPathInput uses useSessionRepoPaths (Redux) and usePathCompletions (RPC).
 // Stub both so tests don't need a Redux store or ConnectRPC transport.
@@ -37,6 +38,14 @@ jest.mock("@/lib/hooks/usePathCompletions", () => ({
 // state deterministically, without a real ConnectRPC transport.
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: jest.fn(),
+}));
+
+// backlog:sdd-default-pipeline pre-selection (project_plans/backlog-sdd-default-pipeline)
+// reads useFeatureFlag directly rather than the whole flags map — mock it so
+// each test controls the flag value deterministically without a real
+// FeatureFlagsProvider/ConnectRPC transport.
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: jest.fn(() => false),
 }));
 
 const mockUseBacklogService = useBacklogService as jest.MockedFunction<typeof useBacklogService>;
@@ -80,10 +89,20 @@ const FULL_MODE = makeMode({
   triagePromptTemplate: "Use {{repo_path}} to run the test suite before triage.",
 });
 
+const SDD_MODE = makeMode({
+  slug: "sdd",
+  name: "SDD (Stapler-Driven Development)",
+  description: "Multi-phase research/plan/validate/implement/verify pipeline",
+});
+
+const mockUseFeatureFlag = useFeatureFlag as jest.MockedFunction<typeof useFeatureFlag>;
+
 beforeEach(() => {
   mockUseBacklogService.mockReset();
   // Default: resolves to an empty mode list so unrelated tests aren't affected.
   mockListPipelineModes(() => Promise.resolve([]));
+  mockUseFeatureFlag.mockReset();
+  mockUseFeatureFlag.mockReturnValue(false);
 });
 
 describe("BacklogItemForm — Repository Path help", () => {
@@ -590,5 +609,95 @@ describe("BacklogItemForm — pipeline mode selector (Epic 3.2)", () => {
     // Non-blocking: selection remains, and Save stays enabled.
     expect(screen.getByTestId("backlog-pipeline-mode-full")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("backlog-form-submit")).not.toBeDisabled();
+  });
+});
+
+// project_plans/backlog-sdd-default-pipeline: pre-selecting the seeded "sdd"
+// pipeline mode for a brand-new item when the operator has opted in via the
+// backlog:sdd-default-pipeline feature flag. This is a default, not a lock —
+// the user can still pick any other mode before saving.
+describe("BacklogItemForm — sdd default pipeline pre-selection", () => {
+  beforeEach(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("pre-selects sdd when creating a new item, flag on, and an enabled sdd mode is available", async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, SDD_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    const sddOption = await screen.findByTestId("backlog-pipeline-mode-sdd");
+    await waitFor(() => expect(sddOption).toHaveAttribute("aria-checked", "true"));
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("never auto-selects sdd when editing an existing item, even with the flag on", async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, SDD_MODE]));
+
+    render(
+      <BacklogItemForm
+        initialValues={{ id: "item-1", title: "Existing item" }}
+        onSubmit={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+
+    await screen.findByTestId("backlog-pipeline-mode-sdd");
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-pipeline-mode-sdd")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("does not pre-select sdd when the flag is off", async () => {
+    mockUseFeatureFlag.mockReturnValue(false);
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, SDD_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("backlog-pipeline-mode-sdd");
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-pipeline-mode-sdd")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("does not pre-select anything when the flag is on but no sdd mode is available", async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, FULL_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    await screen.findByTestId("backlog-pipeline-mode-quick");
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("lets the user override the pre-selected sdd default before submitting", async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockListPipelineModes(() => Promise.resolve([QUICK_MODE, SDD_MODE]));
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-pipeline-mode-sdd")).toHaveAttribute("aria-checked", "true")
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-pipeline-mode-default"));
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.change(screen.getByTestId("backlog-title-input"), {
+      target: { value: "Some title" },
+    });
+    fireEvent.change(screen.getByTestId("backlog-repo-path-input"), {
+      target: { value: "/home/user/project" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pipelineMode: "" }))
+    );
   });
 });

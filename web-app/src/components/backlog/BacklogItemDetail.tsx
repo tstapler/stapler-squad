@@ -23,6 +23,7 @@ import { useAppSelector } from "@/lib/store";
 import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
+import { copyToClipboard } from "@/lib/clipboard";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -100,6 +101,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
 
   // Epic 3.4 "what ran" surface: the currently-fetched mode list, used only
   // to resolve a session's frozen pipelineModeSnapshot slug to a
@@ -116,6 +118,27 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     };
   }, []);
 
+  // copyTimerRef cancels a still-pending prior confirmation timeout so
+  // clicking Copy ID then Copy Link within the 1.5s window doesn't let the
+  // first timer clear the second button's confirmation state early.
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback((field: "id" | "link", value: string) => {
+    void copyToClipboard(value).then((ok) => {
+      if (!ok || !mountedRef.current) return;
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      setCopiedField(field);
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setCopiedField(null);
+        copyTimerRef.current = null;
+      }, 1500);
+    });
+  }, []);
 
   // Review changes modal
   const [showChangesModal, setShowChangesModal] = useState(false);
@@ -988,6 +1011,27 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                   · Updated {formatDate(item.updatedAt)}
                 </span>
               )}
+            </div>
+            <div className={styles.idRow}>
+              <span className={styles.idText} data-testid="backlog-item-id">{item.id}</span>
+              <button
+                type="button"
+                className={styles.copyButton}
+                onClick={() => handleCopy("id", item.id)}
+                aria-label="Copy item ID"
+                data-testid="copy-item-id-button"
+              >
+                {copiedField === "id" ? "✓ Copied" : "Copy ID"}
+              </button>
+              <button
+                type="button"
+                className={styles.copyButton}
+                onClick={() => handleCopy("link", `${window.location.origin}/backlog?item=${item.id}`)}
+                aria-label="Copy shareable link"
+                data-testid="copy-item-link-button"
+              >
+                {copiedField === "link" ? "✓ Copied" : "Copy Link"}
+              </button>
             </div>
           </div>
           <div className={styles.headerActions}>

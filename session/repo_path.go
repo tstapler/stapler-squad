@@ -428,3 +428,32 @@ func GetMainRepoPath(path string) (string, error) {
 	}
 	return absPath, nil
 }
+
+// WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,
+// used to group sibling worktrees/branches of the same repo as peers. Prefers the GitHub
+// owner/repo (stable across worktree paths); falls back to MainRepoPath, then Path.
+// Returns "" when none are set (e.g. a bare one-off session with no git remote).
+func WorkspaceKey(githubOwner, githubRepo, mainRepoPath, path string) string {
+	if githubOwner != "" && githubRepo != "" {
+		return "gh:" + strings.ToLower(githubOwner) + "/" + strings.ToLower(githubRepo)
+	}
+	if mainRepoPath != "" {
+		return "path:" + mainRepoPath
+	}
+	if path != "" {
+		return "path:" + path
+	}
+	return ""
+}
+
+// WorkspaceKey returns this instance's workspace identity. See the package-level
+// WorkspaceKey function for the derivation rules.
+func (i *Instance) WorkspaceKey() string {
+	return WorkspaceKey(i.GitHubOwner, i.GitHubRepo, i.MainRepoPath, i.Path)
+}
+
+// WorkspaceKey returns this instance data's workspace identity. See the package-level
+// WorkspaceKey function for the derivation rules.
+func (d InstanceData) WorkspaceKey() string {
+	return WorkspaceKey(d.GitHubOwner, d.GitHubRepo, d.MainRepoPath, d.Path)
+}

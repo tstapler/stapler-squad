@@ -121,6 +121,33 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON,
 	return session.AcCriteriaJSON(b), nil
 }
 
+// defaultPipelineModeForNewItem resolves the pipeline_mode value a brand-new
+// item should be created with. requested is CreateBacklogItemRequest's raw
+// *string field: nil means the caller omitted pipeline_mode entirely (every
+// non-UI caller — BacklogItemForm.tsx always sends the field, even as ""; see
+// project_plans/backlog-sdd-default-pipeline/research/expressiveness-and-
+// design.md §4), and is the only case this function ever overrides. Any
+// explicit value — including an explicit empty string — is always respected
+// verbatim, so this never overrides a caller's deliberate choice to use the
+// flat default pipeline.
+//
+// Reads the flag via a fresh config.LoadConfig() rather than s.cfg, matching
+// every other live feature-flag read in this codebase (server/server.go's
+// interceptor, session/instance_vnc.go, session/instance_cdp.go) — a flag
+// toggled via UpdateFeatureFlag persists through its own LoadConfig/SaveConfig
+// round-trip, not through BacklogService's constructor-injected cfg pointer.
+// Only ever runs at item creation, so it can never retroactively change an
+// already-created item's stored pipeline_mode.
+func defaultPipelineModeForNewItem(requested *string) string {
+	if requested != nil {
+		return *requested
+	}
+	if !config.LoadConfig().GetFeatureFlag(sddDefaultPipelineFlagName) {
+		return ""
+	}
+	return session.DefaultSDDPipelineModeSlug
+}
+
 // --- CreateBacklogItem ---
 
 // CreateBacklogItem adds a new item to the backlog.
@@ -162,7 +189,7 @@ func (s *BacklogService) CreateBacklogItem(
 		SkipPlanning:       req.Msg.SkipPlanning,
 		AutoSpawnSession:   req.Msg.AutoSpawnSession,
 		AutoCreatePR:       req.Msg.AutoCreatePr,
-		PipelineMode:       req.Msg.GetPipelineMode(),
+		PipelineMode:       defaultPipelineModeForNewItem(req.Msg.PipelineMode),
 		Notes:              req.Msg.Notes,
 	}
 

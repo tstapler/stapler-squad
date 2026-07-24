@@ -96,6 +96,7 @@ export const lightTheme = createTheme(vars, {
 
     success: "#10b981",
     successBg: "#d1fae5",
+    successText: "#065f46", /* success on successBg = 3.83:1, fails WCAG AA; #065f46 = 6.78:1 */
     warning: "#f59e0b",
     warningBg: "#fef3c7",
     warningText: "#92400e",
@@ -199,6 +200,7 @@ export const darkTheme = createTheme(vars, {
 
     success: "#10b981",
     successBg: "#064e3b",
+    successText: "#34d399", /* success on successBg = 3.83:1, fails WCAG AA; #34d399 = 5.06:1 */
     warning: "#f59e0b",
     warningBg: "#78350f",
     warningText: "#fbbf24",
@@ -303,6 +305,7 @@ export const matrixTheme = createTheme(vars, {
 
     success: "#00ff41",
     successBg: "#001a00",
+    successText: "#00ff41", /* already 13.4:1 on successBg — well above WCAG AA */
     warning: "#ffaa00",
     warningBg: "#2a1a00",
     warningText: "#ffcc44",
@@ -414,6 +417,7 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     success: "#00ff9f",
     successBg: "#001a11",
+    successText: "#00ff9f", /* already 13.67:1 on successBg — well above WCAG AA */
     warning: "#fcee09",
     warningBg: "#1a1600",
     warningText: "#fcee09",
@@ -525,6 +529,7 @@ export const wh40kTheme = createTheme(vars, {
 
     success: "#4a7c3f",
     successBg: "#0a1208",
+    successText: "#8fd47a", /* success on successBg = 3.85:1, fails WCAG AA; #8fd47a = 10.76:1 */
     warning: "#c0a020",
     warningBg: "#1a1400",
     warningText: "#e4c840",
@@ -637,6 +642,7 @@ export const cleanTheme = createTheme(vars, {
     // was #10b981 — 3.83:1 on successBg fails WCAG AA; #34d399 = 5.06:1 ✅
     success: "#34d399",
     successBg: "#064e3b",
+    successText: "#34d399", /* success on successBg = 3.83:1, fails WCAG AA; #34d399 = 5.06:1 */
     warning: "#f59e0b",
     warningBg: "#78350f",
     warningText: "#fbbf24",

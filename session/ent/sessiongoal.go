@@ -28,6 +28,8 @@ type SessionGoal struct {
 	Tasks string `json:"tasks,omitempty"`
 	// SetBy holds the value of the "set_by" field.
 	SetBy string `json:"set_by,omitempty"`
+	// Canonical repo/workspace identity (gh:owner/repo or path:<main repo path>); used to group peer sessions
+	WorkspaceKey string `json:"workspace_key,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -40,7 +42,7 @@ func (*SessionGoal) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case sessiongoal.FieldSessionUUID, sessiongoal.FieldGoal, sessiongoal.FieldStatus, sessiongoal.FieldTasks, sessiongoal.FieldSetBy:
+		case sessiongoal.FieldSessionUUID, sessiongoal.FieldGoal, sessiongoal.FieldStatus, sessiongoal.FieldTasks, sessiongoal.FieldSetBy, sessiongoal.FieldWorkspaceKey:
 			values[i] = new(sql.NullString)
 		case sessiongoal.FieldCreatedAt, sessiongoal.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -96,6 +98,12 @@ func (_m *SessionGoal) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field set_by", values[i])
 			} else if value.Valid {
 				_m.SetBy = value.String
+			}
+		case sessiongoal.FieldWorkspaceKey:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field workspace_key", values[i])
+			} else if value.Valid {
+				_m.WorkspaceKey = value.String
 			}
 		case sessiongoal.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -159,6 +167,9 @@ func (_m *SessionGoal) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("set_by=")
 	builder.WriteString(_m.SetBy)
+	builder.WriteString(", ")
+	builder.WriteString("workspace_key=")
+	builder.WriteString(_m.WorkspaceKey)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

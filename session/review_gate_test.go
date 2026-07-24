@@ -905,3 +905,218 @@ func TestReviewGateRunner_NoBranchName_DiffComputationFailure_SkipsRepairAndBloc
 
 	assert.Contains(t, notifier.titles(), "Review blocked — diff computation failed")
 }
+
+// cloneWithOrigin clones originDir into a fresh temp directory with a real "origin"
+// remote pointing back at originDir, so git.EnsureBranchSyncedWithMain's fetch/merge/
+// push calls have something real to talk to (unlike this file's other fixtures, which
+// use a single standalone repo with no remote at all — fine for GetGitDiff, but not
+// for exercising the BUG-044 drift precondition, which fetches before every check).
+func cloneWithOrigin(t *testing.T, originDir string) string {
+	t.Helper()
+	parent := t.TempDir()
+	cloneDir := filepath.Join(parent, "clone")
+	runGitOrFail(t, parent, "clone", originDir, cloneDir)
+	runGitOrFail(t, cloneDir, "config", "user.email", "test@example.com")
+	runGitOrFail(t, cloneDir, "config", "user.name", "Test")
+	return cloneDir
+}
+
+// commitOnRepo adds n trivial commits to dir, simulating unrelated upstream activity
+// landing on main while a work session's branch sits open.
+func commitOnRepo(t *testing.T, dir string, n int, prefix string) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		fname := fmt.Sprintf("%s-%d.txt", prefix, i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, fname), []byte("content\n"), 0o644))
+		runGitOrFail(t, dir, "add", fname)
+		runGitOrFail(t, dir, "commit", "-m", fmt.Sprintf("%s commit %d", prefix, i))
+	}
+}
+
+// TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts
+// is the core regression guard for BUG-044: a work session's branch that has drifted
+// past the drift threshold, where main has since diverged on the same lines the
+// branch itself touched, must not proceed to review on a diff that will be dominated
+// by unrelated upstream drift (the live 693c2700 failure mode — "the diff contains no
+// code related to the feature at all"). Instead the branch-sync precondition attempts
+// an auto-merge, finds a real conflict, and blocks with an explicit, actionable
+// message naming the conflicted file — never silently letting an inflated/misleading
+// diff reach the reviewer.
+func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoSyncConflicts(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "config", "user.email", "test@example.com")
+	runGitOrFail(t, origin, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
+	runGitOrFail(t, origin, "add", "README.md")
+	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+
+	work := cloneWithOrigin(t, origin)
+	runGitOrFail(t, work, "checkout", "-b", "feature")
+	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
+
+	// The feature branch makes its own real edit to README.md.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("# Feature Edit\n"), 0o644))
+	runGitOrFail(t, work, "add", "README.md")
+	runGitOrFail(t, work, "commit", "-m", "feature: edit README")
+
+	// Main diverges on the same line AND drifts well past the default threshold (50).
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# Main Edit\n"), 0o644))
+	runGitOrFail(t, origin, "add", "README.md")
+	runGitOrFail(t, origin, "commit", "-m", "main: edit README")
+	commitOnRepo(t, origin, 55, "upstream")
+
+	itemData := BacklogItemData{
+		Title:              "Branch drift conflict test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           origin,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	inst := newTestInstance("branch-drift-conflict-test")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-conflict-test", "feature", baseSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
+
+	// The session creator must never be consulted — review must be blocked before
+	// ever reaching it, so no reviewer is ever handed the (would-be) drift-inflated diff.
+	spawner := &mockReviewGateSpawner{}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+
+	reopener := newFakeAutoReopenSpawner()
+	getAutoReopener := func() AutoReopenSpawner { return reopener }
+
+	notifier := &fakeNotifier{}
+	getNotifier := func() Notifier { return notifier }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	var onPassCalled atomic.Bool
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {
+		onPassCalled.Store(true)
+	})
+
+	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the branch could not be auto-synced")
+	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
+
+	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
+
+	assert.Contains(t, notifier.titles(), "Review blocked — branch drifted too far behind main")
+
+	select {
+	case gotItemID := <-reopener.called:
+		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so a fix session can resolve the conflict")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
+	}
+
+	// The worktree must have been left clean — the aborted merge must not strand a
+	// half-merged tree for whatever touches this worktree next.
+	status := runGitCapture(t, work, "status", "--porcelain")
+	assert.Empty(t, strings.TrimSpace(status))
+}
+
+// TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConflict is
+// the positive counterpart: a branch drifted past the threshold but with no real
+// conflict against main is synced and pushed automatically, and review proceeds
+// normally — the branch-sync precondition must never block a review that could have
+// just been fixed transparently.
+func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConflict(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "config", "user.email", "test@example.com")
+	runGitOrFail(t, origin, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "README.md"), []byte("# base\n"), 0o644))
+	runGitOrFail(t, origin, "add", "README.md")
+	runGitOrFail(t, origin, "commit", "-m", "initial commit")
+
+	work := cloneWithOrigin(t, origin)
+	runGitOrFail(t, work, "checkout", "-b", "feature")
+	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
+
+	// The feature branch's own unrelated change.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "feature.txt"), []byte("feature work\n"), 0o644))
+	runGitOrFail(t, work, "add", "feature.txt")
+	runGitOrFail(t, work, "commit", "-m", "feature work")
+
+	// Main drifts well past the threshold, but on unrelated files.
+	commitOnRepo(t, origin, 55, "upstream")
+
+	itemData := BacklogItemData{
+		Title:              "Branch drift clean-sync test",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		RepoPath:           origin,
+	}
+	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workSessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      createdItemData.ID,
+		SessionUUID: workSessionUUID,
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	inst := newTestInstance("branch-drift-clean-sync-test")
+	inst.UUID = workSessionUUID
+	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-clean-sync-test", "feature", baseSHA)
+	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+
+	item := &BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
+
+	reviewInstance := &Instance{UUID: uuid.New().String()}
+	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	getSessionCreator := func() ReviewGateSpawner { return spawner }
+	getAutoReopener := func() AutoReopenSpawner { return nil }
+	getNotifier := func() Notifier { return nil }
+
+	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
+
+	runner.Run(ctx, item, workIS, func(ctx context.Context, item *BacklogItemData, is ItemSessionSummary) {})
+
+	assert.Equal(t, 1, spawner.getCallCount(), "a cleanly-synced branch must proceed to a real review, not stay blocked")
+
+	// The sync must have actually landed on origin — otherwise the next reconciliation
+	// tick (or a human inspecting the PR) sees the drift reappear.
+	originTip := strings.TrimSpace(runGitCapture(t, origin, "rev-parse", "feature"))
+	workTip := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "feature"))
+	assert.Equal(t, workTip, originTip, "the merge commit must be pushed to origin, not left local-only")
+}
+
+// runGitCapture runs a git command in dir and returns its combined output, failing
+// the test on error. Distinct from runGitOrFail (which discards output) — used where
+// the test needs the command's stdout (rev-parse, status --porcelain).
+func runGitCapture(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, out)
+	return string(out)
+}

@@ -202,7 +202,7 @@ func TestGetSessionGoalMCP_returnsGoalForNamedSession(t *testing.T) {
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
 	// Pre-set a goal.
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "get goal test", session.GoalStatusWorking, nil, "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "get goal test", session.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 
 	req := makeToolReq(map[string]interface{}{
@@ -254,7 +254,7 @@ func TestUpdateSessionTaskMCP_updatesStatusAndPublishesEvent(t *testing.T) {
 	tasks := []session.TaskNode{
 		{ID: "task-a", Title: "Task A", Status: session.TaskStatusPending},
 	}
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "task update goal", session.GoalStatusWorking, tasks, "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "task update goal", session.GoalStatusWorking, tasks, "", "")
 	require.NoError(t, err)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
@@ -296,7 +296,7 @@ func TestUpdateSessionTaskMCP_callerUUIDMismatchReturnsError(t *testing.T) {
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
 	// Goal belongs to sessionUUID.
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "mismatch goal", session.GoalStatusIdle, nil, "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "mismatch goal", session.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
 	// Call with differentUUID as caller.
@@ -322,7 +322,7 @@ func TestUpdateSessionTaskMCP_missingTaskIDReturnsError(t *testing.T) {
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", session.GoalStatusIdle, nil, "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", session.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)

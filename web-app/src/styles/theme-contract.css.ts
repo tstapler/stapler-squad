@@ -40,6 +40,7 @@ export const vars = createThemeContract({
     // Status
     success: null,
     successBg: null,
+    successText: null,
     warning: null,
     warningBg: null,
     warningText: null,

@@ -357,9 +357,12 @@ jobs:
   # 20% threshold is deliberate — tmux-touching benchmarks have 15-25% natural
   # variance on shared runners. count=5 + utest for statistical significance.
   #
-  # Baseline stored in benchmarks/go/benchmark-gate-baseline.txt (tracked, not
-  # gitignored). Uses same concurrency group as benchmark.yml to prevent 5
-  # concurrent pushers colliding on main.
+  # Baseline persisted via GitHub Actions cache (key "bench-gate-<run_id>",
+  # restored by "bench-gate-" prefix match) — not committed to git; a prior
+  # version of this job committed the baseline to `benchmarks/` on every
+  # push to main, which flooded the commit history for very little value.
+  # Uses same concurrency group as benchmark.yml to prevent 5 concurrent
+  # runs colliding.
   # ─────────────────────────────────────────────────────────────────────────────
   benchmark-gate:
     name: Benchmark Gate (main only)
@@ -367,7 +370,7 @@ jobs:
     timeout-minutes: 30
     needs: [prepare, test]
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     concurrency:
@@ -417,6 +420,14 @@ jobs:
       - name: Install benchstat (pinned)
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
+      - name: Restore benchmark baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmarks/go/benchmark-gate-baseline.txt
+          key: bench-gate-
+          restore-keys: |
+            bench-gate-
+
       - name: Compare against baseline (20% threshold)
         run: |
           BASELINE=benchmarks/go/benchmark-gate-baseline.txt
@@ -431,20 +442,13 @@ jobs:
             exit 1
           fi
 
-      - name: Update baseline on success
+      - name: Save benchmark baseline on success
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          pushed=false
-          for i in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p benchmarks/go
-            cp bench-current.txt benchmarks/go/benchmark-gate-baseline.txt
-            git add benchmarks/go/benchmark-gate-baseline.txt
-            git diff --cached --quiet && echo "no changes to baseline" && pushed=true && break
-            git commit -m "chore(bench): update benchmark-gate baseline [skip ci]"
-            git push origin HEAD:main && pushed=true && break
-            sleep $((5 * i))
-          done
-          $pushed || { echo "ERROR: git push failed after 3 retries"; exit 1; }
+          mkdir -p benchmarks/go
+          cp bench-current.txt benchmarks/go/benchmark-gate-baseline.txt
+
+      - name: Persist baseline to cache on success
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/go/benchmark-gate-baseline.txt
+          key: bench-gate-${{ github.run_id }}

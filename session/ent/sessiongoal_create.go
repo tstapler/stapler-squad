@@ -78,6 +78,20 @@ func (_c *SessionGoalCreate) SetNillableSetBy(v *string) *SessionGoalCreate {
 	return _c
 }
 
+// SetWorkspaceKey sets the "workspace_key" field.
+func (_c *SessionGoalCreate) SetWorkspaceKey(v string) *SessionGoalCreate {
+	_c.mutation.SetWorkspaceKey(v)
+	return _c
+}
+
+// SetNillableWorkspaceKey sets the "workspace_key" field if the given value is not nil.
+func (_c *SessionGoalCreate) SetNillableWorkspaceKey(v *string) *SessionGoalCreate {
+	if v != nil {
+		_c.SetWorkspaceKey(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *SessionGoalCreate) SetCreatedAt(v time.Time) *SessionGoalCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -256,6 +270,10 @@ func (_c *SessionGoalCreate) createSpec() (*SessionGoal, *sqlgraph.CreateSpec) {
 		_spec.SetField(sessiongoal.FieldSetBy, field.TypeString, value)
 		_node.SetBy = value
 	}
+	if value, ok := _c.mutation.WorkspaceKey(); ok {
+		_spec.SetField(sessiongoal.FieldWorkspaceKey, field.TypeString, value)
+		_node.WorkspaceKey = value
+	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(sessiongoal.FieldCreatedAt, field.TypeTime, value)
 		_node.CreatedAt = value
@@ -385,6 +403,24 @@ func (u *SessionGoalUpsert) UpdateSetBy() *SessionGoalUpsert {
 // ClearSetBy clears the value of the "set_by" field.
 func (u *SessionGoalUpsert) ClearSetBy() *SessionGoalUpsert {
 	u.SetNull(sessiongoal.FieldSetBy)
+	return u
+}
+
+// SetWorkspaceKey sets the "workspace_key" field.
+func (u *SessionGoalUpsert) SetWorkspaceKey(v string) *SessionGoalUpsert {
+	u.Set(sessiongoal.FieldWorkspaceKey, v)
+	return u
+}
+
+// UpdateWorkspaceKey sets the "workspace_key" field to the value that was provided on create.
+func (u *SessionGoalUpsert) UpdateWorkspaceKey() *SessionGoalUpsert {
+	u.SetExcluded(sessiongoal.FieldWorkspaceKey)
+	return u
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (u *SessionGoalUpsert) ClearWorkspaceKey() *SessionGoalUpsert {
+	u.SetNull(sessiongoal.FieldWorkspaceKey)
 	return u
 }
 
@@ -532,6 +568,27 @@ func (u *SessionGoalUpsertOne) UpdateSetBy() *SessionGoalUpsertOne {
 func (u *SessionGoalUpsertOne) ClearSetBy() *SessionGoalUpsertOne {
 	return u.Update(func(s *SessionGoalUpsert) {
 		s.ClearSetBy()
+	})
+}
+
+// SetWorkspaceKey sets the "workspace_key" field.
+func (u *SessionGoalUpsertOne) SetWorkspaceKey(v string) *SessionGoalUpsertOne {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.SetWorkspaceKey(v)
+	})
+}
+
+// UpdateWorkspaceKey sets the "workspace_key" field to the value that was provided on create.
+func (u *SessionGoalUpsertOne) UpdateWorkspaceKey() *SessionGoalUpsertOne {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.UpdateWorkspaceKey()
+	})
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (u *SessionGoalUpsertOne) ClearWorkspaceKey() *SessionGoalUpsertOne {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.ClearWorkspaceKey()
 	})
 }
 
@@ -848,6 +905,27 @@ func (u *SessionGoalUpsertBulk) UpdateSetBy() *SessionGoalUpsertBulk {
 func (u *SessionGoalUpsertBulk) ClearSetBy() *SessionGoalUpsertBulk {
 	return u.Update(func(s *SessionGoalUpsert) {
 		s.ClearSetBy()
+	})
+}
+
+// SetWorkspaceKey sets the "workspace_key" field.
+func (u *SessionGoalUpsertBulk) SetWorkspaceKey(v string) *SessionGoalUpsertBulk {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.SetWorkspaceKey(v)
+	})
+}
+
+// UpdateWorkspaceKey sets the "workspace_key" field to the value that was provided on create.
+func (u *SessionGoalUpsertBulk) UpdateWorkspaceKey() *SessionGoalUpsertBulk {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.UpdateWorkspaceKey()
+	})
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (u *SessionGoalUpsertBulk) ClearWorkspaceKey() *SessionGoalUpsertBulk {
+	return u.Update(func(s *SessionGoalUpsert) {
+		s.ClearWorkspaceKey()
 	})
 }
 

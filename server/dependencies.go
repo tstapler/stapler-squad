@@ -490,6 +490,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		pipelineModeRepo = session.NewEntPipelineModeRepository(entClient)
+		// Seed the "sdd" pipeline mode before the engine's first cache Load
+		// below, so that Load already sees the seeded row in one pass rather
+		// than needing a follow-up InvalidateCache. Create-if-missing only —
+		// never overwrites an operator's later hand-edit — and never aborts
+		// boot on failure, matching NewPipelineEngine's own non-fatal
+		// posture immediately below (see
+		// project_plans/backlog-sdd-default-pipeline/implementation/plan.md
+		// Task 1.1.1c).
+		if seedErr := session.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
+			log.Warn("failed to seed default sdd pipeline mode, continuing without it", "err", seedErr)
+		}
 		if cachingPipelineEngine, err := session.NewPipelineEngine(pipelineModeRepo); err != nil {
 			log.Warn("pipelineEngine construction failed; continuing with the default pipeline for all backlog items", "err", err)
 		} else {

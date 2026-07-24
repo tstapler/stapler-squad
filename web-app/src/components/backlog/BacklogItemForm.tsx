@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus, PipelineMode } from "@/lib/hooks/useBacklogService";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { RadioGroup } from "@/components/ui/RadioGroup";
 import type { RadioGroupOption } from "@/components/ui/RadioGroup";
@@ -46,6 +47,14 @@ const PIPELINE_MODE_FETCH_ERROR_NOTICE =
 const PIPELINE_MODE_UNKNOWN_HINT =
   "This item references a pipeline mode that no longer exists or is disabled. Choosing a different mode below will replace it when you save.";
 
+// Slug of the seeded SDD pipeline mode (session.DefaultSDDPipelineModeSlug on
+// the backend) and the feature flag name (server/services/feature_flag_service.go's
+// sddDefaultPipelineFlagName) gating whether a brand-new item pre-selects it.
+// See project_plans/backlog-sdd-default-pipeline — this pre-selection is a
+// default, not a lock: the user can still pick any other mode before saving.
+const SDD_PIPELINE_MODE_SLUG = "sdd";
+const SDD_DEFAULT_PIPELINE_FLAG = "backlog:sdd-default-pipeline";
+
 interface BacklogItemFormProps {
   initialValues?: Partial<BacklogItem>;
   onSubmit: (data: BacklogItemInput) => Promise<void>;
@@ -83,6 +92,11 @@ export function BacklogItemForm({
     initialValues?.acCriteria ?? []
   );
   const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
+  // Guards the one-shot SDD default pre-selection below from ever re-firing
+  // after either the user has manually touched the selector, or the
+  // pre-selection has already applied once — see handlePipelineModeChange
+  // and the effect below.
+  const pipelineModeTouchedRef = useRef(!!initialValues?.id);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
@@ -119,6 +133,30 @@ export function BacklogItemForm({
       cancelled = true;
     };
   }, [listPipelineModes]);
+
+  // Pre-select the seeded "sdd" pipeline mode for a brand-new item once the
+  // operator has opted in via the backlog:sdd-default-pipeline feature flag
+  // (see project_plans/backlog-sdd-default-pipeline). This is purely a
+  // default: pipelineModeTouchedRef.current stays false only until this
+  // effect fires or the user picks a value themselves (handlePipelineModeChange
+  // below), whichever happens first — after that, this effect never touches
+  // pipelineMode again, so it can never fight a manual choice, and it never
+  // runs at all for an existing item (pipelineModeTouchedRef starts true
+  // whenever initialValues?.id is set).
+  const sddDefaultFlagEnabled = useFeatureFlag(SDD_DEFAULT_PIPELINE_FLAG);
+  useEffect(() => {
+    if (pipelineModeTouchedRef.current) return;
+    if (modesLoading || modesError) return;
+    if (!sddDefaultFlagEnabled) return;
+    if (!availableModes.some((m) => m.slug === SDD_PIPELINE_MODE_SLUG)) return;
+    pipelineModeTouchedRef.current = true;
+    setPipelineMode(SDD_PIPELINE_MODE_SLUG);
+  }, [sddDefaultFlagEnabled, modesLoading, modesError, availableModes]);
+
+  const handlePipelineModeChange = useCallback((value: string) => {
+    pipelineModeTouchedRef.current = true;
+    setPipelineMode(value);
+  }, []);
 
   // Options offered by the RadioGroup: "Default" is always first and always
   // present. While the fetch is pending or failed, no other options render —
@@ -503,7 +541,7 @@ export function BacklogItemForm({
         <RadioGroup
           options={pipelineModeOptions}
           value={pipelineMode}
-          onChange={setPipelineMode}
+          onChange={handlePipelineModeChange}
           groupLabel="Pipeline mode"
           hintForValue={pipelineModeHintForValue}
           trailingContent={unresolvedPipelineModeOption}

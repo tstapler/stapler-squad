@@ -76,6 +76,11 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// concStorage is the concrete backing store, used for operations (like
+	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
+	// fake InstanceStore (tests) — callers must nil-check.
+	concStorage *session.Storage
+
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
 	searchSvc       *SearchService
@@ -341,6 +346,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 
 	svc := &SessionService{
 		storage:           storage,
+		concStorage:       concStorage,
 		eventBus:          eventBus,
 		reviewQueueSvc:    reviewQueueSvc,
 		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
@@ -1188,6 +1194,16 @@ func (s *SessionService) GetSession(
 	return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 }
 
+// workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
+// nudge for a new session being created at repoPath, or "" on any detection/lookup
+// failure, when there's no concrete storage backing this service, or when there are no
+// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
+// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
+// initialPromptFor so the two callers can't drift on how the nudge is built.
+func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
+	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
@@ -1406,6 +1422,13 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
+	// Best-effort: any detection/lookup failure just omits the nudge.
+	initialPrompt := req.Msg.InitialPrompt
+	if req.Msg.ResumeId == "" {
+		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -1415,7 +1438,7 @@ func (s *SessionService) CreateSession(
 		Program:          program,
 		AutoYes:          autoYes,
 		Prompt:           req.Msg.Prompt,
-		InitialPrompt:    req.Msg.InitialPrompt,
+		InitialPrompt:    initialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,

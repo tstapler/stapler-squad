@@ -32,11 +32,26 @@ import (
 // session.CachingPipelineEngine's own default-mode fallback for the nil-engine case
 // (many tests construct a BacklogService without one). Used by SpawnSessionFromItem
 // (Epic 1.5, Story 1.5.5) to build the prompt handed to inst.Prompt / AutonomousDriver.
-func (s *BacklogService) initialPromptFor(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
+//
+// Appends a one-time "other active sessions in this workspace" nudge (AC5) when peers
+// exist — best-effort: detection/lookup failures are logged and swallowed rather than
+// blocking session creation, since this is a convenience nudge, not required context.
+func (s *BacklogService) initialPromptFor(ctx context.Context, item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
+	var prompt string
 	if s.pipelineEngine == nil {
-		return session.BuildTokenBudgetedPrompt(item, priorSessions)
+		prompt = session.BuildTokenBudgetedPrompt(item, priorSessions)
+	} else {
+		prompt = s.pipelineEngine.InitialPromptFor(item, priorSessions)
 	}
-	return s.pipelineEngine.InitialPromptFor(item, priorSessions)
+	return prompt + s.workspacePeersBlockFor(ctx, item.RepoPath)
+}
+
+// workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
+// on any detection/lookup failure or when repoPath is empty. Delegates to
+// session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
+// callers can't drift on how the nudge is built.
+func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
+	return session.WorkspacePeersBlockForPath(ctx, s.storage, repoPath)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is
@@ -647,7 +662,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
 	// non-default PipelineMode changes what inst.Prompt / AutonomousDriver's goal sees.
-	prompt := s.initialPromptFor(item, priorSessions)
+	prompt := s.initialPromptFor(ctx, item, priorSessions)
 
 	// 9. Generate session title.
 	// On reopen, append a revision number (r2, r3…) based on how many work sessions
@@ -1834,21 +1849,58 @@ func (s *BacklogService) TriggerReReview(
 	// 5. Note: We don't need to delete the old verdict; a new one will overwrite it when the re-review
 	// session submits its findings via the MCP tool.
 
-	// 6. Get git diff from the most recent work session's worktree using its base SHA.
-	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions.
-	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
-
-	// 7. Deserialize AC snapshot (from most recent work session or item AC).
+	// 5b. Deserialize AC snapshot (from most recent work session or item AC) — needed
+	// ahead of step 6 so the branch-drift precondition below (5c) can record a blocked
+	// verdict against it without a second lookup.
 	acSnapshot := resolveACSnapshot(mostRecentWorkSession, item.AcceptanceCriteria)
+	acSnapshotJSON, _ := json.Marshal(acSnapshot)
+
+	// 5c. Precondition of review, not a best-effort side effect of the reactive PR-fix
+	// path (BUG-044): this is the entry point AutoRespawnReview uses to re-review an
+	// item abandoned in review — exactly the path that let backlog item 693c2700's
+	// branch drift 289 commits behind main across repeated abandoned-review cycles
+	// before ever being caught. Checked/synced here, before any diff is computed, so a
+	// clean auto-sync never even reaches the reviewer, and a real conflict blocks with
+	// an explicit, actionable reason instead of a misleading "no related work" verdict.
+	if mostRecentWorkSession != nil {
+		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
+			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
+				log.WarningLog.Printf("[TriggerReReview] branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
+				is, createErr := session.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), headlessReReviewUUIDPrefix, blockedSummary)
+				if createErr != nil {
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
+				}
+				log.InfoLog.Printf("[TriggerReReview] branch drift blocked for item %s — verdict recorded (session %s)", item.ID, is.ID)
+				if s.eventBus != nil {
+					// itemID as sessionID — see comment in notifyReworkCapHit above.
+					s.eventBus.Publish(events.NewNotificationEvent(
+						item.ID, "", uuid.New().String(),
+						int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+						int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+						"Review blocked — branch drifted too far behind main",
+						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
+						map[string]string{"item_id": item.ID},
+					))
+				}
+				return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
+				}), nil
+			}
+		}
+	}
+
+	// 6. Get git diff from the most recent work session's worktree using its base SHA.
+	// Fall back to item.RepoPath / HEAD~1 only for directory-mode sessions. Read AFTER
+	// the drift precondition above (5c) so a just-synced branch's diff reflects the
+	// merge rather than the stale pre-sync state.
+	workSessionDiff := s.getWorkSessionDiff(ctx, item.RepoPath, mostRecentWorkSession)
 
 	verificationNotes := ""
 	if mostRecentWorkSession != nil {
 		verificationNotes = mostRecentWorkSession.VerificationNotes
 	}
 
-	// 8. Build re-review prompt.
-	acSnapshotJSON, _ := json.Marshal(acSnapshot)
-
+	// 8. Build re-review prompt. acSnapshotJSON was already computed in step 5c above.
 	priorVerdictSection := ""
 	if mostRecentReviewSession != nil && mostRecentReviewSession.ReviewVerdict != nil {
 		rv := mostRecentReviewSession.ReviewVerdict
@@ -2311,31 +2363,50 @@ func findMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSessio
 
 // resolveCodebaseWorkDir returns the directory the headless codebase-read review call
 // (BuildReviewCallOptions' empty-diff branch) should be granted Read/Grep/Glob access
-// to, and whether that directory actually exists on disk. Prefers the work session's
-// dedicated worktree path (freshest, matches the session's actual branch); falls back
-// to repoPath when no worktree is recorded or the lookup fails (directory-mode
-// sessions, or a worktree that's since been cleaned up).
+// to, and whether that directory is safe to use for that purpose. Prefers the work
+// session's dedicated worktree path (freshest, matches the session's actual branch).
+// Falls back to repoPath only when there is no work session at all to fall back
+// from — the one case where repoPath is genuinely the only directory available, not a
+// stand-in for the item's own (missing) state.
 //
-// The existence check exists because the DB-recorded worktree row can outlive the
-// worktree directory itself (e.g. cleanup deleted the directory without pruning the
-// row) — see the confirmed live incident on the "Backlog History feature Broken" item
-// (PR #173): get_session_diff reported "worktree path does not exist" for a session
-// whose worktree row still resolved successfully. Handing the reviewer Read/Grep/Glob
-// access scoped to a directory that isn't there produces zero real evidence, which the
-// reviewer then (correctly, given what it was shown) reports as "no diff exists" /
-// "codebase shows none of the claimed work" — a false FAIL that masks real, substantial
-// work sitting on the branch. The caller must check exists before proceeding into
-// codebase-read mode, mirroring ReviewGateRunner.Run's (session/review_gate.go) refusal
-// to hand the reviewer a diff it could not positively compute.
+// The existence check on the worktree path exists because the DB-recorded worktree row
+// can outlive the worktree directory itself (e.g. cleanup deleted the directory without
+// pruning the row) — see the confirmed live incident on the "Backlog History feature
+// Broken" item (PR #173): get_session_diff reported "worktree path does not exist" for
+// a session whose worktree row still resolved successfully.
+//
+// BUG-045 (confirmed live on item 693c2700, PR #216): when a work session exists but its
+// worktree data cannot be resolved at all (the underlying session/worktree row itself
+// was reaped, or the storage lookup otherwise fails), this function used to silently
+// fall back to repoPath and report it as "exists" — repoPath obviously exists, since for
+// every backlog item in this project it resolves to the single shared main checkout the
+// human operator (and any concurrent Claude Code session) actively works in day to day.
+// Granting the reviewer live Read/Grep/Glob access to that directory hands it whatever
+// unrelated, uncommitted work happens to be sitting there at that exact moment, as if it
+// were the item's own diff — producing a plausible-sounding but completely wrong verdict
+// (item 693c2700's review reported FAIL describing an entirely unrelated tmux fix that
+// happened to be stashed in the operator's checkout, not any of the item's real work).
+// A work session with no resolvable worktree now refuses the codebase-read fallback
+// outright (dir is still returned, for logging, but exists is always false) — mirroring
+// ReviewGateRunner.Run's (session/review_gate.go) refusal to hand the reviewer a diff it
+// could not positively compute. The caller must check exists before proceeding into
+// codebase-read mode.
 func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath string, workSession *session.ItemSessionSummary) (dir string, exists bool) {
-	dir = repoPath
-	if workSession != nil {
-		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" {
-			dir = wt.WorktreePath
-		}
+	if workSession == nil {
+		// No work session at all for this item — repoPath is the only directory
+		// available, and there is nothing item-specific it could be masking.
+		info, statErr := os.Stat(repoPath)
+		return repoPath, statErr == nil && info.IsDir()
 	}
-	info, statErr := os.Stat(dir)
-	return dir, statErr == nil && info.IsDir()
+	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, workSession.SessionUUID)
+	if wtErr != nil || wt.WorktreePath == "" {
+		// A work session exists but its dedicated worktree cannot be resolved. Refuse
+		// the repoPath fallback rather than risk granting the reviewer live access to
+		// the shared main checkout's current, arbitrary working-tree state (BUG-045).
+		return repoPath, false
+	}
+	info, statErr := os.Stat(wt.WorktreePath)
+	return wt.WorktreePath, statErr == nil && info.IsDir()
 }
 
 // getWorkSessionDiff returns the git diff for the given work session. It prefers the

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // ReviewGateRunner encapsulates the spawnReviewGate logic into a testable value type.
@@ -104,6 +105,47 @@ func (r *ReviewGateRunner) Run(
 	// blocks the review instead of silently handing the reviewer an empty diff.
 	var worktreeDiffErr error
 	wt, wtErr := r.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
+	if wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
+		// Precondition of review, not a best-effort side effect of the reactive PR-fix
+		// path (BUG-044): a branch left to drift unbounded from main eventually produces
+		// a diff dominated by unrelated upstream commits rather than the item's own
+		// work, which review then — correctly, given what it's shown — reports as
+		// unrelated, misdiagnosing branch staleness as bad work (backlog item 693c2700).
+		// Checked/synced here, before any diff is computed, so a clean auto-sync never
+		// even reaches the reviewer, and a real conflict blocks with an explicit,
+		// actionable reason instead of silently producing a misleading diff.
+		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, bounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
+			log.WarningLog.Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
+			driftIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "branch-drift-"+uuid.New().String(), ReviewVerdictFail, blockedSummary)
+			if createErr != nil {
+				log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (branch drift) item=%s: %v", item.ID, createErr)
+				return
+			}
+			log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked for item %s — FAIL verdict recorded (session %s)", item.ID, driftIS.ID)
+			if r.getNotifier != nil {
+				if n := r.getNotifier(); n != nil {
+					n.Notify(item.ID,
+						"Review blocked — branch drifted too far behind main",
+						fmt.Sprintf("%s — the branch could not be automatically synced with main. See the item's review history for the conflict details.", item.Title),
+						7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+						3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+					)
+				}
+			}
+			// Feed into the same auto-reopen/cap-and-notify machinery every other terminal
+			// block in this function uses — a conflict left by drift is exactly the kind of
+			// thing a rework session can resolve, and the rework cap still protects against
+			// an unresolvable case looping silently forever.
+			if reopener := r.getAutoReopener(); reopener != nil {
+				go func() {
+					if err := reopener.AutoReopenAfterFailedReview(ctx, item.ID); err != nil {
+						log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate AutoReopenAfterFailedReview (branch drift) item=%s: %v", item.ID, err)
+					}
+				}()
+			}
+			return
+		}
+	}
 	if wtErr == nil && wt.WorktreePath != "" {
 		// Belt-and-suspenders layer 2: warn if the worktree still has uncommitted changes.
 		// request_review (layer 1) should have caught this, but flag it here too so the
