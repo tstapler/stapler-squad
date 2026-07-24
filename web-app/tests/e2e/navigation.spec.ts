@@ -19,7 +19,7 @@ import { test, expect } from '@playwright/test';
 // server-side import dependency. Keep in sync with web-app/src/lib/nav-pages.ts.
 const NAV_PAGES = [
   { href: '/',             label: 'Sessions',     shortLabel: undefined,  mobileNav: true },
-  { href: '/unfinished',   label: 'Unfinished',   shortLabel: undefined,  mobileNav: true },
+  { href: '/unfinished',   label: 'Up Next',      shortLabel: undefined,  mobileNav: true },
   { href: '/review-queue', label: 'Review Queue', shortLabel: 'Review',   mobileNav: true },
   { href: '/rules',        label: 'Rules',        shortLabel: undefined,  mobileNav: true },
   { href: '/logs',         label: 'Logs',         shortLabel: undefined,  mobileNav: false },

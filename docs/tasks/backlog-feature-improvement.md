@@ -994,3 +994,87 @@ of the two candidates in point 4 above is actually blocking it, since the fix di
 `bucket 1` reconciliation bug per the skill's routing table — independent of the 07-19
 bounce-loop fix (already shipped) and independent of the 07-19 `autonomous_stuck`-orphaned-row
 fix (#4 above, still open) — can run as its own parallel `sdd:fix-bug` session.
+
+## Update — 2026-07-22 (night, full skill re-run): dead-review-pane fix confirmed shipped; same item now stuck in a new way (BUG-040), remediation-with-backoff system confirmed live and healthy
+
+Full re-run triggered by `/backlog-feature-improvement`. `git log` shows this project shipped
+substantial work since the last entry above, all same-day: `410db67b`/`3789a545` (auto-remediate
+stale work sessions), `7c3508a0`/`3bd2847c` (automated `push_failed` remediation with backoff
+gate), `b0f26785` (**Phase A stuck-item auto-remediation with exponential backoff**, #185),
+`2ec298d3`+`c9a4f336` (manual `TriggerRemediationNow`/`ResetStuckRemediation`/
+`BulkResetStuckRemediation` RPCs + `/unfinished` UI controls), `1c310eb5`/`11748379` (ship
+PASS-verdict PRs via a headless agent run — `shipViaAgentOrFallback` — before the mechanical
+`pushAndCreatePR` fallback), `ce4783c2`/`e71cb67d` (TOCTOU race on stale reopens),
+`d99875d1` (stop flagging bouncing items whose PR already merged), plus the three fixes visible
+at `HEAD` (`c2a419be`/`341d1a48`/`5d77b70b` — fresh-worktree-base false-positive-shipped,
+queued-blocked-by-planning-gate, kanban board hiding queued/pr_pending/refining items — see
+BUG-037/038/039, all now in `docs/bugs/fixed/`). This is the busiest single-day span this audit
+doc has recorded.
+
+### Live State
+
+`ListStuckBacklogItems`: 7 rows / 5 unique items (up slightly from the 1-item low on 07-22
+daytime, but structurally different — see below):
+
+| Item | Reason(s) | Detail |
+|---|---|---|
+| `693c2700` "Expose ID functionality in Backlog" | `BOUNCING` + `AUTONOMOUS_STUCK` | `remediationAttempts: 1-2`, `nextRemediationAt` ~15-100min out — **actively in a bounded backoff cycle**, not a runaway loop |
+| `61684863` "collapse session-list categories" | `AUTONOMOUS_STUCK` | `remediationAttempts: 1`, backoff scheduled |
+| `40cf8885` "Rebrand the unfinished page" | `BOUNCING` + `AUTONOMOUS_STUCK` | same shape as `693c2700` |
+| `e99d3f4a` "Omnibar creation hangs" | `PLAN_NOT_APPROVED` | queued, parked by the (now-surfaced, per BUG-038) planning gate — working as designed |
+| `9264efe7` "Backlog History feature Broken" | `AUTONOMOUS_STUCK` (stale) | **the real problem — see BUG-040 below** |
+
+**Good news, verified not just claimed**: the `remediationAttempts`/`nextRemediationAt` fields
+are new since the 07-19 audit entry and back a genuinely bounded system —
+`session/backlog_remediation.go`'s `MaxRemediationAttempts` (`= len(remediationBackoffSchedule)`,
+a hard cap) plus `evaluateRemediation`'s attempt-cap check (line 97) mean a bouncing item now
+provably cannot loop forever the way the 07-19 CRITICAL bounce-loop bug did — it either
+converges or parks with `justParked=true` for a human/operator reset via the new
+`ResetStuckRemediation`/`TriggerRemediationNow` RPCs and `/unfinished` UI buttons. This is a
+real, structural fix for that finding's root cause (a proper capped-backoff state machine, not
+just a patch to the one code path that was looping) — closes the 07-19 update's recommendation
+#1 as **done**, not just mitigated.
+
+### [1, NEW] BUG-040: `pr_pending` item loses its PR reference, becomes permanently unreconcilable
+
+Filed as `docs/bugs/open/BUG-040-pr-pending-item-loses-pr-reference-dead-end.md` — full
+root-cause writeup there. Summary: item `9264efe7` (the same item flagged as this doc's "one
+real stuck item" on 2026-07-22 daytime, after its dead-review-pane fix landed and it
+progressed to `pr_pending` off the back of PR #173) is now sitting at `status = pr_pending`
+with `pr_url = ""` and `pr_number = 0`, live-verified via direct sqlite query against
+`~/.stapler-squad/workspaces/d685c4b1a423cca3/sessions.db` — a shape that
+`ReconcilePRPending` structurally cannot act on (every code path in that function requires a
+real `PrNumber`), and that `ListStuckBacklogItems` doesn't specifically detect (only the
+unrelated, stale `AUTONOMOUS_STUCK` reason fires). Two candidate root causes identified by
+reading `session/backlog_lifecycle.go`, not yet distinguished by a live trace (this session's
+window had already rotated out of the log retention by the time it was investigated):
+`pushAndCreatePR`'s PR-field persist is best-effort/non-blocking before it unconditionally
+transitions to `pr_pending` (lines 2716-2747), and separately `ReconcilePRPending`'s closed-PR
+branch clears `PrURL`/`PrNumber` *before* confirming `AutoReopenForPRFix` actually reopened the
+item (lines 3320-3359) — either produces the exact observed dead end. **This is another
+instance of this doc's recurring bucket-1 shape**: a write silently doesn't happen (or happens
+out of order), and nothing detects the resulting terminal state. Routed to `sdd:fix-bug`
+(kicked off as a parallel worktree agent — see below); the bug doc's suggested fix direction
+adds a dedicated `StuckReason` for `pr_pending` items with no `PrNumber` so this shape is at
+least visible even before the write-ordering root cause is nailed down.
+
+### Bucket [3] — no material change this pass
+
+Not re-audited in full this run (the last two passes, 07-18 and 07-19, already found and
+tracked the concrete remaining gaps: pipeline-mode selector UI still not wired into
+`BacklogItemForm.tsx`, automatic review-gate prompt still bypasses `PipelineEngine`). Spot
+check: `web-app/src/app/settings/pipeline-modes/` still exists; not re-verified whether the
+Settings nav link or the item-level picker landed since 07-19 — flag for the next full pass
+rather than re-deriving here.
+
+### Recommended Next Actions (routing per skill Phase 5)
+
+1. **`sdd:fix-bug` — BUG-040** (above). Started as a parallel `Agent(isolation: worktree)`
+   session per this repo's standing preference for Agent-tool-driven parallel fix work over
+   `create_session`.
+2. Re-verify the 07-18/07-19 pipeline-mode-selector-UI and automatic-review-gate
+   `PipelineEngine`-coverage gaps are still open (or close them out if they landed unnoticed
+   in today's busy commit span) — next full pass, not started here.
+3. Nothing else newly actionable this pass — the remediation-backoff system landing is a
+   genuine, verified structural win and the is-it-ready verdict would likely improve from
+   `FIX-THEN-SHIP` once BUG-040 is closed, contingent on re-confirming bucket [3]'s status.

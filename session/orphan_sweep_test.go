@@ -53,3 +53,42 @@ exit 1
 		require.Contains(t, socket, "test-isolated-", "socket must be the per-process isolated socket, not the shared default")
 	}
 }
+
+// TestReconcileOrphanedTmuxSessions_PreservesLiveShellSessions is the regression guard
+// for the bug where shell sibling tmux sessions (staplersquad_{parent}_shell_{shellID})
+// were unconditionally treated as orphans: the sweep only ever checked instance-level
+// tmux names/UUIDs and never looked at an instance's shells, so a freshly-spawned shell
+// with no Instance-level identity of its own was killed on the very next sweep/restart.
+func TestReconcileOrphanedTmuxSessions_PreservesLiveShellSessions(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "argv.log")
+	fakeTmux := filepath.Join(dir, "tmux")
+
+	script := `#!/bin/sh
+echo "$@" >> "` + logPath + `"
+case "$*" in
+  *list-sessions*) echo "staplersquad_parent_shell_shell-1"; exit 0 ;;
+  *show-environment*) exit 1 ;;
+  *kill-session*) exit 0 ;;
+esac
+exit 1
+`
+	require.NoError(t, os.WriteFile(fakeTmux, []byte(script), 0o755))
+	t.Setenv("TMUX_BIN", fakeTmux)
+
+	inst := &Instance{}
+	inst.initShellRegistry()
+	inst.shells.AddStopped(&Shell{
+		ID:              "shell-1",
+		TmuxSessionName: "staplersquad_parent_shell_shell-1",
+	})
+
+	ReconcileOrphanedTmuxSessions([]*Instance{inst})
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+
+	logStr := string(logBytes)
+	require.Contains(t, logStr, "list-sessions", "expected list-sessions to have been called")
+	require.NotContains(t, logStr, "kill-session", "the known shell session must not be killed")
+}
