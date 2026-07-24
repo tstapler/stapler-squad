@@ -64,7 +64,7 @@ jobs:
 
       - name: Start test server
         run: |
-          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=ux-${{ github.run_id }} \
+          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local \
             ./stapler-squad --tmux-keep-server &
           echo $! > /tmp/server.pid
 
