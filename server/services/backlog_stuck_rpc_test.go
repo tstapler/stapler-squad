@@ -391,3 +391,40 @@ func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns
 	require.Len(t, list.Msg.Items, 1)
 	assert.Equal(t, int32(1), list.Msg.Items[0].RemediationAttempts)
 }
+
+// reasonsWithoutAutomatedRemediation lists every domain.StuckReason that
+// intentionally has no wired remediationActionByReason case — these require a
+// human decision (e.g. plan_not_approved) or don't yet have a safe automated
+// fix. A reason must be listed here explicitly, or wired to an action: it may
+// not silently do neither.
+var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
+	domain.StuckReasonPRReadyUnmerged: true,
+	domain.StuckReasonReworkCap:       true,
+	domain.StuckReasonPushFailed:      true,
+	domain.StuckReasonOrphanedTriage:  true,
+	domain.StuckReasonSpawnFailed:     true,
+	domain.StuckReasonPlanNotApproved: true,
+}
+
+// TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded
+// is an exhaustiveness guard: every domain.AllStuckReasons entry must either be
+// wired in remediationActionByReason or be explicitly listed in
+// reasonsWithoutAutomatedRemediation. Without this test, adding a new
+// StuckReason (a detector) with no corresponding remediation decision compiles
+// fine and silently falls through remediationActionByReason's default case —
+// exactly what happened with StuckReasonPRPendingNoPR: BUG-040 added the
+// detector but TriggerRemediationNow returned Unimplemented for it until this
+// gap was found in a live audit and closed. golangci-lint's `exhaustive`
+// linter would catch this at compile-adjacent time, but this repo scopes
+// `exhaustive` out of server/ entirely (see .golangci.yml) because most
+// switches there use iota types with intentional defaults — this test is the
+// narrowly-scoped substitute for this one specific reason/action contract.
+func TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	for _, reason := range domain.AllStuckReasons {
+		wired := svc.remediationActionByReason(reason) != nil
+		explicitlyUnwired := reasonsWithoutAutomatedRemediation[reason]
+		assert.True(t, wired != explicitlyUnwired,
+			"StuckReason %q must be either wired in remediationActionByReason or listed in reasonsWithoutAutomatedRemediation, not both or neither", reason)
+	}
+}
