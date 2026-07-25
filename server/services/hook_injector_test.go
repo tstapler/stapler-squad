@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -338,6 +339,46 @@ func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresen
 	}
 	if _, ok := hooksMap["PermissionRequest"]; !ok {
 		t.Error("PermissionRequest hook was removed even though it wasn't named in RemoveHooksConfig")
+	}
+}
+
+// TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
+// guards against the fixed-tmp-filename hazard writeSettingsAtomic previously had:
+// tmpPath was settingsPath+".tmp" (not unique per call), so two concurrent writers
+// targeting the same rootDir — e.g. InjectHooksConfig and RemoveHooksConfig racing
+// from two goroutines on the same session's worktree, or two backlog spawns hitting
+// the same reused branch — could clobber each other's temp file mid-write and leave
+// a truncated/corrupt settings.local.json after rename (observed in CI as "parse
+// PostToolUse groups: unexpected end of JSON input" on this package's other tests).
+// internal/claudehooks/claudehooks.go's mutate() already documents this exact
+// failure mode and uses a unique os.CreateTemp name for the same reason.
+func TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			hooks := []HookName{HookPostToolLogging, HookGitDriftCheck}
+			_ = InjectHooksConfig(tmpDir, "sess", hooks)
+			_ = RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck})
+		}(i)
+	}
+	wg.Wait()
+
+	settingsPath := filepath.Join(tmpDir, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after concurrent writes: %v", err)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("settings.local.json is corrupt after concurrent writes: %v\ncontent: %s", err, data)
+	}
+	if _, ok := parsed["hooks"]; !ok {
+		t.Error("expected a \"hooks\" key to survive concurrent InjectHooksConfig/RemoveHooksConfig calls")
 	}
 }
 

@@ -134,12 +134,29 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
-	tmpPath := settingsPath + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
+	// Unique temp file (not settingsPath+".tmp") so two concurrent writers targeting
+	// the same settingsPath — e.g. InjectHooksConfig and RemoveHooksConfig racing on
+	// the same rootDir from two goroutines — can't clobber each other's temp file
+	// mid-write and produce a truncated/corrupt settingsPath after rename. Mirrors
+	// internal/claudehooks/claudehooks.go's mutate(), which documents the same fix
+	// for the identical fixed-tmp-filename hazard.
+	tmp, err := os.CreateTemp(claudeDir, filepath.Base(settingsPath)+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", claudeDir, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) //nolint:errcheck // best-effort cleanup if rename fails
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close() //nolint:errcheck
 		return fmt.Errorf("write temp %s: %w", tmpPath, err)
 	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp %s: %w", tmpPath, err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("chmod temp %s: %w", tmpPath, err)
+	}
 	if err := os.Rename(tmpPath, settingsPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
 	log.Info("[InjectMCPConfig] wrote settings", "path", settingsPath)
