@@ -439,3 +439,321 @@ func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
 		assert.Contains(t, tc.Text, "Triage result submitted")
 	})
 }
+
+// ─── archive_backlog_item ─────────────────────────────────────────────────
+
+// createLinkedBacklogItem creates a backlog item and links a session to it
+// with the given role, returning the item and the session UUID.
+func createLinkedBacklogItem(t *testing.T, storage *session.Storage, itemData session.BacklogItemData, role string) (*session.BacklogItemData, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: role,
+	})
+	require.NoError(t, err)
+
+	return item, sessionUUID
+}
+
+// TestArchiveBacklogItem_SuccessfullyArchivesItem verifies that archiveBacklogItem
+// sets the item's status to archived without touching existing notes when no note is given.
+func TestArchiveBacklogItem_SuccessfullyArchivesItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Duplicate item",
+		Notes:    "keep me",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.archiveBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "archived")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusArchived), fetched.Status)
+	require.NotNil(t, fetched.ArchivedAt)
+	require.Equal(t, "keep me", fetched.Notes, "notes should be unchanged when no note is provided")
+}
+
+// TestArchiveBacklogItem_SuccessfullyArchivesItemWithNote verifies that a note
+// passed to archiveBacklogItem is appended to notes before the item is archived.
+func TestArchiveBacklogItem_SuccessfullyArchivesItemWithNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Duplicate item",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"note":    "duplicate of 1dc7ff10-326c-4276-a70f-eb8869713593, fixed by commit baca1c7",
+	})
+
+	result, err := handler.archiveBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "archived")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusArchived), fetched.Status)
+	require.NotNil(t, fetched.ArchivedAt)
+	require.Contains(t, fetched.Notes, "duplicate of 1dc7ff10-326c-4276-a70f-eb8869713593")
+}
+
+// TestArchiveBacklogItem_RejectsUnknownItemID verifies that archiveBacklogItem
+// returns ITEM_NOT_FOUND for a syntactically valid but non-existent item_id.
+func TestArchiveBacklogItem_RejectsUnknownItemID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+
+	sessionUUID := uuid.New().String()
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": "00000000-0000-0000-0000-000000000999",
+	})
+
+	result, err := handler.archiveBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errCode)
+}
+
+// TestArchiveBacklogItem_RejectsWhenSessionNotLinkedToItem verifies that archiveBacklogItem
+// returns PERMISSION_DENIED when the calling session is not linked to the item.
+func TestArchiveBacklogItem_RejectsWhenSessionNotLinkedToItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Unlinked item",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	sessionUUID := uuid.New().String()
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.archiveBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrPermissionDenied, errCode)
+}
+
+// ─── append_backlog_notes ──────────────────────────────────────────────────
+
+// TestAppendBacklogNotes_AppendsToExistingNotes verifies that appendBacklogNotes
+// preserves prior notes rather than overwriting them.
+func TestAppendBacklogNotes_AppendsToExistingNotes(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Item with notes",
+		Notes:    "original note",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"note":    "cross-linked from duplicate 10128af0",
+	})
+
+	result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "appended")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Contains(t, fetched.Notes, "original note", "prior notes must survive the append")
+	require.Contains(t, fetched.Notes, "cross-linked from duplicate 10128af0")
+}
+
+// TestAppendBacklogNotes_RejectsUnknownItemID verifies that appendBacklogNotes
+// returns ITEM_NOT_FOUND for a syntactically valid but non-existent item_id.
+func TestAppendBacklogNotes_RejectsUnknownItemID(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	handler := &backlogHandlers{storage: storage}
+
+	sessionUUID := uuid.New().String()
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": "00000000-0000-0000-0000-000000000999",
+		"note":    "some note",
+	})
+
+	result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errCode)
+}
+
+// TestAppendBacklogNotes_RejectsWhenSessionNotLinkedToItem verifies that appendBacklogNotes
+// returns PERMISSION_DENIED when the calling session is not linked to the item.
+func TestAppendBacklogNotes_RejectsWhenSessionNotLinkedToItem(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Unlinked item",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	sessionUUID := uuid.New().String()
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"note":    "some note",
+	})
+
+	result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrPermissionDenied, errCode)
+}
+
+// TestAppendBacklogNotes_RejectsMissingNote verifies that appendBacklogNotes
+// returns INVALID_ARGUMENT when note is missing.
+func TestAppendBacklogNotes_RejectsMissingNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Item missing note",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errCode)
+}
+
+// TestAppendBacklogNotes_PreconditionGuardsAgainstLostUpdate verifies the
+// optimistic-concurrency precondition that appendBacklogNotes relies on:
+// writing with a stale ExpectedUpdatedAt fails instead of silently
+// overwriting a concurrent change (the lost-update race).
+func TestAppendBacklogNotes_PreconditionGuardsAgainstLostUpdate(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Contended item",
+		Notes:    "original",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	staleUpdatedAt := item.UpdatedAt
+
+	// A concurrent writer updates the item first.
+	concurrentNote := "concurrent note"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Notes: &concurrentNote}, nil)
+	require.NoError(t, err)
+
+	// A second writer using the now-stale UpdatedAt must fail rather than
+	// overwrite the concurrent note.
+	lateNote := "late note based on stale read"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID,
+		session.BacklogItemUpdate{Notes: &lateNote},
+		&session.BacklogItemPrecondition{ExpectedUpdatedAt: &staleUpdatedAt},
+	)
+	require.ErrorIs(t, err, session.ErrPreconditionFailed)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, "concurrent note", fetched.Notes, "concurrent writer's note must not be lost")
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -56,7 +57,19 @@ func validateUUID(id string) error {
 const (
 	ErrPermissionDenied = "PERMISSION_DENIED"
 	ErrItemNotFound     = "ITEM_NOT_FOUND"
+	ErrConflict         = "CONFLICT"
 )
+
+// appendNote merges a new note into an existing notes string, tagging it with
+// a timestamp and the authoring session so multiple appends stay attributable
+// and lossless (no note text is ever overwritten).
+func appendNote(existing, note, sessionUUID string) string {
+	entry := fmt.Sprintf("[%s] session=%s\n%s", time.Now().UTC().Format(time.RFC3339), sessionUUID, note)
+	if existing == "" {
+		return entry
+	}
+	return existing + "\n\n---\n" + entry
+}
 
 // --- Handler struct ---
 
@@ -535,6 +548,116 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	)), nil
 }
 
+// --- archive_backlog_item ---
+
+func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
+	}
+
+	args := req.GetArguments()
+
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	note, _ := args["note"].(string)
+
+	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		if errors.Is(getErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// Verify session is linked to item.
+	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", "Only sessions assigned to the item may archive it."), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+
+	if note != "" {
+		merged := appendNote(item.Notes, note, callerUUID)
+		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &merged}, nil); updateErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("update notes: %v", updateErr), ""), nil
+		}
+	}
+
+	if _, archiveErr := h.storage.ArchiveBacklogItem(ctx, itemID); archiveErr != nil {
+		if errors.Is(archiveErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("archive backlog item: %v", archiveErr), ""), nil
+	}
+
+	msg := fmt.Sprintf("Backlog item %s archived.", itemID)
+	if note != "" {
+		msg += " Note appended before archiving."
+	}
+	return mcpgo.NewToolResultText(msg), nil
+}
+
+// --- append_backlog_notes ---
+
+func (h *backlogHandlers) appendBacklogNotes(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
+	}
+
+	args := req.GetArguments()
+
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	note, ok := args["note"].(string)
+	if !ok || note == "" {
+		return errResult(ErrInvalidArgument, "note is required", ""), nil
+	}
+
+	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		if errors.Is(getErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// Verify session is linked to item.
+	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", "Only sessions assigned to the item may append notes."), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+
+	merged := appendNote(item.Notes, note, callerUUID)
+	precondition := &session.BacklogItemPrecondition{ExpectedUpdatedAt: &item.UpdatedAt}
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &merged}, precondition); updateErr != nil {
+		if errors.Is(updateErr, session.ErrPreconditionFailed) {
+			return errResult(ErrConflict, "backlog item was modified concurrently — notes not appended", "Call get_backlog_item again to see the latest state, then retry append_backlog_notes."), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("update notes: %v", updateErr), ""), nil
+	}
+
+	return mcpgo.NewToolResultText(fmt.Sprintf("Note appended to backlog item %s.", itemID)), nil
+}
+
 // --- Registration ---
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
@@ -656,5 +779,34 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.submitTriageResult,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("archive_backlog_item",
+			mcpgo.WithDescription("Archive a backlog item, e.g. when it turns out to be a duplicate or is otherwise no longer actionable. Optionally records a note (such as which item it duplicates, or a landing commit) before archiving. Requires the calling session to be linked to the item."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item to archive"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("note",
+				mcpgo.Description("Optional note to append to the item's notes before archiving (e.g. why it's a duplicate, canonical item ID, landing commit)"),
+			),
+		),
+		h.archiveBacklogItem,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("append_backlog_notes",
+			mcpgo.WithDescription("Append text to a backlog item's notes without overwriting existing notes. Use to cross-link related items (e.g. note a canonical item that a duplicate points to) or leave a running log. Requires the calling session to be linked to the item."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("note",
+				mcpgo.Description("Text to append to the item's existing notes"),
+				mcpgo.Required(),
+			),
+		),
+		h.appendBacklogNotes,
 	)
 }
