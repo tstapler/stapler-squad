@@ -139,6 +139,18 @@
           }
         ]
       }
+    },
+    {
+      "files": ["src/lib/**/*.ts", "src/lib/**/*.tsx", "src/app/**/*.ts", "src/app/**/*.tsx"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "Literal[value=/^(Executing|Processing|Needs Approval|Input Required|Idle|Unknown|Success|Error|Tests Failing|Rate Limited|Waiting for Agent)$/]",
+            "message": "Use DetectedStatus enum from @/gen/session/v1/types_pb instead of raw strings for detected status values."
+          }
+        ]
+      }
     }
   ]
 }

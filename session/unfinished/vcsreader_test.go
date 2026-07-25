@@ -264,6 +264,64 @@ func testVCSReaderContract(t *testing.T, r unfinished.VCSReader) {
 	})
 }
 
+// TestDiffShortstat_MultiBlobWorktree verifies that DiffShortstat returns correct
+// counts when a worktree has 5+ modified files, exercising the batch blob-read path
+// that replaced the per-file lock-acquire/release cycle.
+func TestDiffShortstat_MultiBlobWorktree(t *testing.T) {
+	repo := initRepo(t)
+	r := &unfinished.GoGitVCSReader{}
+
+	// Commit 5 files with known content, each 3 lines.
+	files := []string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"}
+	original := "line1\nline2\nline3\n"
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(original), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("add", ".")
+	run("commit", "-m", "add five files")
+
+	// Modify each file: replace 3 lines with 2 distinct lines → 3 deletions + 2 insertions per file.
+	// Use "a\nb\n" (4 bytes) instead of a same-size string to ensure size-based
+	// unstaged-change detection in GoGitVCSReader.DiffShortstat always sees a delta.
+	modified := "a\nb\n"
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(modified), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d, err := r.DiffShortstat(repo)
+	if err != nil {
+		t.Fatalf("DiffShortstat: %v", err)
+	}
+
+	// 5 files modified (README.md is unchanged).
+	if d.Files != 5 {
+		t.Errorf("expected 5 changed files, got %d", d.Files)
+	}
+	// Each file: 3 original lines deleted, 2 new lines inserted.
+	if d.Deletions != 15 {
+		t.Errorf("expected 15 deletions (5×3), got %d", d.Deletions)
+	}
+	if d.Insertions != 10 {
+		t.Errorf("expected 10 insertions (5×2), got %d", d.Insertions)
+	}
+}
+
 // TestGoGitVCSReader_AheadBehind_BehindCount verifies the "behind" direction of
 // AheadBehind when the base branch has commits that the current branch lacks.
 func TestGoGitVCSReader_AheadBehind_BehindCount(t *testing.T) {

@@ -195,62 +195,74 @@ func (pe *PolicyEngine) ListPolicies() []*ApprovalPolicy {
 
 // Evaluate evaluates an approval request against all policies.
 func (pe *PolicyEngine) Evaluate(request *detection.ApprovalRequest) (*PolicyDecision, error) {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.mu.RLock() // scan under read lock
 
 	decision := &PolicyDecision{
 		Request:   request,
 		Timestamp: time.Now(),
-		Decision:  ActionPrompt, // Default to prompting user
+		Decision:  ActionPrompt,
 		Matched:   false,
 	}
 
-	// Check each policy in priority order
+	var matchedPolicy *ApprovalPolicy
 	for _, policy := range pe.policies {
 		if !policy.Enabled {
 			continue
 		}
-
-		// Check if policy applies to this request type
 		if !pe.appliesToType(policy, request.Type) {
 			continue
 		}
-
-		// Check time restrictions
 		if policy.TimeRestriction != nil && !pe.checkTimeRestriction(policy.TimeRestriction) {
 			continue
 		}
-
-		// Check usage limits
-		if policy.UsageLimit != nil && !pe.checkUsageLimit(policy) {
+		if policy.UsageLimit != nil && !pe.checkUsageLimitReadOnly(policy) {
 			continue
 		}
-
-		// Evaluate conditions
 		if pe.matchesConditions(policy, request) {
-			decision.Matched = true
-			decision.MatchedPolicy = policy
-			decision.Decision = policy.Action
-			decision.Reason = fmt.Sprintf("Matched policy: %s", policy.Name)
-
-			// Update usage tracking
-			policy.usageCount++
-			policy.lastUsed = time.Now()
-
-			// Audit log
-			pe.addAuditEntry(PolicyAuditEntry{
-				Timestamp:      time.Now(),
-				RequestID:      request.ID,
-				PolicyID:       policy.ID,
-				PolicyName:     policy.Name,
-				Action:         policy.Action,
-				MatchedRequest: request,
-				Reason:         decision.Reason,
-			})
-
-			break // First matching policy wins
+			matchedPolicy = policy
+			break
 		}
 	}
+	pe.mu.RUnlock()
+
+	if matchedPolicy == nil {
+		return decision, nil
+	}
+
+	// Upgrade to write lock for stats update and audit log.
+	// Re-verify the matched policy is still enabled (it could have been removed
+	// in the window between RUnlock and Lock, though this is rare in practice).
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	if !matchedPolicy.Enabled {
+		// Policy was disabled between RUnlock and Lock — return default (prompt)
+		return decision, nil
+	}
+
+	// Apply deferred time-window reset if needed.
+	if matchedPolicy.UsageLimit != nil && matchedPolicy.UsageLimit.TimeWindow > 0 &&
+		time.Since(matchedPolicy.lastUsed) > matchedPolicy.UsageLimit.TimeWindow {
+		matchedPolicy.usageCount = 0
+	}
+
+	matchedPolicy.usageCount++
+	matchedPolicy.lastUsed = time.Now()
+
+	decision.Matched = true
+	decision.MatchedPolicy = matchedPolicy
+	decision.Decision = matchedPolicy.Action
+	decision.Reason = fmt.Sprintf("Matched policy: %s", matchedPolicy.Name)
+
+	pe.addAuditEntry(PolicyAuditEntry{
+		Timestamp:      time.Now(),
+		RequestID:      request.ID,
+		PolicyID:       matchedPolicy.ID,
+		PolicyName:     matchedPolicy.Name,
+		Action:         matchedPolicy.Action,
+		MatchedRequest: request,
+		Reason:         decision.Reason,
+	})
 
 	return decision, nil
 }
@@ -316,21 +328,19 @@ func (pe *PolicyEngine) checkTimeRestriction(restriction *TimeRestriction) bool 
 	return true
 }
 
-// checkUsageLimit validates if a policy hasn't exceeded its usage limits.
-func (pe *PolicyEngine) checkUsageLimit(policy *ApprovalPolicy) bool {
+// checkUsageLimitReadOnly checks usage limits without modifying policy state.
+// Must be called under at least a read lock on pe.mu.
+func (pe *PolicyEngine) checkUsageLimitReadOnly(policy *ApprovalPolicy) bool {
 	if policy.UsageLimit.MaxUses == 0 {
-		return true // Unlimited
+		return true // No limit
 	}
-
-	// Check time window
-	if policy.UsageLimit.TimeWindow > 0 {
-		if time.Since(policy.lastUsed) > policy.UsageLimit.TimeWindow {
-			// Reset counter if outside time window
-			policy.usageCount = 0
-		}
+	count := policy.usageCount
+	// If the time window has expired, treat the count as 0 for the check.
+	// The actual reset happens in the write lock section of Evaluate.
+	if policy.UsageLimit.TimeWindow > 0 && time.Since(policy.lastUsed) > policy.UsageLimit.TimeWindow {
+		count = 0
 	}
-
-	return policy.usageCount < policy.UsageLimit.MaxUses
+	return count < policy.UsageLimit.MaxUses
 }
 
 // matchesConditions checks if all policy conditions match the request.

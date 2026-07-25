@@ -18,10 +18,10 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	inst := &Instance{
 		Title:      "test-non-worktree",
 		Status:     Active,
-		started:    true,
 		IsWorktree: false,
 		// gitManager left as zero value — IsDirty() returns error if called
 	}
+	inst.started.Store(true)
 
 	err := inst.Pause()
 
@@ -38,10 +38,10 @@ func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t 
 	inst := &Instance{
 		Title:      "test-worktree-uninit",
 		Status:     Active,
-		started:    true,
 		IsWorktree: true,
 		// gitManager.worktree == nil → IsDirty returns "git worktree not initialized"
 	}
+	inst.started.Store(true)
 
 	err := inst.Pause()
 
@@ -58,10 +58,10 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 	// (because after the first successful transition, the status is Paused
 	// and Paused->Paused is not a valid transition).
 	inst := &Instance{
-		Title:   "test-concurrent",
-		Status:  Active,
-		started: true,
+		Title:  "test-concurrent",
+		Status: Active,
 	}
+	inst.started.Store(true)
 
 	const numGoroutines = 10
 	var wg sync.WaitGroup
@@ -73,9 +73,9 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// Use the public-facing mutex pattern matching Approve/Deny
-			inst.stateMutex.Lock()
+			inst.mu.Lock()
 			err := inst.transitionTo(context.Background(), Paused)
-			inst.stateMutex.Unlock()
+			inst.mu.Unlock()
 
 			if err == nil {
 				atomic.AddInt32(&successCount, 1)
@@ -101,11 +101,14 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	// Start from Paused — Paused→Active is valid.
 	// Launch goroutines all calling Approve() simultaneously.
 	// Exactly one should succeed; after that, Active→Active is invalid.
+	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
-		Title:   "test-concurrent-approve",
-		Status:  Paused,
-		started: true,
+		Title:  "test-concurrent-approve",
+		Status: Paused,
 	}
+	inst.started.Store(true)
+	li := NewLiveInstance(inst)
+	defer li.Stop()
 
 	const numGoroutines = 10
 	var wg sync.WaitGroup
@@ -144,11 +147,14 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	//   1. No data race (validated by -race flag)
 	//   2. Final state is consistent (Active or Paused)
 	//   3. At least one operation succeeds
+	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
-		Title:   "test-concurrent-mixed",
-		Status:  Paused,
-		started: true,
+		Title:  "test-concurrent-mixed",
+		Status: Paused,
 	}
+	inst.started.Store(true)
+	li := NewLiveInstance(inst)
+	defer li.Stop()
 
 	const numGoroutines = 20
 	var wg sync.WaitGroup
@@ -183,4 +189,44 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	if inst.Status != Active && inst.Status != Paused {
 		t.Errorf("expected final status Active or Paused, got %s", inst.Status)
 	}
+}
+
+// ─── U-GO-30: TestInstanceGetSetSessionGoal_threadSafe ───────────────────────
+// Run with: go test -race ./session/ -run TestInstanceGetSetSessionGoal_threadSafe
+
+func TestInstanceGetSetSessionGoal_threadSafe(t *testing.T) {
+	inst := &Instance{
+		Title: "concurrency-goal-test",
+		UUID:  "test-uuid-concurrent-goal",
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+
+	// Writers.
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			g := &SessionGoalData{
+				UUID:        "test-uuid",
+				SessionUUID: inst.UUID,
+				Goal:        "concurrent goal",
+				Status:      GoalStatusWorking,
+			}
+			inst.SetSessionGoalCached(g)
+		}()
+	}
+
+	// Readers.
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = inst.GetSessionGoal()
+		}()
+	}
+
+	wg.Wait()
+	// No data race should occur (detected by -race flag).
 }

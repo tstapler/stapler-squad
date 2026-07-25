@@ -17,6 +17,14 @@ export interface AuthStatus {
 
 /** Returns the /auth base URL using the current origin. */
 function authBase(): string {
+  // Explicit override always wins, even in the browser (e.g. `next dev`
+  // running on its own port against a separately-ported backend).
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (apiUrl) {
+    const origin = apiUrl.replace(/\/api\/?$/, "");
+    return origin + "/auth";
+  }
+
   if (typeof window !== "undefined") {
     return window.location.origin + "/auth";
   }

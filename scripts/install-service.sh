@@ -31,6 +31,41 @@ log_success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
 log_warning() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 log_error()   { printf "${RED}✗${NC} %s\n" "$1" >&2; }
 
+# ── Log Rotation ──────────────────────────────────────────────────────────────
+# launchd/systemd just append() to StandardOutPath/StandardError forever — neither
+# rotates it. A crash-restart loop (e.g. ThrottleInterval-bounded respawns) can grow
+# service.log to millions of lines in minutes. Rotate on every install/restart so a
+# bad run doesn't silently fill the disk between installs.
+# Threshold: 20 MiB.
+LOG_ROTATE_MAX_BYTES=20971520
+
+rotate_log_if_large() {
+    log_file="$1"
+    [ -f "$log_file" ] || return 0
+
+    size=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')
+    [ -n "$size" ] || return 0
+
+    if [ "$size" -gt "$LOG_ROTATE_MAX_BYTES" ]; then
+        mv -f "$log_file" "$log_file.old"
+        : > "$log_file"
+        log_info "Rotated oversized log ($((size / 1048576)) MiB): $log_file -> $log_file.old"
+    fi
+}
+
+# Remove duplicate ':'-separated PATH entries, keeping first occurrence order.
+# The unit/plist below bakes in "$PATH:<fallbacks>" verbatim from the invoking
+# shell; re-running this script from a shell whose own PATH already carries
+# duplicates (e.g. nested tool/plugin PATH prepends) writes those duplicates
+# into the persisted service file, and each subsequent install compounds it
+# further since the new shell inherits the bloated PATH. Once large enough,
+# every spawned tmux session re-embeds PATH via `-e PATH=...`, and the total
+# `tmux new-session` command line exceeds tmux's message-size limit — every
+# session/tmux spawn then fails with "command too long" (exit status 1).
+dedup_path() {
+    printf '%s' "$1" | awk -v RS=':' '{ if (!seen[$0]++) { if (out != "") out = out ":" $0; else out = $0 } } END { printf "%s", out }'
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -78,9 +113,10 @@ install_linux() {
     service_file="$service_dir/stapler-squad.service"
     log_dir="$HOME/.stapler-squad/logs"
 
-    # Verify systemd --user is available before writing any files
-    if ! systemctl --user is-system-running >/dev/null 2>&1 && \
-       ! systemctl --user status >/dev/null 2>&1; then
+    # Verify systemd --user is available before writing any files.
+    # Use timeout to avoid hanging indefinitely if D-Bus is unresponsive.
+    if ! timeout 5 systemctl --user is-system-running >/dev/null 2>&1 && \
+       ! timeout 5 systemctl --user status >/dev/null 2>&1; then
         log_error "systemd user session is not available."
         log_info  "On WSL or minimal containers, try adding stapler-squad to ~/.profile instead:"
         log_info  "  echo '$bin_path &' >> ~/.profile"
@@ -90,24 +126,74 @@ install_linux() {
     log_info "Creating systemd user service..."
     mkdir -p "$service_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
+
+    # Build a PATH that preserves the current shell's PATH first (so custom
+    # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
+    # but appends standard fallback locations, mirroring install_macos's
+    # LaunchAgent PATH below. Without this, the unit bakes in a raw PATH
+    # snapshot from install time with no fallback: if claude/tmux/git later
+    # move (nvm/asdf reinstall, a fresh `pip install --user`/npm global
+    # install to ~/.local/bin) without a subsequent `make install-service`,
+    # the headless LLM pool's exec.LookPath("claude") silently fails and
+    # backlog triage no-ops with only a log warning (see server/dependencies.go).
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    service_path=$(dedup_path "$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+    # Cgroup memory bound: this service's cgroup covers the Go binary AND every
+    # process it forks (tmux server + all spawned Claude agent sessions), since
+    # children inherit their parent's cgroup at fork time regardless of tmux
+    # daemonizing/detaching. Capping it keeps a runaway burst of concurrent agents
+    # (the 2026-07-12 OOM incident: 57/61GB used, swap exhausted) from taking down
+    # the whole box — the kernel's cgroup-aware OOM killer instead picks a victim
+    # from within this budget, leaving unrelated system processes alone.
+    # MemoryHigh (soft: throttle/reclaim, no kill) at 60% and MemoryMax (hard kill
+    # boundary) at 80% of total RAM, both computed from this machine's actual
+    # /proc/meminfo rather than a hardcoded value so the same script is safe on a
+    # small VM or a large workstation alike. Skipped entirely if detection fails.
+    mem_total_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || true)
+    memory_limit_lines=""
+    if [ -n "$mem_total_kb" ]; then
+        mem_high_mb=$((mem_total_kb * 60 / 100 / 1024))
+        mem_max_mb=$((mem_total_kb * 80 / 100 / 1024))
+        memory_limit_lines="MemoryHigh=${mem_high_mb}M
+MemoryMax=${mem_max_mb}M"
+    else
+        log_warning "Could not read /proc/meminfo; skipping MemoryHigh/MemoryMax cgroup limits"
+    fi
 
     cat > "$service_file" << EOF
 [Unit]
 Description=Stapler Squad — AI Agent Session Manager
 Documentation=https://github.com/tstapler/stapler-squad
 After=network.target
+# Tolerate a burst of OOM-kill/restart cycles during sustained memory pressure
+# without systemd permanently giving up (default is 5 restarts / 10s — a 5s
+# RestartSec can blow through that in one bad episode, leaving the service
+# down until a manual 'systemctl reset-failed'). It still gives up eventually
+# if genuinely crash-looping forever.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
-ExecStart=$bin_path --remote-access$extra_flags
+ExecStart=$bin_path --remote-access --tmux-keep-server$extra_flags
 WorkingDirectory=$HOME
 Restart=on-failure
 RestartSec=5s
 KillMode=process
+# Mild protective bias for the coordinator process itself (also inherited by
+# spawned children — a coarse, honestly-scoped tradeoff; per-session cgroup
+# delegation would be needed to bias only the coordinator, which is out of
+# scope here). In practice the kernel's OOM badness score is dominated by RSS,
+# and Claude agent subprocesses are the memory-heavy ones, so this mostly just
+# nudges ties in the coordinator's favor.
+OOMScoreAdjust=-500
+$memory_limit_lines
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
-Environment=HOME=$HOME
-Environment=PATH=$PATH
+Environment="HOME=$HOME"
+Environment="PATH=$service_path"
 
 [Install]
 WantedBy=default.target
@@ -139,6 +225,59 @@ EOF
     echo "    loginctl enable-linger \$USER"
 }
 
+# ── TCC / Full Disk Access helpers ───────────────────────────────────────────
+# Returns 0 if $1 (binary path) has an explicit FDA grant in the TCC database,
+# 1 otherwise (not granted, denied, or DB unreadable without FDA itself).
+# sqlite3 is pre-installed on macOS; we try both the system DB and the
+# per-user DB so the check works regardless of whether the calling terminal
+# has FDA.
+#
+# Non-admin users cannot read either TCC database (authorization denied).
+# In that case, if the binary is already installed and cert-signed (not
+# ad-hoc), we assume FDA was previously granted — the TCC grant is tied
+# to the signing identity (com.stapler-squad + cert), which is stable across
+# rebuilds, so re-installs don't need a new grant.
+fda_is_granted() {
+    local bin_path="$1"
+    local result
+    local any_db_found=false
+    local all_denied=true
+    for tcc_db in \
+        "/Library/Application Support/com.apple.TCC/TCC.db" \
+        "$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+    do
+        [ -f "$tcc_db" ] || continue
+        any_db_found=true
+        if [ ! -r "$tcc_db" ]; then
+            # DB exists but unreadable — likely non-admin user; note it and skip.
+            continue
+        fi
+        all_denied=false
+        # auth_value=2  → kTCCAuthorizationRightAllow (macOS 11+)
+        # allowed=1     → legacy boolean schema (macOS 10.x)
+        result=$(sqlite3 "$tcc_db" \
+            "SELECT COALESCE(auth_value, allowed) FROM access
+             WHERE service='kTCCServiceSystemPolicyAllFiles'
+               AND client='$bin_path'" 2>/dev/null)
+        [ "$result" = "2" ] || [ "$result" = "1" ] && return 0
+    done
+
+    # If at least one TCC DB existed but none were readable (non-admin user),
+    # fall back to a heuristic: assume FDA is already granted if the binary
+    # exists at the install path and is signed with our cert (not ad-hoc).
+    # Ad-hoc signatures embed a cdhash that changes every build; cert-signed
+    # binaries keep a stable designated requirement, so their TCC grant persists.
+    if $any_db_found && $all_denied && [ -f "$bin_path" ]; then
+        local dr
+        dr=$(codesign -d --requirements - "$bin_path" 2>/dev/null)
+        if echo "$dr" | grep -q "certificate root"; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # ── macOS / LaunchAgent ───────────────────────────────────────────────────────
 install_macos() {
     bin_path="$1"
@@ -149,12 +288,14 @@ install_macos() {
     log_info "Creating macOS LaunchAgent..."
     mkdir -p "$plist_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the user's shell PATH first (so custom tools,
     # go/bin, nvm, rbenv, etc. take precedence), then appends both Homebrew
     # prefixes (Apple Silicon + Intel) as a fallback so tools like tmux, git,
     # and claude are found even if not already on the shell PATH.
-    plist_path="$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    # Deduplicated (see dedup_path) so repeated installs don't compound PATH growth.
+    plist_path=$(dedup_path "$PATH:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin")
 
     # Build XML <string> entries for any extra flags (e.g. --profile --profile-port 6060).
     # We rely on the EnvironmentVariables PATH key above, so no shell wrapper is needed.
@@ -179,7 +320,8 @@ install_macos() {
     <key>ProgramArguments</key>
     <array>
         <string>$bin_path</string>
-        <string>--remote-access</string>$extra_args_xml
+        <string>--remote-access</string>
+        <string>--tmux-keep-server</string>$extra_args_xml
     </array>
 
     <key>RunAtLoad</key>
@@ -217,6 +359,44 @@ EOF
     log_success "LaunchAgent plist written to: $plist_file"
     echo ""
 
+    # ── Full Disk Access — gate before starting the service ──────────────────
+    # On a fresh install (or after the binary path changes) the binary isn't
+    # yet in the FDA list.  macOS will pop a TCC consent dialog the first time
+    # it accesses a protected path (Documents, Desktop, iCloud Drive, etc.),
+    # stalling startup past the health-check window and causing an apparent
+    # crash/segfault.  Check the TCC database first; only prompt if FDA isn't
+    # already granted so re-installs stay quiet.
+    if ! fda_is_granted "$bin_path"; then
+        echo ""
+        log_warning "Full Disk Access not detected for this binary"
+        echo ""
+        echo "    stapler-squad needs Full Disk Access to create sessions in"
+        echo "    Documents, Desktop, iCloud Drive, and other protected locations."
+        echo ""
+        echo "    System Settings → Privacy & Security → Full Disk Access"
+        echo "    is opening now.  Add this binary and toggle it ON:"
+        echo ""
+        echo "      $bin_path"
+        echo ""
+        open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" 2>/dev/null || true
+        printf "    Waiting 15 s for you to grant access before starting the service"
+        i=0
+        while [ $i -lt 15 ]; do
+            sleep 1
+            printf "."
+            i=$((i + 1))
+        done
+        printf "\n\n"
+    fi
+
+    # Verify the new binary is properly signed before stopping the running service.
+    # This prevents a bad binary from taking the service down with no way back.
+    if ! codesign --verify --no-strict "$bin_path" 2>/dev/null; then
+        log_error "New binary failed code signature verification: $bin_path"
+        log_error "Aborting install — existing service left running."
+        exit 1
+    fi
+
     # Stop the existing service before loading the updated plist.
     # Use 'launchctl bootout' (blocking — waits for the process to exit) so the
     # old process is fully gone before the new one starts.  This prevents the two
@@ -231,38 +411,96 @@ EOF
     sleep 0.5
 
     log_info "Starting updated service..."
-    if launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
-        log_success "Service started via launchctl bootstrap."
+    if ! launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null; then
+        # bootstrap can fail with I/O error on some macOS versions; fall back to legacy load
+        if ! launchctl load "$plist_file" 2>/dev/null; then
+            log_error "launchctl bootstrap failed — service may not start on login."
+            log_error "Try: launchctl bootstrap gui/$(id -u) $plist_file"
+            exit 1
+        fi
+        log_success "Service started via launchctl load (bootstrap fallback)."
     else
-        # Fallback for macOS 12 and earlier
-        launchctl load -w "$plist_file"
-        log_success "Service loaded via launchctl load."
+        log_success "Service started via launchctl bootstrap."
     fi
 
     echo ""
-    log_info "Check status:"
-    echo "    launchctl list | grep stapler-squad"
-    echo ""
-    log_info "View logs:"
-    echo "    tail -f $log_dir/service.log"
+    log_info "Check status:  launchctl list | grep stapler-squad"
+    log_info "View logs:     tail -f $log_dir/service.log"
+}
 
-    # ── Full Disk Access reminder ─────────────────────────────────────────────
-    # stapler-squad creates sessions in arbitrary directories (~/Documents,
-    # ~/Developer, etc.).  Without Full Disk Access, macOS pops a TCC consent
-    # dialog on every startup for each protected directory it touches.
-    # Granting Full Disk Access suppresses those dialogs permanently.
-    echo ""
-    log_info "macOS Privacy — Full Disk Access"
-    echo "    stapler-squad needs Full Disk Access to create sessions in any"
-    echo "    directory without macOS prompting for consent each time."
-    echo ""
-    echo "    To grant it:"
-    echo "      1. Open: System Settings → Privacy & Security → Full Disk Access"
-    echo "      2. Click '+' and add: $bin_path"
-    echo "      3. Restart the service: launchctl kickstart -k gui/\$(id -u)/com.stapler-squad"
-    echo ""
-    echo "    Opening Privacy & Security now..."
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" 2>/dev/null || true
+# ── Health Check + Auto-rollback ──────────────────────────────────────────────
+# Polls localhost:8543/health for up to 120s. The extra time covers the TCC
+# consent dialog (Full Disk Access) on first-boot and session-restore latency
+# when many sessions need to be reconnected on startup.
+# If the service exits with a non-zero status before the timeout we bail early
+# rather than waiting the full 120 s, since a crashed binary won't recover.
+health_check_and_rollback() {
+    bin_path="$1"
+    prev_bin="${bin_path}.prev"
+    max_wait=120
+    elapsed=0
+    url="http://localhost:8543/health"
+    printf "==> Waiting for service to be healthy (up to ${max_wait}s)"
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        if curl -sf "$url" >/dev/null 2>&1; then
+            printf "\n"
+            log_success "Service is healthy"
+            return 0
+        fi
+
+        # On macOS, check if the service has already crashed so we can bail
+        # early instead of polling the full 60 s for a dead process.
+        if [ "$(uname -s)" = "Darwin" ] && [ "$elapsed" -ge 5 ]; then
+            # launchctl list output: <pid>  <last_exit_status>  <label>
+            # A running service has a numeric PID; a crashed one shows "-".
+            svc_line=$(launchctl list 2>/dev/null | grep "com.stapler-squad" | head -1)
+            svc_pid=$(echo "$svc_line" | awk '{print $1}')
+            svc_exit=$(echo "$svc_line" | awk '{print $2}')
+            if [ "$svc_pid" = "-" ] && [ -n "$svc_exit" ] && [ "$svc_exit" != "0" ]; then
+                printf "\n"
+                log_error "Service crashed at startup (launchctl exit status: $svc_exit)."
+                log_info  "Check logs: tail -20 ~/.stapler-squad/logs/service.log"
+                if [ "$svc_exit" = "139" ] || [ "$svc_exit" = "11" ]; then
+                    log_warning "Exit status $svc_exit suggests a segfault."
+                    log_warning "If this is a first install, ensure Full Disk Access is granted:"
+                    log_warning "  System Settings → Privacy & Security → Full Disk Access"
+                    log_warning "  Add: $bin_path"
+                fi
+                break
+            fi
+        fi
+
+        printf "."
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    printf "\n"
+    log_error "Service did not respond within ${max_wait}s."
+
+    if [ ! -f "$prev_bin" ]; then
+        log_warning "No previous build found at $prev_bin — cannot auto-rollback."
+        log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
+        return 1
+    fi
+
+    log_info "Auto-rolling back to previous build..."
+    cp -f "$prev_bin" "$bin_path"
+    log_success "Binary restored from $prev_bin"
+
+    os=$(detect_os)
+    case "$os" in
+        linux)
+            systemctl --user restart stapler-squad
+            log_success "Service restarted with previous build."
+            ;;
+        macos)
+            launchctl kickstart -k "gui/$(id -u)/com.stapler-squad" 2>/dev/null || \
+                launchctl stop "gui/$(id -u)/com.stapler-squad" 2>/dev/null || true
+            log_success "Service restarted with previous build."
+            ;;
+    esac
+    log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
+    return 1
 }
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
@@ -341,6 +579,8 @@ main() {
         linux) install_linux "$bin_path" ;;
         macos) install_macos "$bin_path" ;;
     esac
+
+    health_check_and_rollback "$bin_path"
 }
 
 main "$@"

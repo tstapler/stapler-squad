@@ -114,9 +114,10 @@ func (i *Instance) onVNCStateChange() {
 	// Re-use the onStatusChange callback machinery to trigger a reactive queue refresh
 	// and a WatchSessions SessionUpdated event. The reactive queue manager wires this
 	// callback in BuildRuntimeDeps via inst.SetOnStatusChange().
-	i.onStatusChangeMu.RLock()
-	fn := i.onStatusChange
-	i.onStatusChangeMu.RUnlock()
+	var fn func(detection.DetectedStatus, string)
+	i.onStatusChange.Read(func(f func(detection.DetectedStatus, string)) {
+		fn = f
+	})
 	if fn != nil {
 		// Trigger with StatusIdle — we just want to signal that session state changed
 		// so the reactive queue manager broadcasts a SessionUpdated event with the

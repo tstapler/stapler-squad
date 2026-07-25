@@ -50,6 +50,11 @@ type ExternalTmuxStreamer struct {
 	// Control mode infrastructure
 	controlModeCmd    *exec.Cmd
 	controlModeActive bool
+	// controlModeStdin is kept open (never written to) for the life of the control
+	// mode process. Without it, cmd.Stdin defaults to /dev/null, which tmux's
+	// control-mode client reads as immediate EOF -- causing it to print %exit and
+	// detach within ~1s regardless of session liveness or the -r flag.
+	controlModeStdin io.WriteCloser
 
 	// Configuration
 	pollInterval time.Duration
@@ -59,7 +64,7 @@ type ExternalTmuxStreamer struct {
 func NewExternalTmuxStreamer(tmuxSessionName string) *ExternalTmuxStreamer {
 	return &ExternalTmuxStreamer{
 		tmuxSessionName: tmuxSessionName,
-		pollInterval:    500 * time.Millisecond, // Fallback poll interval (only used when control mode unavailable)
+		pollInterval:    100 * time.Millisecond, // Fallback poll interval (only used when control mode unavailable)
 	}
 }
 
@@ -185,8 +190,14 @@ func (s *ExternalTmuxStreamer) ConsumerCount() int {
 // should fall back to polling).
 func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Use s.ctx so the process is killed when the streamer is stopped.
-	//nolint:norawexec long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable
-	cmd := exec.CommandContext(s.ctx, "tmux", "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
+	// Targets a user-created external session, which by definition lives on the real
+	// ambient tmux socket wherever the user created it -- there is no isolated variant
+	// of an external session to target instead.
+	//nolint:norawexec,tmuxsocketscope long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable; external session has no isolated variant
+	cmd := exec.CommandContext(s.ctx, tmux.Binary(), "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
+	// Backs up ctx-based cleanup at the kernel level in case this process is
+	// SIGKILLed before ctx cancellation can run.
+	safeexec.EnsurePdeathsig(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -194,21 +205,33 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 		return false
 	}
 
+	// Keep stdin open (never written to) so the child doesn't see EOF -- see
+	// controlModeStdin's doc comment for why this matters.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		stdout.Close()
+		log.Warn("control mode stdin pipe failed", "session", s.tmuxSessionName, "err", err)
+		return false
+	}
+
 	// Capture stderr for diagnostics but don't block on it
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		stdout.Close()
+		stdin.Close()
 		log.Warn("control mode stderr pipe failed", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 
 	if err := cmd.Start(); err != nil {
+		stdin.Close()
 		log.Warn("control mode failed to start", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 	tmux.TrackChildPID(cmd.Process.Pid, "tmux external control-mode session="+s.tmuxSessionName)
 
 	s.controlModeCmd = cmd
+	s.controlModeStdin = stdin
 	s.controlModeActive = true
 
 	log.Info("control mode started for external session", "session", s.tmuxSessionName, "pid", cmd.Process.Pid)
@@ -231,6 +254,11 @@ func (s *ExternalTmuxStreamer) stopControlMode() {
 	}
 
 	s.controlModeActive = false
+
+	if s.controlModeStdin != nil {
+		s.controlModeStdin.Close()
+		s.controlModeStdin = nil
+	}
 
 	// Kill the process
 	if s.controlModeCmd.Process != nil {
@@ -296,7 +324,7 @@ func (s *ExternalTmuxStreamer) readControlMode(stdout io.ReadCloser) {
 			}
 		} else if strings.HasPrefix(line, "%exit") {
 			log.Info("control mode received %exit for external session", "session", s.tmuxSessionName)
-			return
+			break
 		} else if strings.HasPrefix(line, "%error") {
 			log.Warn("control mode error", "session", s.tmuxSessionName, "line", line)
 		}
@@ -426,10 +454,15 @@ func (s *ExternalTmuxStreamer) checkForUpdates() {
 func (s *ExternalTmuxStreamer) capturePane() (string, error) {
 	// Use -e to preserve ANSI escape sequences (colors)
 	// Use -p to print to stdout
-	// Use -J to join wrapped lines
+	// Deliberately omit -J (join wrapped lines): joining collapses wrapped rows in
+	// the text, but withCursorSync positions the cursor using tmux's raw cursor_y
+	// (session/tmux/tmux.go GetCursorPosition), which counts wrapped rows. Keeping
+	// captured line breaks in sync with cursor_y avoids landing the cursor one row
+	// below the last rendered row when a line has wrapped.
 	captureCtx, captureCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer captureCancel()
-	cmd := safeexec.CommandContext(captureCtx, "tmux", "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
+	//nolint:tmuxsocketscope targets a user-created external session; no isolated variant exists to target
+	cmd := safeexec.CommandContext(captureCtx, tmux.Binary(), "capture-pane", "-p", "-e", "-t", s.tmuxSessionName)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

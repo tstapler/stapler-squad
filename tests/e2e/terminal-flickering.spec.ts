@@ -1,3 +1,8 @@
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: terminal-flickering — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['terminal-render'],
+] as const;
 import { test, expect } from '@playwright/test';
 
 /**

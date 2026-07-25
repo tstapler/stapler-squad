@@ -1,23 +1,39 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, memo } from "react";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
+import { GitHubBadge } from "./GitHubBadge";
 import {
   row,
   rowPaused,
+  rowActive,
+  rowSelected,
   statusDot,
   nameCell as nameCellStyle,
   name as nameStyle,
   agentIcon as agentIconStyle,
   path as pathStyle,
+  pathLine as pathLineStyle,
   elapsed as elapsedStyle,
+  elapsedIcon as elapsedIconStyle,
   actions as actionsStyle,
+  primaryActionWrapper,
+  inlineActionButton,
+  rowOverflowButton,
   memoryBadge,
+  memoryBadgeWarning,
+  memoryBadgeHigh,
+  diffBadge,
+  branchCell,
   rowMemoryPressure,
+  checkboxCell,
+  checkboxButton,
 } from "./SessionRow.css";
+import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
 
 interface SessionRowProps {
   session: Session;
@@ -32,11 +48,26 @@ interface SessionRowProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
+  /** When true, hides the Needs Approval SubStatusChip during optimistic clear */
+  suppressApprovalSubStatus?: boolean;
+  /** Which optional columns to render. Defaults to DEFAULT_VISIBLE_COLUMNS. */
+  visibleColumns?: ColumnKey[];
+  /** When true, the checkbox column is interactive and visible on hover/select mode. */
+  selectMode?: boolean;
+  /** Whether this row is currently in the selected set. */
+  isSelected?: boolean;
+  /** Called when the checkbox is clicked; receives the native MouseEvent so the parent can inspect e.shiftKey. */
+  onToggleSelect?: (e: React.MouseEvent) => void;
 }
+
+// Module-level constant avoids repeated BigInt(0) allocations in hot render paths.
+const BIGINT_ZERO = BigInt(0);
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
@@ -60,8 +91,22 @@ function getStatusDotValue(status: SessionStatus): string {
   }
 }
 
+const STATUS_DOT_LABELS: Record<string, string> = {
+  "running": "Running",
+  "idle": "Idle",
+  "paused-session": "Paused",
+  "paused": "Stopped",
+  "loading": "Loading",
+  "needs-approval": "Needs Approval",
+  "hibernated": "Hibernated",
+};
+
+function getStatusDotLabel(dotValue: string): string {
+  return STATUS_DOT_LABELS[dotValue] ?? dotValue;
+}
+
 function formatElapsed(ts?: { seconds: bigint; nanos: number }): string {
-  if (!ts || ts.seconds === BigInt(0)) return "";
+  if (!ts || ts.seconds === BIGINT_ZERO) return "";
   const now = Date.now();
   const date = new Date(Number(ts.seconds) * 1000);
   const seconds = Math.floor((now - date.getTime()) / 1000);
@@ -84,119 +129,263 @@ function getAgentEmoji(program: string): string {
   return "◇";
 }
 
+function abbreviatePath(p: string): string {
+  return p.replace(/^\/home\/[^/]+\//, "~/").replace(/^\/Users\/[^/]+\//, "~/");
+}
+
 function getLastActivity(session: Session): { seconds: bigint; nanos: number } | undefined {
-  const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
-  const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
-  if (moSecs === BigInt(0) && tuSecs === BigInt(0)) return undefined;
+  const moSecs = session.lastMeaningfulOutput?.seconds ?? BIGINT_ZERO;
+  const tuSecs = session.lastTerminalUpdate?.seconds ?? BIGINT_ZERO;
+  if (moSecs === BIGINT_ZERO && tuSecs === BIGINT_ZERO) return undefined;
   return moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
 }
 
-export function SessionRow({
+function SessionRowInner({
   session, onClick,
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
   onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onClearConversationState, onUpdateTags,
+  onSetRateLimitEnabled, onToggleAutonomousMode, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
+  suppressApprovalSubStatus = false,
+  visibleColumns = DEFAULT_VISIBLE_COLUMNS,
+  selectMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
+  const sessionActions = useSessionActions(session.id);
 
   const dotStatus = getStatusDotValue(session.status);
   const isPaused = session.status === SessionStatus.PAUSED;
+  const isNeedsApproval = session.status === SessionStatus.NEEDS_APPROVAL;
+  const isHibernated = session.status === SessionStatus.HIBERNATED;
+  const isRunning = session.status === SessionStatus.ACTIVE;
+  const isCreating = session.status === SessionStatus.CREATING;
+  // Sessions needing user attention always show their primary action
+  const actionsAlwaysVisible = isPaused || isNeedsApproval || isHibernated;
   const lastActivity = getLastActivity(session);
   const elapsedText = formatElapsed(lastActivity ?? session.updatedAt);
-  const displayName = session.branch || session.title;
+  // Show branch separately if the branch column is visible; otherwise fold into displayName.
+  const showBranchCol = visibleColumns.includes("branch");
+  const displayName = showBranchCol ? session.title : (session.branch || session.title);
 
-  const handleContextMenu = (e: React.MouseEvent<HTMLLIElement>) => {
+  const memMB = Number(session.memoryRssMb ?? 0n);
+  const memorySeverityClass =
+    memMB > 500 ? memoryBadgeHigh :
+    memMB > 300 ? memoryBadgeWarning : "";
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     overflowRef.current?.openAt(e.clientX, e.clientY);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLLIElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((e.key === "Enter" || e.key === " ") && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLAnchorElement) && !(e.target instanceof HTMLSelectElement)) {
       e.preventDefault();
       onClick?.();
     }
   };
 
   return (
-    <li
+    <div
       className={[
         row,
-        Number(session.estimatedSavingsMb ?? 0n) > 0 ? rowMemoryPressure : "",
+        memMB > 500 ? rowMemoryPressure : "",
         isPaused ? rowPaused : "",
+        session.status === SessionStatus.ACTIVE &&
+          (session.subStatus === SubStatus.PROCESSING || session.subStatus === SubStatus.WAITING_FOR_AGENT)
+          ? rowActive
+          : "",
+        isSelected ? rowSelected : "",
       ].filter(Boolean).join(" ")}
+      style={{ gridTemplateColumns: buildRowGridTemplate(visibleColumns ?? DEFAULT_VISIBLE_COLUMNS, { reserveCheckbox: true }) }}
       data-testid="session-row"
       data-paused={isPaused ? "true" : undefined}
+      data-actions-visible={actionsAlwaysVisible ? "true" : undefined}
       onClick={onClick}
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
       tabIndex={0}
-      aria-label={`Session ${session.title}, status: ${isPaused ? "paused" : dotStatus}, program: ${session.program}`}
+      aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
     >
-      {/* Status dot */}
-      <Tooltip label={`Status: ${dotStatus}`}>
+      {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
+      <div
+        className={checkboxCell}
+        aria-hidden={!selectMode ? "true" : undefined}
+      >
+        <button
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label={`Select session ${displayName || session.id}`}
+          tabIndex={selectMode ? 0 : -1}
+          data-testid="session-row-checkbox"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect?.(e);
+          }}
+          className={checkboxButton}
+        />
+      </div>
+
+      {/* Status dot — always visible */}
+      <Tooltip label={`Status: ${getStatusDotLabel(dotStatus)}`}>
         <span
           className={statusDot}
           data-status={dotStatus}
-          role="img"
-          aria-label={`Status: ${dotStatus}`}
+          aria-hidden="true"
         />
       </Tooltip>
 
-      {/* Name + path stacked — name always visible, path wraps below */}
+      {/* Name + path stacked — always visible */}
       <span className={nameCellStyle}>
-        <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-          <span className={nameStyle} aria-label={displayName} title={displayName}>
-            {displayName}
-          </span>
-          {/* Sub-status chip — only for Active sessions (ACTIVE covers legacy RUNNING) */}
+        <span className={nameStyle} title={displayName}>
+          {displayName}
+        </span>
+        <span className={pathLineStyle}>
+          {session.path && (
+            <Tooltip label={session.path} side="bottom">
+              <span className={pathStyle} role="img" aria-label={`Path: ${session.path}`}>
+                {abbreviatePath(session.path)}
+              </span>
+            </Tooltip>
+          )}
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
-            session.subStatus !== SubStatus.IDLE && (
+            session.subStatus !== SubStatus.READY &&
+            session.subStatus !== SubStatus.IDLE &&
+            !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
               <SubStatusChip subStatus={session.subStatus} />
             )}
+          <GitHubBadge
+            prNumber={session.githubPrNumber}
+            prUrl={session.githubPrUrl}
+            owner={session.githubOwner}
+            repo={session.githubRepo}
+            sourceRef={session.githubSourceRef}
+            prPriority={session.githubPrPriority}
+            prState={session.githubPrState}
+            isDraft={session.githubPrIsDraft}
+            approvedCount={session.githubApprovedCount}
+            changesRequestedCount={session.githubChangesReqCount}
+            checkConclusion={session.githubCheckConclusion}
+            compact={true}
+          />
         </span>
-        {session.path && (
-          <Tooltip label={session.path} side="bottom">
-            <span className={pathStyle} aria-label={`Path: ${session.path}`}>
-              {session.path}
-            </span>
-          </Tooltip>
-        )}
       </span>
 
-      {/* Agent icon */}
-      <span
-        className={agentIconStyle}
-        title={session.program}
-        aria-label={`Agent: ${session.program}`}
-      >
-        {getAgentEmoji(session.program)}
-      </span>
-
-      {/* Memory usage badge */}
-      {Number(session.memoryRssMb ?? 0n) > 0 && (
-        <span className={memoryBadge} aria-label={`${Number(session.memoryRssMb)} MB`}>
-          {Number(session.memoryRssMb)} MB
+      {/* Agent icon — optional column */}
+      {visibleColumns.includes("agent") && (
+        <span
+          className={agentIconStyle}
+          role="img"
+          title={session.program}
+          aria-label={`Agent: ${session.program}`}
+        >
+          {getAgentEmoji(session.program)}
         </span>
       )}
 
-      {/* Elapsed time */}
-      <time
-        className={elapsedStyle}
-        dateTime={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toISOString() : undefined}
-        title={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString() : undefined}
-      >
-        {elapsedText}
-      </time>
+      {/* Diff stats — optional column */}
+      {visibleColumns.includes("diff") && (
+        <span
+          className={diffBadge}
+          role={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? "img" : undefined}
+          aria-label={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0)
+            ? `Diff: +${session.diffStats.added} -${session.diffStats.removed}`
+            : undefined}
+          aria-hidden={session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? undefined : "true"}
+        >
+          {session.diffStats && (session.diffStats.added > 0 || session.diffStats.removed > 0) ? (
+            <>
+              <span style={{ color: "var(--success)" }}>+{session.diffStats.added}</span>
+              {" "}
+              <span style={{ color: "var(--error)" }}>-{session.diffStats.removed}</span>
+            </>
+          ) : (
+            <span style={{ opacity: 0.3 }}>—</span>
+          )}
+        </span>
+      )}
 
-      {/* Actions — overflow menu with pause/resume shortcut and confirmed delete */}
-      <span className={actionsStyle} aria-label="Session actions">
+      {/* Memory usage — optional column, colored by severity */}
+      {visibleColumns.includes("memory") && (
+        <span
+          className={[memoryBadge, memorySeverityClass].filter(Boolean).join(" ")}
+          role="img"
+          title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
+          aria-label={memMB > 0 ? `${memMB} MB RAM` : "No memory data"}
+        >
+          {memMB > 0
+            ? memMB >= 1024
+              ? `${(memMB / 1024).toFixed(1)} GB`
+              : `${memMB} MB`
+            : <span style={{ opacity: 0.3 }}>—</span>}
+        </span>
+      )}
+
+      {/* Branch — optional column */}
+      {visibleColumns.includes("branch") && (
+        <span
+          className={branchCell}
+          role="img"
+          title={session.branch || undefined}
+          aria-label={session.branch ? `Branch: ${session.branch}` : "No branch"}
+        >
+          {session.branch || <span style={{ opacity: 0.3 }}>—</span>}
+        </span>
+      )}
+
+      {/* Elapsed time — optional column */}
+      {visibleColumns.includes("elapsed") && (
+        <time
+          className={elapsedStyle}
+          dateTime={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toISOString() : undefined}
+          title={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString() : undefined}
+          aria-label={elapsedText ? `Last active: ${elapsedText}` : "No recent activity"}
+        >
+          {elapsedText
+            ? <><span className={elapsedIconStyle} aria-hidden="true">⏱</span>{elapsedText}</>
+            : <span style={{ opacity: 0.3 }}>—</span>}
+        </time>
+      )}
+
+      {/* Actions: primary (hover-only unless needs attention) + overflow (always visible) */}
+      <span className={actionsStyle} role="group" aria-label="Session actions">
+        <span className={primaryActionWrapper} role="presentation">
+          {(isPaused || isNeedsApproval) && onResume && (
+            <button
+              className={inlineActionButton}
+              onClick={(e) => { e.stopPropagation(); onResume(); }}
+              aria-label={`Resume session ${session.title}`}
+            >
+              <span aria-hidden="true">▶️</span> Resume
+            </button>
+          )}
+          {isHibernated && onResumeFromHibernation && (
+            <button
+              className={inlineActionButton}
+              onClick={(e) => { e.stopPropagation(); onResumeFromHibernation(); }}
+              aria-label={`Wake session ${session.title} from hibernation`}
+            >
+              <span aria-hidden="true">▶️</span> Resume
+            </button>
+          )}
+          {isRunning && !isCreating && onPause && (
+            <button
+              className={inlineActionButton}
+              onClick={(e) => { e.stopPropagation(); onPause(); }}
+              aria-label={`Pause session ${session.title}`}
+            >
+              <span aria-hidden="true">⏸️</span> Pause
+            </button>
+          )}
+        </span>
         <SessionActionsOverflow
           ref={overflowRef}
           session={session}
-          showPrimaryAction
+          showPrimaryAction={false}
+          buttonClassName={rowOverflowButton}
           onPause={onPause}
           onResume={onResume}
           onHibernate={onHibernate}
@@ -209,10 +398,18 @@ export function SessionRow({
           onCreateCheckpoint={onCreateCheckpoint}
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
+          onToggleAutonomousMode={onToggleAutonomousMode}
+          onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
+          onChangeProgram={async (_id, program) => {
+            const result = await sessionActions.update({ program });
+            if (!result) throw new Error("Failed to change program.");
+          }}
         />
       </span>
-    </li>
+    </div>
   );
 }
+
+export const SessionRow = memo(SessionRowInner);

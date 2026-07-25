@@ -23,6 +23,12 @@ export const emptyState = style({
   gap: 12,
 });
 
+export const emptyHint = style({
+  fontSize: vars.fontSize.sm,
+  opacity: 0.6,
+  margin: 0,
+});
+
 export const emptyIcon = style({
   fontSize: 48,
   opacity: 0.5,
@@ -66,6 +72,11 @@ export const breadcrumb = style({
 
 export const breadcrumbSegment = style({
   color: vars.color.textMuted,
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  padding: 0,
+  font: "inherit",
 });
 
 export const breadcrumbCurrent = style({
@@ -199,6 +210,19 @@ globalStyle(`${codeMirrorEditor} .cm-editor`, {
   fontSize: 13,
 });
 
+globalStyle(`${codeMirrorEditor} .cm-changeGutter`, {
+  width: 4,
+});
+
+const gutterMarker = style({
+  width: 4,
+  height: "100%",
+});
+
+export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.gitAdded }]);
+export const gutterMarkerDelete = style([gutterMarker, { background: vars.color.gitDeleted }]);
+export const gutterMarkerModify = style([gutterMarker, { background: vars.color.gitModified }]);
+
 export const binaryPlaceholder = style({
   display: "flex",
   flexDirection: "column",
@@ -291,4 +315,16 @@ export const videoMeta = style({
   color: vars.color.textMuted,
   textAlign: "center",
   margin: 0,
+});
+
+const shimmerMove = keyframes({
+  "0%": { backgroundPosition: "200% 0" },
+  "100%": { backgroundPosition: "-200% 0" },
+});
+
+export const shimmer = style({
+  height: "100%",
+  background: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%)",
+  backgroundSize: "200% 100%",
+  animation: `${shimmerMove} 1.5s linear infinite`,
 });

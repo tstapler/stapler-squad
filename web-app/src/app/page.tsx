@@ -1,7 +1,8 @@
 "use client";
-// +feature: session-list session-search session-filter session-groupby
+// +feature: session-list session-search session-filter session-groupby session-list-collapse-groups
 
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -14,6 +15,7 @@ function isValidTab(tab: string | null): tab is SessionDetailTab {
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
@@ -46,6 +48,8 @@ function HomeContent() {
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
   const sessionDetailRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const lastFocusBeforeDelete = useRef<HTMLElement | null>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -61,6 +65,15 @@ function HomeContent() {
       sessionTriggerRef.current = null;
     }
   }, [selectedSession]);
+
+  // Trap focus inside delete confirmation dialog; return focus on close
+  useFocusTrap(deleteDialogRef, !!deleteConfirmTarget);
+  useEffect(() => {
+    if (!deleteConfirmTarget && lastFocusBeforeDelete.current) {
+      lastFocusBeforeDelete.current.focus();
+      lastFocusBeforeDelete.current = null;
+    }
+  }, [deleteConfirmTarget]);
 
 
   const {
@@ -183,14 +196,19 @@ function HomeContent() {
     }
   }, [searchParams, sessions, findSessionById, router]);
 
-  // Detect ?new=true, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
+  // Detect ?new=true, ?pr=<url>, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
   useEffect(() => {
     const newParam = searchParams.get("new");
+    const prUrl = searchParams.get("pr");
     const duplicateId = searchParams.get("duplicate");
     const worktreePath = searchParams.get("worktree");
     const worktreeBranch = searchParams.get("branch");
+    const title = searchParams.get("title");
 
-    if (newParam === "true") {
+    if (prUrl) {
+      router.replace("/", { scroll: false });
+      openOmnibar(prUrl);
+    } else if (newParam === "true") {
       router.replace("/", { scroll: false });
       openOmnibar();
     } else if (duplicateId) {
@@ -204,7 +222,10 @@ function HomeContent() {
     } else if (worktreePath) {
       router.replace("/", { scroll: false });
       // Pass path@branch so the PathWithBranch detector pre-fills both fields
-      openOmnibar(worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath);
+      openOmnibar(
+        worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath,
+        title || undefined
+      );
     }
   }, [searchParams, getSession, openOmnibar, router, track]);
 
@@ -254,6 +275,20 @@ function HomeContent() {
   const handleSetRateLimitEnabled = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_rate_limit_updated", category: "user_action" });
     await updateSession(sessionId, { rateLimitEnabled: enabled });
+  }, [updateSession, track]);
+
+  const handleToggleAutonomousMode = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    track({ name: "session_autonomous_mode_updated", category: "user_action" });
+    try {
+      await updateSession(sessionId, { autonomousMode: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutonomousMode failed:", err);
+    }
+  }, [updateSession, track]);
+
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+    track({ name: "session_autonomous_steer", category: "user_action" });
+    await updateSession(sessionId, { steerMessage: message });
   }, [updateSession, track]);
 
   const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
@@ -365,6 +400,7 @@ function HomeContent() {
     },
     "d": () => {
       if (selectedSession && !deleteConfirmTarget) {
+        lastFocusBeforeDelete.current = document.activeElement as HTMLElement;
         setDeleteConfirmTarget(selectedSession);
       }
     },
@@ -393,6 +429,8 @@ function HomeContent() {
     onForkFromCheckpoint: forkSession,
     onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
+    onToggleAutonomousMode: handleToggleAutonomousMode,
+    onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
   }), [
@@ -400,7 +438,7 @@ function HomeContent() {
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    clearConversationState, listSessions,
+    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (
@@ -437,9 +475,10 @@ function HomeContent() {
       )}
 
       {/* Delete confirmation modal (triggered by 'd' keyboard shortcut) */}
-      {deleteConfirmTarget && (
+      {deleteConfirmTarget && createPortal(
         <div className={styles.modal} onClick={() => setDeleteConfirmTarget(null)}>
           <div
+            ref={deleteDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="deleteConfirmTitle"
@@ -456,7 +495,7 @@ function HomeContent() {
               <p>Delete &quot;{deleteConfirmTarget.title}&quot;?</p>
               <p style={{ color: "var(--error, #ef4444)", fontSize: "0.875rem", marginTop: "0.5rem" }}>This action cannot be undone.</p>
               <div className={styles.deleteConfirmActions}>
-                <button className={styles.cancelButton} onClick={() => setDeleteConfirmTarget(null)}>Cancel</button>
+                <button autoFocus className={styles.cancelButton} onClick={() => setDeleteConfirmTarget(null)}>Cancel</button>
                 <button
                   className={styles.dangerButton}
                   onClick={async () => {
@@ -470,7 +509,8 @@ function HomeContent() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -179,6 +179,24 @@ export const navButton = style({
   },
 });
 
+export const navButtonWithLabel = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: "1px",
+});
+
+export const navSessionLabel = style({
+  fontSize: "0.6rem",
+  color: vars.color.textMuted,
+  maxWidth: "72px",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  lineHeight: 1,
+  userSelect: "none",
+});
+
 export const closeButton = style({
   background: "transparent",
   border: "none",
@@ -312,6 +330,7 @@ export const infoGrid = style({
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
   gap: "1rem",
+  userSelect: "text",
   "@media": {
     "screen and (max-width: 768px)": {
       gridTemplateColumns: "1fr",
@@ -609,4 +628,8 @@ export const fullscreenMobileTabs = style({
 export const tabDisabled = style({
   opacity: 0.4,
   cursor: "not-allowed",
+});
+
+export const workflowSection = style({
+  display: "contents",
 });

@@ -15,16 +15,19 @@ import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { getApiBaseUrl } from "@/lib/config";
+import { closeNativeNotification, notificationTag } from "@/lib/utils/notifications";
 import type { ConnectionState } from "@/lib/store/sessionsSlice";
 
-interface SessionServiceContextValue {
+export interface SessionServiceContextValue {
   sessions: Session[];
   loading: boolean;
   error: Error | null;
   connectionState: ConnectionState;
   /** System-wide memory usage percentage (0–100). Zero when unavailable. */
   systemMemoryPct: number;
-  listSessions: (options?: { category?: string; status?: SessionStatus }) => Promise<void>;
+  /** Reconnect attempt counter from BackoffState. Zero when connected normally. */
+  reconnectAttemptCount: number;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
   getSession: (id: string) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
@@ -46,7 +49,7 @@ interface SessionServiceContextValue {
   stopWatching: () => void;
 }
 
-const SessionServiceContext = createContext<SessionServiceContextValue | null>(null);
+export const SessionServiceContext = createContext<SessionServiceContextValue | null>(null);
 
 /**
  * GlobalSessionServiceProvider mounts a single persistent watchSessions connection
@@ -59,7 +62,7 @@ const SessionServiceContext = createContext<SessionServiceContextValue | null>(n
  */
 export function GlobalSessionServiceProvider({ children }: { children: React.ReactNode }) {
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
-  const { refreshHistory, markAsReadBySessionId } = useNotifications();
+  const { refreshHistory, markAsReadBySessionId, removeToastByApprovalId, removeToastBySessionId } = useNotifications();
   const router = useRouter();
 
   // Navigate to the session detail when user clicks "View" on a toast.
@@ -79,8 +82,21 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
     enabled: !authLoading && (!authEnabled || authenticated),
     onNotification: handleNotification,
     onReconnect: refreshHistory,
-    onApprovalResponse: refreshHistory,
-    onSessionDeleted: markAsReadBySessionId,
+    onApprovalResponse: (approvalId: string, sessionId: string) => {
+      removeToastByApprovalId(approvalId);
+      // Close native OS notification for this approval
+      closeNativeNotification(notificationTag.approval(approvalId));
+      // Also close any review-queue tier-1 notification for this session
+      closeNativeNotification(notificationTag.tier1Review(sessionId));
+      void refreshHistory();
+    },
+    onSessionDeleted: (sessionId: string) => {
+      // Mark notification history as read for the deleted session.
+      markAsReadBySessionId(sessionId);
+      // Remove any active approval toasts for the deleted session so stale
+      // Approve/Deny buttons are not shown after the session is gone.
+      removeToastBySessionId(sessionId);
+    },
   });
 
   return (

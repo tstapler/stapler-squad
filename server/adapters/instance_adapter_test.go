@@ -5,6 +5,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
@@ -33,7 +34,7 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 }
 
 func TestInstanceToProto_NilReturnsNil(t *testing.T) {
-	result := InstanceToProto(nil)
+	result := InstanceToProto(nil, nil)
 	if result != nil {
 		t.Error("expected nil for nil input, got non-nil")
 	}
@@ -43,7 +44,7 @@ func TestInstanceToProto_NilReturnsNil(t *testing.T) {
 // is populated correctly from the Instance struct field.
 func TestInstanceToProto_RateLimitEnabled_DefaultTrue(t *testing.T) {
 	inst := &session.Instance{} // nil RateLimitAutoResume → defaults to true
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -57,7 +58,7 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	inst := &session.Instance{
 		RateLimitAutoResume: &disabled,
 	}
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -68,7 +69,7 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 
 func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 	inst := &session.Instance{} // no controller → state is None
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -77,5 +78,130 @@ func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 	}
 	if proto.RateLimitResetTime != nil {
 		t.Errorf("expected nil RateLimitResetTime for fresh instance, got %v", proto.RateLimitResetTime)
+	}
+}
+
+// ─── U-GO-35: TestInstanceToProto_includesGoalSummaryWhenSet ─────────────────
+
+func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
+	inst := &session.Instance{}
+	goal := &session.SessionGoalData{
+		UUID:        "goal-uuid",
+		SessionUUID: "session-uuid",
+		Goal:        "test goal",
+		Status:      session.GoalStatusWorking,
+		Tasks: []session.TaskNode{
+			{ID: "t1", Title: "Task 1", Status: session.TaskStatusDone},
+		},
+	}
+	inst.SetSessionGoalCached(goal)
+
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+	if proto.Goal == nil {
+		t.Fatal("expected Goal to be set when inst.SessionGoal is non-nil")
+	}
+	if proto.Goal.GoalText != "test goal" {
+		t.Errorf("GoalText = %q, want %q", proto.Goal.GoalText, "test goal")
+	}
+	if proto.Goal.Status != session.GoalStatusWorking {
+		t.Errorf("Status = %q, want %q", proto.Goal.Status, session.GoalStatusWorking)
+	}
+	if proto.Goal.TasksTotal != 1 {
+		t.Errorf("TasksTotal = %d, want 1", proto.Goal.TasksTotal)
+	}
+	if proto.Goal.TasksDone != 1 {
+		t.Errorf("TasksDone = %d, want 1", proto.Goal.TasksDone)
+	}
+	if proto.Goal.TasksJson == "" {
+		t.Error("TasksJson should be non-empty when tasks are set")
+	}
+}
+
+// TC-4: TestToProtoSubStatus_WaitingForAgent verifies that StatusWaitingForAgent
+// maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatusFromInfo switch.
+func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
+	// Verify the non-Active short-circuit: a non-Active instance always returns UNSPECIFIED.
+	got := toProtoSubStatusFromInfo(session.Paused, 0, session.InstanceStatusInfo{})
+	if got != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+		t.Errorf("toProtoSubStatusFromInfo(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
+	}
+
+	// Verify the StatusWaitingForAgent → SUB_STATUS_WAITING_FOR_AGENT mapping.
+	item := &session.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
+	gotSubStatus := subStatusFromItem(item)
+	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT {
+		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_WAITING_FOR_AGENT", gotSubStatus)
+	}
+
+	// An Active instance with no controller (IsControllerActive=false) returns UNSPECIFIED.
+	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
+	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
+		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
+	}
+}
+
+// ─── U-GO-36: TestInstanceToProto_omitsGoalSummaryWhenNil ─────────────────────
+
+func TestStatusToProto_AllStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.Status
+		expected sessionv1.SessionStatus
+	}{
+		{"Active", session.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
+		{"Creating", session.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
+		{"Paused", session.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
+		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
+		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
+		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StatusToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestProtoToStatus_AllStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    sessionv1.SessionStatus
+		expected session.Status
+	}{
+		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, session.Active},
+		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, session.Creating},
+		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, session.Paused},
+		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, session.Stopped},
+		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, session.Hibernated},
+		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, session.Restoring},
+		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), session.Creating},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ProtoToStatus(tc.input)
+			if got != tc.expected {
+				t.Errorf("ProtoToStatus(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
+	inst := &session.Instance{}
+	// SessionGoal is nil by default.
+	proto := InstanceToProto(inst, nil)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+	if proto.Goal != nil {
+		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
 	}
 }

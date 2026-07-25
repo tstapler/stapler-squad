@@ -267,6 +267,31 @@ func TestGetConfigDir(t *testing.T) {
 	})
 
 	t.Run("uses test mode isolation for tests", func(t *testing.T) {
+		// GetConfigDir checks STAPLER_SQUAD_TEST_DIR (priority 1) and
+		// STAPLER_SQUAD_INSTANCE (priority 2) before falling through to test
+		// mode auto-detection (priority 3). Both can be set in the ambient
+		// environment this test process inherits (e.g. a stapler-squad
+		// session sets STAPLER_SQUAD_INSTANCE for its own tooling), which
+		// would otherwise short-circuit test mode detection and make this
+		// test order- and environment-dependent. Clear both explicitly so
+		// this test always exercises pure test mode auto-detection.
+		originalTestDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+		originalInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+		os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		defer func() {
+			if originalTestDir == "" {
+				os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+			} else {
+				os.Setenv("STAPLER_SQUAD_TEST_DIR", originalTestDir)
+			}
+			if originalInstance == "" {
+				os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+			} else {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", originalInstance)
+			}
+		}()
+
 		// This test itself triggers test mode auto-detection
 		configDir, err := GetConfigDir()
 
@@ -450,13 +475,15 @@ func TestGetClaudeCommand_Timeout(t *testing.T) {
 	})
 
 	t.Run("Default executor uses timeout protection", func(t *testing.T) {
-		// Verify that NewConfig() creates a config with timeout protection.
+		// Verify that NewConfig() creates a config with a non-nil executor.
 		cfg := NewConfig()
 		assert.NotNil(t, cfg.executor)
 
-		// The default should be timeoutCommandExecutor
-		_, ok := cfg.executor.(*timeoutCommandExecutor)
-		assert.True(t, ok, "Default executor should be timeoutCommandExecutor")
+		// In test mode the default executor is lookPathOnlyExecutor (avoids slow
+		// shell config sourcing); in production it is timeoutCommandExecutor.
+		_, isTimeout := cfg.executor.(*timeoutCommandExecutor)
+		_, isLookPath := cfg.executor.(*lookPathOnlyExecutor)
+		assert.True(t, isTimeout || isLookPath, "Default executor should be timeoutCommandExecutor or lookPathOnlyExecutor, got %T", cfg.executor)
 	})
 }
 
@@ -653,6 +680,31 @@ func TestEscapeAnalyticsDefaults(t *testing.T) {
 	})
 }
 
+// TestDefaultConfigMirrorsEscapeAnalyticsDefaults is a regression test for BUG-025:
+// DefaultConfig() must produce the same escape analytics defaults as
+// LoadConfigFromPath's post-decode defaulting (see the comment above the
+// SessionDefaults init in DefaultConfig — the two code paths must be
+// equivalent). Before this fix, DefaultConfig() left these fields at their Go
+// zero values, so a fresh install's very first LoadConfig() call (which
+// returns DefaultConfig() directly, before any config.json exists) would pass
+// EscapeAnalyticsMaxRowsPerSession=0 into the batch writer at server startup —
+// disabling the per-session row cap instead of applying the intended default.
+func TestDefaultConfigMirrorsEscapeAnalyticsDefaults(t *testing.T) {
+	fresh := DefaultConfig()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, loaded.EscapeAnalyticsCaptureLevel, fresh.EscapeAnalyticsCaptureLevel)
+	require.NotNil(t, fresh.EscapeAnalyticsSamplingRate)
+	require.NotNil(t, loaded.EscapeAnalyticsSamplingRate)
+	assert.Equal(t, *loaded.EscapeAnalyticsSamplingRate, *fresh.EscapeAnalyticsSamplingRate)
+	assert.Equal(t, loaded.EscapeAnalyticsMaxRowsPerSession, fresh.EscapeAnalyticsMaxRowsPerSession)
+	assert.Equal(t, loaded.EscapeAnalyticsRetentionDays, fresh.EscapeAnalyticsRetentionDays)
+}
+
 // TestEscapeAnalyticsCaptureLevel_Validation verifies that invalid capture level values
 // are reset to "summary".
 func TestEscapeAnalyticsCaptureLevel_Validation(t *testing.T) {
@@ -741,4 +793,117 @@ func TestOSCPayloadsAreRedacted(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, cfg.OSCPayloadsAreRedacted())
 	})
+}
+
+// ─── U-GO-16, U-GO-17, U-GO-18: GetFeatureFlag default-off ─────────────────
+
+// TestGetFeatureFlag_defaultsFalse verifies backlog flag defaults to false on empty Config.
+func TestGetFeatureFlag_defaultsFalse(t *testing.T) {
+	cfg := &Config{}
+	assert.False(t, cfg.GetFeatureFlag("backlog"), "backlog feature flag should be false by default")
+	assert.False(t, cfg.GetFeatureFlag("nonexistent"), "unknown feature flag should be false")
+}
+
+// TestGetFeatureFlag_unknownKeyDefaultsFalse verifies that any unrecognized key returns false.
+func TestGetFeatureFlag_unknownKeyDefaultsFalse(t *testing.T) {
+	cfg := &Config{FeatureFlags: map[string]bool{"other": true}}
+	assert.False(t, cfg.GetFeatureFlag("nonexistent"))
+}
+
+// TestGetFeatureFlag_knownKeyReturnsValue verifies that an explicitly set flag returns its value.
+func TestGetFeatureFlag_knownKeyReturnsValue(t *testing.T) {
+	cfg := &Config{FeatureFlags: map[string]bool{"backlog": true}}
+	assert.True(t, cfg.GetFeatureFlag("backlog"))
+}
+
+// ─── IsNamedInstance ────────────────────────────────────────────────────────
+
+// TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset covers the
+// default production case: no STAPLER_SQUAD_INSTANCE set at all.
+func TestIsNamedInstance_should_ReturnFalse_When_InstanceEnvVarUnset(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.False(t, IsNamedInstance())
+}
+
+// TestIsNamedInstance_should_ReturnFalse_When_InstanceIsShared verifies "shared"
+// is treated the same as unset — GetConfigDirForDir's own backward-compat special case.
+func TestIsNamedInstance_should_ReturnFalse_When_InstanceIsShared(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.False(t, IsNamedInstance())
+}
+
+// TestIsNamedInstance_should_ReturnTrue_When_InstanceIsExplicitlyNamed is the
+// regression test for the incident this function exists to prevent: the E2E test
+// harness runs with STAPLER_SQUAD_INSTANCE=e2e-local (real production binary, not a
+// `go test` binary — IsTestMode() alone doesn't catch it) and must be recognized as
+// unsafe for a shared-tmux-socket orphan sweep.
+func TestIsNamedInstance_should_ReturnTrue_When_InstanceIsExplicitlyNamed(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "e2e-local")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.True(t, IsNamedInstance())
+}
+
+// ─── IsIsolatedInstance ─────────────────────────────────────────────────────
+
+// TestIsIsolatedInstance_should_ReturnTrue_When_TestDirOverrideSet is the
+// regression test for the incident this function exists to prevent: the demo
+// server harness (tests/demo/helpers.go StartDemoServer) launches the real
+// production binary with --test-mode --test-dir, setting STAPLER_SQUAD_TEST_DIR
+// but neither STAPLER_SQUAD_INSTANCE nor a `go test` binary suffix — so neither
+// IsTestMode() nor IsNamedInstance() alone caught it, and its startup orphan
+// sweep killed real production tmux sessions on the shared default socket.
+func TestIsIsolatedInstance_should_ReturnTrue_When_TestDirOverrideSet(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+	os.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		} else {
+			os.Setenv("STAPLER_SQUAD_TEST_DIR", original)
+		}
+	}()
+
+	assert.True(t, IsIsolatedInstance())
+}
+
+// TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet covers the
+// pre-existing IsNamedInstance mechanism composing correctly into the umbrella check.
+func TestIsIsolatedInstance_should_ReturnTrue_When_NamedInstanceSet(t *testing.T) {
+	original := os.Getenv("STAPLER_SQUAD_INSTANCE")
+	os.Setenv("STAPLER_SQUAD_INSTANCE", "e2e-local")
+	defer func() {
+		if original == "" {
+			os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		} else {
+			os.Setenv("STAPLER_SQUAD_INSTANCE", original)
+		}
+	}()
+
+	assert.True(t, IsIsolatedInstance())
 }

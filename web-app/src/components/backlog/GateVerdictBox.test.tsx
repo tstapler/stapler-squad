@@ -18,18 +18,21 @@
  *  14. Skip gate: Escape key in confirmation hides it
  *  15. Skip gate: focus trap — Tab cycles between Cancel and Confirm only
  *  16. Criteria list renders when verdict is PARTIAL with criteria
+ *  17. UNVERIFIABLE verdict + onReReview provided renders "Re-run Gate" and clicking it calls onReReview
+ *  18. UNVERIFIABLE verdict + onReReview omitted hides "Re-run Gate"
+ *  19. UNVERIFIABLE verdict renders "Reopen for Revision" and the Override section
  */
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { GateVerdictBox } from "./GateVerdictBox";
+import { GateVerdictBox, type GateVerdictBoxWriteProps } from "./GateVerdictBox";
 
 // ---------------------------------------------------------------------------
 // Default props factory
 // ---------------------------------------------------------------------------
 
-function makeProps(overrides: Partial<React.ComponentProps<typeof GateVerdictBox>> = {}) {
+function makeProps(overrides: Partial<GateVerdictBoxWriteProps> = {}): GateVerdictBoxWriteProps {
   return {
     verdict: "PASS" as const,
     summary: "All checks passed.",
@@ -86,7 +89,7 @@ describe("GateVerdictBox — FAIL verdict", () => {
 // ---------------------------------------------------------------------------
 
 describe("GateVerdictBox — PENDING verdict", () => {
-  it("renders PENDING label with disabled Approve and Reopen buttons with aria-disabled", () => {
+  it("renders PENDING label with disabled Approve button; Reopen stays enabled", () => {
     render(<GateVerdictBox {...makeProps({ verdict: "PENDING" })} />);
 
     expect(screen.getByText("PENDING")).toBeInTheDocument();
@@ -95,9 +98,9 @@ describe("GateVerdictBox — PENDING verdict", () => {
     expect(approveBtn).toBeDisabled();
     expect(approveBtn).toHaveAttribute("aria-disabled", "true");
 
+    // Reopen is intentionally enabled during PENDING (fix(backlog): enable Reopen in pending state)
     const reopenBtn = screen.getByRole("button", { name: /Reopen for Revision/i });
-    expect(reopenBtn).toBeDisabled();
-    expect(reopenBtn).toHaveAttribute("aria-disabled", "true");
+    expect(reopenBtn).not.toBeDisabled();
   });
 });
 
@@ -126,7 +129,7 @@ describe("GateVerdictBox — keyboard shortcut", () => {
   // Test: 6 — Ctrl+Enter on PARTIAL calls onReopen NOT onApprove
   // ---------------------------------------------------------------------------
 
-  it("Ctrl+Enter on PARTIAL verdict calls onReopen, not onApprove", async () => {
+  it("Ctrl+Enter on PARTIAL verdict opens reopen form, not onApprove", async () => {
     const onApprove = jest.fn().mockResolvedValue(undefined);
     const onReopen = jest.fn().mockResolvedValue(undefined);
     render(
@@ -138,7 +141,9 @@ describe("GateVerdictBox — keyboard shortcut", () => {
     const section = screen.getByRole("status", { name: "Gate verdict" });
     fireEvent.keyDown(section, { key: "Enter", ctrlKey: true });
 
-    await waitFor(() => expect(onReopen).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("form", { name: /Reopen for revision/i })).toBeInTheDocument()
+    );
     expect(onApprove).not.toHaveBeenCalled();
   });
 });
@@ -338,7 +343,7 @@ describe("GateVerdictBox — criteria list", () => {
     expect(screen.getByText("Coverage >= 80%")).toBeInTheDocument();
   });
 
-  it("does not render criteria list when verdict is PASS", () => {
+  it("renders criteria list for PASS verdict (shown for all verdicts)", () => {
     const criteria = [{ label: "Unit tests pass", passed: true }];
     render(
       <GateVerdictBox
@@ -346,6 +351,91 @@ describe("GateVerdictBox — criteria list", () => {
       />
     );
 
-    expect(screen.queryByRole("list", { name: /Criteria results/i })).not.toBeInTheDocument();
+    // feat(backlog): show review criteria for all verdicts
+    expect(screen.getByRole("list", { name: /Criteria results/i })).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: 17-19 — UNVERIFIABLE verdict
+// ---------------------------------------------------------------------------
+
+describe("GateVerdictBox — UNVERIFIABLE verdict", () => {
+  it("renders Re-run Gate button when onReReview is provided and clicking it calls onReReview", async () => {
+    const onReReview = jest.fn().mockResolvedValue(undefined);
+    render(<GateVerdictBox {...makeProps({ verdict: "UNVERIFIABLE", onReReview })} />);
+
+    expect(screen.getByText("UNVERIFIABLE")).toBeInTheDocument();
+
+    const reReviewBtn = screen.getByRole("button", { name: /Re-run Gate/i });
+    expect(reReviewBtn).toBeInTheDocument();
+
+    fireEvent.click(reReviewBtn);
+
+    await waitFor(() => expect(onReReview).toHaveBeenCalledTimes(1));
+  });
+
+  it("hides Re-run Gate button when onReReview is omitted", () => {
+    render(<GateVerdictBox {...makeProps({ verdict: "UNVERIFIABLE", onReReview: undefined })} />);
+
+    expect(screen.getByText("UNVERIFIABLE")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Re-run Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("renders Reopen for Revision button and the Override section", () => {
+    render(<GateVerdictBox {...makeProps({ verdict: "UNVERIFIABLE" })} />);
+
+    expect(screen.getByRole("button", { name: /Reopen for Revision/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Override: Mark done anyway/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 4.1.2: readOnly mode (Structured Diagnostic for Headless Diagnostic
+// Sessions)
+// ---------------------------------------------------------------------------
+
+describe("GateVerdictBox_should_HideActionButtonRowButShowPerCriterionOutcomes_When_ReadOnlyIsTrueAndVerdictIsFail", () => {
+  it("hides the entire action-button row but keeps verdict/summary/per-criterion outcomes", () => {
+    const criteria = [
+      { label: "AC1 — Passed", passed: true },
+      { label: "AC2 — Failed: error not surfaced to user", passed: false },
+    ];
+    render(
+      <GateVerdictBox
+        verdict="FAIL"
+        criteria={criteria}
+        summary="2 of 5 criteria still not met."
+        readOnly
+      />
+    );
+
+    // Verdict card + per-criterion detail still present.
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
+    expect(screen.getByText("2 of 5 criteria still not met.")).toBeInTheDocument();
+    expect(screen.getByText("AC1 — Passed")).toBeInTheDocument();
+    expect(screen.getByText("AC2 — Failed: error not surfaced to user")).toBeInTheDocument();
+
+    // Approve/Reopen/Override/Skip Gate/Re-review row entirely absent.
+    expect(screen.queryByRole("button", { name: /Approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reopen for Revision/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Override: Mark done anyway/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Skip gate and mark done without review/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Re-run Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("ignores Ctrl+Enter in readOnly mode — no action buttons or forms appear", () => {
+    // readOnly props have no write-mode callbacks at all (discriminated union),
+    // so there is nothing to spy on here — the compiler enforces the "never
+    // invoked" contract that this test used to check with a noop mock.
+    render(<GateVerdictBox verdict="PASS" summary="All checks passed." readOnly />);
+
+    const section = screen.getByRole("status", { name: /Gate verdict/i });
+    fireEvent.keyDown(section, { key: "Enter", ctrlKey: true });
+
+    expect(screen.queryByRole("button", { name: /Approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: /Reopen for revision/i })).not.toBeInTheDocument();
   });
 });

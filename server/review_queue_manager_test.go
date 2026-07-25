@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -209,6 +211,47 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Error("expected EventBus event for ReasonErrorState, got none (timeout)")
+	}
+}
+
+// TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue verifies that
+// publishing EventSessionDeleted removes the session from the review queue (UT-GO-03).
+func TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue(t *testing.T) {
+	mgr, poller, bus := newReactiveQueueTestSetup(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go mgr.Start(ctx)
+
+	if err := testutil.WaitForCondition(func() bool {
+		return poller.IsRunning()
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Fatalf("manager failed to initialize: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Add a session to the queue.
+	const sessionID = "delete-target-session"
+	mgr.queue.Add(&session.ReviewItem{
+		SessionID:  sessionID,
+		Reason:     session.ReasonInputRequired,
+		Priority:   session.PriorityMedium,
+		DetectedAt: time.Now(),
+	})
+
+	// Confirm it's in the queue.
+	if items := mgr.queue.List(); len(items) == 0 {
+		t.Fatal("expected item to be in queue before deletion")
+	}
+
+	// Publish EventSessionDeleted.
+	bus.Publish(events.NewSessionDeletedEvent(sessionID))
+
+	// Wait for the queue to be emptied.
+	if err := testutil.WaitForCondition(func() bool {
+		return len(mgr.queue.List()) == 0
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Errorf("session was not removed from queue after EventSessionDeleted: queue len = %d", len(mgr.queue.List()))
 	}
 }
 
@@ -503,14 +546,18 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
-	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "stapler-squad-bench-throughput")
-	defer os.RemoveAll(testDir)
+	// Use b.TempDir() so each benchmark calibration call gets an isolated directory
+	// and automatic cleanup — avoids path conflicts between successive b.N runs.
+	testDir := b.TempDir()
 
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
-	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
+	// Use a fast poll interval so event delivery isn't gated on the default 2s cycle.
+	benchPollerCfg := session.DefaultReviewQueuePollerConfig()
+	benchPollerCfg.PollInterval = 10 * time.Millisecond
+	benchPollerCfg.SlowPollInterval = 10 * time.Millisecond
+	reviewQueuePoller := session.NewReviewQueuePollerWithConfig(queue, statusManager, nil, benchPollerCfg)
 	eventBus := events.NewEventBus(100)
 	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
 	if err != nil {
@@ -554,21 +601,35 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		item := &session.ReviewItem{
-			SessionID:  "bench-" + string(rune(i)),
+		queue.Add(&session.ReviewItem{
+			SessionID:  fmt.Sprintf("bench-%d", i),
 			Priority:   session.PriorityMedium,
 			Reason:     session.ReasonInputRequired,
 			DetectedAt: time.Now(),
-		}
-		queue.Add(item)
+		})
+	}
 
-		// Drain event channel
+	b.StopTimer()
+
+	// Drain events delivered during the run. The event channel is buffered at 100;
+	// at high b.N most events are dropped by publishToClients (by design — slow consumers
+	// don't block the publisher). We verify at least one event arrived to confirm the
+	// reactive path is wired, without blocking indefinitely.
+	delivered := 0
+	drain := time.After(200 * time.Millisecond)
+drainLoop:
+	for {
 		select {
 		case <-eventCh:
-		case <-time.After(100 * time.Millisecond):
-			b.Fatal("Timeout receiving event")
+			delivered++
+		case <-drain:
+			break drainLoop
 		}
 	}
+	if delivered == 0 {
+		b.Fatalf("no events delivered: reactive observer not wired (added %d items)", b.N)
+	}
+	b.ReportMetric(float64(delivered)/float64(b.N)*100, "delivery%")
 
 	reactiveQueueMgr.Stop()
 }
@@ -685,5 +746,372 @@ func TestOnItemAdded_NotificationFallsBackToTitleWhenNoMatch(t *testing.T) {
 
 	if gotID != "orphan-session" {
 		t.Errorf("notification event.SessionID = %q, want raw title %q", gotID, "orphan-session")
+	}
+}
+
+// fakeOneShotPRCreator is a test double for OneShotPRCreator that records every
+// call so maybeAutoCreatePR's trigger behavior can be asserted without exercising
+// the real headless LLM pool / claude binary.
+type fakeOneShotPRCreator struct {
+	mu     sync.Mutex
+	calls  []string // sessionIDs passed to RunOneShotForSession
+	prURL  string
+	runErr error
+}
+
+func (f *fakeOneShotPRCreator) RunOneShotForSession(_ context.Context, sessionID, _ string, _ int32) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, sessionID)
+	return f.prURL, f.runErr
+}
+
+func (f *fakeOneShotPRCreator) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// newReactiveQueueTestSetupWithStorage is like newReactiveQueueTestSetup but also
+// returns the underlying *session.Storage, needed by tests that create backlog
+// items / item sessions to exercise maybeAutoCreatePR's storage lookups.
+func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, *session.ReviewQueuePoller, *session.Storage) {
+	t.Helper()
+	testDir := t.TempDir()
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("newReactiveQueueTestSetupWithStorage: create repo: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)
+	}
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	bus := events.NewEventBus(32)
+	t.Cleanup(bus.Close)
+
+	mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
+	return mgr, poller, storage
+}
+
+// TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled verifies the opt-in
+// "auto-create PR on Complete" policy (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-17 entry): when the backlog item behind a session has AutoCreatePR set
+// and that session newly transitions to TASK_COMPLETE, the one-shot PR-creation
+// prompt runs automatically — no manual Review Queue "Create PR" click required.
+func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "auto-create-pr item",
+		Status:       string(session.BacklogStatusInProgress),
+		Priority:     3,
+		AutoCreatePR: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "widgets-work-session"
+	const sessionUUID = "cccc1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	deadline := time.After(3 * time.Second)
+	for fake.callCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for AutoCreatePR to invoke the one-shot PR runner")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 one-shot call, got %d", got)
+	}
+	fake.mu.Lock()
+	gotSessionID := fake.calls[0]
+	fake.mu.Unlock()
+	if gotSessionID != sessionUUID {
+		t.Errorf("one-shot runner called with sessionID = %q, want stable UUID %q", gotSessionID, sessionUUID)
+	}
+}
+
+// TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled is the
+// default-behavior guard: with AutoCreatePR left false (the default), a
+// TASK_COMPLETE session must NOT trigger an automatic PR — the existing manual
+// "Create PR" click in the Review Queue remains the only path.
+func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/99"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "manual-pr item",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+		// AutoCreatePR intentionally omitted — defaults to false.
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "manual-work-session"
+	const sessionUUID = "dddd1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	assertNeverInvoked(t, fake, "AutoCreatePR=false must never invoke the one-shot PR runner")
+}
+
+// assertNeverInvoked polls fake.callCount() for a window instead of a single flat
+// time.Sleep, failing immediately if the runner is ever invoked rather than only
+// checking once after a fixed delay. Mirrors this file's existing "poll until"
+// idiom (see TestOnItemAdded_NotificationUsesStableID) applied to a negative
+// assertion.
+func assertNeverInvoked(t *testing.T, fake *fakeOneShotPRCreator, msg string) {
+	t.Helper()
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		if got := fake.callCount(); got > 0 {
+			t.Fatalf("%s, got %d call(s)", msg, got)
+		}
+		select {
+		case <-deadline:
+			return
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+// TestMaybeAutoCreatePR_DoesNothing_When_SessionNotBacklogLinked covers the
+// guard that keeps this feature scoped to backlog work sessions: an ordinary
+// session with no ItemSession row (most sessions in this app aren't backlog
+// work items) must never trigger AutoCreatePR, even if it reaches
+// TASK_COMPLETE. Regression guard for storage.GetItemSessionBySessionUUID's
+// ErrNotFound branch in maybeAutoCreatePR.
+func TestMaybeAutoCreatePR_DoesNothing_When_SessionNotBacklogLinked(t *testing.T) {
+	mgr, poller, _ := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
+	mgr.SetOneShotRunner(fake)
+
+	const sessionTitle = "ad-hoc-session"
+	const sessionUUID = "eeee1111-2222-3333-4444-555566667777"
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+	// Deliberately no CreateBacklogItem / CreateItemSession call.
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	assertNeverInvoked(t, fake, "a session with no ItemSession row must never trigger AutoCreatePR")
+}
+
+// TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists covers the idempotency
+// guard: a session that already has a GitHub PR URL (e.g. a prior automatic or
+// manual run already created one) must not trigger a second one-shot run even
+// if AutoCreatePR is true and the item re-enters the queue at TASK_COMPLETE.
+func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/2"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "already-has-pr item",
+		Status:       string(session.BacklogStatusInProgress),
+		Priority:     3,
+		AutoCreatePR: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "already-has-pr-session"
+	const sessionUUID = "ffff1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID, GitHubPRURL: "https://github.com/acme/widgets/pull/1"}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	assertNeverInvoked(t, fake, "a session that already has a PR must never trigger a second AutoCreatePR run")
+}
+
+// TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete is the positive
+// guard for the trigger condition itself: AutoCreatePR fires only for
+// ReasonTaskComplete, not for any other AttentionReason that lands in the
+// queue (approval pending, input required, etc.) even when AutoCreatePR is true.
+func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/3"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "not-yet-complete item",
+		Status:       string(session.BacklogStatusInProgress),
+		Priority:     3,
+		AutoCreatePR: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "not-yet-complete-session"
+	const sessionUUID = "aaaa2222-3333-4444-5555-666677778888"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonApprovalPending,
+		Priority:    session.PriorityHigh,
+		DetectedAt:  time.Now(),
+	})
+
+	assertNeverInvoked(t, fake, "a non-TASK_COMPLETE reason must never trigger AutoCreatePR")
+}
+
+// TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhileQueued
+// is the regression test for the CRITICAL gap found in code review: ReviewQueue.Add
+// only fires OnItemAdded when the session's queue key is newly inserted
+// (session/queue/queue.go's `exists` check). A session already queued for a
+// different reason (e.g. ReasonIdle, when idle-timeout detection races ahead of
+// the controller's completion-status detection) that later transitions to
+// ReasonTaskComplete while remaining queued fires OnQueueUpdated instead — which
+// must also trigger AutoCreatePR, or the feature silently misses this
+// transition. Uses the real session.ReviewQueue (not direct OnItemAdded/
+// OnQueueUpdated calls) so the observer wiring itself is exercised, not just
+// maybeAutoCreatePR's internal logic.
+func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhileQueued(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+	mgr.queue.Subscribe(mgr) // wire the observer without a full Start() (no poller/event-bus loops needed)
+
+	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/4"}
+	mgr.SetOneShotRunner(fake)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "reason-changes-while-queued item",
+		Status:       string(session.BacklogStatusInProgress),
+		Priority:     3,
+		AutoCreatePR: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "reason-changes-while-queued-session"
+	const sessionUUID = "bbbb2222-3333-4444-5555-666677778888"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*session.Instance{inst})
+
+	// Item first enters the queue for an unrelated reason — exists==false,
+	// fires OnItemAdded, but Reason != TaskComplete so no trigger yet.
+	mgr.queue.Add(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonIdle,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	// Same session, same queue key, now transitions to TaskComplete while
+	// still present — exists==true, fires OnQueueUpdated, not OnItemAdded.
+	mgr.queue.Add(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	deadline := time.After(3 * time.Second)
+	for fake.callCount() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for AutoCreatePR to trigger via OnQueueUpdated after a reason change while queued")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 one-shot call, got %d", got)
 	}
 }

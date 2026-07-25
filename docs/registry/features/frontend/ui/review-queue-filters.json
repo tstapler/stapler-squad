@@ -1,0 +1,16 @@
+{
+  "id": "review-queue-filters",
+  "type": "frontend",
+  "component": "ReviewQueuePanel",
+  "path": "web-app/src/components/sessions/ReviewQueuePanel.tsx",
+  "tested": true,
+  "testIds": [
+    "ReviewQueuePanel — combinable filters > keeps priority and reason filters active simultaneously (combinable, not exclusive)",
+    "ReviewQueuePanel — combinable filters > filters by program",
+    "ReviewQueuePanel — combinable filters > filters to items with a GitHub PR when Has PR is selected",
+    "ReviewQueuePanel — combinable filters > filters by free-text search across session name and branch",
+    "ReviewQueuePanel — combinable filters > sorts by name ascending when selected",
+    "ReviewQueuePanel — combinable filters > clear-all resets every filter dimension and search text"
+  ],
+  "lastModified": "2026-07-09T00:00:00Z"
+}

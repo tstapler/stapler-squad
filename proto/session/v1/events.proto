@@ -16,12 +16,15 @@ message SessionEvent {
     SessionCreatedEvent session_created = 2;
     SessionUpdatedEvent session_updated = 3;
     SessionDeletedEvent session_deleted = 4;
-    SessionStatusChangedEvent status_changed = 5;
+    // field 5 (status_changed / SessionStatusChangedEvent) removed in Epic 4
     UserInteractionEvent user_interaction = 6;
     SessionAcknowledgedEvent session_acknowledged = 7;
     ApprovalResponseEvent approval_response = 8;
     NotificationEvent notification = 9;
   }
+
+  reserved 5;
+  reserved "status_changed";
 
   // Monotonically increasing sequence number assigned by the server EventBus.
   // Clients should track the highest seq they have received and pass it as
@@ -40,30 +43,19 @@ message SessionUpdatedEvent {
   Session session = 1;
   // Fields that were updated (for efficient client updates)
   repeated string updated_fields = 2;
+  // Fine-grained detected status at event publish time. Transitional shortcut for the
+  // migration period; populated when the detection layer has a registered controller.
+  // Deprecated once StatusBadge reads from session.detected_status directly (Epic 5).
+  DetectedStatus detected_status = 3;
+  // Human-readable context string from the terminal pattern detector.
+  // Empty when detected_status is UNSPECIFIED.
+  string detected_context = 4;
 }
 
 // SessionDeletedEvent is emitted when a session is deleted
 message SessionDeletedEvent {
   string session_id = 1;
   string reason = 2; // Optional deletion reason
-}
-
-// SessionStatusChangedEvent is emitted when session status transitions
-message SessionStatusChangedEvent {
-  string session_id = 1;
-  SessionStatus old_status = 2;
-  SessionStatus new_status = 3;
-  // Detected status from terminal pattern analysis (e.g. "StatusNeedsApproval", "StatusInputRequired").
-  // Populated when InstanceStatusManager has a registered controller for this session.
-  // Empty string when detection is unavailable or controller is inactive.
-  optional string detected_status = 4;
-  // Human-readable context string from the terminal pattern detector
-  // (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
-  // Empty when detected_status is empty.
-  optional string detected_context = 5;
-
-  // Active-work state at the time of the status change.
-  WorkingState working_state = 6;
 }
 
 // TerminalData represents terminal I/O for bidirectional streaming.
@@ -80,16 +72,9 @@ message TerminalData {
     TerminalError error = 5;
     ScrollbackRequest scrollback_request = 6;
     ScrollbackResponse scrollback_response = 7;
-    TerminalDelta delta = 8;  // Delta compression for efficient updates (DEPRECATED - use diff)
     CurrentPaneRequest current_pane_request = 9;   // Request current tmux pane content
-    CurrentPaneResponse current_pane_response = 10; // Response with current pane content (DEPRECATED - use diff)
+    CurrentPaneResponse current_pane_response = 10; // Response with current pane content
     FlowControl flow_control = 11;  // Flow control signals for backpressure management (xterm.js best practice)
-    TerminalState state = 12;  // Complete terminal state (DEPRECATED - use diff for incremental updates)
-
-    // SSP (State Synchronization Protocol) messages - MOSH-style efficient updates
-    TerminalDiff diff = 13;           // Minimal ANSI diff (server → client)
-    InputWithEcho input_echo = 14;    // Input with echo tracking (client → server)
-    SSPNegotiation ssp_negotiation = 15;  // Feature negotiation (bidirectional)
 
     // Resize quiescence signal — sent before/after server-side tmux reflow wait
     ResizeQuiescence resize_quiescence = 16;
@@ -97,6 +82,15 @@ message TerminalData {
     // Shell status update event (server → client); shell_id identifies the shell.
     ShellStatusUpdate shell_status_update = 18;
   }
+
+  // Fields 8, 12, 13, 14, 15 (delta, state, diff, input_echo, ssp_negotiation)
+  // removed — the MOSH-style state-synchronization protocol (TerminalDelta /
+  // TerminalState / TerminalDiff / InputWithEcho / SSPNegotiation) was never
+  // fully wired up on either the server or client and has been removed along
+  // with its Go and TypeScript implementations. Reserved to prevent
+  // accidental reuse.
+  reserved 8, 12, 13, 14, 15;
+  reserved "delta", "state", "diff", "input_echo", "ssp_negotiation";
 
   // Optional shell identifier. When non-empty, this TerminalData message is
   // scoped to a custom shell (sibling tmux session) rather than the main session.
@@ -212,11 +206,11 @@ message CurrentPaneRequest {
   optional int32 target_cols = 3;  // Target columns (width)
   optional int32 target_rows = 4;  // Target rows (height)
 
-  // Streaming mode for terminal output (optional)
-  // Options: "raw" (direct PTY bytes), "raw-compressed" (PTY bytes with LZMA),
-  //          "state" (MOSH-style state sync), "hybrid" (both raw and state)
-  // Default: "raw" if not specified
-  optional string streaming_mode = 5;
+  // Field 5 (streaming_mode) removed — the selectable streaming-mode feature
+  // (raw/raw-compressed/state/hybrid) was never fully wired up server-side
+  // and has been removed. Reserved to prevent accidental reuse.
+  reserved 5;
+  reserved "streaming_mode";
 }
 
 // CurrentPaneResponse contains the current visible tmux pane content
@@ -231,280 +225,6 @@ message CurrentPaneResponse {
   // Current pane dimensions
   int32 pane_width = 4;   // Columns
   int32 pane_height = 5;  // Rows
-}
-
-// ============================================================================
-// Delta Compression Protocol (MOSH-style)
-// ============================================================================
-
-// TerminalDelta represents incremental terminal state changes.
-// Inspired by MOSH protocol - only sends what changed in the terminal screen.
-// Reduces bandwidth by 70-90% for typical terminal usage.
-message TerminalDelta {
-  // State version tracking for synchronization
-  uint64 from_state = 1;     // Previous state version (0 for initial)
-  uint64 to_state = 2;       // New state version after applying delta
-
-  // Screen changes (only modified lines)
-  repeated LineDelta lines = 3;
-
-  // Cursor position after changes
-  CursorPosition cursor = 4;
-
-  // Full sync flag - if true, this is complete state (not a delta)
-  // Used for initial sync or error recovery when client/server out of sync
-  bool full_sync = 5;
-
-  // Terminal dimensions (included if changed)
-  optional TerminalDimensions dimensions = 6;
-}
-
-// LineDelta represents changes to a specific terminal line
-message LineDelta {
-  // Line number (0-based from top of screen)
-  uint32 line_number = 1;
-
-  // Operation to perform on this line
-  oneof operation {
-    bytes replace_line = 2;     // Replace entire line with this content (raw bytes with ANSI codes)
-    LineEdit edit = 3;          // Character-level edit within line
-    bool delete_line = 4;       // Delete this line (shifts lines up)
-    InsertLine insert = 5;      // Insert new line (shifts lines down)
-    bool clear_line = 6;        // Clear line to empty (optimization)
-  }
-}
-
-// LineEdit represents a character-level edit within a line
-message LineEdit {
-  uint32 start_col = 1;  // Start column (0-based)
-  uint32 end_col = 2;    // End column (exclusive, like string slice)
-  bytes text = 3;        // Replacement text (raw bytes with ANSI codes)
-}
-
-// InsertLine represents insertion of a new line
-message InsertLine {
-  bytes text = 1;        // Line content (raw bytes with ANSI codes)
-  bool at_cursor = 2;    // If true, insert at cursor; else at line_number
-}
-
-// CursorPosition tracks terminal cursor location
-message CursorPosition {
-  uint32 row = 1;        // Row number (0-based from top)
-  uint32 col = 2;        // Column number (0-based from left)
-  bool visible = 3;      // Cursor visibility flag
-}
-
-// TerminalDimensions represents terminal size
-message TerminalDimensions {
-  uint32 rows = 1;       // Number of rows
-  uint32 cols = 2;       // Number of columns
-}
-
-// ============================================================================
-// MOSH-Style State Synchronization Protocol (SSP)
-// ============================================================================
-
-// TerminalDiff represents minimal ANSI escape sequences to transform terminal state.
-// This is the core of the SSP protocol - generates the smallest possible update
-// to transform an old terminal state into a new one.
-//
-// Key features (inspired by Mosh):
-// - Generates minimal ANSI escape sequences (not cell-by-cell diffs)
-// - Uses smart cursor positioning (relative vs absolute, whichever is shorter)
-// - Batches consecutive cells with the same style into single writes
-// - Skips unchanged rows entirely for efficiency
-// - Can piggyback echo acknowledgments for predictive typing
-message TerminalDiff {
-  // Sequence number of the state this diff is based on
-  // Client must have this state to apply the diff correctly
-  uint64 from_sequence = 1;
-
-  // Sequence number of the resulting state after applying this diff
-  uint64 to_sequence = 2;
-
-  // Minimal ANSI escape sequences that transform from_sequence → to_sequence
-  // These can be written directly to xterm.js (they're valid ANSI codes)
-  bytes diff_bytes = 3;
-
-  // Echo acknowledgment piggy-backed on state updates
-  // Reduces round-trips for predictive echo confirmation
-  optional EchoAck echo_ack = 4;
-
-  // True if this is a full redraw (no dependency on from_sequence)
-  // Sent when: dimension change, client requests resync, or from_sequence=0
-  bool full_redraw = 5;
-
-  // Number of cells that changed (for metrics/debugging)
-  uint32 changed_cells = 6;
-
-  // Number of cells unchanged (for metrics/debugging)
-  uint32 unchanged_cells = 7;
-
-  // Compression metadata (optional - for compressed diff_bytes)
-  optional CompressionMetadata compression = 8;
-}
-
-// EchoAck confirms that the server has processed input up to a certain point.
-// Used for predictive echo - client shows typed characters immediately, then
-// clears the prediction once the server confirms the input was processed.
-//
-// Mosh uses a 50ms timeout: if EchoAck not received within 50ms, the prediction
-// is cleared to prevent stuck predictions on slow connections.
-message EchoAck {
-  // Server has processed all input with echo_num <= echo_ack_num
-  uint64 echo_ack_num = 1;
-
-  // Server timestamp when the input was processed (for RTT calculation)
-  int64 server_timestamp_ms = 2;
-}
-
-// InputWithEcho wraps user input with echo tracking for predictive typing.
-// The client assigns a monotonically increasing echo_num to each input,
-// then shows the input immediately (dimmed) as a "prediction". When the
-// server sends back an EchoAck with that echo_num, the prediction is cleared.
-message InputWithEcho {
-  // Raw input bytes (keystrokes)
-  bytes data = 1;
-
-  // Client-assigned echo number (monotonically increasing)
-  uint64 echo_num = 2;
-
-  // Client timestamp when input was sent (for latency measurement)
-  int64 client_timestamp_ms = 3;
-}
-
-// SSPCapabilities is exchanged during connection setup for feature negotiation.
-// Allows graceful fallback when client/server have different capabilities.
-message SSPCapabilities {
-  // Client/server supports predictive echo protocol
-  bool supports_predictive_echo = 1;
-
-  // Client/server supports diff-based updates (TerminalDiff messages)
-  bool supports_diff_updates = 2;
-
-  // Supported compression algorithms (e.g., "lzma", "zstd", "none")
-  repeated string compression_algorithms = 3;
-
-  // Protocol version for future compatibility
-  uint32 protocol_version = 4;
-
-  // Maximum diff size in bytes before falling back to full state
-  // (helps with very large terminal changes like `cat large_file.txt`)
-  optional uint32 max_diff_size = 5;
-
-  // Preferred frame interval in milliseconds (for RTT-based throttling)
-  optional uint32 preferred_frame_interval_ms = 6;
-}
-
-// SSPNegotiation is sent at connection start to negotiate SSP features.
-// Server responds with its capabilities, and both sides use the intersection.
-message SSPNegotiation {
-  // Client's capabilities
-  SSPCapabilities capabilities = 1;
-
-  // True if this is a request (client → server), false if response (server → client)
-  bool is_request = 2;
-
-  // Selected capabilities after negotiation (only in response)
-  optional SSPCapabilities negotiated = 3;
-}
-
-// TerminalState represents complete terminal state using MOSH-style SSP.
-// Unlike deltas, this contains the complete visible terminal screen state.
-// Optimized with LZMA compression and dynamic dictionary learning.
-message TerminalState {
-  // State sequence number for idempotent updates
-  uint64 sequence = 1;
-
-  // Terminal dimensions
-  TerminalDimensions dimensions = 2;
-
-  // Complete screen buffer - array of terminal lines
-  repeated TerminalLine lines = 3;
-
-  // Cursor position
-  CursorPosition cursor = 4;
-
-  // Scrollback information
-  optional ScrollbackInfo scrollback = 5;
-
-  // Compression metadata (optional)
-  optional CompressionMetadata compression = 6;
-}
-
-// TerminalLine represents a single line in the terminal buffer
-message TerminalLine {
-  // Line content with ANSI escape sequences preserved
-  bytes content = 1;
-
-  // Line attributes for optimization
-  optional LineAttributes attributes = 2;
-}
-
-// LineAttributes provide metadata for compression optimization
-message LineAttributes {
-  // True if line is empty (optimization)
-  bool is_empty = 1;
-
-  // True if line contains only printable ASCII (optimization)
-  bool ascii_only = 2;
-
-  // Character encoding hint for compression
-  optional string encoding = 3;
-
-  // Pattern hash for dictionary learning
-  optional uint64 pattern_hash = 4;
-}
-
-// ScrollbackInfo provides context about terminal scrollback
-message ScrollbackInfo {
-  // Total lines available in scrollback
-  uint64 total_lines = 1;
-
-  // First visible line number (0-based)
-  uint64 first_visible = 2;
-
-  // Last visible line number (0-based)
-  uint64 last_visible = 3;
-}
-
-// CompressionMetadata tracks LZMA compression and dictionary learning
-message CompressionMetadata {
-  // Compression algorithm used
-  string algorithm = 1;  // "lzma", "none"
-
-  // Dictionary ID used for this state
-  optional string dictionary_id = 2;
-
-  // Uncompressed size in bytes
-  uint64 uncompressed_size = 3;
-
-  // Compressed size in bytes
-  uint64 compressed_size = 4;
-
-  // Compression ratio (compressed/uncompressed)
-  float compression_ratio = 5;
-
-  // Dictionary learning metadata
-  optional DictionaryMetadata dictionary = 6;
-}
-
-// DictionaryMetadata tracks dynamic dictionary learning progress
-message DictionaryMetadata {
-  // Dictionary learning level (base/session/user/project)
-  string level = 1;
-
-  // Number of patterns learned
-  uint64 pattern_count = 2;
-
-  // Dictionary effectiveness score (0.0-1.0)
-  float effectiveness = 3;
-
-  // Last update timestamp
-  int64 updated_at = 4;
-
-  // Dictionary size in bytes
-  uint64 size_bytes = 5;
 }
 
 // ============================================================================

@@ -13,6 +13,7 @@ export enum GroupingStrategy {
   Status = "status",
   SessionType = "session_type",
   Project = "project",
+  Workflow = "workflow",
   None = "none",
 }
 
@@ -25,6 +26,7 @@ export const GroupingStrategyLabels: Partial<Record<GroupingStrategy, string>> =
   [GroupingStrategy.Status]: "Status",
   [GroupingStrategy.SessionType]: "Session Type",
   [GroupingStrategy.Project]: "Project",
+  [GroupingStrategy.Workflow]: "Workflow",
   [GroupingStrategy.None]: "None (Flat List)",
 };
 
@@ -56,9 +58,18 @@ export interface GroupedSessions {
  * @param strategy - Grouping strategy to apply (Category, Tag, Branch, etc.)
  * @returns Sorted array of grouped sessions with display metadata
  */
+/**
+ * Options for groupSessions. Currently used to pass workflow name lookups.
+ */
+export interface GroupSessionsOptions {
+  /** Map from workflow UUID to workflow name, used by GroupingStrategy.Workflow */
+  workflowIdToName?: Map<string, string>;
+}
+
 export function groupSessions(
   sessions: Session[],
-  strategy: GroupingStrategy
+  strategy: GroupingStrategy,
+  options?: GroupSessionsOptions
 ): GroupedSessions[] {
   // Early exit: No grouping returns single flat group
   if (strategy === GroupingStrategy.None) {
@@ -128,6 +139,16 @@ export function groupSessions(
         groupKeys = [session.projectId || "No Project"];
         break;
 
+      case GroupingStrategy.Workflow:
+        // Single-membership: One workflow per session; manual sessions go into "Manual Sessions"
+        if (session.workflowId) {
+          const wfName = options?.workflowIdToName?.get(session.workflowId) ?? session.workflowId;
+          groupKeys = [wfName];
+        } else {
+          groupKeys = ["Manual Sessions"];
+        }
+        break;
+
       default:
         // Fallback for unknown strategies
         groupKeys = ["Uncategorized"];
@@ -149,7 +170,7 @@ export function groupSessions(
   // Sort logic ensures consistent ordering with special groups at the end
   const sortedGroups = Array.from(grouped.keys()).sort((a, b) => {
     // Special groups (empty/missing fields) always appear at the end
-    const specialGroups = ["Uncategorized", "Untagged", "No Branch", "No Path", "No Program", "No Project"];
+    const specialGroups = ["Uncategorized", "Untagged", "No Branch", "No Path", "No Program", "No Project", "Manual Sessions"];
     if (specialGroups.includes(a)) return 1;
     if (specialGroups.includes(b)) return -1;
 

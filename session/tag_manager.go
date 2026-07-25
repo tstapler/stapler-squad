@@ -2,7 +2,7 @@ package session
 
 // TagManager provides CRUD operations for session tags.
 // It is a pure data structure with no I/O or external dependencies.
-// Thread safety is provided by Instance.stateMutex -- callers must hold
+// Thread safety is provided by Instance.mu -- callers must hold
 // the lock when calling TagManager methods.
 //
 // TagManager stores a pointer to the Instance.Tags slice so that mutations

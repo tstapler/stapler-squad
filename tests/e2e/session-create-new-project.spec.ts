@@ -1,4 +1,8 @@
-// @feature session:create
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: session-create-new-project — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['session-create'],
+] as const;
 import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';

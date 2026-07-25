@@ -1,3 +1,5 @@
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['review-queue-list'], FEATURE_CATALOG['review-queue-acknowledge']] as const;
 /**
  * End-to-end tests for review queue functionality
  *

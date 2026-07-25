@@ -1,4 +1,8 @@
-// @feature terminal:resize
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: terminal-resize — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['terminal-resize'], // TODO: add to catalog
+] as const;
 import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 

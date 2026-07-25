@@ -1,28 +1,43 @@
 "use client";
 
+import React, { useRef } from "react";
 import { useAppSelector } from "@/lib/store";
 import { selectConnectionState, type ConnectionState } from "@/lib/store/sessionsSlice";
-import { button, dots, labels } from "./ConnectionIndicator.css";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
+import { button, dots, spinner, labels, ariaLiveRegion, tooltip, tooltipReloadLink, wrapper } from "./ConnectionIndicator.css";
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connected: "Live",
-  stale: "Stale",
-  disconnected: "Offline",
+  stale: "Reconnecting…",
+  disconnected: "Reconnecting…",
 };
 
-const STATE_ARIA: Record<ConnectionState, string> = {
-  connected: "Live — session data is up to date",
-  stale: "Stale — session data may be outdated. Click to refresh",
-  disconnected: "Offline — reconnecting. Click to reload",
+const STATE_ANNOUNCE: Record<ConnectionState, string> = {
+  connected: "Connection restored",
+  stale: "Reconnecting…",
+  disconnected: "Reconnecting…",
 };
 
 export function ConnectionIndicator() {
   const connectionState = useAppSelector(selectConnectionState);
+  const { watchSessions, reconnectAttemptCount } = useSessionServiceContext();
   const isActionable = connectionState !== "connected";
+  const isReconnecting = connectionState === "stale" || connectionState === "disconnected";
+
+  const prevStateRef = useRef<ConnectionState>(connectionState);
+  const [announcement, setAnnouncement] = React.useState<string>("");
+
+  // Announce on state transitions
+  React.useEffect(() => {
+    if (prevStateRef.current !== connectionState) {
+      setAnnouncement(STATE_ANNOUNCE[connectionState]);
+      prevStateRef.current = connectionState;
+    }
+  }, [connectionState]);
 
   const handleClick = () => {
     if (isActionable) {
-      window.location.reload();
+      watchSessions();
     }
   };
 
@@ -33,23 +48,57 @@ export function ConnectionIndicator() {
     }
   };
 
+  const ariaLabel = isReconnecting
+    ? `Reconnecting… attempt ${reconnectAttemptCount}. Click to reconnect now.`
+    : "Live — session data is up to date";
+
+  const titleText = isReconnecting
+    ? `Reconnecting… attempt ${reconnectAttemptCount}`
+    : "Live — session data is up to date";
+
   return (
-    <button
-      className={button}
-      aria-label={STATE_ARIA[connectionState]}
-      title={STATE_ARIA[connectionState]}
-      onClick={isActionable ? handleClick : undefined}
-      onKeyDown={isActionable ? handleKeyDown : undefined}
-      disabled={!isActionable}
-      aria-live="polite"
-    >
-      <span
-        className={dots[connectionState]}
-        aria-hidden="true"
-      />
-      <span className={labels[connectionState]}>
-        {STATE_LABEL[connectionState]}
-      </span>
-    </button>
+    <>
+      {/* Visually-hidden live region — separate from button so screen readers announce it */}
+      <div
+        className={ariaLiveRegion}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcement}
+      </div>
+      <div className={wrapper}>
+        <button
+          className={button}
+          aria-label={ariaLabel}
+          title={titleText}
+          onClick={isActionable ? handleClick : undefined}
+          onKeyDown={isActionable ? handleKeyDown : undefined}
+          disabled={!isActionable}
+        >
+          {isReconnecting ? (
+            <span className={spinner} aria-hidden="true" />
+          ) : (
+            <span
+              className={dots[connectionState]}
+              aria-hidden="true"
+            />
+          )}
+          <span className={labels[connectionState]}>
+            {STATE_LABEL[connectionState]}
+          </span>
+        </button>
+        {isReconnecting && (
+          <div className={tooltip}>
+            <a
+              href="#"
+              className={tooltipReloadLink}
+              onClick={(e) => { e.preventDefault(); window.location.reload(); }}
+            >
+              Reload page (resets state)
+            </a>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

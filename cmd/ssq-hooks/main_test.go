@@ -84,9 +84,43 @@ func TestPatchBeforeToolHook_MalformedJSON(t *testing.T) {
 	require.Error(t, err)
 }
 
+// ── patchAntigravityHooks unit tests ──────────────────────────────────────────
+
+func TestPatchAntigravityHooks_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, "subdir", "hooks.json")
+	err := patchAntigravityHooks(hooksPath, "/path/to/ssq-hooks")
+	require.NoError(t, err)
+	raw, _ := os.ReadFile(hooksPath)
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &m))
+	sqHook := m["stapler-squad"].(map[string]interface{})
+	assert.True(t, sqHook["enabled"].(bool))
+	preTool := sqHook["PreToolUse"].([]interface{})
+	first := preTool[0].(map[string]interface{})
+	assert.Equal(t, "*", first["matcher"])
+	hooks := first["hooks"].([]interface{})
+	h := hooks[0].(map[string]interface{})
+	assert.Equal(t, "command", h["type"])
+	assert.Equal(t, "/path/to/ssq-hooks check --antigravity", h["command"])
+}
+
+func TestPatchAntigravityHooks_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	hooksPath := filepath.Join(dir, "hooks.json")
+	require.NoError(t, patchAntigravityHooks(hooksPath, "/path/to/ssq-hooks"))
+	stat1, err := os.Stat(hooksPath)
+	require.NoError(t, err)
+
+	require.NoError(t, patchAntigravityHooks(hooksPath, "/path/to/ssq-hooks"))
+	stat2, err := os.Stat(hooksPath)
+	require.NoError(t, err)
+	assert.Equal(t, stat1.ModTime(), stat2.ModTime())
+}
+
 // ── installAgy integration tests ──────────────────────────────────────────────
 
-// installAgy_should_copyBinaryAndPatchSettings_When_dirAbsent
+// installAgy_should_copyBinaryAndPatchHooks_When_dirAbsent
 func TestInstallAgy_FreshInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -94,14 +128,19 @@ func TestInstallAgy_FreshInstall(t *testing.T) {
 	// Assert binary copied
 	destBin := filepath.Join(home, ".local", "bin", "ssq-hooks")
 	assert.FileExists(t, destBin)
-	// Assert settings patched
-	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
-	raw, err := os.ReadFile(settingsPath)
+	// Assert hooks patched
+	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json")
+	raw, err := os.ReadFile(hooksPath)
 	require.NoError(t, err)
 	var m map[string]interface{}
 	require.NoError(t, json.Unmarshal(raw, &m))
-	hooks := m["hooks"].(map[string]interface{})
-	assert.Contains(t, hooks["BeforeTool"].(string), "check --gemini")
+	sq := m["stapler-squad"].(map[string]interface{})
+	assert.True(t, sq["enabled"].(bool))
+	preTool := sq["PreToolUse"].([]interface{})
+	first := preTool[0].(map[string]interface{})
+	hooks := first["hooks"].([]interface{})
+	h := hooks[0].(map[string]interface{})
+	assert.Contains(t, h["command"].(string), "check --antigravity")
 }
 
 // installAgy_should_beIdempotent_When_runTwice
@@ -109,14 +148,76 @@ func TestInstallAgy_Idempotent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	installAgy()
-	// Capture settings after first run
-	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
-	content1, err := os.ReadFile(settingsPath)
+	// Capture hooks after first run
+	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json")
+	content1, err := os.ReadFile(hooksPath)
 	require.NoError(t, err)
 	installAgy()
-	content2, err := os.ReadFile(settingsPath)
+	content2, err := os.ReadFile(hooksPath)
 	require.NoError(t, err)
-	assert.Equal(t, string(content1), string(content2), "settings changed on second run")
+	assert.Equal(t, string(content1), string(content2), "hooks changed on second run")
+}
+
+// installAgy_should_patchOnlyAntigravityCli_When_bothFilesExist
+func TestInstallAgy_PatchesOnlyFirstFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agyDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(agyDir, 0700))
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(agyDir, "hooks.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte(`{"other":"value"}`), 0644))
+	installAgy()
+	raw1, _ := os.ReadFile(filepath.Join(agyDir, "hooks.json"))
+	assert.Contains(t, string(raw1), "check --antigravity")
+	raw2, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.JSONEq(t, `{"other":"value"}`, string(raw2))
+}
+
+// installAgy_should_fallBackToConfigJson_When_antigravityCliAbsent
+func TestInstallAgy_FallsBackToConfigJson(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte("{}"), 0644))
+	installAgy()
+	raw, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.Contains(t, string(raw), "check --antigravity")
+	_, err := os.Stat(filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+// installAgy_should_cleanStaleFallback_When_bothWerePreviouslyPatched
+func TestInstallAgy_CleansUpStaleFallbackEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agyDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(agyDir, 0700))
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	staleHook := `{"stapler-squad":{"enabled":true,"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/fake/ssq-hooks check --antigravity","timeout":10}]}]}}`
+	require.NoError(t, os.WriteFile(filepath.Join(agyDir, "hooks.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte(staleHook), 0644))
+	installAgy()
+	raw1, _ := os.ReadFile(filepath.Join(agyDir, "hooks.json"))
+	assert.Contains(t, string(raw1), "check --antigravity")
+	raw2, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.NotContains(t, string(raw2), "stapler-squad")
+}
+
+// installAgy_should_createAntigravityCli_When_neitherPathExists
+func TestInstallAgy_CreatesAntigravityCliWhenNeitherExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installAgy()
+	agyHooks := filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json")
+	assert.FileExists(t, agyHooks)
+	raw, _ := os.ReadFile(agyHooks)
+	assert.Contains(t, string(raw), "check --antigravity")
+	_, err := os.Stat(filepath.Join(home, ".gemini", "config", "hooks.json"))
+	assert.True(t, os.IsNotExist(err))
 }
 
 // ── installGemini integration tests ───────────────────────────────────────────
@@ -225,6 +326,15 @@ func TestParseGeminiPayload_VariantB(t *testing.T) {
 	assert.Equal(t, "Read", payload.ToolName)
 }
 
+// parseGeminiPayload_should_returnToolName_When_variantCPayloadProvided
+func TestParseGeminiPayload_VariantC(t *testing.T) {
+	input := `{"toolCall":{"name":"run_command","args":{"command":"ls -la"}},"cwd":"/some/dir"}`
+	payload := callParseGeminiPayloadWithStdin(t, input)
+	assert.Equal(t, "Bash", payload.ToolName)
+	assert.Equal(t, "ls -la", payload.ToolInput["command"])
+	assert.Equal(t, "/some/dir", payload.Cwd)
+}
+
 // parseGeminiPayload_should_returnUnknown_When_schemaUnrecognized
 func TestParseGeminiPayload_UnknownSchema(t *testing.T) {
 	input := `{"command":"ls"}` // no 'name' or 'tool_name'
@@ -282,6 +392,23 @@ func TestMain(m *testing.M) {
 		writeGeminiHookDecision(result)
 		os.Exit(0) // reached only for AutoAllow / Escalate
 	}
+	if decision := os.Getenv("AGY_DECISION"); decision != "" {
+		reason := os.Getenv("AGY_DENY_REASON")
+		alt := os.Getenv("AGY_DENY_ALT")
+		var result classifier.ClassificationResult
+		switch decision {
+		case "allow":
+			result.Decision = classifier.AutoAllow
+		case "deny":
+			result.Decision = classifier.AutoDeny
+			result.Reason = reason
+			result.Alternative = alt
+		case "escalate":
+			result.Decision = classifier.Escalate
+		}
+		writeAntigravityHookDecision(result)
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -296,6 +423,27 @@ func runGeminiDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
 	t.Helper()
 	// Re-invoke the test binary, gated by GEMINI_DECISION env var.
 	c := exec.Command(os.Args[0], "-test.run=^TestMain$") //nolint:forbidigo,norawexec // subprocess re-invoke of the test binary; context/WaitDelay not applicable to test binary re-execution
+	c.Env = append(os.Environ(), env...)
+	var stdout, stderr strings.Builder
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	err := c.Run()
+	code := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		}
+	}
+	return subprocessResult{
+		ExitCode: code,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}
+}
+
+func runAgyDecisionSubprocess(t *testing.T, env ...string) subprocessResult {
+	t.Helper()
+	c := exec.Command(os.Args[0], "-test.run=^TestMain$") //nolint:forbidigo,norawexec
 	c.Env = append(os.Environ(), env...)
 	var stdout, stderr strings.Builder
 	c.Stdout = &stdout
@@ -364,4 +512,32 @@ func TestWriteGeminiHookDecision_AutoDenyWithRuleID(t *testing.T) {
 	assert.Equal(t, 1, res.ExitCode)
 	assert.Contains(t, res.Stderr, "[rule: RULE-007]")
 	assert.Contains(t, res.Stderr, "rm -rf blocked")
+}
+
+func TestWriteAntigravityHookDecision_AutoAllow(t *testing.T) {
+	res := runAgyDecisionSubprocess(t, "AGY_DECISION=allow")
+	assert.Equal(t, 0, res.ExitCode)
+	var out map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
+	assert.Equal(t, "allow", out["decision"])
+	assert.Equal(t, true, out["allow_tool"])
+}
+
+func TestWriteAntigravityHookDecision_AutoDeny(t *testing.T) {
+	res := runAgyDecisionSubprocess(t, "AGY_DECISION=deny", "AGY_DENY_REASON=unsafe", "AGY_DENY_ALT=try again")
+	assert.Equal(t, 0, res.ExitCode)
+	var out map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
+	assert.Equal(t, "deny", out["decision"])
+	assert.Equal(t, false, out["allow_tool"])
+	assert.Equal(t, "unsafe try again", out["deny_reason"])
+}
+
+func TestWriteAntigravityHookDecision_Escalate(t *testing.T) {
+	res := runAgyDecisionSubprocess(t, "AGY_DECISION=escalate")
+	assert.Equal(t, 0, res.ExitCode)
+	var out map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(res.Stdout), &out))
+	assert.Equal(t, "ask", out["decision"])
+	assert.Nil(t, out["allow_tool"])
 }

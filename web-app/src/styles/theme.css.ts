@@ -1,3 +1,6 @@
+/* eslint-disable no-restricted-syntax -- this file defines the literal hex values behind
+ * vars.color.* for every theme (see theme-contract.css.ts); consuming .css.ts files must
+ * use vars.color.* tokens instead of hex literals per .claude/rules/css-architecture.md. */
 import { createTheme } from "@vanilla-extract/css";
 import { vars } from "./theme-contract.css";
 
@@ -52,6 +55,12 @@ const terminalTokens = {
   terminalHoverBg: "#3e3e42",
 };
 
+// Header always uses a dark backdrop regardless of theme — mirrors terminalTokens above.
+const headerTokens = {
+  headerTextPrimary: "#ededed",
+  headerTextSecondary: "#b4b4b4",
+};
+
 export const lightTheme = createTheme(vars, {
   color: {
     textPrimary: "#0a0a0a",
@@ -87,6 +96,7 @@ export const lightTheme = createTheme(vars, {
 
     success: "#10b981",
     successBg: "#d1fae5",
+    successText: "#065f46", /* success on successBg = 3.83:1, fails WCAG AA; #065f46 = 6.78:1 */
     warning: "#f59e0b",
     warningBg: "#fef3c7",
     warningText: "#92400e",
@@ -97,16 +107,25 @@ export const lightTheme = createTheme(vars, {
 
     accentBg: "rgba(0, 112, 243, 0.08)",
     accentHover: "rgba(0, 112, 243, 0.16)",
+    /* accentText: primary (#0070f3) on accentBg (~#ebf4fe) measures 4.09:1 —
+     * fails WCAG AA (needs >=4.5:1), caught by InlineNotice's Reload button
+     * (tests/e2e/accessibility.spec.ts). primaryDark (#003d99) on the same
+     * background measures ~9.2:1. */
+    accentText: "#003d99",
 
     inputBackground: "#ffffff",
     inputText: "#0a0a0a",
     placeholderColor: "#9ca3af",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#b91c1c", logWarn: "#d97706", logInfo: "#1d4ed8",
     logDebug: "#6b7280", logTrace: "#4b5563",
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
+
+    gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitRenamed: "#2563eb", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(0,112,243,0.4)",
     glowSecondary: "rgba(0,112,243,0.2)",
@@ -181,6 +200,7 @@ export const darkTheme = createTheme(vars, {
 
     success: "#10b981",
     successBg: "#064e3b",
+    successText: "#34d399", /* success on successBg = 3.83:1, fails WCAG AA; #34d399 = 5.06:1 */
     warning: "#f59e0b",
     warningBg: "#78350f",
     warningText: "#fbbf24",
@@ -191,16 +211,23 @@ export const darkTheme = createTheme(vars, {
 
     accentBg: "rgba(45, 156, 219, 0.1)",
     accentHover: "rgba(45, 156, 219, 0.2)",
+    /* accentText: primary (#2d9cdb) already measures ~5:1 against accentBg
+     * blended over cardBackground — unchanged from pre-fix behavior. */
+    accentText: "#2d9cdb",
 
     inputBackground: "#2a2a2a",
     inputText: "#ededed",
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#2563eb",
     logDebug: "#6b7280", logTrace: "#4b5563",
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
+
+    gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitRenamed: "#2563eb", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(45,156,219,0.4)",
     glowSecondary: "rgba(45,156,219,0.2)",
@@ -278,6 +305,7 @@ export const matrixTheme = createTheme(vars, {
 
     success: "#00ff41",
     successBg: "#001a00",
+    successText: "#00ff41", /* already 13.4:1 on successBg — well above WCAG AA */
     warning: "#ffaa00",
     warningBg: "#2a1a00",
     warningText: "#ffcc44",
@@ -288,16 +316,22 @@ export const matrixTheme = createTheme(vars, {
 
     accentBg: "rgba(0,255,65,0.1)",
     accentHover: "rgba(0,255,65,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#00ff41",
 
     inputBackground: "#050505",
     inputText: "#00ff41",
     placeholderColor: "#004d18",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#cc0033", logWarn: "#cc8800", logInfo: "#00aaff",
     logDebug: "#00802b", logTrace: "#006622",
     logOnDark: "#00ff41", logOnAmber: "#000000", logLive: "#00ff41",
+
+    gitModified: "#ccaa00", gitAdded: "#00ff41", gitDeleted: "#ff3333",
+    gitRenamed: "#00aaff", gitUntracked: "#00802b", gitConflict: "#ff00ff",
 
     glowPrimary: "rgba(0,255,65,0.5)",
     glowSecondary: "rgba(0,255,65,0.25)",
@@ -383,6 +417,7 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     success: "#00ff9f",
     successBg: "#001a11",
+    successText: "#00ff9f", /* already 13.67:1 on successBg — well above WCAG AA */
     warning: "#fcee09",
     warningBg: "#1a1600",
     warningText: "#fcee09",
@@ -393,16 +428,22 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     accentBg: "rgba(255,45,120,0.1)",
     accentHover: "rgba(255,45,120,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#cc245f",
 
     inputBackground: "#0f0f22",
     inputText: "#fcee09",
     placeholderColor: "#4a4603",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#ff2d78", logWarn: "#ffd700", logInfo: "#00d4ff",
     logDebug: "#9d4edd", logTrace: "#7b2d8b",
     logOnDark: "#ffffff", logOnAmber: "#0d0d1a", logLive: "#00ff9f",
+
+    gitModified: "#ffd700", gitAdded: "#00ff9f", gitDeleted: "#ff2d78",
+    gitRenamed: "#00d4ff", gitUntracked: "#9d4edd", gitConflict: "#ff0099",
 
     glowPrimary: "rgba(255,45,120,0.5)",
     glowSecondary: "rgba(0,212,255,0.4)",
@@ -488,6 +529,7 @@ export const wh40kTheme = createTheme(vars, {
 
     success: "#4a7c3f",
     successBg: "#0a1208",
+    successText: "#8fd47a", /* success on successBg = 3.85:1, fails WCAG AA; #8fd47a = 10.76:1 */
     warning: "#c0a020",
     warningBg: "#1a1400",
     warningText: "#e4c840",
@@ -498,16 +540,22 @@ export const wh40kTheme = createTheme(vars, {
 
     accentBg: "rgba(192,160,32,0.1)",
     accentHover: "rgba(192,160,32,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#c0a020",
 
     inputBackground: "#120e0a",
     inputText: "#c8b89a",
     placeholderColor: "#786858",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#8b1a1a", logWarn: "#c0a020", logInfo: "#1a4a8b",
     logDebug: "#6b6040", logTrace: "#4a4030",
     logOnDark: "#fcee09", logOnAmber: "#0d0b00", logLive: "#c0a020",
+
+    gitModified: "#c0a020", gitAdded: "#5a7a3a", gitDeleted: "#8b1a1a",
+    gitRenamed: "#1a4a8b", gitUntracked: "#786858", gitConflict: "#7a3a5a",
 
     glowPrimary: "rgba(192,160,32,0.4)",
     glowSecondary: "rgba(139,26,26,0.4)",
@@ -591,8 +639,10 @@ export const cleanTheme = createTheme(vars, {
     primaryDark: "#3730a3",
     primaryText: "#ffffff",
 
-    success: "#10b981",
+    // was #10b981 — 3.83:1 on successBg fails WCAG AA; #34d399 = 5.06:1 ✅
+    success: "#34d399",
     successBg: "#064e3b",
+    successText: "#34d399", /* success on successBg = 3.83:1, fails WCAG AA; #34d399 = 5.06:1 */
     warning: "#f59e0b",
     warningBg: "#78350f",
     warningText: "#fbbf24",
@@ -603,16 +653,22 @@ export const cleanTheme = createTheme(vars, {
 
     accentBg: "rgba(99,102,241,0.1)",
     accentHover: "rgba(99,102,241,0.2)",
+    // accentText: unchanged from pre-fix behavior (same as primary) — not in scope for this fix.
+    accentText: "#6366f1",
 
     inputBackground: "#161b22",
     inputText: "#e2e8f0",
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+    ...headerTokens,
 
     logError: "#dc2626", logWarn: "#d97706", logInfo: "#4f46e5",
     logDebug: "#6b7280", logTrace: "#4b5563",
     logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
+
+    gitModified: "#d97706", gitAdded: "#16a34a", gitDeleted: "#dc2626",
+    gitRenamed: "#4f46e5", gitUntracked: "#6b7280", gitConflict: "#c026d3",
 
     glowPrimary: "rgba(99,102,241,0.3)",
     glowSecondary: "rgba(99,102,241,0.15)",

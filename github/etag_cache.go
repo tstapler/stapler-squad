@@ -12,9 +12,10 @@ import (
 // ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
 // Using conditional requests (If-None-Match) allows GitHub to return 304 Not Modified
 // responses that cost zero rate-limit quota when the PR has not changed.
+// sync.Map gives lock-free reads in the steady state — entries are written once on
+// first PR discovery and then read on every subsequent poll tick.
 type ETagCache struct {
-	mu    sync.RWMutex
-	store map[string]etagEntry
+	store sync.Map // key: string, value: etagEntry
 }
 
 type etagEntry struct {
@@ -24,13 +25,23 @@ type etagEntry struct {
 
 // NewETagCache creates a new empty ETagCache.
 func NewETagCache() *ETagCache {
-	return &ETagCache{
-		store: make(map[string]etagEntry),
-	}
+	return &ETagCache{}
 }
 
 func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
 	return fmt.Sprintf("%s/%s/%d", owner, repo, prNumber)
+}
+
+func (c *ETagCache) get(key string) (etagEntry, bool) {
+	v, ok := c.store.Load(key)
+	if !ok {
+		return etagEntry{}, false
+	}
+	return v.(etagEntry), true
+}
+
+func (c *ETagCache) set(key string, e etagEntry) {
+	c.store.Store(key, e)
 }
 
 // GetPRInfoConditional fetches PR info using ETag conditional requests.
@@ -42,9 +53,7 @@ func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
 func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int, cache *ETagCache) (*PRInfo, bool, error) {
 	key := cache.cacheKey(owner, repo, prNumber)
 
-	cache.mu.RLock()
-	entry, hasCached := cache.store[key]
-	cache.mu.RUnlock()
+	entry, hasCached := cache.get(key)
 
 	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
@@ -69,8 +78,24 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		return nil, false, nil
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, false, fmt.Errorf("GitHub API: auth error (%d)", resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, false, fmt.Errorf("GitHub API: unauthorized (401)")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		// Retry-After present → secondary rate limit; no Retry-After → auth/permission error.
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		return nil, false, fmt.Errorf("GitHub API: forbidden (403)")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, false, fmt.Errorf("GitHub API: rate limited (429)")
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -81,9 +106,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		if fetchErr != nil {
 			return nil, false, fetchErr
 		}
-		cache.mu.Lock()
-		cache.store[key] = etagEntry{prInfo: info}
-		cache.mu.Unlock()
+		cache.set(key, etagEntry{prInfo: info})
 		return info, true, nil
 	}
 
@@ -97,9 +120,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		return nil, false, err
 	}
 
-	cache.mu.Lock()
-	cache.store[key] = etagEntry{etag: newEtag, prInfo: newInfo}
-	cache.mu.Unlock()
+	cache.set(key, etagEntry{etag: newEtag, prInfo: newInfo})
 
 	return newInfo, true, nil
 }

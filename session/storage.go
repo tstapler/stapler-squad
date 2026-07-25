@@ -2,28 +2,34 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // InstanceData represents the serializable data of an Instance
 type InstanceData struct {
-	Title      string    `json:"title"`
-	UUID       string    `json:"uuid,omitempty"`
-	Path       string    `json:"path"`
-	WorkingDir string    `json:"working_dir"`
-	Branch     string    `json:"branch"`
-	Status     Status    `json:"status"`
-	Height     int       `json:"height"`
-	Width      int       `json:"width"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	AutoYes    bool      `json:"auto_yes"`
-	Prompt     string    `json:"prompt"`
+	Title         string    `json:"title"`
+	UUID          string    `json:"uuid,omitempty"`
+	Path          string    `json:"path"`
+	WorkingDir    string    `json:"working_dir"`
+	Branch        string    `json:"branch"`
+	Status        Status    `json:"status"`
+	Height        int       `json:"height"`
+	Width         int       `json:"width"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	AutoYes       bool      `json:"auto_yes"`
+	Prompt        string    `json:"prompt"`
+	InitialPrompt string    `json:"initial_prompt,omitempty"`
 
 	Program          string          `json:"program"`
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
@@ -65,6 +71,8 @@ type InstanceData struct {
 	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
 	// Tmux session prefix for isolation
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
+	// Tmux server socket name for isolation (used with tmux -L flag)
+	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
 
 	// Terminal update timestamps for activity tracking
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
@@ -123,6 +131,13 @@ type InstanceData struct {
 	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// WorkflowID is the UUID of the Workflow that spawned this session.
+	// Empty for manually-created sessions.
+	WorkflowID string `json:"workflow_id,omitempty"`
+
+	// ArchivedAt is set when the session is archived. Nil means not archived.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -151,6 +166,25 @@ type ClaudeSessionData struct {
 	LastAttached     time.Time         `json:"last_attached,omitempty"`    // When this session was last used
 	Settings         ClaudeSettings    `json:"settings,omitempty"`         // User preferences for Claude Code
 	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
+}
+
+// UnmarshalJSON keeps backward compatibility with persisted state written
+// before SquadSessionID was renamed from ConversationID. The legacy
+// "conversation_id" key is read as a fallback when "squad_session_id" is
+// absent, so existing JSON state files continue to hydrate the field on load.
+func (c *ClaudeSessionData) UnmarshalJSON(data []byte) error {
+	type alias ClaudeSessionData
+	aux := struct {
+		*alias
+		LegacyConversationID string `json:"conversation_id,omitempty"`
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.SquadSessionID == "" && aux.LegacyConversationID != "" {
+		c.SquadSessionID = aux.LegacyConversationID
+	}
+	return nil
 }
 
 // ClaudeSettings contains user preferences for Claude Code integration
@@ -204,6 +238,21 @@ func (s *Storage) GetEntClient() *ent.Client {
 	return nil
 }
 
+// SetItemChangePublisher wires p into the underlying repository when it is
+// ent-backed, following the same type-assertion-forwarding precedent as
+// GetEntClient above. server/dependencies.go only has a *Storage value in
+// scope (Storage.repo is a Repository interface field, not a concrete
+// *EntRepository), so this forwarding method is the entry point it uses to
+// reach ItemChangePublisher wiring. When the repository is not ent-backed
+// (e.g. an in-memory test double), the type assertion fails gracefully and
+// the publisher is simply never wired — no panic, matching GetEntClient's
+// nil-on-mismatch behavior.
+func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
+	if er, ok := s.repo.(*EntRepository); ok {
+		er.SetItemChangePublisher(p)
+	}
+}
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.saveInstancesToRepo(instances)
@@ -239,13 +288,17 @@ func (s *Storage) SaveInstancesSync(instances []*Instance) error {
 
 // LoadInstances loads the list of instances from the repository.
 func (s *Storage) LoadInstances() ([]*Instance, error) {
-	dataSlice, err := s.repo.List(context.Background())
+	ctx := context.Background()
+	dataSlice, err := s.repo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
 	instances := make([]*Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
-		inst, err := FromInstanceData(data)
+		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
+		// load (server startup) doesn't block on cold-restoring every dead
+		// session before the HTTP server can bind.
+		inst, err := fromInstanceData(data, true)
 		if err != nil {
 			log.Warn("skipping instance from repository", "session", data.Title, "err", err)
 			continue
@@ -256,6 +309,69 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		}
 		instances = append(instances, inst)
 	}
+
+	// Bulk-load all session goals in one query (N+1 → 1) and apply to instances.
+	if client := s.GetEntClient(); client != nil && len(instances) > 0 {
+		uuids := make([]string, 0, len(instances))
+		for _, inst := range instances {
+			if inst.UUID != "" {
+				uuids = append(uuids, inst.UUID)
+			}
+		}
+		if len(uuids) > 0 {
+			goals, goalErr := client.SessionGoal.Query().
+				Where(sessiongoal.SessionUUIDIn(uuids...)).
+				All(ctx)
+			if goalErr != nil {
+				log.Warn("LoadInstances: failed to bulk-load session goals", "err", goalErr)
+			} else {
+				goalMap := make(map[string]*SessionGoalData, len(goals))
+				for _, g := range goals {
+					tasks, decodeErr := DecodeTasks(g.Tasks)
+					if decodeErr != nil {
+						log.Warn("LoadInstances: failed to decode tasks JSON", "session_uuid", g.SessionUUID, "err", decodeErr)
+						tasks = []TaskNode{}
+					}
+					goalMap[g.SessionUUID] = &SessionGoalData{
+						UUID:        g.ID.String(),
+						SessionUUID: g.SessionUUID,
+						Goal:        g.Goal,
+						Status:      g.Status,
+						Tasks:       tasks,
+						SetBy:       g.SetBy,
+						UpdatedAt:   g.UpdatedAt,
+					}
+				}
+				for _, inst := range instances {
+					if goal, ok := goalMap[inst.UUID]; ok {
+						inst.SetSessionGoalCached(goal)
+					}
+				}
+			}
+		}
+	}
+
+	// Bulk-load stored artifact blobs so the first render shows cached artifacts
+	// without waiting for ArtifactExtractor's startup walk to complete.
+	// Single bulk query replaces N per-session queries (M-4 fix).
+	if s.GetEntClient() != nil && len(instances) > 0 {
+		allArtifacts, artifErr := s.GetAllInstanceArtifacts()
+		if artifErr != nil {
+			log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
+		} else {
+			for _, inst := range instances {
+				raw := allArtifacts[inst.Title]
+				if raw == "" {
+					continue
+				}
+				var blob artifacts.SessionArtifactsBlob
+				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
+					inst.Artifacts = &blob
+				}
+			}
+		}
+	}
+
 	return instances, nil
 }
 
@@ -264,6 +380,55 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
 	return s.repo.List(context.Background())
+}
+
+// GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
+// Title otherwise. Used by Registry.AcquireAll and ListInstanceIDs to produce stable
+// per-session keys without constructing live Instance objects.
+func (d InstanceData) GetStableID() string {
+	if d.UUID != "" {
+		return d.UUID
+	}
+	return d.Title
+}
+
+// MatchesID reports whether id refers to this InstanceData. Unlike Instance.MatchesID,
+// there is no tmux-name arm because InstanceData has no GetTmuxSessionName (that method
+// requires the live processManager). For tmux-name matching, call Instance.MatchesID.
+func (d InstanceData) MatchesID(id string) bool {
+	return d.Title == id || d.GetStableID() == id
+}
+
+// ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
+var ErrInstanceDataNotFound = errors.New("instance data not found")
+
+// FindInstanceDataByID finds the first InstanceData whose stable ID or title matches id.
+// Returns ErrInstanceDataNotFound when no match exists.
+func (s *Storage) FindInstanceDataByID(id string) (*InstanceData, error) {
+	all, err := s.ListInstanceData()
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].MatchesID(id) {
+			return &all[i], nil
+		}
+	}
+	return nil, ErrInstanceDataNotFound
+}
+
+// ListInstanceIDs returns the stable ID (UUID if set, else Title) for every stored
+// InstanceData. Used by Registry.AcquireAll to seed the initial live-handle set.
+func (s *Storage) ListInstanceIDs() ([]string, error) {
+	all, err := s.ListInstanceData()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(all))
+	for i, d := range all {
+		ids[i] = d.GetStableID()
+	}
+	return ids, nil
 }
 
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
@@ -378,11 +543,14 @@ func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool)
 	return nil
 }
 
-// UpdateInstancePRNumber is intentionally a no-op: PR number is not persisted in
-// the ent schema. Callers (e.g. PRStatusPoller) call this as a persistence hook,
-// but no DB write occurs.
-func (s *Storage) UpdateInstancePRNumber(_ string, _ int) error {
-	return nil
+// UpdateInstancePRNumber persists the discovered PR number for a session so it
+// survives restarts and avoids repeated branch-name lookups in PRStatusPoller.
+func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
+	repo, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil
+	}
+	return repo.UpdateGitHubPRNumber(context.Background(), title, prNumber)
 }
 
 // UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
@@ -390,6 +558,36 @@ func (s *Storage) UpdateInstancePRNumber(_ string, _ int) error {
 // but no DB write occurs.
 func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
 	return nil
+}
+
+// UpdateInstanceArtifacts persists the JSON-encoded artifact blob for a session.
+// Only the session_artifacts column is touched; all other fields are unchanged.
+func (s *Storage) UpdateInstanceArtifacts(title string, blob string) error {
+	repo, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil
+	}
+	return repo.UpdateSessionArtifacts(context.Background(), title, blob)
+}
+
+// GetInstanceArtifacts loads the raw JSON-encoded artifact blob for a session.
+// Returns ("", nil) if the session exists but has no artifacts yet.
+func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
+	repo, ok := s.repo.(*EntRepository)
+	if !ok {
+		return "", nil
+	}
+	return repo.GetSessionArtifacts(context.Background(), title)
+}
+
+// GetAllInstanceArtifacts returns a map of title → raw artifacts JSON for all sessions
+// that have stored artifacts. Single bulk query (M-4 fix).
+func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
+	repo, ok := s.repo.(*EntRepository)
+	if !ok {
+		return map[string]string{}, nil
+	}
+	return repo.GetAllSessionArtifacts(context.Background())
 }
 
 // --- Session-first convenience methods (Task 2.5) ---
@@ -514,6 +712,11 @@ func (s *Storage) ListBacklogItems(ctx context.Context, filter BacklogItemFilter
 	return s.repo.ListBacklogItems(ctx, filter)
 }
 
+// ListBacklogItemSummaries returns lightweight summaries for list views.
+func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemSummary, error) {
+	return s.repo.ListBacklogItemSummaries(ctx, filter)
+}
+
 // UpdateBacklogItem modifies an existing backlog item.
 func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
@@ -524,9 +727,144 @@ func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogIt
 	return s.repo.ArchiveBacklogItem(ctx, id)
 }
 
+// DeleteBacklogItem permanently removes an item and all its child records.
+func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
+	return s.repo.DeleteBacklogItem(ctx, id)
+}
+
 // TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
+func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
+}
+
+// SetBacklogItemPRAndTransition is the shared primary-write path for
+// recording a PR that genuinely exists on GitHub against a backlog item and
+// moving it review -> pr_pending. Used by both the agent-initiated
+// report_pr_created MCP tool (server/mcp/tools_backlog.go, Epic 3.1) and the
+// reconciliation backstop detector (BacklogLifecycleListener.
+// reconcileOrphanedAgentPRs, Epic 3.2) — see "PR Metadata Capture Fix",
+// project_plans/backlog-agent-communication/implementation/plan.md.
+//
+// Unlike AppendProgressNote's best-effort discipline, a failure persisting
+// the PR fields or performing the transition is returned to the caller, not
+// merely logged — BUG-040's root cause #1 was exactly this class of silent
+// failure (a write whose result was never checked against the invariant it
+// protects), and this is the primitive that must not repeat it.
+//
+// Idempotent: if the item is already pr_pending with this exact prNumber,
+// this is a no-op success — a retried report_pr_created call (network blip)
+// or the reconciliation backstop re-scanning an item it already fixed on a
+// prior tick must not error.
+func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prURL string, prNumber int, summary string) error {
+	item, err := s.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if item.Status == string(BacklogStatusPRPending) && item.PrNumber == prNumber && prNumber > 0 {
+		return nil // already recorded — idempotent no-op
+	}
+
+	prURLCopy, prNumCopy := prURL, prNumber
+	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
+		PrURL:    &prURLCopy,
+		PrNumber: &prNumCopy,
+	}, nil); err != nil {
+		return fmt.Errorf("persist PR fields: %w", err)
+	}
+
+	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
+	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending: %w", err)
+	}
+
+	// Best-effort from here: the primary contract (PR fields persisted, item
+	// moved to pr_pending) already succeeded above. A failure enriching the
+	// history or resolving a stale stuck row must not roll that back or be
+	// reported as this call's own failure — mirrors report_progress's
+	// primary-write/secondary-enrichment split (AppendProgressNote there).
+	if appendErr := s.AppendProgressNote(ctx, itemID, -1, summary, "pr_created"); appendErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to append summary note item=%s: %v", itemID, appendErr)
+	}
+	if _, resolveErr := s.ResolveStuck(ctx, itemID, domain.StuckReasonPushFailed); resolveErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve push_failed row item=%s: %v", itemID, resolveErr)
+	}
+	if _, resolveErr := s.ResolveStuck(ctx, itemID, domain.StuckReasonAbandonedReview); resolveErr != nil {
+		log.WarningLog.Printf("[Storage] SetBacklogItemPRAndTransition: failed to resolve abandoned_review row item=%s: %v", itemID, resolveErr)
+	}
+
+	return nil
+}
+
+// FindDoneItemsOlderThan returns backlog items in "done" status whose most
+// recent done-transition happened at/before cutoff. Thin passthrough to the
+// ent-backed repository (same rationale as MarkStuck below) — returns
+// nil, nil for backends that don't support it (e.g. an in-memory test
+// double), never an error.
+func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.FindDoneItemsOlderThan(ctx, cutoff)
+}
+
+// --- BacklogStuckState (durable stuck-state read surface) ---
+
+// FindOpenStuckStates returns every open (unresolved, un-snoozed)
+// BacklogStuckState row, joined with rendering-relevant item fields. Returns
+// an empty slice (no error) when the backend does not support stuck-state
+// queries (e.g. an in-memory test double).
+func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return er.FindOpenStuckStates(ctx)
+}
+
+// SnoozeStuckState sets snoozed_until on an open BacklogStuckState row for
+// (itemID, reason). Returns false, nil when the backend does not support
+// stuck-state writes or no matching open row exists — never an error for a
+// missing row.
+func (s *Storage) SnoozeStuckState(ctx context.Context, itemID string, reason domain.StuckReason, until time.Time) (bool, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return false, nil
+	}
+	return er.SnoozeStuckState(ctx, itemID, reason, until)
+}
+
+// MarkStuck opens/refreshes/reopens a durable BacklogStuckState row for
+// (itemID, reason). Thin passthrough so callers outside package session
+// (e.g. server/services, which cannot reach the unexported repo field) can
+// write stuck state. Returns false, nil when the backend does not support
+// stuck-state writes — never an error for an unsupported backend.
+func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (bool, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return false, nil
+	}
+	return er.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
+}
+
+// ResolveStuck atomically, idempotently closes an open BacklogStuckState row
+// for (itemID, reason). Thin passthrough, same rationale as MarkStuck above.
+func (s *Storage) ResolveStuck(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return false, nil
+	}
+	return er.ResolveStuck(ctx, itemID, reason)
+}
+
+// MarkStuckNotified sets notified_at=now on an open, not-yet-notified stuck
+// row for (itemID, reason). Thin passthrough, same rationale as MarkStuck above.
+func (s *Storage) MarkStuckNotified(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return false, nil
+	}
+	return er.MarkStuckNotified(ctx, itemID, reason)
 }
 
 // --- ItemSource ---
@@ -551,24 +889,64 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 	return s.repo.DeleteItemSource(ctx, id)
 }
 
+// ListSourceSyncEvents returns sync history events for an item source, most
+// recent first. Direct EntRepository delegation, like GetItemSession below.
+func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, false, ErrNotFound
+	}
+	return er.ListSourceSyncEvents(ctx, sourceID)
+}
+
+// CreateSourceSyncEvent records a sync run for an item source. Direct EntRepository
+// delegation, like ListSourceSyncEvents above.
+func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAfter string, created, updated, skipped, errored int, errMsg string, startedAt, finishedAt time.Time) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+}
+
 // --- ItemSession (direct EntRepository delegation) ---
 
 // GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).
-func (s *Storage) GetItemSession(ctx context.Context, id string) (*ent.ItemSession, error) {
+func (s *Storage) GetItemSession(ctx context.Context, id string) (ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, ErrNotFound
+		return ItemSessionSummary{}, ErrNotFound
 	}
 	return er.GetItemSession(ctx, id)
 }
 
-// GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
-func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (*ent.ItemSession, error) {
+// GetBaseCommitSHAsForSessions returns a sessionUUID→base_commit_sha map for the given UUIDs.
+func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []string) (map[string]string, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, ErrNotFound
+		return map[string]string{}, nil
+	}
+	return er.GetBaseCommitSHAsForSessions(ctx, uuids)
+}
+
+// GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
+func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ItemSessionSummary{}, ErrNotFound
 	}
 	return er.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
+// the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
+// the session is not found.
+func (s *Storage) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (GitWorktreeData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return GitWorktreeData{}, nil
+	}
+	return er.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 }
 
 // UpdateItemSessionTriageResult stores the triage result JSON payload on an ItemSession.
@@ -580,6 +958,16 @@ func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, 
 	return er.UpdateItemSessionTriageResult(ctx, id, triageResult)
 }
 
+// UpdateItemSessionVerificationNotes stores verification evidence (commands run, manual
+// checks performed) reported via request_review on an ItemSession.
+func (s *Storage) UpdateItemSessionVerificationNotes(ctx context.Context, id string, verificationNotes string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionVerificationNotes(ctx, id, verificationNotes)
+}
+
 // UpdateItemSessionStarted records the start time for an ItemSession.
 func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, startedAt time.Time) error {
 	er, ok := s.repo.(*EntRepository)
@@ -587,6 +975,15 @@ func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, start
 		return fmt.Errorf("item session updates not supported by this storage backend")
 	}
 	return er.UpdateItemSessionStarted(ctx, id, startedAt)
+}
+
+// UpdateItemSessionGitActivity records the latest commit SHA and related fields on an ItemSession.
+func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, sha, msg string, commitAt time.Time, commitCount int) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionGitActivity(ctx, id, sha, msg, commitAt, commitCount)
 }
 
 // UpdateItemSessionEnded records the end time for an ItemSession.
@@ -600,17 +997,28 @@ func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
-func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (*ent.ItemSession, error) {
+func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, ErrNotFound
+		return ItemSessionSummary{}, ErrNotFound
 	}
 	return er.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
 }
 
+// GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
+// for the session whose title matches the given UUID. Returns "" when the session
+// has no ClaudeSession, and ErrNotFound when no session matches.
+func (s *Storage) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return "", ErrNotFound
+	}
+	return er.GetClaudeConversationUUIDBySessionUUID(ctx, sessionUUID)
+}
+
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
 // ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
-func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (string, error) {
+func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
 		return "", nil
@@ -618,11 +1026,21 @@ func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID 
 	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
 }
 
-// SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
-func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) (*ent.ReviewVerdict, error) {
+// GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
+// most recent first. Returns nil (not an error) when the repo isn't ent-backed.
+func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, fmt.Errorf("review verdicts not supported by this storage backend")
+		return nil, nil
+	}
+	return er.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
+}
+
+// SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
+func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("review verdicts not supported by this storage backend")
 	}
 	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
 }
@@ -636,11 +1054,31 @@ func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, cr
 	return er.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
-// CreateItemSession creates a new ItemSession linked to a BacklogItem.
-func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (*ent.ItemSession, error) {
+// AppendProgressNote records a single report_progress call as an immutable history
+// entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
+func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, fmt.Errorf("item sessions not supported by this storage backend")
+		return fmt.Errorf("progress note history not supported by this storage backend")
+	}
+	return er.AppendProgressNote(ctx, itemID, criterionIndex, note, status)
+}
+
+// ListProgressNotesForItem returns the full append-only history of report_progress
+// calls for a backlog item, ordered by created_at ascending.
+func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.ListProgressNotesForItem(ctx, itemID)
+}
+
+// CreateItemSession creates a new ItemSession linked to a BacklogItem.
+func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ItemSessionSummary{}, fmt.Errorf("item sessions not supported by this storage backend")
 	}
 	return er.CreateItemSession(ctx, data)
 }
@@ -648,16 +1086,16 @@ func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (
 // CreateItemSessionWithVerdict atomically creates an ItemSession and its initial
 // ReviewVerdict in a single transaction. Falls back gracefully if the backend is
 // not ent-based.
-func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (*ent.ItemSession, *ent.ReviewVerdict, error) {
+func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
-		return nil, nil, fmt.Errorf("item sessions not supported by this storage backend")
+		return ItemSessionSummary{}, fmt.Errorf("item sessions not supported by this storage backend")
 	}
 	return er.CreateItemSessionWithVerdict(ctx, isData, verdict)
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
-func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]*ent.ItemSession, error) {
+func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
 	er, ok := s.repo.(*EntRepository)
 	if !ok {
 		return nil, ErrNotFound
@@ -672,4 +1110,170 @@ func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, s
 		return fmt.Errorf("item session updates not supported by this storage backend")
 	}
 	return er.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)
+}
+
+// GetAllItemSessionsWithBacklogInfo returns all item sessions joined with backlog item metadata.
+// Delegates to EntRepository; returns an error for non-ent backends.
+func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, fmt.Errorf("item sessions not supported by this storage backend")
+	}
+	return er.GetAllItemSessionsWithBacklogInfo(ctx)
+}
+
+// --- Session Goal ---
+
+// SetSessionGoal upserts the goal for a session (1:1 per session_uuid).
+// If a goal already exists for the session, it is replaced.
+// workspaceKey, when non-empty, is stamped in the same upsert as the goal write (rather
+// than a separate follow-up UPDATE) so the two never diverge on a crash between writes.
+func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []TaskNode, setBy string, workspaceKey string) (*SessionGoalData, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return nil, fmt.Errorf("goal storage not supported by this backend")
+	}
+	if err := validateTasks(tasks); err != nil {
+		return nil, err
+	}
+	tasksJSON, err := EncodeTasks(tasks)
+	if err != nil {
+		return nil, err
+	}
+	create := client.SessionGoal.Create().
+		SetSessionUUID(sessionUUID).
+		SetGoal(goal).
+		SetStatus(status).
+		SetSetBy(setBy).
+		SetTasks(tasksJSON).
+		SetNillableWorkspaceKey(nonEmptyPtr(workspaceKey))
+	err = create.
+		OnConflictColumns("session_uuid").
+		Update(func(u *ent.SessionGoalUpsert) {
+			u.SetGoal(goal)
+			u.SetStatus(status)
+			u.SetSetBy(setBy)
+			u.SetTasks(tasksJSON)
+			u.SetUpdatedAt(time.Now())
+			if workspaceKey != "" {
+				u.SetWorkspaceKey(workspaceKey)
+			}
+		}).
+		Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert session goal: %w", err)
+	}
+	return s.GetSessionGoal(ctx, sessionUUID)
+}
+
+// nonEmptyPtr returns nil for "" and &s otherwise, for SetNillableX ent builder calls.
+func nonEmptyPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// GetSessionGoal retrieves the goal for a session by session UUID.
+// Returns ErrNotFound if no goal has been set for the session.
+func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*SessionGoalData, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return nil, ErrNotFound
+	}
+	g, err := client.SessionGoal.Query().
+		Where(sessiongoal.SessionUUID(sessionUUID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get session goal: %w", err)
+	}
+	tasks, decodeErr := DecodeTasks(g.Tasks)
+	if decodeErr != nil {
+		log.Warn("GetSessionGoal: failed to decode tasks JSON", "session_uuid", sessionUUID, "err", decodeErr)
+		tasks = []TaskNode{}
+	}
+	return &SessionGoalData{
+		UUID:        g.ID.String(),
+		SessionUUID: g.SessionUUID,
+		Goal:        g.Goal,
+		Status:      g.Status,
+		Tasks:       tasks,
+		SetBy:       g.SetBy,
+		UpdatedAt:   g.UpdatedAt,
+	}, nil
+}
+
+// UpdateSessionTaskStatus loads the goal for a session, finds the task by ID,
+// updates its status, and saves the goal back.
+// Returns ErrNotFound if no goal exists, or an error if task_id is not found in the tree.
+// The read-modify-write is wrapped in a transaction to prevent concurrent update races.
+func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID string, taskID string, newStatus string) (*SessionGoalData, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return nil, fmt.Errorf("goal storage not supported by this backend")
+	}
+
+	tx, err := client.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	g, err := tx.SessionGoal.Query().
+		Where(sessiongoal.SessionUUID(sessionUUID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get session goal: %w", err)
+	}
+
+	existingTasks, decodeErr := DecodeTasks(g.Tasks)
+	if decodeErr != nil {
+		log.Warn("UpdateSessionTaskStatus: failed to decode tasks JSON", "session_uuid", sessionUUID, "err", decodeErr)
+		existingTasks = []TaskNode{}
+	}
+
+	updated, found := findAndUpdateTask(existingTasks, taskID, newStatus)
+	if !found {
+		err = fmt.Errorf("task %q not found in goal tree", taskID)
+		return nil, err
+	}
+
+	tasksJSON, encErr := EncodeTasks(updated)
+	if encErr != nil {
+		err = encErr
+		return nil, err
+	}
+
+	if _, saveErr := tx.SessionGoal.UpdateOne(g).
+		SetTasks(tasksJSON).
+		SetUpdatedAt(time.Now()).
+		Save(ctx); saveErr != nil {
+		err = saveErr
+		return nil, fmt.Errorf("failed to save updated tasks: %w", err)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		err = commitErr
+		return nil, fmt.Errorf("failed to commit task status update: %w", err)
+	}
+
+	return &SessionGoalData{
+		UUID:        g.ID.String(),
+		SessionUUID: g.SessionUUID,
+		Goal:        g.Goal,
+		Status:      g.Status,
+		Tasks:       updated,
+		SetBy:       g.SetBy,
+		UpdatedAt:   time.Now(),
+	}, nil
 }

@@ -1,7 +1,10 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,7 +135,99 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 	}
 
 	assert.True(t, extractionAttempted,
-		"extraction must be attempted when claudeSession is nil")
-	// claudeSession remains nil because tmux was not running.
-	assert.Nil(t, inst.claudeSession)
+		"tryExtractConversationUUID must be reachable when SwitchWorkspace's guard fires")
+}
+
+// TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear is the
+// regression test for the cold-restore hardening in startLocked/start
+// (instance.go): after a cold restore clears claudeSession.ConversationUUID
+// (to avoid blindly trusting a possibly-stale ID — see the "source of truth"
+// comment there), tryExtractConversationUUID must be able to immediately
+// repopulate it via the path-based fallback (no live tmux pane required),
+// which is exactly what the fix now calls synchronously right after clearing.
+// Without this, an item whose conversation UUID sits blank waiting on some
+// unrelated lazy caller (ClaudeAdapter.Import, SwitchWorkspace, ...) would
+// lose resumability entirely if the process crashed a second time first.
+func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing.T) {
+	tempHome := t.TempDir()
+	projectPath := "/fake/project/path"
+	const conversationUUID = "550e8400-e29b-41d4-a716-446655440000"
+
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(projectPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	jsonlPath := filepath.Join(projectDir, conversationUUID+".jsonl")
+	require.NoError(t, os.WriteFile(jsonlPath, []byte(`{"type":"user"}`+"\n"), 0o644))
+
+	inst := &Instance{
+		Title:           "test-path-fallback-repopulate",
+		Path:            projectPath,
+		historyDetector: NewHistoryFileDetectorWithHomeDir(nil, tempHome),
+		// Simulates the state right after a cold restore clears the old ID —
+		// no live tmux pane, so the fast path is skipped and DetectByPath runs.
+		claudeSession: &ClaudeSessionData{ConversationUUID: ""},
+	}
+
+	inst.tryExtractConversationUUID()
+
+	require.NotNil(t, inst.claudeSession)
+	assert.Equal(t, conversationUUID, inst.claudeSession.ConversationUUID,
+		"ConversationUUID must be repopulated from the jsonl file discovered via path fallback")
+	assert.Equal(t, jsonlPath, inst.HistoryFilePath,
+		"HistoryFilePath must point at the discovered jsonl file")
+}
+
+// TestSwitchWorkspace_DoesNotDeadlockOnStartCall is a regression test ensuring
+// SwitchWorkspace does not deadlock when it needs to call Start() internally.
+//
+// Prior to Epic 4, SwitchWorkspace held i.stateMutex.Lock() across its entire body
+// including calls to i.Start(false), which also acquires i.stateMutex — a reentrant
+// deadlock on a non-reentrant mutex.
+//
+// After Epic 4, both SwitchWorkspace and Start route through the actor mailbox via
+// sendSyncErr, eliminating stateMutex from the hot path. The test is re-targeted to
+// use *LiveInstance so the actor goroutine is present and the test reflects real
+// production usage.
+//
+// The instance has no VCS in its temp directory, so VCS detection fails and
+// SwitchWorkspace takes the SessionTypeDirectory fallback path, exercising the
+// startLocked call inside switchWorkspaceLocked.
+func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a (mocked) tmux session")
+	}
+
+	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
+		WithSessionType(SessionTypeDirectory).
+		Build()
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
+
+	// Wrap in LiveInstance so the actor goroutine is present (production-realistic).
+	li := NewLiveInstance(instance)
+	defer li.Stop()
+
+	// Simulate an already-running session so SwitchWorkspace's guard passes.
+	instance.started.Store(true)
+	instance.Status = Active
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Result/error are not asserted: the temp dir has no VCS, so this may
+		// well return an error. The only thing this test verifies is that the
+		// call returns at all instead of deadlocking.
+		_, _ = li.SwitchWorkspace(WorkspaceSwitchRequest{
+			Type:   SwitchTypeRevision,
+			Target: "some-branch",
+		})
+	}()
+
+	select {
+	case <-done:
+		// Returned without deadlocking - the actor-based fix holds.
+	case <-time.After(10 * time.Second):
+		t.Fatal("SwitchWorkspace did not return within 10s - actor deadlock in switchWorkspaceLocked (see instance_workspace.go)")
+	}
 }

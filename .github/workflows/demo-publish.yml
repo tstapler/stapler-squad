@@ -5,11 +5,7 @@ name: Publish Demo GIFs
 # paths-ignore prevents this from re-triggering on its own [skip ci] commit.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/demos/**'
-      - '**.gif'
+  workflow_dispatch:
 
 jobs:
   publish-demos:
@@ -20,6 +16,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -124,4 +123,4 @@ jobs:
           git add docs/demos/
           git diff --cached --quiet && echo "No GIF changes to commit" && exit 0
           git commit -m "chore(demos): update E2E feature GIFs [skip ci]"
-          git push
+          for i in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 5; done

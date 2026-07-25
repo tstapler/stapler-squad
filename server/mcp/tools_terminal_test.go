@@ -246,3 +246,219 @@ func TestWaitForOutputTimeout(t *testing.T) {
 		t.Error("expected non-empty output on timeout")
 	}
 }
+
+// ─── U-GO-32: TestSteerSessionMCP_rejectsEmptyMessage ────────────────────────
+
+func TestSteerSessionMCP_rejectsEmptyMessage(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    "",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false for empty message, got true")
+	}
+}
+
+// ─── U-GO-33: TestSteerSessionMCP_rejectsMessageExceeding4096Bytes ────────────
+
+func TestSteerSessionMCP_rejectsMessageExceeding4096Bytes(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	oversized := strings.Repeat("x", maxInputBytes+1) // 4097 bytes
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    oversized,
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false for oversized message, got true")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object")
+	}
+	code, _ := errObj["code"].(string)
+	if code != "MESSAGE_TOO_LONG" {
+		t.Errorf("expected MESSAGE_TOO_LONG error code, got %q", code)
+	}
+}
+
+// ─── U-GO-34: TestSteerSessionMCP_stripsNullBytes ─────────────────────────────
+
+func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	// Message with only null bytes should be rejected after sanitization.
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    "\x00\x00\x00",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	// After stripping null bytes, message is empty → should be rejected.
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false after null byte stripping results in empty message")
+	}
+}
+
+// ─── U-GO-31 note ─────────────────────────────────────────────────────────────
+// TestSteerSessionMCP_sendsMessageWithNewline requires a live PTY session and
+// cannot be tested without tmux in unit tests. The validation tests above cover
+// the sanitization and error-path behavior. The full send path (SendKeys+"\n")
+// is verified by integration/E2E tests.
+
+// ─── U-GO-35: TestSteerSessionMCP_passesValidationAndReachesSendKeys ──────────
+// Verifies that a valid message passes all validation and reaches the SendKeys
+// call. Since SendKeys requires a live PTY, the call will return an internal
+// error — but receiving INTERNAL_ERROR (not a validation error) proves the happy
+// path was reached.
+
+func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
+	inst := &session.Instance{
+		Title:   "active-session",
+		Status:  session.Active,
+		Program: "claude",
+	}
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "active-session",
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	// All validation passed; SendKeys will fail because the instance has no live
+	// PTY (not started). The response must be an INTERNAL_ERROR, not a validation
+	// rejection — proving the message reached the SendKeys call.
+	if success, _ := m["success"].(bool); success {
+		// A real active session would return success — that's the true happy path.
+		// In unit tests without tmux we accept success too (if somehow it worked).
+		return
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	code, _ := errObj["code"].(string)
+	// Must be INTERNAL_ERROR or PTY_WRITE_TIMEOUT — not a validation rejection.
+	if code == ErrInvalidArgument || code == "MESSAGE_TOO_LONG" || code == ErrSessionNotFound {
+		t.Errorf("steerSession returned validation error %q after valid message; expected SendKeys to be reached", code)
+	}
+}
+
+// --- BUG-035: findInstance must prefer the live instance over LoadInstances() ---
+
+// fakeLiveInstanceFinder is a test double implementing liveInstanceFinder,
+// returning a scripted instance (or nil) per session ID.
+type fakeLiveInstanceFinder struct {
+	instances map[string]*session.Instance
+}
+
+func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+	return f.instances[id]
+}
+
+// TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt is the
+// direct regression test for BUG-035: every MCP tool that mutates a
+// session's terminal (write_to_session, send_control, run_command,
+// steer_session) called Storage.LoadInstances() on every single invocation
+// via findInstance — but LoadInstances() always defers Start() ("so a bulk
+// load (server startup) doesn't block"), so the Instance handed back was
+// never the live one and SendKeys deterministically failed with "instance
+// has not been started", regardless of how long the server had actually
+// been running. findInstance must now prefer th.live (the real live
+// instance) over the LoadInstances()-reconstructed one when both exist —
+// proven here by returning two distinguishable instances (different
+// WorkingDir) for the same session ID from each source and asserting the
+// live one wins.
+func TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt(t *testing.T) {
+	liveInst := &session.Instance{Title: "s1", WorkingDir: "/live/path"}
+	staleInst := &session.Instance{Title: "s1", WorkingDir: "/stale/reconstructed/path"}
+
+	th := &terminalHandlers{
+		store: &stubStore{instances: []*session.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"s1": liveInst}},
+	}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != liveInst {
+		t.Errorf("expected the live instance (WorkingDir=%q) to be returned, got WorkingDir=%q", liveInst.WorkingDir, got.WorkingDir)
+	}
+}
+
+// TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt
+// verifies the fallback path: a session th.live doesn't track (e.g. outside
+// the review queue poller's scope) must still be found via the pre-fix
+// LoadInstances() path rather than returning SESSION_NOT_FOUND.
+func TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt(t *testing.T) {
+	staleInst := &session.Instance{Title: "s1"}
+	th := &terminalHandlers{
+		store: &stubStore{instances: []*session.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{}}, // wired, but doesn't have "s1"
+	}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != staleInst {
+		t.Error("expected fallback to the LoadInstances()-sourced instance when the live finder doesn't have it")
+	}
+}
+
+// TestFindInstance_should_fallBackToStore_When_LiveFinderNil verifies the
+// nil-safety guard — th.live unset (as in every pre-existing test in this
+// file) must behave exactly as before this fix, not panic.
+func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
+	staleInst := &session.Instance{Title: "s1"}
+	th := &terminalHandlers{store: &stubStore{instances: []*session.Instance{staleInst}}}
+
+	got, errRes := th.findInstance("s1")
+	if errRes != nil {
+		t.Fatalf("findInstance returned an error result: %+v", errRes)
+	}
+	if got != staleInst {
+		t.Error("expected the LoadInstances()-sourced instance when th.live is nil")
+	}
+}

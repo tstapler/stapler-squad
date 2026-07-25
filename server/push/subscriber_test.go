@@ -3,7 +3,6 @@ package push
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -32,11 +31,11 @@ func TestShouldNotifyTable(t *testing.T) {
 		{"urgent priority generic → push", events.EventNotification, priorityUrgent, typeUnspecified, 0, true}, // UT-2.1b [BUG-2 fix]
 		{"low priority APPROVAL → push", events.EventNotification, priorityLow, typeApproval, 0, true},         // UT-2.2 [R5]
 		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, true},       // UT-2.3
-		// EventSessionStatusChanged cases
-		{"session stopped → push", events.EventSessionStatusChanged, 0, 0, session.Stopped, true},
+		// EventSessionUpdated cases
+		{"session stopped → push", events.EventSessionUpdated, 0, 0, session.Stopped, true},
 		// NeedsApproval is no longer a lifecycle status (it is a sub-status in Epic 3).
-		// Approval notifications are delivered via EventNotification, not EventSessionStatusChanged.
-		{"session active → no push", events.EventSessionStatusChanged, 0, 0, session.Active, false},
+		// Approval notifications are delivered via EventNotification, not EventSessionUpdated.
+		{"session active → no push", events.EventSessionUpdated, 0, 0, session.Active, false},
 		// Other event types
 		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, false},
 	}
@@ -53,7 +52,7 @@ func TestNotificationURLUsesSessionID(t *testing.T) {
 	notification := buildNotificationForSession(&session.Instance{
 		ID:    "session-abc-123",
 		Title: "My Session (renamed)",
-	}, events.EventSessionStatusChanged)
+	}, events.EventSessionUpdated)
 
 	url, ok := notification.Data["url"].(string)
 	assert.True(t, ok, "url must be a string in Data")
@@ -66,7 +65,7 @@ func TestNotificationTagUsesSessionID(t *testing.T) {
 	notification := buildNotificationForSession(&session.Instance{
 		ID:    "session-abc-123",
 		Title: "Renamed Title",
-	}, events.EventSessionStatusChanged)
+	}, events.EventSessionUpdated)
 
 	assert.Contains(t, notification.Tag, "session-abc-123")
 	assert.NotContains(t, notification.Tag, "Renamed Title")
@@ -206,24 +205,17 @@ func TestSubscriberExitsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Record count before starting, then immediately start subscriber.
-	// We capture before+StartDeliverySubscriber atomically so the baseline
-	// is not contaminated by goroutines from other parallel tests.
-	before := runtime.NumGoroutine()
-	StartDeliverySubscriber(ctx, bus, []Notifier{n})
+	done := StartDeliverySubscriber(ctx, bus, []Notifier{n})
 
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		return runtime.NumGoroutine() > before
-	}, testutil.FastWaitConfig()))
-	assert.Greater(t, runtime.NumGoroutine(), before)
-
-	// Cancel the context and poll until the goroutine exits.
+	// Cancel the context and wait for the done channel to close — this is an exact
+	// signal from the goroutine itself, not a flaky goroutine-count heuristic.
 	cancel()
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		return runtime.NumGoroutine() <= before+1
-	}, testutil.FastWaitConfig()))
-	assert.LessOrEqual(t, runtime.NumGoroutine(), before+1,
-		"subscriber goroutine should exit after context cancel")
+	select {
+	case <-done:
+		// goroutine exited cleanly
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber goroutine should exit after context cancel")
+	}
 }
 
 // IT-2.1 — APPROVAL_NEEDED at LOW priority triggers delivery [R5]
@@ -270,6 +262,46 @@ func TestUrgentPriorityTriggersPush(t *testing.T) {
 		return n.CallCount() >= 1
 	}, testutil.FastWaitConfig()))
 	assert.Equal(t, 1, n.CallCount(), "URGENT priority must trigger push")
+}
+
+// IT-4.1 — EventSessionUpdated with Status=Stopped triggers push notification
+func TestSessionUpdatedStoppedTriggersPush(t *testing.T) {
+	bus := events.NewEventBus(10)
+	n := &mockNotifier{name: "test"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	StartDeliverySubscriber(ctx, bus, []Notifier{n})
+
+	inst := &session.Instance{ID: "sess-1", Title: "My Session", Status: session.Stopped}
+	bus.Publish(&events.Event{
+		Type:    events.EventSessionUpdated,
+		Session: inst,
+	})
+
+	require.NoError(t, testutil.WaitForCondition(func() bool {
+		return n.CallCount() >= 1
+	}, testutil.FastWaitConfig()))
+	assert.Equal(t, 1, n.CallCount(), "SessionUpdated with Stopped must trigger push")
+}
+
+// IT-4.2 — EventSessionUpdated with Status=Active does NOT trigger push
+func TestSessionUpdatedActiveSuppressesPush(t *testing.T) {
+	bus := events.NewEventBus(10)
+	n := &mockNotifier{name: "test"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	StartDeliverySubscriber(ctx, bus, []Notifier{n})
+
+	inst := &session.Instance{ID: "sess-2", Title: "Active Session", Status: session.Active}
+	bus.Publish(&events.Event{
+		Type:    events.EventSessionUpdated,
+		Session: inst,
+	})
+
+	<-ctx.Done()
+	assert.Equal(t, 0, n.CallCount(), "SessionUpdated with Active must NOT trigger push")
 }
 
 // ─── test helpers ─────────────────────────────────────────────────────────────

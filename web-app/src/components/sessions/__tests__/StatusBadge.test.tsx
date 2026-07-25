@@ -3,18 +3,19 @@
  *
  * Covers:
  *  - Renders with AttentionReason: shows correct label and aria-label
- *  - Renders with detectedStatus string: shows correct label
+ *  - Renders with detectedStatus typed enum: shows correct label
  *  - Returns null when neither reason nor detectedStatus given
  *  - Icon has aria-hidden="true"
  *  - Title shows context when provided
  *  - WAITING_FOR_USER and INPUT_REQUIRED render successfully
  *  - getAttentionReasonInfo: maps all known reasons to non-empty labels
+ *  - getDetectedStatusInfo: maps all known DetectedStatus values correctly
  */
 
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { StatusBadge, getAttentionReasonInfo } from "../StatusBadge";
-import { AttentionReason } from "@/gen/session/v1/types_pb";
+import { StatusBadge, getAttentionReasonInfo, getDetectedStatusInfo } from "../StatusBadge";
+import { AttentionReason, DetectedStatus } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,9 +70,9 @@ describe("StatusBadge with AttentionReason", () => {
     expect(screen.getByText("Stale")).toBeInTheDocument();
   });
 
-  it("renders Waiting label for WAITING_FOR_USER", () => {
+  it("renders Your Input Needed label for WAITING_FOR_USER", () => {
     renderBadge({ reason: AttentionReason.WAITING_FOR_USER });
-    expect(screen.getByText("Waiting")).toBeInTheDocument();
+    expect(screen.getByText("Your Input Needed")).toBeInTheDocument();
   });
 
   it("sets aria-label matching the reason label", () => {
@@ -97,28 +98,48 @@ describe("StatusBadge with AttentionReason", () => {
 });
 
 // ---------------------------------------------------------------------------
-// detectedStatus string rendering
+// detectedStatus typed enum rendering
 // ---------------------------------------------------------------------------
 
 describe("StatusBadge with detectedStatus", () => {
-  it("renders Ready label for 'Ready'", () => {
-    renderBadge({ detectedStatus: "Ready" });
+  it("renders Ready label for DetectedStatus.READY", () => {
+    renderBadge({ detectedStatus: DetectedStatus.READY });
     expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
-  it("renders Tests Failing label for 'Tests Failing'", () => {
-    renderBadge({ detectedStatus: "Tests Failing" });
+  it("renders Tests Failing label for DetectedStatus.TESTS_FAILING", () => {
+    renderBadge({ detectedStatus: DetectedStatus.TESTS_FAILING });
     expect(screen.getByText("Tests Failing")).toBeInTheDocument();
   });
 
-  it("renders Processing label for 'Processing'", () => {
-    renderBadge({ detectedStatus: "Processing" });
+  it("renders Processing label for DetectedStatus.PROCESSING", () => {
+    renderBadge({ detectedStatus: DetectedStatus.PROCESSING });
     expect(screen.getByText("Processing")).toBeInTheDocument();
   });
 
-  it("renders unknown status string as-is for unrecognised status", () => {
-    renderBadge({ detectedStatus: "SomeNewStatus" });
-    expect(screen.getByText("SomeNewStatus")).toBeInTheDocument();
+  it("renders Executing label for DetectedStatus.EXECUTING", () => {
+    renderBadge({ detectedStatus: DetectedStatus.EXECUTING });
+    expect(screen.getByText("Executing")).toBeInTheDocument();
+  });
+
+  it("renders Needs Approval label for DetectedStatus.NEEDS_APPROVAL", () => {
+    renderBadge({ detectedStatus: DetectedStatus.NEEDS_APPROVAL });
+    expect(screen.getByText("Needs Approval")).toBeInTheDocument();
+  });
+
+  it("renders Input Required label for DetectedStatus.INPUT_REQUIRED", () => {
+    renderBadge({ detectedStatus: DetectedStatus.INPUT_REQUIRED });
+    expect(screen.getByText("Input Required")).toBeInTheDocument();
+  });
+
+  it("renders null (nothing) for DetectedStatus.UNKNOWN", () => {
+    const { container } = renderBadge({ detectedStatus: DetectedStatus.UNKNOWN });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders null (nothing) for DetectedStatus.UNSPECIFIED", () => {
+    const { container } = renderBadge({ detectedStatus: DetectedStatus.UNSPECIFIED });
+    expect(container).toBeEmptyDOMElement();
   });
 });
 
@@ -157,5 +178,40 @@ describe("getAttentionReasonInfo", () => {
       expect(info.icon).toBeTruthy();
       expect(info.variant).toBeTruthy();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getDetectedStatusInfo helper
+// ---------------------------------------------------------------------------
+
+describe("getDetectedStatusInfo", () => {
+  const badgeStatuses = [
+    { status: DetectedStatus.READY, expectedLabel: "Ready" },
+    { status: DetectedStatus.PROCESSING, expectedLabel: "Processing" },
+    { status: DetectedStatus.EXECUTING, expectedLabel: "Executing" },
+    { status: DetectedStatus.NEEDS_APPROVAL, expectedLabel: "Needs Approval" },
+    { status: DetectedStatus.INPUT_REQUIRED, expectedLabel: "Input Required" },
+    { status: DetectedStatus.ERROR, expectedLabel: "Error" },
+    { status: DetectedStatus.TESTS_FAILING, expectedLabel: "Tests Failing" },
+    { status: DetectedStatus.IDLE, expectedLabel: "Idle" },
+    { status: DetectedStatus.SUCCESS, expectedLabel: "Success" },
+    { status: DetectedStatus.WAITING_FOR_AGENT, expectedLabel: "Waiting for Agent" },
+  ];
+
+  badgeStatuses.forEach(({ status, expectedLabel }) => {
+    it(`returns label "${expectedLabel}" for DetectedStatus.${DetectedStatus[status]}`, () => {
+      const info = getDetectedStatusInfo(status);
+      expect(info).not.toBeNull();
+      expect(info!.label).toBe(expectedLabel);
+    });
+  });
+
+  it("returns null for DetectedStatus.UNKNOWN", () => {
+    expect(getDetectedStatusInfo(DetectedStatus.UNKNOWN)).toBeNull();
+  });
+
+  it("returns null for DetectedStatus.UNSPECIFIED", () => {
+    expect(getDetectedStatusInfo(DetectedStatus.UNSPECIFIED)).toBeNull();
   });
 });

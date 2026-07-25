@@ -1,5 +1,18 @@
-import { style } from "@vanilla-extract/css";
+import { keyframes, style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+
+export const boardWrapper = style({
+  display: "flex",
+  flexDirection: "column",
+  flex: 1,
+  minHeight: 0,
+});
+
+export const boardToolbar = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  padding: `${vars.space["2"]} ${vars.space["4"]} 0`,
+});
 
 export const board = style({
   display: "flex",
@@ -59,6 +72,36 @@ export const columnCards = style({
   flexDirection: "column",
   gap: vars.space["2"],
   flex: 1,
+});
+
+// Epic 6.4 (backlog-event-driven-updates): brief fade+slight-scale exit for a
+// card whose item just left this column via a genuine live status change
+// (ux.md §7 — "reads as moved," paired with the flash on entry into the
+// destination column via BacklogItemCard's `forceJustChanged`). Applied to
+// the `role="listitem"` wrapper around BacklogItemCard, mirroring
+// backlog.css.ts's `tableRowExiting` for the list view.
+const cardExitKeyframes = keyframes({
+  "0%": { opacity: 1, transform: "scale(1)" },
+  "100%": { opacity: 0, transform: "scale(0.96)" },
+});
+
+export const cardExiting = style({
+  pointerEvents: "none",
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: cardExitKeyframes,
+      animationDuration: "200ms",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "forwards",
+    },
+    // Reduced motion: removal is already instant (driven by JS, see
+    // BacklogBoard.tsx), so no transition/animation is applied here — just
+    // avoid a stray opaque flash of the card before it's removed from the
+    // DOM.
+    "(prefers-reduced-motion: reduce)": {
+      opacity: 1,
+    },
+  },
 });
 
 export const emptyColumn = style({

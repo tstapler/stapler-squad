@@ -101,6 +101,10 @@ func makeIdleInstance(t *testing.T, uuid, title string, idleFor time.Duration) *
 	}
 	// Set LastMeaningfulOutput so TimeSinceLastMeaningfulOutput returns idleFor.
 	inst.LastMeaningfulOutput = now.Add(-idleFor)
+	// TimeSinceLastMeaningfulOutput() reads the lock-free atomic shadow, not the plain
+	// field above — sync it explicitly since this test bypasses the normal write path
+	// (UpdateTimestamps), which updates both together.
+	inst.SyncAtomicTimestamps()
 	return inst
 }
 

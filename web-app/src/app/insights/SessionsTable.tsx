@@ -5,6 +5,7 @@ import React, { useState, useMemo, useCallback } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import Fuse from "fuse.js";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import {
   tableCard,
   tableHeader,
@@ -17,6 +18,7 @@ import {
   tdRight,
   tdMono,
   orphanBadge,
+  backlogBadge,
   empty,
   filterBar,
   searchInput,
@@ -30,6 +32,7 @@ import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 interface Props {
   sessions: SessionTokenSummary[];
   onSessionClick?: (session: SessionTokenSummary) => void;
+  backlogIndex?: Map<string, BacklogIndexEntry>;
 }
 
 function pathBasename(p: string): string {
@@ -38,16 +41,31 @@ function pathBasename(p: string): string {
 
 const VIRTUOSO_THRESHOLD = 50;
 
-export function SessionsTable({ sessions, onSessionClick }: Props) {
+export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props) {
   const [showOrphans, setShowOrphans] = useState(true);
   const [searchText, setSearchText] = useState("");
   const [modelFilter, setModelFilter] = useState("");
 
   const orphanCount = sessions.filter((s) => s.isOrphan).length;
 
+  // Build fuse documents that pair each session with its backlog title for searching.
+  type FuseDoc = { session: SessionTokenSummary; backlogTitle: string };
+  const fuseDocs = useMemo<FuseDoc[]>(
+    () =>
+      sessions.map((s) => ({
+        session: s,
+        backlogTitle: backlogIndex?.get(s.sessionId)?.itemTitle ?? "",
+      })),
+    [sessions, backlogIndex]
+  );
+
   const fuse = useMemo(
-    () => new Fuse(sessions, { keys: ["projectPath"], threshold: 0.4 }),
-    [sessions]
+    () =>
+      new Fuse(fuseDocs, {
+        keys: ["session.projectPath", "backlogTitle"],
+        threshold: 0.4,
+      }),
+    [fuseDocs]
   );
 
   const uniqueModels = useMemo(() => {
@@ -62,7 +80,7 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
     let result: SessionTokenSummary[];
 
     if (searchText.trim()) {
-      result = fuse.search(searchText).map((r) => r.item);
+      result = fuse.search(searchText).map((r) => r.item.session);
     } else {
       result = sessions;
     }
@@ -108,26 +126,40 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
     </tr>
   );
 
-  const renderCells = (_index: number, s: SessionTokenSummary) => (
-    <>
-      <td className={tdMono} title={s.sessionId || s.conversationId}>
-        {s.isOrphan ? (
-          <>
-            {shortId(s.conversationId)}
-            <span className={orphanBadge}>orphan</span>
-          </>
-        ) : (
-          shortId(s.sessionId || s.conversationId)
-        )}
-      </td>
-      <td className={td} title={s.primaryModel}>{s.primaryModel || "—"}</td>
-      <td className={td} title={s.projectPath}>{pathBasename(s.projectPath) || "—"}</td>
-      <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
-      <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
-      <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
-      <td className={tdRight}>{fmtCost(s.estimatedCostUsd)}</td>
-    </>
-  );
+  const renderCells = (_index: number, s: SessionTokenSummary) => {
+    const backlogEntry = backlogIndex?.get(s.sessionId);
+    return (
+      <>
+        <td className={tdMono} title={s.sessionId || s.conversationId}>
+          {s.isOrphan ? (
+            <>
+              {shortId(s.conversationId)}
+              <span className={orphanBadge}>orphan</span>
+            </>
+          ) : (
+            shortId(s.sessionId || s.conversationId)
+          )}
+          {backlogEntry && (
+            <a
+              href={`/backlog?item=${backlogEntry.itemId}`}
+              className={backlogBadge}
+              data-testid="backlog-badge"
+              title={`${backlogEntry.sessionRole}: ${backlogEntry.itemTitle}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {backlogEntry.sessionRole}: {backlogEntry.itemTitle}
+            </a>
+          )}
+        </td>
+        <td className={td} title={s.primaryModel}>{s.primaryModel || "—"}</td>
+        <td className={td} title={s.projectPath}>{pathBasename(s.projectPath) || "—"}</td>
+        <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
+        <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
+        <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
+        <td className={tdRight}>{fmtCost(s.estimatedCostUsd)}</td>
+      </>
+    );
+  };
 
   const virtuosoComponents = useMemo(() => ({
     Table: ({ style: s, ...props }: React.ComponentPropsWithRef<"table">) => (

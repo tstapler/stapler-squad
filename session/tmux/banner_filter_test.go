@@ -321,6 +321,18 @@ func TestStripANSICodes(t *testing.T) {
 			input:    "\x1b[38;5;250m\x1b[48;5;237mColored\x1b[0m",
 			expected: "Colored",
 		},
+		{
+			// CSI final-byte range is 0x40-0x7E per ECMA-48, not just letters —
+			// '@' (Insert Character) must be stripped too.
+			name:     "insert character at-sign terminator",
+			input:    "\x1b[5@Hello",
+			expected: "Hello",
+		},
+		{
+			name:     "tilde terminator",
+			input:    "\x1b[3~Hello",
+			expected: "Hello",
+		},
 	}
 
 	for _, tt := range tests {

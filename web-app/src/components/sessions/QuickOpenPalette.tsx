@@ -165,11 +165,17 @@ export function QuickOpenPalette({
     };
   }, [query, sessionId, baseUrl, recentPaths]);
 
+  // Clear stale DOM refs when the results list changes length
+  useEffect(() => {
+    resultRefs.current = [];
+  }, [results]);
+
   // Scroll active item into view
   useEffect(() => {
-    resultRefs.current[activeIndex]?.scrollIntoView({
-      block: "nearest",
-    });
+    const el = resultRefs.current[activeIndex];
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
   }, [activeIndex]);
 
   const handleKeyDown = useCallback(

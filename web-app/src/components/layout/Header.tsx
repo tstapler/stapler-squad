@@ -8,12 +8,14 @@ import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
 import { MemoryNavBadge } from "@/components/sessions/MemoryNavBadge";
 import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
+import { StuckNavBadge } from "@/components/backlog-stuck/StuckNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
 import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { routes } from "@/lib/routes";
 import { NAV_PAGES } from "@/lib/nav-pages";
+import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { WorkspaceSwitcher } from "@/components/layout/WorkspaceSwitcher";
 import { BottomNav } from "@/components/layout/BottomNav";
@@ -28,6 +30,8 @@ export function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isApprovalDrawerOpen, setIsApprovalDrawerOpen] = useState(false);
   const { togglePanel, getUnreadCount } = useNotifications();
+  const { flags } = useFeatureFlags();
+  const visibleNavPages = NAV_PAGES.filter((p) => !p.featureFlag || flags[p.featureFlag]);
   const { open: openOmnibar } = useOmnibar();
   const unreadCount = getUnreadCount();
 
@@ -73,7 +77,7 @@ export function Header() {
             aria-label="Main navigation"
             className={`${styles.nav} ${isMobileMenuOpen ? styles.navOpen : ""}`}
           >
-            {NAV_PAGES.map((page) => {
+            {visibleNavPages.map((page) => {
               const isActive = page.href === routes.home
                 ? pathname === routes.home
                 : pathname?.startsWith(page.href);
@@ -86,7 +90,7 @@ export function Header() {
                   aria-current={isActive ? "page" : undefined}
                 >
                   {page.href === routes.unfinished ? (
-                    <><span>{page.label}</span><UnfinishedNavBadge inline={true} /></>
+                    <><span>{page.label}</span><UnfinishedNavBadge inline={true} /><StuckNavBadge inline={true} /></>
                   ) : page.href === routes.reviewQueue ? (
                     <><span>{page.label}</span><ReviewQueueNavBadge inline={true} /></>
                   ) : page.href === routes.notifications ? (

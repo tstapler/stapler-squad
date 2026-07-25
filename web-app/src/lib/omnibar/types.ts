@@ -15,6 +15,10 @@ export enum InputType {
   SessionSearch = "session_search",
   NewSession = "new_session",
   SpawnShell = "spawn_shell",
+  Workflow = "workflow",
+  Alias = "alias",
+  AliasNotFound = "alias_not_found",
+  AliasBrowse = "alias_browse",
 }
 
 export interface InputTypeInfo {
@@ -77,7 +81,27 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
   [InputType.SpawnShell]: {
     label: "Spawn Shell",
     icon: ">_",
-    description: "Open the new shell dialog",
+    description: "Open a terminal session, optionally in a directory or running a command",
+  },
+  [InputType.Workflow]: {
+    label: "Workflow",
+    icon: "⚡",
+    description: "Quick workflow invocation",
+  },
+  [InputType.Alias]: {
+    label: "Alias",
+    icon: "@",
+    description: "Named session preset",
+  },
+  [InputType.AliasNotFound]: {
+    label: "Alias Not Found",
+    icon: "@",
+    description: "No alias with that name",
+  },
+  [InputType.AliasBrowse]: {
+    label: "Alias Browse",
+    icon: "@",
+    description: "Browse or filter aliases",
   },
 };
 

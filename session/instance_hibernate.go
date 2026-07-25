@@ -16,13 +16,18 @@ func (i *Instance) SetHibernateReason(reason string) {
 }
 
 // Hibernate transitions an Active session to Hibernated.
-// It sets the reason, transitions state, and returns.
-// The actual checkpoint write and process kill happen asynchronously via the
-// Active → Hibernated After hook (see state_machine.go).
+// It transitions state and dispatches the heavy I/O to a goroutine.
 func (i *Instance) Hibernate(ctx context.Context) error {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	return i.transitionTo(ctx, Hibernated)
+	return i.sendSyncErr(func(s *instanceState) error {
+		return transitionToLocked(s, ctx, Hibernated)
+	})
+}
+
+// hibernateProcessLocked is the actor-safe twin of hibernateProcess.
+// Called from transitionToLocked when transitioning Active→Hibernated;
+// dispatches the I/O work to a goroutine so the actor is not blocked.
+func hibernateProcessLocked(s *instanceState, ctx context.Context) {
+	go s.inst.hibernateProcess(ctx)
 }
 
 // hibernateProcess performs the actual hibernation side-effects:
@@ -88,30 +93,82 @@ func (i *Instance) scrollbackPath() string {
 }
 
 // ResumeFromHibernation transitions a Hibernated session back to Active.
-// The actual process re-launch happens asynchronously via the
-// Hibernated → Active After hook (see state_machine.go).
+// The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	return i.transitionTo(ctx, Active)
+	return i.sendSyncErr(func(s *instanceState) error {
+		return transitionToLocked(s, ctx, Active)
+	})
+}
+
+// resumeFromHibernationLocked is the actor-safe twin of resumeFromHibernation.
+// Called from transitionToLocked when transitioning Hibernated→Active;
+// dispatches the re-launch work to a goroutine so the actor is not blocked.
+func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
+	i := s.inst
+	i.started.Store(false)
+	go func() {
+		if err := i.Start(false); err != nil {
+			log.Error("hibernation resume: failed to start session",
+				"session", i.Title, "err", err.Error())
+			i.send(func(s *instanceState) {
+				// Hold i.mu across the write and buildSnapshot so this is ordered
+				// against the legacy direct-lock setters (MarkViewed & co.) that
+				// read every field via buildSnapshot under i.mu.Lock() from
+				// outside the actor. See runActor's doc comment in actor.go.
+				s.inst.mu.Lock()
+				s.inst.loadStatus(Hibernated)
+				snap := buildSnapshot(s.inst)
+				s.inst.mu.Unlock()
+				s.inst.snapshot.Store(snap)
+			})
+			return
+		}
+		if i.controllerManager.GetStatusManager() != nil {
+			if err := i.StartController(); err != nil {
+				log.Warn("hibernation resume: failed to start controller",
+					"session", i.Title, "err", err)
+			}
+		}
+		StartSessionDriver(i, i.GetEffectiveRootDir())
+		cfg := appconfig.LoadConfig()
+		checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()
+		if err == nil && checkpointDir != "" {
+			writer := hibernation.NewWriter(checkpointDir)
+			if err := writer.Delete(i.UUID); err != nil {
+				log.Warn("hibernation resume: failed to delete checkpoint",
+					"session", i.Title, "err", err)
+			}
+		}
+	}()
 }
 
 // resumeFromHibernation re-launches the AI process and cleans up the checkpoint.
-// Called from the Hibernated → Active After hook in a goroutine.
+// Called from the Hibernated → Active After hook in a goroutine (legacy path used
+// by state_machine.go transitionDefs After hooks — kept for StartWithCleanup path).
 // Must NOT hold stateMutex.
 func (i *Instance) resumeFromHibernation(ctx context.Context) {
-	// Re-launch via the cold-restore path
-	i.started = false
+	// Re-launch via the cold-restore path. started is atomic.Bool (BUG-025
+	// follow-up) so this write is race-free without needing mu — it's also
+	// excluded from InstanceSnapshot, so no buildSnapshot() call is needed here.
+	i.started.Store(false)
 	if err := i.Start(false); err != nil {
 		log.Error("hibernation resume: failed to start session",
 			"session", i.Title, "err", err.Error())
 		// Roll back to Hibernated on failure
-		i.stateMutex.Lock()
+		i.mu.Lock()
 		i.loadStatus(Hibernated)
-		i.stateMutex.Unlock()
+		i.snapshot.Store(buildSnapshot(i))
+		i.mu.Unlock()
 		return
 	}
-
+	// Start the controller and session driver
+	if i.controllerManager.GetStatusManager() != nil {
+		if err := i.StartController(); err != nil {
+			log.Warn("hibernation resume: failed to start controller",
+				"session", i.Title, "err", err)
+		}
+	}
+	StartSessionDriver(i, i.GetEffectiveRootDir())
 	// Clean up checkpoint files
 	cfg := appconfig.LoadConfig()
 	checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()

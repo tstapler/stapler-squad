@@ -71,14 +71,33 @@ func (r *ringBuffer) Write(p []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for _, b := range p {
-		pos := (r.start + r.len) % r.size
-		r.data[pos] = b
-		if r.len < r.size {
-			r.len++
-		} else {
-			r.start = (r.start + 1) % r.size
-		}
+	if len(p) == 0 {
+		return
+	}
+	if len(p) >= r.size {
+		// p overwrites the entire buffer; keep only the last r.size bytes.
+		p = p[len(p)-r.size:]
+		copy(r.data, p)
+		r.start = 0
+		r.len = r.size
+		return
+	}
+	// Bulk copy in at most two segments (head-to-end, then wrap to start).
+	writePos := (r.start + r.len) % r.size
+	n := len(p)
+	toEnd := r.size - writePos
+	if n <= toEnd {
+		copy(r.data[writePos:], p)
+	} else {
+		copy(r.data[writePos:], p[:toEnd])
+		copy(r.data, p[toEnd:])
+	}
+	if r.len+n <= r.size {
+		r.len += n
+	} else {
+		overwritten := r.len + n - r.size
+		r.start = (r.start + overwritten) % r.size
+		r.len = r.size
 	}
 }
 
@@ -89,10 +108,13 @@ func (r *ringBuffer) Read() []byte {
 	if r.len == 0 {
 		return nil
 	}
-
 	result := make([]byte, r.len)
-	for i := 0; i < r.len; i++ {
-		result[i] = r.data[(r.start+i)%r.size]
+	toEnd := r.size - r.start
+	if toEnd >= r.len {
+		copy(result, r.data[r.start:r.start+r.len])
+	} else {
+		copy(result, r.data[r.start:])
+		copy(result[toEnd:], r.data[:r.len-toEnd])
 	}
 	return result
 }

@@ -1,10 +1,11 @@
 /**
- * Tests for ApprovalRulesPanel — Epic 3 and Epic 6 AI rule generation.
+ * Tests for ApprovalRulesPanel — Epic 3, Epic 6, and YAML import/export.
  *
  * Covers:
  *  - ApprovalRulesPanel_should_showGenerateSuggestionsButton
  *  - ApprovalRulesPanel_should_showSuggestedRuleCards_When_SuggestionsReturned
  *  - ApprovalRulesPanel_should_prefillForm_When_CommandSampleSuggestionReturns
+ *  - UT-FE-23 through UT-FE-27 (YAML import/export + UX improvements)
  */
 
 import React from "react";
@@ -38,6 +39,25 @@ jest.mock("@/lib/hooks/useApprovalAnalytics", () => ({
     loading: false,
     error: null,
   }),
+}));
+
+const mockExportRules = jest.fn();
+jest.mock("@/lib/hooks/useExportRules", () => ({
+  useExportRules: () => ({
+    exportRules: mockExportRules,
+    loading: false,
+    error: null,
+  }),
+}));
+
+// Stub ImportRulesModal so it renders a lightweight sentinel instead of the full modal.
+jest.mock("./ImportRulesModal", () => ({
+  ImportRulesModal: ({ open, onClose }: { open: boolean; onClose: () => void }) =>
+    open ? (
+      <div data-testid="import-rules-modal">
+        <button data-testid="close-import-modal" onClick={onClose}>Close</button>
+      </div>
+    ) : null,
 }));
 
 // Control the two useGenerateRule instances via a shared config object.
@@ -166,6 +186,7 @@ function resetHookConfig() {
   mockRefresh.mockClear();
   mockUpsertRule.mockClear();
   mockDeleteRule.mockClear();
+  mockExportRules.mockClear();
 }
 
 // ---------------------------------------------------------------------------
@@ -470,17 +491,84 @@ describe("ApprovalRulesPanel", () => {
   // ── Empty state copy ──────────────────────────────────────────────────────
 
   describe("Empty state", () => {
-    it("shows add-rule hint for 'all' source filter", () => {
+    it("UT-FE-23: ApprovalRulesPanel_empty_state_explains_purpose", () => {
       render(<ApprovalRulesPanel />);
-      expect(screen.getByText(/No rules found\./)).toBeInTheDocument();
-      expect(screen.getByText(/Add Rule.*button above to create one/i)).toBeInTheDocument();
+      const emptyState = screen.getByTestId("empty-state");
+      expect(emptyState).toBeInTheDocument();
+      expect(emptyState).toHaveTextContent(/Approval rules let you automatically/i);
     });
 
-    it("hides add-rule hint for 'seed' source filter", () => {
+    it("UT-FE-24: ApprovalRulesPanel_empty_state_seed_no_cta", () => {
       render(<ApprovalRulesPanel />);
+      // Switch to the "Built-in" (seed) filter tab.
       fireEvent.click(screen.getByRole("button", { name: /Built-in/ }));
-      expect(screen.getByText(/No rules found\./)).toBeInTheDocument();
-      expect(screen.queryByText(/Add Rule.*button above/i)).not.toBeInTheDocument();
+      const emptyState = screen.getByTestId("empty-state");
+      expect(emptyState).toBeInTheDocument();
+      // No "+ Add Rule" CTA inside the empty state for seed filter.
+      // (The header button is always present but not within the empty-state div.)
+      const { queryByText } = { queryByText: (text: RegExp) => emptyState.textContent?.match(text) };
+      expect(queryByText(/\+ Add Rule/i)).toBeNull();
+    });
+
+    it("shows add-rule and import-yaml links in empty state for 'all' source filter", () => {
+      render(<ApprovalRulesPanel />);
+      const emptyState = screen.getByTestId("empty-state");
+      expect(emptyState).toHaveTextContent(/Add Rule/);
+      expect(emptyState).toHaveTextContent(/Import YAML/);
+    });
+  });
+
+  // ── YAML import/export (UT-FE-25 through UT-FE-27) ───────────────────────
+
+  describe("YAML import/export", () => {
+    it("UT-FE-25: ApprovalRulesPanel_import_yaml_button_opens_modal", async () => {
+      render(<ApprovalRulesPanel />);
+
+      // The modal should not be mounted yet.
+      expect(screen.queryByTestId("import-rules-modal")).not.toBeInTheDocument();
+
+      // Click the Import YAML header button.
+      fireEvent.click(screen.getByTestId("import-yaml-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("import-rules-modal")).toBeInTheDocument();
+      });
+    });
+
+    it("UT-FE-26: ApprovalRulesPanel_export_yaml_button_triggers_hook", () => {
+      render(<ApprovalRulesPanel />);
+
+      fireEvent.click(screen.getByTestId("export-yaml-button"));
+
+      expect(mockExportRules).toHaveBeenCalledTimes(1);
+    });
+
+    it("UT-FE-27: ApprovalRulesPanel_field_order_regex_after_separator", () => {
+      render(<ApprovalRulesPanel />);
+      fireEvent.click(screen.getByTestId("add-rule-button"));
+
+      // The form should be open.
+      const form = screen.getByRole("dialog");
+      expect(form).toBeInTheDocument();
+
+      // The separator should be present.
+      const separator = screen.getByTestId("advanced-regex-separator");
+      expect(separator).toBeInTheDocument();
+
+      // Tool Name field should appear before the separator.
+      const toolNameInput = screen.getByTestId("form-tool-name-input");
+      const commandPatternInput = screen.getByTestId("form-command-pattern-input");
+      expect(toolNameInput).toBeInTheDocument();
+      expect(commandPatternInput).toBeInTheDocument();
+
+      // Assert DOM order: toolName precedes separator precedes commandPattern.
+      const allInputs = form.querySelectorAll("[data-testid]");
+      const ids = Array.from(allInputs).map((el) => el.getAttribute("data-testid"));
+      const toolNameIdx = ids.indexOf("form-tool-name-input");
+      const sepIdx = ids.indexOf("advanced-regex-separator");
+      const cmdPatternIdx = ids.indexOf("form-command-pattern-input");
+      expect(toolNameIdx).toBeLessThan(sepIdx);
+      expect(sepIdx).toBeLessThan(cmdPatternIdx);
     });
   });
 });

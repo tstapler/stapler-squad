@@ -5,9 +5,12 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -248,24 +251,24 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 // GetClaudeSession returns the Claude session data for this instance.
 // Thread-safe: acquires stateMutex read lock.
 func (i *Instance) GetClaudeSession() *ClaudeSessionData {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
 	return i.claudeSession
 }
 
 // SetClaudeSession sets the Claude session data for this instance.
 // Thread-safe: acquires stateMutex write lock.
 func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
 	i.claudeSession = sessionData
 }
 
 // HasClaudeSession returns true if this instance has Claude session data.
 // Thread-safe: acquires stateMutex read lock.
 func (i *Instance) HasClaudeSession() bool {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
 	return i.claudeSession != nil && i.claudeSession.ConversationUUID != ""
 }
 
@@ -273,12 +276,23 @@ func (i *Instance) HasClaudeSession() bool {
 // file path so that the next Resume starts a fresh conversation rather than
 // attempting --resume with a potentially stale or path-mismatched UUID.
 func (i *Instance) ClearConversationState() {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	// claudeSessionMu protects claudeSession from concurrent SetHistoryInfo-style
+	// writers, but HistoryFilePath and buildSnapshot's read of every mutable
+	// field also need to be ordered against legacy setters (MarkViewed & co.)
+	// that mutate fields directly under i.mu.Lock() from outside the actor.
+	// Take i.mu too (nested inside claudeSessionMu, the only lock order used
+	// anywhere for these two locks) around the writes AND the buildSnapshot
+	// call, not just the read — see runActor's doc comment in actor.go.
+	i.mu.Lock()
 	if i.claudeSession != nil {
 		i.claudeSession.ConversationUUID = ""
 	}
 	i.HistoryFilePath = ""
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 }
 
 // tryExtractConversationUUID attempts to detect the Claude conversation UUID
@@ -349,19 +363,101 @@ func (i *Instance) tryExtractConversationUUID() {
 }
 
 // GetConversationUUID returns the Claude conversation UUID, or "" if not linked.
+// Thread-safe: acquires stateMutex read lock.
 func (i *Instance) GetConversationUUID() string {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
 	if i.claudeSession == nil {
 		return ""
 	}
 	return i.claudeSession.ConversationUUID
 }
 
+// GetClaudeConversationUUID returns the stored Claude conversation UUID, empty if none.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) GetClaudeConversationUUID() string {
+	i.claudeSessionMu.RLock()
+	defer i.claudeSessionMu.RUnlock()
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
+// RunWithResume spawns a new claude subprocess using --resume <uuid> and -p <message>,
+// waits for completion, and returns the result text. Updates ConversationUUID on success.
+func (i *Instance) RunWithResume(ctx context.Context, message string) (string, error) {
+	uuid := i.GetClaudeConversationUUID()
+	if uuid == "" {
+		return "", fmt.Errorf("no conversation UUID: session has no stored session_id")
+	}
+
+	// Extract binary path from Program field (may include flags — take first word).
+	claudePath := i.Program
+	if claudePath == "" {
+		claudePath = "claude"
+	}
+	if idx := strings.IndexByte(claudePath, ' '); idx >= 0 {
+		claudePath = claudePath[:idx]
+	}
+
+	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
+	cmd.Dir = i.GetEffectiveRootDir()
+
+	out, runErr := cmd.Output()
+	output := string(out)
+
+	result := parseJSONField(output, "result")
+
+	// Update UUID in case it changed (fires save callback).
+	if newUUID := parseClaudeSessionID(output); newUUID != "" && newUUID != uuid {
+		i.SetClaudeConversationUUID(newUUID)
+	}
+
+	if runErr != nil {
+		if result != "" {
+			return result, nil
+		}
+		return "", fmt.Errorf("claude subprocess error: %w", runErr)
+	}
+	return result, nil
+}
+
+// SetClaudeConversationUUID stores the Claude conversation UUID so it is used
+// in subsequent --resume flags. Fires the claudeSessionIDSavedCallback if set.
+// No-op (including callback) if uuid is unchanged.
+func (i *Instance) SetClaudeConversationUUID(uuid string) {
+	i.claudeSessionMu.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	if i.claudeSession.ConversationUUID == uuid {
+		i.claudeSessionMu.Unlock()
+		return // no change, skip callback
+	}
+	i.claudeSession.ConversationUUID = uuid
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+// SetClaudeSessionIDSavedCallback registers a callback that fires when
+// SetClaudeConversationUUID is called. Used by the service layer to trigger
+// a storage save when the session_id is discovered.
+func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	i.claudeSessionIDSavedCallback = fn
+}
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
 func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
 
 	currentUUID := ""
 	if i.claudeSession != nil {
@@ -371,10 +467,18 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 		return
 	}
 
+	// See ClearConversationState's comment: nest i.mu inside claudeSessionMu,
+	// around the writes AND the buildSnapshot call, so this is ordered against
+	// legacy direct-lock setters (MarkViewed & co.) that mutate fields under
+	// i.mu.Lock() from outside the actor.
+	i.mu.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
 }

@@ -5,9 +5,7 @@
   "method": "ListClaudeHistory",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestListClaudeHistory_EmptyDir"
-  ],
-  "lastModified": "2026-05-18T19:18:16.428607422-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }

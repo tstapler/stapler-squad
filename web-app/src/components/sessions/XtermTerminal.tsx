@@ -59,6 +59,14 @@ export interface XtermTerminalHandle {
   clear: () => void;
   focus: () => void;
   fit: () => void;
+  /**
+   * Directly set the terminal's grid size in cols/rows, bypassing FitAddon's pixel-based
+   * measurement. Used to synchronously match the terminal buffer to a pre-calculated size
+   * (from cached cell metrics) before the initial capture-pane snapshot streams in — otherwise
+   * ANSI cursor-positioning sequences targeting rows beyond the xterm.js default (80x24) are
+   * silently dropped, leaving those rows unpainted until a later resize forces a full repaint.
+   */
+  resize: (cols: number, rows: number) => void;
   search: (term: string) => boolean;
   searchNext: (term: string) => boolean;
   searchPrevious: (term: string) => boolean;
@@ -107,6 +115,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Refs for floating Copy button and toast — avoid React re-renders on 60fps selection changes
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const toastRef = useRef<HTMLDivElement>(null);
+  // Draggable selection handles for mobile — DOM-mutated at 60fps alongside the copy button
+  const startHandleRef = useRef<HTMLDivElement>(null);
+  const endHandleRef = useRef<HTMLDivElement>(null);
+  // Custom left-side scrollbar track and thumb
+  const scrollTrackRef = useRef<HTMLDivElement>(null);
+  const scrollThumbRef = useRef<HTMLDivElement>(null);
 
   // Context menu uses useState (shown at most once per right-click — not a hot path)
   const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number } | null>(null);
@@ -161,6 +175,35 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     document.body.removeChild(el);
     return ok;
   }, []);
+
+  // "Copy all" scrollback handler — extracts plain text from xterm buffer (no ANSI codes).
+  // Uses onPointerDown (not onClick) to stay in a synchronous user-gesture context for
+  // iOS Safari, which only allows clipboard writes inside unbroken gesture handlers.
+  const handleCopyScrollbackPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    const buffer = terminal.buffer.active;
+    const lineStrings: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        // translateToString(true) trims trailing whitespace — gives clean plain text
+        lineStrings.push(line.translateToString(true));
+      }
+    }
+    const text = lineStrings.join('\n').trimEnd();
+    if (!text) return;
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => showToast('copied'))
+        .catch(() => showToast(execCommandCopy(text) ? 'copied' : 'failed'));
+    } else {
+      showToast(execCommandCopy(text) ? 'copied' : 'failed');
+    }
+  }, [showToast, execCommandCopy]);
 
   // Floating Copy button pointer-down handler — synchronous user gesture path (iOS safe)
   const handleCopyButtonPointerDown = useCallback((e: React.PointerEvent) => {
@@ -225,6 +268,31 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     setContextMenuState(null);
   }, []);
 
+  // Sync the custom left-side scrollbar with the terminal's current viewport.
+  // Called from onScroll, onResize, and after the initial fit — all via direct
+  // DOM mutation so there's no React re-render overhead on every scroll event.
+  const updateScrollbar = useCallback((term: Terminal) => {
+    const track = scrollTrackRef.current;
+    const thumb = scrollThumbRef.current;
+    if (!track || !thumb) return;
+    const buf = term.buffer.active;
+    const totalLines = buf.length;
+    const visibleLines = term.rows;
+    if (totalLines <= visibleLines) {
+      track.style.display = 'none';
+      return;
+    }
+    track.style.display = 'block';
+    const trackHeight = track.clientHeight;
+    if (trackHeight === 0) return;
+    const thumbHeight = Math.max(20, trackHeight * (visibleLines / totalLines));
+    const maxScrollLines = totalLines - visibleLines;
+    const progress = maxScrollLines > 0 ? buf.viewportY / maxScrollLines : 0;
+    const thumbTop = progress * (trackHeight - thumbHeight);
+    thumb.style.height = `${thumbHeight}px`;
+    thumb.style.transform = `translateY(${thumbTop}px)`;
+  }, []);
+
   // Initialize terminal on mount
   useEffect(() => {
     // SSR guard
@@ -284,23 +352,24 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     try {
       terminal.open(containerRef.current);
 
-      // Attach contextmenu listener after terminal.open() — terminal.element is guaranteed non-null here.
-      // Capture the element reference for cleanup to ensure add/remove operate on the same node.
-      const termElement = terminal.element!;
-
+      // Attach contextmenu listener after terminal.open() — terminal.element is non-null after open().
+      // Guard against null (can occur in test environments where open() is mocked as no-op).
+      const termElement = terminal.element;
       const handleContextMenu = (e: MouseEvent) => {
         e.preventDefault(); // always suppress browser native menu
         if (isMouseTracking(terminal)) return; // let PTY handle right-click via VT sequences
         setContextMenuState({ x: e.clientX, y: e.clientY });
       };
-      termElement.addEventListener('contextmenu', handleContextMenu);
+      if (termElement) {
+        termElement.addEventListener('contextmenu', handleContextMenu);
+      }
 
       // Custom key handler — a single handler for all shortcuts (attaching multiple replaces).
       // All key intercepts must be here. No cleanup needed; tied to terminal instance lifecycle.
       // iOS note: navigator.clipboard.writeText may fail in keydown because keydown events may
       // not carry the same user-gesture trust as pointer events. iOS users don't have Ctrl+C
       // hardware — they use the floating Copy button (onPointerDown path) instead.
-      terminal.attachCustomKeyEventHandler((event: KeyboardEvent): boolean => {
+      terminal.attachCustomKeyEventHandler?.((event: KeyboardEvent): boolean => {
         if (event.type !== 'keydown') return true;
 
         const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key === 'c';
@@ -379,6 +448,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           }
 
           fitAddon.fit();
+          updateScrollbar(terminal);
 
           console.log(`[XtermTerminal] Initial fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
 
@@ -401,7 +471,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // Cleanup includes contextmenu listener removal
       const cleanupContextMenu = () => {
-        termElement.removeEventListener('contextmenu', handleContextMenu);
+        if (termElement) termElement.removeEventListener('contextmenu', handleContextMenu);
       };
 
       // Setup event handlers using refs to avoid recreating terminal
@@ -412,6 +482,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // Show floating Copy button on selection change via direct DOM mutation (no setState).
       // onSelectionChange fires at up to 60fps during mouse drag — setState here would cause
       // a re-render storm. Direct ref mutation costs ~0.01ms vs ~3ms for React reconcile.
+      // true once on mount — pointer:coarse means a touch-primary device
+      const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
       const selectionDisposable = terminal.onSelectionChange(() => {
         const btn = copyButtonRef.current;
         if (!btn) return;
@@ -424,9 +497,27 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             btn.style.left = `${rect.left + pos.end.x * cellW}px`;
             btn.style.top = `${rect.top + pos.end.y * cellH - 40}px`;
             btn.style.display = 'block';
+
+            // Draggable selection handles — mobile only
+            if (isTouchPrimary) {
+              const sh = startHandleRef.current;
+              const eh = endHandleRef.current;
+              if (sh && eh) {
+                // Start handle: left edge of first selected character, below the row
+                sh.style.left = `${rect.left + pos.start.x * cellW}px`;
+                sh.style.top = `${rect.top + (pos.start.y + 1) * cellH}px`;
+                sh.style.display = 'block';
+                // End handle: right edge of last selected character, below the row
+                eh.style.left = `${rect.left + (pos.end.x + 1) * cellW}px`;
+                eh.style.top = `${rect.top + (pos.end.y + 1) * cellH}px`;
+                eh.style.display = 'block';
+              }
+            }
           }
         } else {
           btn.style.display = 'none';
+          startHandleRef.current && (startHandleRef.current.style.display = 'none');
+          endHandleRef.current && (endHandleRef.current.style.display = 'none');
         }
       });
 
@@ -437,7 +528,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           lastSizeRef.current = { cols, rows };
           onResizeRef.current?.(cols, rows);
         }
+        updateScrollbar(terminal);
       });
+
+      const scrollDisposable = terminal.onScroll?.(() => updateScrollbar(terminal));
+      // onWriteParsed fires after each chunk of data is rendered. When the user has
+      // scrolled up into history and new output arrives, onScroll doesn't fire (the
+      // viewport position didn't change) but the buffer grew, so thumb proportions
+      // go stale. Updating here keeps the thumb correctly sized while streaming.
+      const writeParsedDisposable = terminal.onWriteParsed?.(() => updateScrollbar(terminal));
 
       // CRITICAL: Store refs BEFORE triggering callbacks
       // This ensures terminalRef is available when parent component calls getTerminal()
@@ -445,6 +544,190 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       fitAddonRef.current = fitAddon;
       searchAddonRef.current = searchAddon;
       serializeAddonRef.current = serializeAddon;
+
+      // ---- Mobile selection handle drag logic ----
+      // Each handle listens for touchstart, then registers a document-level
+      // touchmove handler that updates the xterm selection in real time.
+      // The anchor (fixed endpoint) is captured at touchstart and held throughout
+      // the drag so the opposite handle stays in place.
+      const handleCleanupFns: (() => void)[] = [];
+      if (isTouchPrimary) {
+        const attachHandleDrag = (el: HTMLDivElement | null, handle: 'start' | 'end') => {
+          if (!el) return;
+          // { startCol, startRow, endCol, endRow } in xterm viewport coords
+          let anchor: { sc: number; sr: number; ec: number; er: number } | null = null;
+
+          const onTouchMove = (e: TouchEvent) => {
+            if (!anchor || !terminal.element) return;
+            const touch = e.touches[0];
+            if (!touch) return;
+            e.preventDefault();
+            const rect = terminal.element.getBoundingClientRect();
+            const { cellH, cellW } = getCellDimensions(terminal);
+            const col = Math.max(0, Math.min(terminal.cols - 1, Math.floor((touch.clientX - rect.left) / cellW)));
+            const row = Math.max(0, Math.min(terminal.rows - 1, Math.floor((touch.clientY - rect.top) / cellH)));
+
+            if (handle === 'end') {
+              // Keep start fixed, extend/shrink the end
+              const len = Math.max(1, (row - anchor.sr) * terminal.cols + (col - anchor.sc));
+              terminal.select(anchor.sc, anchor.sr, len);
+            } else {
+              // Keep end fixed, extend/shrink the start
+              const len = Math.max(1, (anchor.er - row) * terminal.cols + (anchor.ec - col));
+              terminal.select(col, row, len);
+            }
+          };
+
+          const onTouchEnd = () => {
+            anchor = null;
+            document.removeEventListener('touchmove', onTouchMove);
+            document.removeEventListener('touchend', onTouchEnd);
+            document.removeEventListener('touchcancel', onTouchEnd);
+          };
+
+          const onTouchStart = (e: TouchEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const pos = terminal.getSelectionPosition();
+            if (!pos) return;
+            anchor = { sc: pos.start.x, sr: pos.start.y, ec: pos.end.x, er: pos.end.y };
+            document.addEventListener('touchmove', onTouchMove, { passive: false });
+            document.addEventListener('touchend', onTouchEnd, { passive: true });
+            document.addEventListener('touchcancel', onTouchEnd, { passive: true });
+          };
+
+          el.addEventListener('touchstart', onTouchStart, { passive: false });
+          handleCleanupFns.push(() => {
+            el.removeEventListener('touchstart', onTouchStart);
+            document.removeEventListener('touchmove', onTouchMove);
+            document.removeEventListener('touchend', onTouchEnd);
+            document.removeEventListener('touchcancel', onTouchEnd);
+          });
+        };
+
+        attachHandleDrag(startHandleRef.current, 'start');
+        attachHandleDrag(endHandleRef.current, 'end');
+      }
+
+      // ---- Custom scrollbar track click (jump to position) ----
+      // A tap on the track itself (not the thumb) scrolls to that proportional position.
+      const trackEl = scrollTrackRef.current;
+      if (trackEl) {
+        const onTrackClick = (e: MouseEvent) => {
+          if (e.target !== trackEl) return; // thumb click handled separately
+          const trackHeight = trackEl.clientHeight;
+          if (trackHeight <= 0) return;
+          const relY = e.clientY - trackEl.getBoundingClientRect().top;
+          const buf = terminal.buffer.active;
+          const maxScrollLines = buf.length - terminal.rows;
+          if (maxScrollLines <= 0) return;
+          const targetViewportY = Math.max(0, Math.min(maxScrollLines,
+            Math.round((relY / trackHeight) * maxScrollLines)));
+          terminal.scrollLines(targetViewportY - buf.viewportY);
+        };
+        const onTrackTouchEnd = (e: TouchEvent) => {
+          if (e.target !== trackEl) return;
+          const touch = e.changedTouches[0];
+          if (!touch) return;
+          const trackHeight = trackEl.clientHeight;
+          if (trackHeight <= 0) return;
+          const relY = touch.clientY - trackEl.getBoundingClientRect().top;
+          const buf = terminal.buffer.active;
+          const maxScrollLines = buf.length - terminal.rows;
+          if (maxScrollLines <= 0) return;
+          const targetViewportY = Math.max(0, Math.min(maxScrollLines,
+            Math.round((relY / trackHeight) * maxScrollLines)));
+          terminal.scrollLines(targetViewportY - buf.viewportY);
+        };
+        trackEl.addEventListener('click', onTrackClick);
+        trackEl.addEventListener('touchend', onTrackTouchEnd, { passive: true });
+        handleCleanupFns.push(() => {
+          trackEl.removeEventListener('click', onTrackClick);
+          trackEl.removeEventListener('touchend', onTrackTouchEnd);
+        });
+      }
+
+      // ---- Custom scrollbar thumb drag (mouse + touch, all devices) ----
+      // Dragging the left-side thumb scrolls the terminal without touching the
+      // right-side window scrollbar area.
+      const thumbEl = scrollThumbRef.current;
+      if (thumbEl) {
+        let dragStartY = 0;
+        let dragStartViewportY = 0;
+        let isDragging = false;
+
+        const performDrag = (clientY: number) => {
+          if (!isDragging) return;
+          const track = scrollTrackRef.current;
+          if (!track) return;
+          const trackHeight = track.clientHeight;
+          const buf = terminal.buffer.active;
+          const totalLines = buf.length;
+          const visibleLines = terminal.rows;
+          const maxScrollLines = totalLines - visibleLines;
+          if (maxScrollLines <= 0 || trackHeight <= 0) return;
+          const thumbHeight = Math.max(20, trackHeight * (visibleLines / totalLines));
+          const scrollableTrack = Math.max(1, trackHeight - thumbHeight);
+          const dy = clientY - dragStartY;
+          const targetViewportY = Math.max(0, Math.min(maxScrollLines,
+            dragStartViewportY + Math.round((dy / scrollableTrack) * maxScrollLines)));
+          const delta = targetViewportY - buf.viewportY;
+          if (delta !== 0) terminal.scrollLines(delta);
+        };
+
+        const endDrag = () => {
+          if (!isDragging) return;
+          isDragging = false;
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', endDrag);
+          document.removeEventListener('touchmove', onScrollThumbTouchMove);
+          document.removeEventListener('touchend', endDrag);
+          document.removeEventListener('touchcancel', endDrag);
+        };
+
+        const onMouseMove = (e: MouseEvent) => performDrag(e.clientY);
+
+        const onScrollThumbTouchMove = (e: TouchEvent) => {
+          e.preventDefault();
+          const t = e.touches[0];
+          if (t) performDrag(t.clientY);
+        };
+
+        const onMouseDown = (e: MouseEvent) => {
+          e.preventDefault();
+          isDragging = true;
+          dragStartY = e.clientY;
+          dragStartViewportY = terminal.buffer.active.viewportY;
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', endDrag);
+        };
+
+        const onScrollThumbTouchStart = (e: TouchEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const t = e.touches[0];
+          if (!t) return;
+          isDragging = true;
+          dragStartY = t.clientY;
+          dragStartViewportY = terminal.buffer.active.viewportY;
+          document.addEventListener('touchmove', onScrollThumbTouchMove, { passive: false });
+          document.addEventListener('touchend', endDrag, { passive: true });
+          document.addEventListener('touchcancel', endDrag, { passive: true });
+        };
+
+        thumbEl.addEventListener('mousedown', onMouseDown);
+        thumbEl.addEventListener('touchstart', onScrollThumbTouchStart, { passive: false });
+
+        handleCleanupFns.push(() => {
+          thumbEl.removeEventListener('mousedown', onMouseDown);
+          thumbEl.removeEventListener('touchstart', onScrollThumbTouchStart);
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', endDrag);
+          document.removeEventListener('touchmove', onScrollThumbTouchMove);
+          document.removeEventListener('touchend', endDrag);
+          document.removeEventListener('touchcancel', endDrag);
+        });
+      }
 
       // Setup ResizeObserver for automatic fitting
       // Track container size to avoid unnecessary fit() calls
@@ -514,9 +797,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
         cleanupContextMenu();
         resizeObserver.disconnect();
-        dataDisposable.dispose();
-        selectionDisposable.dispose();
-        resizeDisposable.dispose();
+        dataDisposable?.dispose();
+        selectionDisposable?.dispose();
+        resizeDisposable?.dispose();
+        scrollDisposable?.dispose();
+        writeParsedDisposable?.dispose();
+        handleCleanupFns.forEach(fn => fn());
         terminal.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
@@ -550,6 +836,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // This provides automatic theme switching when no explicit theme prop is given
   useEffect(() => {
     if (typeof window === "undefined" || themeProp !== undefined) return;
+    if (typeof window.matchMedia !== "function") return;
 
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (e: MediaQueryListEvent) => {
@@ -614,6 +901,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     fit: () => {
       fitAddonRef.current?.fit();
     },
+    resize: (cols: number, rows: number) => {
+      terminalRef.current?.resize(cols, rows);
+    },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;
       return searchAddonRef.current.findNext(term);
@@ -631,6 +921,21 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   return (
     <div className={styles.container} data-context="terminal">
       <div ref={containerRef} className={styles.terminal} />
+      {/* Custom left-side scrollbar — stays out of the right-side window-scrollbar zone.
+          Only visible when scrollback content exists (controlled via updateScrollbar). */}
+      <div ref={scrollTrackRef} className={styles.scrollTrack} style={{ display: 'none' }}>
+        <div ref={scrollThumbRef} className={styles.scrollThumb} />
+      </div>
+      {/* Persistent "Copy all" button — copies full scrollback as plain text.
+          Always visible so mobile users don't need to struggle with text selection.
+          onPointerDown keeps clipboard write inside a synchronous gesture (iOS safe). */}
+      <button
+        aria-label="Copy terminal scrollback to clipboard"
+        className={styles.scrollbackCopyButton}
+        onPointerDown={handleCopyScrollbackPointerDown}
+      >
+        📋 Copy all
+      </button>
       {/* Floating Copy button and toast — always in DOM (hidden by default) so no
           mount/unmount during selection drag. Position set via ref DOM mutation.
           onPointerDown used (not onClick) because iOS Safari only allows clipboard
@@ -650,6 +955,21 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             ref={toastRef}
             className={styles.copiedToast}
             aria-live="polite"
+            style={{ display: 'none' }}
+          />
+          {/* Mobile selection handles — draggable circles at selection start/end.
+              Touch events attached natively in useEffect (not React handlers)
+              so they can call e.preventDefault() and stopPropagation reliably. */}
+          <div
+            ref={startHandleRef}
+            className={styles.selectionHandle}
+            aria-hidden="true"
+            style={{ display: 'none' }}
+          />
+          <div
+            ref={endHandleRef}
+            className={styles.selectionHandle}
+            aria-hidden="true"
             style={{ display: 'none' }}
           />
         </>,

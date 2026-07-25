@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -57,14 +58,51 @@ func (s *UnfinishedWorkService) sessionPathIndex() map[string][]string {
 	if s.storage == nil {
 		return map[string][]string{}
 	}
-	instances, err := s.storage.LoadInstances()
+	data, err := s.storage.ListInstanceData()
 	if err != nil {
 		return map[string][]string{}
 	}
-	index := make(map[string][]string, len(instances))
-	for _, inst := range instances {
-		if inst.Path != "" && inst.UUID != "" {
-			index[inst.Path] = append(index[inst.Path], inst.UUID)
+	index := make(map[string][]string, len(data))
+	for _, d := range data {
+		if d.Path != "" && d.UUID != "" {
+			index[d.Path] = append(index[d.Path], d.UUID)
+		}
+	}
+	return index
+}
+
+// worktreePRInfo holds the best available PR information for an unfinished worktree,
+// derived from active session instances whose Path matches the worktree path.
+type worktreePRInfo struct {
+	Number   int
+	URL      string
+	State    string
+	Priority string
+}
+
+// instancePRIndex builds a worktreePath → worktreePRInfo map from session instances
+// that have GitHub PR data from the PRStatusPoller.
+func (s *UnfinishedWorkService) instancePRIndex() map[string]worktreePRInfo {
+	if s.storage == nil {
+		return map[string]worktreePRInfo{}
+	}
+	data, err := s.storage.ListInstanceData()
+	if err != nil {
+		return map[string]worktreePRInfo{}
+	}
+	index := make(map[string]worktreePRInfo, len(data))
+	for _, d := range data {
+		if d.Path == "" || d.GitHubPRNumber == 0 {
+			continue
+		}
+		// Prefer the first (or best-priority) PR we find for a given path.
+		if _, exists := index[d.Path]; !exists {
+			index[d.Path] = worktreePRInfo{
+				Number:   d.GitHubPRNumber,
+				URL:      d.GitHubPRURL,
+				State:    d.GitHubPRState,
+				Priority: d.GitHubPRPriority,
+			}
 		}
 	}
 	return index
@@ -77,10 +115,11 @@ func (s *UnfinishedWorkService) ListUnfinishedWork(
 ) (*connect.Response[sessionv1.ListUnfinishedWorkResponse], error) {
 	results := s.scanner.GetAllResults()
 	pathIndex := s.sessionPathIndex()
+	prIndex := s.instancePRIndex()
 	worktrees := make([]*sessionv1.UnfinishedWorktree, 0, len(results))
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
-		worktrees = append(worktrees, scanResultToProto(r))
+		worktrees = append(worktrees, scanResultToProto(r, prIndex[r.WorktreePath]))
 	}
 	return connect.NewResponse(&sessionv1.ListUnfinishedWorkResponse{
 		Worktrees: worktrees,
@@ -98,11 +137,12 @@ func (s *UnfinishedWorkService) WatchUnfinishedWork(
 	// 1. Send initial snapshot.
 	results := s.scanner.GetAllResults()
 	pathIndex := s.sessionPathIndex()
+	prIndex := s.instancePRIndex()
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
 		evt := &sessionv1.UnfinishedWorkEvent{
 			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
-				WorktreeUpdated: scanResultToProto(r),
+				WorktreeUpdated: scanResultToProto(r, prIndex[r.WorktreePath]),
 			},
 		}
 		if err := stream.Send(evt); err != nil {
@@ -148,9 +188,10 @@ func (s *UnfinishedWorkService) convertUnfinishedEvent(evt *events.Event) *sessi
 			return nil
 		}
 		r.SessionIDs = s.sessionPathIndex()[r.WorktreePath]
+		prInfo := s.instancePRIndex()[r.WorktreePath]
 		return &sessionv1.UnfinishedWorkEvent{
 			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
-				WorktreeUpdated: scanResultToProto(r),
+				WorktreeUpdated: scanResultToProto(r, prInfo),
 			},
 		}
 	case unfinished.EventUnfinishedWorkRemoved:
@@ -347,28 +388,39 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 
 	worktreePath := r.WorktreePath
 
-	// git add .
-	addCtx, addCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer addCancel()
-	addCmd := safeexec.CommandContext(addCtx, "git", "-C", worktreePath, "add", ".")
-	addCmd.WaitDelay = 2 * time.Second
-	if out, err := addCmd.CombinedOutput(); err != nil {
+	// Stage everything, then untrack any backlog-scaffolding path that's already
+	// tracked in this branch's history (git.ScaffoldingExcludePatterns) — the same
+	// guard GitWorktree.CommitChanges/PushChanges apply, so a stale-tracked
+	// .backlog-context.md/.claude/commands/backlog/* can never be re-committed here
+	// either, regardless of gitignore/info-exclude state.
+	wt := git.NewGitWorktreeFromStorage(req.Msg.RepoPath, worktreePath, "", req.Msg.Branch, "")
+	if err := wt.StageAllExceptScaffolding(); err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("git add failed: %v\n%s", err, out),
+			ErrorMessage: fmt.Sprintf("git add failed: %v", err),
 		}), nil
 	}
 
-	// git commit -m <message>
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer commitCancel()
-	commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
-	commitCmd.WaitDelay = 2 * time.Second
-	if out, err := commitCmd.CombinedOutput(); err != nil {
+	hasStaged, err := wt.HasStagedChanges()
+	if err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("git commit failed: %v\n%s", err, out),
+			ErrorMessage: fmt.Sprintf("git diff --cached failed: %v", err),
 		}), nil
+	}
+
+	if hasStaged {
+		// git commit -m <message>
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer commitCancel()
+		commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
+		commitCmd.WaitDelay = 2 * time.Second
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("git commit failed: %v\n%s", err, out),
+			}), nil
+		}
 	}
 
 	// git push -u origin <branch> (60s timeout)
@@ -504,7 +556,7 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 
 // --- helpers ---
 
-func scanResultToProto(r unfinished.ScanResult) *sessionv1.UnfinishedWorktree {
+func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
 	wt := &sessionv1.UnfinishedWorktree{
 		RepoPath:            r.RepoPath,
 		Branch:              r.Branch,
@@ -521,6 +573,10 @@ func scanResultToProto(r unfinished.ScanResult) *sessionv1.UnfinishedWorktree {
 		AheadCommitMessages: r.AheadMessages,
 		IsDismissed:         r.Status == unfinished.ScanResultStatusError, // used below
 		SessionIds:          r.SessionIDs,
+		GithubPrNumber:      int32(pr.Number),
+		GithubPrUrl:         pr.URL,
+		GithubPrState:       pr.State,
+		GithubPrPriority:    pr.Priority,
 	}
 
 	// Correct the is_dismissed field (ScanResult doesn't carry this).

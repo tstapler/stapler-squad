@@ -279,6 +279,7 @@ export const error = style({
 
 export const shortcuts = style({
   display: "flex",
+  alignItems: "center",
   gap: 16,
   padding: "8px 16px",
   background: vars.color.hoverBackground,
@@ -286,6 +287,36 @@ export const shortcuts = style({
   color: vars.color.textMuted,
 });
 
+export const createButton = style({
+  marginLeft: "auto",
+  padding: "6px 16px",
+  borderRadius: 6,
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  border: "none",
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  // Touch target: 44px minimum per Apple HIG, achieved via invisible padding.
+  // The button body stays compact so it fits the shortcuts bar height.
+  minHeight: 32,
+  "@media": {
+    "(pointer: coarse)": {
+      padding: "10px 20px",
+      fontSize: 14,
+      borderRadius: 8,
+    },
+  },
+  selectors: {
+    "&:hover:not(:disabled)": {
+      background: vars.color.accentHover,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
 export const shortcut = style({
   display: "flex",
   alignItems: "center",

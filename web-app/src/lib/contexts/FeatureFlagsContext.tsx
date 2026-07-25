@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -92,4 +93,42 @@ export function useFeatureFlags() {
 export function useFeatureFlag(name: string): boolean {
   const { flags } = useContext(FeatureFlagsContext);
   return flags[name] ?? false;
+}
+
+/**
+ * Gates `children` behind a feature flag: renders nothing (and redirects to
+ * `redirectTo`) while the flag is disabled or still loading; renders
+ * `children` once the flag is confirmed enabled.
+ *
+ * Intentionally usable from more than one place in a route's render tree
+ * (e.g. a segment's `layout.tsx` AND its `page.tsx`) — that's not
+ * duplication, it's defense in depth: the layout keeps a disabled flag from
+ * ever mounting the page's client bundle, and the same check inside the
+ * page guarantees the page's own render output can never show gated content
+ * even if it's ever rendered outside that layout (unit tests, future route
+ * restructuring). Using a Server Component `page.tsx` to render this Client
+ * Component also lets the page keep a static `metadata` export, which a
+ * fully-client page cannot do.
+ */
+export function RequireFeatureFlag({
+  flag,
+  redirectTo = "/",
+  children,
+}: {
+  flag: string;
+  redirectTo?: string;
+  children: ReactNode;
+}) {
+  const { flags, isLoading } = useFeatureFlags();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isLoading && !flags[flag]) {
+      router.replace(redirectTo);
+    }
+  }, [isLoading, flags, flag, redirectTo, router]);
+
+  if (isLoading) return null;
+  if (!flags[flag]) return null;
+  return <>{children}</>;
 }

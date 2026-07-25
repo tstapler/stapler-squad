@@ -77,7 +77,9 @@ export function OmnibarResultList({
     const highlightedId = getHighlightedItemId(id, sessionResults, repoEntries, highlightedIndex);
     if (!highlightedId) return;
     const el = listRef.current.querySelector(`#${CSS.escape(highlightedId)}`);
-    el?.scrollIntoView({ block: "nearest" });
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
   }, [highlightedIndex, id, sessionResults, repoEntries]);
 
   return (

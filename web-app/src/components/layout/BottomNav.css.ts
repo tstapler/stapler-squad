@@ -211,3 +211,30 @@ export const moreSheetItemIcon = style({
   textAlign: "center",
   flexShrink: 0,
 });
+
+export const moreSheetScrollable = style({
+  overflowY: "auto",
+  // Use 100dvh so it doesn't overflow behind iOS Safari's collapsible address bar
+  maxHeight: "calc(100dvh - var(--bottom-nav-height, 72px) - env(safe-area-inset-bottom, 0px))",
+  WebkitOverflowScrolling: "touch",
+});
+
+export const moreSheetSection = style({
+  // Semantic grouping container
+});
+
+export const moreSheetSectionHeader = style({
+  display: "block",
+  padding: `${vars.space["3"]} ${vars.space["6"]} ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.bold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  userSelect: "none",
+});
+
+export const moreSheetUtilitySection = style({
+  borderTop: `1px solid ${vars.color.borderColor}`,
+  marginTop: vars.space["1"],
+});

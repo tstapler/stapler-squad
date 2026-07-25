@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -41,7 +42,7 @@ type StatusDeterminer interface {
 		inst *Instance,
 		content string,
 		statusInfo InstanceStatusInfo,
-		detector *detection.StatusDetector,
+		detector detection.TerminalDetector,
 	) DetectionResult
 }
 
@@ -63,13 +64,41 @@ func effectiveCtx(provided, fallback string) string {
 	return fallback
 }
 
+// applyWorktreeCheck inspects the git worktree of inst and potentially overrides the
+// current add/priority state with an UncommittedChanges reason, or sets CleanWorktree.
+// Only called when the session has a git worktree attached.
+func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority Priority) (newShouldAdd bool, newPriority Priority, newReason AttentionReason, newCtx string, cleanWorktree bool) {
+	worktree, err := inst.GetGitWorktree()
+	if err != nil {
+		log.Warn("failed to get git worktree", "session", inst.Title, "err", err)
+		return shouldAdd, priority, "", "", false
+	}
+	if worktree == nil {
+		return shouldAdd, priority, "", "", false
+	}
+	isDirty, err := worktree.IsDirty()
+	if err != nil {
+		log.Warn("failed to check git status", "session", inst.Title, "err", err)
+		return shouldAdd, priority, "", "", false
+	}
+	if isDirty {
+		if !shouldAdd || priority == PriorityLow {
+			log.Debug("uncommitted changes detected", "session", inst.Title)
+			return true, PriorityLow, ReasonUncommittedChanges, "Uncommitted changes ready to commit", false
+		}
+		return shouldAdd, priority, "", "", false
+	}
+	// Worktree is clean — signal caller to remove any UncommittedChanges entry.
+	return shouldAdd, priority, "", "", true
+}
+
 // Determine evaluates a session's state and returns a DetectionResult.
 // It is pure: no queue mutations, no storage calls, no side effects.
 func (d *DefaultStatusDeterminer) Determine(
 	inst *Instance,
 	content string,
 	statusInfo InstanceStatusInfo,
-	detector *detection.StatusDetector,
+	detector detection.TerminalDetector,
 ) DetectionResult {
 	// claudeStatus captures the raw DetectedStatus from whichever detection path ran.
 	// For controller sessions this is statusInfo.ClaudeStatus; for no-controller sessions
@@ -116,13 +145,13 @@ func (d *DefaultStatusDeterminer) Determine(
 			priority = PriorityHigh
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Tests are failing")
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Tests failing - %s", inst.Title, ctx)
+			log.Debug("tests failing", "session", inst.Title, "ctx", ctx)
 		case statusInfo.ClaudeStatus == detection.StatusSuccess:
 			reason = ReasonTaskComplete
 			priority = PriorityLow
 			shouldAdd = true
 			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion - %s", inst.Title, ctx)
+			log.Debug("task complete", "session", inst.Title, "ctx", ctx)
 		}
 
 		// Now handle idle state - but only if no status-based condition was detected above.
@@ -147,36 +176,23 @@ func (d *DefaultStatusDeterminer) Determine(
 		}
 
 		// Check for uncommitted changes (informational - user may want to review and commit)
-		// Only check if we don't already have a higher-priority reason
 		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
-			worktree, err := inst.GetGitWorktree()
-			if err != nil {
-				log.WarningLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
-			} else if worktree != nil {
-				isDirty, err := worktree.IsDirty()
-				if err != nil {
-					log.WarningLog.Printf("[ReviewQueue] Session '%s': Failed to check git status: %v", inst.Title, err)
-					log.LogForSession(inst.Title, "warning", "Failed to check git status: %v", err)
-				} else if isDirty {
-					if !shouldAdd || priority == PriorityLow {
-						reason = ReasonUncommittedChanges
-						priority = PriorityLow
-						shouldAdd = true
-						ctx = "Uncommitted changes ready to commit"
-						log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
-					}
-				} else {
-					// Worktree is clean — signal caller to remove any UncommittedChanges entry.
-					cleanWorktree = true
-				}
+			var newReason AttentionReason
+			shouldAdd, priority, newReason, ctx, cleanWorktree = d.applyWorktreeCheck(inst, shouldAdd, priority)
+			if newReason != "" {
+				reason = newReason
 			}
 		}
 	} else {
 		// No active controller (either none wired or not yet started) — detect status
 		// from terminal content.
 		if content != "" {
-			// Detect status from terminal content using the shared status detector
-			detectedStatus, statusContext := detector.DetectWithContext([]byte(content))
+			// Use line-by-line detection (bottom-up scan) so recent terminal state wins
+			// over stale scrollback content. DetectWithContext (full-block) fires error
+			// patterns on old "Error: Exit code 1" output before reaching a current
+			// approval dialog at the bottom of the pane.
+			lines := strings.Split(content, "\n")
+			detectedStatus, statusContext := detector.DetectWithContextFromLines(lines)
 			claudeStatus = detectedStatus
 
 			// Map terminal-detected status to queue action.
@@ -186,20 +202,32 @@ func (d *DefaultStatusDeterminer) Determine(
 				priority = PriorityHigh
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Waiting for approval to proceed")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Approval needed (no controller) - %s", inst.Title, ctx)
+				log.Debug("approval needed (no controller)", "session", inst.Title)
 			case detection.StatusInputRequired:
 				reason = ReasonInputRequired
 				priority = PriorityMedium
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Waiting for explicit user input")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Input required (no controller) - %s", inst.Title, ctx)
+				log.Debug("input required (no controller)", "session", inst.Title)
 			case detection.StatusError:
 				reason = ReasonErrorState
 				priority = PriorityUrgent
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Error state detected")
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Error detected (no controller) - %s", inst.Title, ctx)
-			case detection.StatusActive, detection.StatusProcessing:
+				log.Debug("error detected (no controller)", "session", inst.Title)
+			case detection.StatusTestsFailing:
+				reason = ReasonTestsFailing
+				priority = PriorityHigh
+				shouldAdd = true
+				ctx = effectiveCtx(statusContext, "Tests are failing")
+				log.Debug("tests failing (no controller)", "session", inst.Title)
+			case detection.StatusSuccess:
+				reason = ReasonTaskComplete
+				priority = PriorityLow
+				shouldAdd = true
+				ctx = effectiveCtx(statusContext, "Task completed successfully")
+				log.Debug("task complete (no controller)", "session", inst.Title)
+			case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
 		}
@@ -217,27 +245,11 @@ func (d *DefaultStatusDeterminer) Determine(
 		}
 
 		// Check for uncommitted changes (informational - user may want to review and commit)
-		// Only check if we don't already have a higher-priority reason
 		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
-			worktree, err := inst.GetGitWorktree()
-			if err != nil {
-				log.WarningLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
-			} else if worktree != nil {
-				isDirty, err := worktree.IsDirty()
-				if err != nil {
-					log.Warn("failed to check git status", "session", inst.Title, "err", err)
-				} else if isDirty {
-					if !shouldAdd || priority == PriorityLow {
-						reason = ReasonUncommittedChanges
-						priority = PriorityLow
-						shouldAdd = true
-						ctx = "Uncommitted changes ready to commit"
-						log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
-					}
-				} else {
-					// Worktree is clean — signal caller to remove any UncommittedChanges entry.
-					cleanWorktree = true
-				}
+			var newReason AttentionReason
+			shouldAdd, priority, newReason, ctx, cleanWorktree = d.applyWorktreeCheck(inst, shouldAdd, priority)
+			if newReason != "" {
+				reason = newReason
 			}
 		}
 	}
@@ -271,9 +283,6 @@ func (d *DefaultStatusDeterminer) Determine(
 					inst.Title, reason.String())
 			}
 		}
-	} else if log.IsDebugEnabled() {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': NOT STALE - %s since last meaningful output (threshold: %s)",
-			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(d.config.StalenessThreshold))
 	}
 
 	action := DetectionActionSkip

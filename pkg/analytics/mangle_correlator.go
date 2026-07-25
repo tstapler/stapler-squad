@@ -2,42 +2,75 @@ package analytics
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
 
 // Stage1Observation records a sequence seen at Stage 1 (PTY read) for later correlation with Stage 2.
 type Stage1Observation struct {
-	PayloadHash string
-	ByteLen     int
-	WallTime    time.Time
-	SessionID   string
-	SessionSeq  int64
+	PayloadHash  string
+	ByteLen      int
+	WallTime     time.Time
+	SessionID    string
+	SequenceType string
 }
 
-// MangleCorrelator correlates Stage 1 and Stage 2 escape sequence observations to detect mangling.
-// It holds Stage 1 observations in memory with a TTL; when Stage 2 arrives for the same sequence,
-// it compares hashes to detect mutations or truncations. Observations not matched within the TTL
-// are recorded as "stripped".
+// MangleCorrelator correlates Stage 1 and Stage 2 escape sequence observations to detect
+// mangling. It holds Stage 1 observations in memory with a TTL; when Stage 2 arrives for
+// the same logical sequence, it compares hashes to detect mutations or truncations.
+// Observations not matched within the TTL are recorded as "stripped".
+//
+// Stage 1 and Stage 2 are delivered by two independent tmux client attachments (a raw PTY
+// attach and a control-mode "-C" attach) with no shared clock or byte-offset numbering
+// between them — an earlier version of this correlator keyed on byte offset, which drifts
+// whenever the two clients' independent connection/redraw timing diverges. Instead,
+// sequences are correlated ORDINALLY per (session, sequence type): the Nth sequence of a
+// given type seen at Stage 1 is assumed to be the same logical occurrence as the Nth
+// sequence of that type seen at Stage 2, since tmux mirrors pane output to all attached
+// clients in the same relative order. This is robust to timing drift but not to an actual
+// dropped or duplicated sequence of that type, which desyncs every subsequent ordinal for
+// that (session, type) pair — a real limitation, but an ongoing desync is itself a symptom
+// worth surfacing (it shows up as a run of unexplained "stripped"/mismatched events) rather
+// than a silently wrong byte-offset correlation.
+// pendingKey is the zero-alloc map key for pending Stage 1 observations.
+type pendingKey struct {
+	sessionID    string
+	sequenceType string
+	ordinal      int64
+}
+
+// ordinalKey is the zero-alloc map key for per-(session, type) ordinal counters.
+type ordinalKey struct {
+	sessionID    string
+	sequenceType string
+}
+
 type MangleCorrelator struct {
 	mu      sync.Mutex
-	pending map[string]Stage1Observation // key: sessionID+":"+seqStr
-	maxAge  time.Duration
-	maxSize int
+	pending map[pendingKey]Stage1Observation
+	// stage1Ordinals/stage2Ordinals are independent per-(session,type) counters. They are
+	// deliberately not shared: Stage 1 and Stage 2 are driven by different goroutines
+	// observing different transports, and each counts only what it has itself seen.
+	stage1Ordinals map[ordinalKey]int64
+	stage2Ordinals map[ordinalKey]int64
+	maxAge         time.Duration
+	maxSize        int
 }
 
 // NewMangleCorrelator creates a correlator with the given TTL and max pending size.
 func NewMangleCorrelator(maxAge time.Duration, maxSize int) *MangleCorrelator {
 	return &MangleCorrelator{
-		pending: make(map[string]Stage1Observation),
-		maxAge:  maxAge,
-		maxSize: maxSize,
+		pending:        make(map[pendingKey]Stage1Observation),
+		stage1Ordinals: make(map[ordinalKey]int64),
+		stage2Ordinals: make(map[ordinalKey]int64),
+		maxAge:         maxAge,
+		maxSize:        maxSize,
 	}
 }
 
-// RecordStage1 records a Stage 1 observation for later correlation.
-func (c *MangleCorrelator) RecordStage1(sessionID string, sessionSeq int64, hash string, byteLen int) {
+// RecordStage1 records a Stage 1 observation for later correlation. It is assigned the next
+// ordinal for this (sessionID, sequenceType) pair.
+func (c *MangleCorrelator) RecordStage1(sessionID, sequenceType, hash string, byteLen int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -50,29 +83,38 @@ func (c *MangleCorrelator) RecordStage1(sessionID string, sessionSeq int64, hash
 		}
 	}
 
-	key := fmt.Sprintf("%s:%d", sessionID, sessionSeq)
-	c.pending[key] = Stage1Observation{
-		PayloadHash: hash,
-		ByteLen:     byteLen,
-		WallTime:    time.Now(),
-		SessionID:   sessionID,
-		SessionSeq:  sessionSeq,
+	ok := ordinalKey{sessionID, sequenceType}
+	c.stage1Ordinals[ok]++
+	ordinal := c.stage1Ordinals[ok]
+
+	c.pending[pendingKey{sessionID, sequenceType, ordinal}] = Stage1Observation{
+		PayloadHash:  hash,
+		ByteLen:      byteLen,
+		WallTime:     time.Now(),
+		SessionID:    sessionID,
+		SequenceType: sequenceType,
 	}
 }
 
-// CheckStage2 checks whether a Stage 2 observation matches the corresponding Stage 1 observation.
+// CheckStage2 checks whether the next Stage 2 observation for this (sessionID, sequenceType)
+// pair — the next ordinal — matches its corresponding Stage 1 observation.
 // Returns (mangled bool, mangleType string). mangleType is one of: "", "truncated", "mutated".
-// If no Stage 1 observation is found, returns (false, "") — absence is not definitive.
-func (c *MangleCorrelator) CheckStage2(sessionID string, sessionSeq int64, hash string, byteLen int) (bool, string) {
+// If no Stage 1 observation is found at that ordinal, returns (false, "") — absence is not
+// definitive; the eviction pass handles the "never arrived" (stripped) case.
+func (c *MangleCorrelator) CheckStage2(sessionID, sequenceType, hash string, byteLen int) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	key := fmt.Sprintf("%s:%d", sessionID, sessionSeq)
-	obs, ok := c.pending[key]
+	ok2 := ordinalKey{sessionID, sequenceType}
+	c.stage2Ordinals[ok2]++
+	ordinal := c.stage2Ordinals[ok2]
+
+	pk := pendingKey{sessionID, sequenceType, ordinal}
+	obs, ok := c.pending[pk]
 	if !ok {
 		return false, ""
 	}
-	delete(c.pending, key)
+	delete(c.pending, pk)
 
 	if obs.PayloadHash == hash {
 		return false, ""
@@ -101,13 +143,12 @@ func (c *MangleCorrelator) EvictExpired(ctx context.Context, writer EscapeEventW
 		writer.WriteEscapeEvent(ctx, EscapeEventRecord{
 			SessionID:    obs.SessionID,
 			Stage:        StageTransport,
-			SequenceType: "unknown",
+			SequenceType: obs.SequenceType,
 			ByteLen:      obs.ByteLen,
 			PayloadHash:  obs.PayloadHash,
 			Mangled:      true,
 			MangleType:   "stripped",
 			WallTime:     obs.WallTime,
-			SessionSeq:   obs.SessionSeq,
 		})
 	}
 }

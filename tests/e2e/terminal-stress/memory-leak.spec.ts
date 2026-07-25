@@ -1,3 +1,5 @@
+import { FEATURE_CATALOG } from '../../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['terminal-render']] as const;
 import { test, expect } from '@playwright/test';
 import {
   setupStressTestPage,

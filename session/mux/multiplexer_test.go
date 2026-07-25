@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestMultiplexer_BroadcastToClients verifies that PTY output is sent to ALL connected clients.
@@ -125,10 +126,11 @@ func newTestMultiplexer(t *testing.T) (*Multiplexer, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Multiplexer{
-		clients:     make(map[net.Conn]struct{}),
-		tmuxSession: "test-session",
-		ctx:         ctx,
-		cancel:      cancel,
+		clients:      make(map[net.Conn]struct{}),
+		tmuxSession:  "test-session",
+		serverSocket: tmux.ResolveSocket(""),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	return m, cancel
 }

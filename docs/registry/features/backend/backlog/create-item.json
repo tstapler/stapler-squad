@@ -5,12 +5,11 @@
   "method": "CreateBacklogItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service.go",
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
-    "TestCreateBacklogItem_Success",
-    "TestCreateBacklogItem_EmptyTitle",
-    "TestCreateBacklogItem_NilStorage"
+    "TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted",
+    "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue"
   ],
-  "lastModified": "2026-05-18T08:01:05.099337344-07:00"
+  "lastModified": "2026-07-17T00:00:00-07:00"
 }

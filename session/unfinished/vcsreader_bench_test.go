@@ -201,3 +201,38 @@ func BenchmarkFullScanCycle(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCommitMessages_ColdThenWarm asserts that the second call to CommitMessages
+// (warm reachableSetCache) is allocation-free compared to the cold path.
+// This is the regression guard for the #1 mutex hotspot: 47.4B cycles, 38 events.
+func BenchmarkCommitMessages_ColdThenWarm(b *testing.B) {
+	for _, n := range commitCounts {
+		repo := newBenchRepo(b, n)
+		b.Run(fmt.Sprintf("GoGitVCSReader/%dcommits", n), func(b *testing.B) {
+			r := &unfinished.GoGitVCSReader{}
+
+			// Cold call: populates reachableSetCache and commitMessagesCache.
+			if _, err := r.CommitMessages(repo.path, repo.base, 20); err != nil {
+				b.Fatalf("cold call failed: %v", err)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = r.CommitMessages(repo.path, repo.base, 20)
+			}
+
+			// Post-bench assertion: warm path (commitMessagesCache hit) must not
+			// perform any graph-walk allocations. The only unavoidable allocs are:
+			//   1. fmt.Sprintf to build the cache key (~1 alloc)
+			//   2. sync.Map.Load boxing the key and value into interface{} (~2 allocs)
+			// Any value >> 4 indicates the O(N) reachable-set walk is happening.
+			allocs := testing.AllocsPerRun(100, func() {
+				_, _ = r.CommitMessages(repo.path, repo.base, 20)
+			})
+			if allocs > 4 {
+				b.Errorf("CommitMessages warm path: got %.0f allocs, want ≤4 (no graph walk)", allocs)
+			}
+		})
+	}
+}

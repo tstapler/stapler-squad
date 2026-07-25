@@ -120,6 +120,9 @@
   --accent-bg: rgba(0, 112, 243, 0.08);
   --accent-hover: rgba(0, 112, 243, 0.16);
 
+  /* Session bulk-select: selected row background tint (indigo-500 at 8% opacity) */
+  --session-selected-bg: rgba(99, 102, 241, 0.08);
+
   /* Extended status variants */
   --error-dark: #b91c1c;
   --error-rgb: 239, 68, 68;

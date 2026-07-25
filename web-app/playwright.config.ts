@@ -4,8 +4,8 @@ import { defineConfig, devices } from '@playwright/test';
  * Playwright configuration for terminal stress tests.
  *
  * Usage:
- *   npm run test:e2e              # Run all E2E tests
- *   npm run test:stress           # Run only terminal stress tests
+ *   pnpm run test:e2e             # Run all E2E tests
+ *   pnpm run test:stress          # Run only terminal stress tests
  *   npx playwright test           # Direct invocation
  *
  * The webServer will automatically start on an available port.

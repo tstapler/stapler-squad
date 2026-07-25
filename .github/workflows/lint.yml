@@ -12,6 +12,7 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'tests/e2e/**'
       - '.github/workflows/lint.yml'
   workflow_dispatch:
   pull_request:
@@ -25,6 +26,7 @@ on:
       - 'web-app/**.css'
       - 'web-app/**.ts'
       - 'web-app/**.tsx'
+      - 'tests/e2e/**'
       - '.github/workflows/lint.yml'
 
 jobs:
@@ -40,12 +42,17 @@ jobs:
           go-version: '1.25.0'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: web-app/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
 
       - name: Install buf
         run: |
@@ -54,7 +61,7 @@ jobs:
 
       - name: Install web-app dependencies
         working-directory: web-app
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Generate protobuf code
         run: buf generate proto
@@ -107,7 +114,7 @@ jobs:
 
       - name: CSS lint (stylelint + undefined variable check)
         working-directory: web-app
-        run: npm run lint:css
+        run: pnpm run lint:css
 
       - name: Check formatting (PR-changed files only)
         run: |
@@ -132,3 +139,11 @@ jobs:
             exit 1
           fi
           echo "All changed Go files are properly formatted"
+
+      - name: Validate feature catalog (typed feature registry)
+        working-directory: web-app
+        run: |
+          # 1. TypeScript compile check on the features catalog — catches unknown FeatureId references
+          node_modules/.bin/tsc --noEmit --project tsconfig.node.json
+          # 2. Runtime catalog validation — catches features with empty testIds
+          pnpm run validate-catalog

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -13,6 +14,21 @@ import (
 
 // defaultSyncInterval is the time between sync ticks.
 const defaultSyncInterval = 15 * time.Minute
+
+// syncSourceLocks serializes SyncOne calls per source ID across every
+// SyncLoop instance in the process — the long-lived periodic loop and any
+// short-lived loop constructed for a manual TriggerSync RPC both consult this
+// same map. Without it, a manual sync racing the periodic tick for the same
+// source could both miss the same not-yet-created item's external_id lookup
+// and both attempt to create it.
+var syncSourceLocks sync.Map // map[string]*sync.Mutex
+
+// lockForSource returns the mutex serializing syncs for a given source ID,
+// creating one on first use.
+func lockForSource(sourceID string) *sync.Mutex {
+	m, _ := syncSourceLocks.LoadOrStore(sourceID, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
 
 // SyncLoop drives periodic sync of all enabled ItemSources.
 type SyncLoop struct {
@@ -157,8 +173,37 @@ func (sl *SyncLoop) decryptConfigToken(raw string) (string, error) {
 	return string(decrypted), nil
 }
 
-// SyncOne fetches and upserts items for a single ItemSource.
+// SyncByID looks up an ItemSource by ID and syncs it, regardless of its
+// Enabled flag — unlike the periodic loop (runAllSources), which only syncs
+// enabled sources, this is for an explicit manual/on-demand trigger where the
+// caller already decided to sync this specific source.
+func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
+	er, ok := sl.storage.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SyncByID: storage backend does not support ent operations")
+	}
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("SyncByID: %w", err)
+	}
+	return sl.SyncOne(ctx, entSrc)
+}
+
+// SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
+// for the same source (e.g. a manual TriggerSync racing the periodic tick)
+// are serialized via a per-source lock — see syncSourceLocks.
 func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
+	mu := lockForSource(source.ID.String())
+	mu.Lock()
+	defer mu.Unlock()
+
+	start := time.Now()
+
+	er, ok := sl.storage.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SyncOne: storage backend does not support ent operations")
+	}
+
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {
 		return fmt.Errorf("no plugin registered for plugin_id %q", source.PluginID)
@@ -175,23 +220,28 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 	items, newCursor, fetchErr := plugin.Fetch(ctx, cfg, cursor)
 	if fetchErr != nil {
+		// Record the failed attempt so it's visible in sync history instead of
+		// vanishing silently — GetSyncHistory would otherwise show nothing for
+		// a sync run that failed outright.
+		if evErr := er.CreateSourceSyncEvent(ctx, source.ID.String(), cursor, 0, 0, 0, 1, fetchErr.Error(), start, time.Now()); evErr != nil {
+			log.ErrorLog.Printf("[SyncLoop] CreateSourceSyncEvent(%s) error: %v", source.ID, evErr)
+		}
 		return fmt.Errorf("fetch: %w", fetchErr)
 	}
 
-	er, ok := sl.storage.repo.(*EntRepository)
-	if !ok {
-		return fmt.Errorf("SyncOne: storage backend does not support ent operations")
-	}
-
-	var created, updated, skipped int
+	var created, updated, skipped, errored int
 
 	for _, extItem := range items {
 		data := plugin.MapToBacklogItem(extItem, source.ID.String())
 
-		// Check if an item with this external_id already exists.
-		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, extItem.ExternalID)
+		// Check if an item with this external_id already exists for this source.
+		// external_id (e.g. a GitHub issue/PR number) is only unique within its
+		// source — two different repos can both have an issue #1 — so the lookup
+		// must never match across sources.
+		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
 		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
 			log.ErrorLog.Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
+			errored++
 			continue
 		}
 
@@ -199,6 +249,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			// New item — create it.
 			if _, createErr := sl.storage.CreateBacklogItem(ctx, data); createErr != nil {
 				log.ErrorLog.Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)
+				errored++
 				continue
 			}
 			created++
@@ -233,24 +284,21 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 		if _, updateErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[SyncLoop] UpdateBacklogItem %s error: %v", existing.ID, updateErr)
+			errored++
 			continue
 		}
 		updated++
 	}
 
-	// Update cursor and last_synced_at on the source.
+	// Advance the cursor and record the SourceSyncEvent atomically — see
+	// FinishSourceSync's doc comment for why these must not be separate writes.
 	now := time.Now()
-	if updateErr := er.UpdateItemSourceSync(ctx, source.ID.String(), newCursor, now); updateErr != nil {
-		log.ErrorLog.Printf("[SyncLoop] UpdateItemSourceSync(%s) error: %v", source.ID, updateErr)
+	if finishErr := er.FinishSourceSync(ctx, source.ID.String(), newCursor, created, updated, skipped, errored, start, now); finishErr != nil {
+		log.ErrorLog.Printf("[SyncLoop] FinishSourceSync(%s) error: %v", source.ID, finishErr)
 	}
 
-	// Record a SourceSyncEvent.
-	if syncEventErr := er.CreateSourceSyncEvent(ctx, source.ID.String(), newCursor, created, updated, skipped, now); syncEventErr != nil {
-		log.ErrorLog.Printf("[SyncLoop] CreateSourceSyncEvent(%s) error: %v", source.ID, syncEventErr)
-	}
-
-	log.InfoLog.Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d",
-		source.ID, source.PluginID, created, updated, skipped)
+	log.InfoLog.Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",
+		source.ID, source.PluginID, created, updated, skipped, errored)
 	return nil
 }
 

@@ -336,3 +336,19 @@ export const denyButton = style([baseActionButton, {
 export const minimizeHint = style({
   display: "none",
 });
+
+export const undoButton = style([baseActionButton, {
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  selectors: {
+    "&:hover": {
+      filter: "brightness(1.1)",
+      transform: "translateY(-1px)",
+      boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
+    },
+    "&:focus-visible": {
+      outline: `2px solid ${vars.color.primary}`,
+      outlineOffset: "2px",
+    },
+  },
+}]);

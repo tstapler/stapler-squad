@@ -11,7 +11,11 @@ export interface ActionDeps {
   deleteSession: (id: string) => Promise<void>;
   close: () => void;
   setTheme: (name: ThemeName) => void;
-  spawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
+  /**
+   * runWorkflow fires a workflow by slug + optional arg.
+   * Optional to avoid breaking existing call sites; absent dep silently no-ops.
+   */
+  runWorkflow?: (slug: string, arg: string) => void;
   /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
   analytics?: Pick<AnalyticsProvider, "track">;
 }
@@ -30,16 +34,17 @@ export function dispatchOmnibarAction(
       deps.close();
       return;
     case "create_session": {
-      const isOneOff = action.sessionType === "one_off";
+      const isAutonomous = action.sessionType === "autonomous";
       if (track) track({ name: "omnibar.create_session", category: "user_action", labels: { sessionType: action.sessionType } });
       void deps.createSession({
         title: action.title ?? "",
         path: action.path,
-        sessionType: isOneOff ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree",
+        sessionType: isAutonomous ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
         branch: action.branch,
         program: action.program ?? "",
         autoYes: false,
-        oneOff: isOneOff,
+        autonomousMode: isAutonomous ? true : undefined,
+        permissionMode: isAutonomous ? "auto" : undefined,
       });
       deps.close();
       return;
@@ -75,9 +80,34 @@ export function dispatchOmnibarAction(
       deps.setTheme(action.themeName);
       deps.close();
       return;
-    case "spawn_shell":
-      if (track) track({ name: "omnibar.spawn_shell", category: "user_action" });
-      deps.spawnShell?.(action.sessionId, action.workingDir, action.shellCommand);
+    case "auto_fix":
+      if (track) track({ name: "omnibar.auto_fix", category: "user_action" });
+      void deps.createSession({
+        title: action.title,
+        path: "",
+        sessionType: undefined,
+        program: action.program ?? "",
+        autoYes: false,
+        autonomousMode: true,
+        permissionMode: "auto",
+      });
+      deps.close();
+      return;
+    case "run_workflow":
+      if (track) track({ name: "omnibar.run_workflow", category: "user_action", labels: { slug: action.workflowSlug } });
+      deps.runWorkflow?.(action.workflowSlug, action.workflowArg);
+      deps.close();
+      return;
+    case "create_alias_session":
+      if (track) track({ name: "omnibar.create_alias_session", category: "user_action", labels: { aliasName: action.aliasName } });
+      void deps.createSession({
+        title: action.label?.trim() || action.aliasName,
+        path: "",
+        program: "",
+        autoYes: false,
+        aliasName: action.aliasName,
+        branch: action.branch,
+      });
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

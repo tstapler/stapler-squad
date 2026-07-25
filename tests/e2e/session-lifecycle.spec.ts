@@ -1,4 +1,5 @@
-// @feature session:create, session:update, session:delete
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['session-create'], FEATURE_CATALOG['session-delete']] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 

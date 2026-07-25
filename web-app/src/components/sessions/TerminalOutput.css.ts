@@ -485,6 +485,55 @@ export const mobileKeyCtrlC = style({
   boxShadow: `0 0 0 1px ${vars.color.error}`,
 });
 
+// Story 3.2.1 — reconnecting banner overlay
+export const reconnectingBanner = style({
+  position: "absolute",
+  top: vars.space["2"],
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 20,
+  padding: `${vars.space["1"]} ${vars.space["4"]}`,
+  borderRadius: "9999px",
+  background: "rgba(0, 0, 0, 0.7)",
+  color: vars.color.textMuted,
+  fontSize: "0.8125rem",
+  textAlign: "center",
+  whiteSpace: "nowrap",
+  pointerEvents: "none",
+});
+
+// Story 3.2.2 — hard-failed banner overlay
+export const hardFailedBanner = style({
+  position: "absolute",
+  top: vars.space["2"],
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 20,
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  padding: `${vars.space["1"]} ${vars.space["4"]}`,
+  borderRadius: "9999px",
+  background: vars.color.error,
+  color: vars.color.textInverse,
+  fontSize: "0.8125rem",
+  whiteSpace: "nowrap",
+});
+
+globalStyle(`${hardFailedBanner} button`, {
+  background: "transparent",
+  border: `1px solid ${vars.color.textInverse}`,
+  borderRadius: "4px",
+  color: vars.color.textInverse,
+  padding: "2px 8px",
+  cursor: "pointer",
+  fontSize: "0.8125rem",
+});
+
+globalStyle(`${hardFailedBanner} button:hover`, {
+  background: "rgba(255,255,255,0.2)",
+});
+
 // Global styles for xterm.js selectors within the terminal class
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar`, {
   width: "12px",

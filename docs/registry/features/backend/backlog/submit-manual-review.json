@@ -1,0 +1,12 @@
+{
+  "id": "backlog:submit-manual-review",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "SubmitManualReview",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+}

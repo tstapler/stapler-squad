@@ -32,6 +32,8 @@ jest.mock("@/lib/hooks/useApprovals", () => ({
     approve: mockApprove,
     deny: mockDeny,
     refresh: mockRefresh,
+    clearForSession: jest.fn(),
+    clearedSessions: new Set(),
   }),
 }));
 

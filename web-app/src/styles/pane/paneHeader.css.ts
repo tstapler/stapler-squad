@@ -1,5 +1,4 @@
 import { style } from "@vanilla-extract/css";
-import { recipe } from "@vanilla-extract/recipes";
 import { vars } from "@/styles/theme.css";
 
 export const paneHeader = style({
@@ -71,38 +70,3 @@ export const paneCloseButton = style([
     },
   },
 ]);
-
-export const paneTabButton = recipe({
-  base: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    height: "20px",
-    padding: `0 ${vars.space["1"]}`,
-    background: "transparent",
-    border: "none",
-    borderRadius: vars.radii.sm,
-    cursor: "pointer",
-    fontSize: vars.fontSize.xs,
-    fontFamily: vars.font.mono,
-    transition: "background 100ms, color 100ms",
-  },
-  variants: {
-    active: {
-      true: {
-        background: vars.color.primary,
-        color: vars.color.textInverse,
-      },
-      false: {
-        color: vars.color.textMuted,
-        selectors: {
-          "&:hover": {
-            background: vars.color.hoverBackground,
-            color: vars.color.textPrimary,
-          },
-        },
-      },
-    },
-  },
-  defaultVariants: { active: false },
-});

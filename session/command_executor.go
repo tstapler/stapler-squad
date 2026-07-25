@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
-	"sync"
-	"time"
 )
 
 // ExecutionResult represents the result of a command execution.
@@ -47,28 +49,44 @@ func DefaultExecutionOptions() ExecutionOptions {
 		MaxOutputSize:       1024 * 1024, // 1MB
 		StatusCheckInterval: 100 * time.Millisecond,
 		TerminalStatuses: []detection.DetectedStatus{
-			detection.StatusReady,
+			detection.StatusIdle,
 			detection.StatusError,
 		},
 	}
 }
 
+// executorLifecycle holds the running context for the executor.
+// Protected by lifecycle; write-locked only during Start/Stop transitions.
+type executorLifecycle struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 // CommandExecutor executes commands by writing to PTY and monitoring responses.
 type CommandExecutor struct {
+	// Immutable after construction
 	sessionName    string
 	ptyAccess      *PTYAccess
 	responseStream *ResponseStream
-	statusDetector *detection.StatusDetector
+	statusDetector detection.TerminalDetector
 	queue          *CommandQueue
-	options        ExecutionOptions
-	mu             sync.RWMutex
-	executing      bool
-	currentCommand *Command
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	resultCallback func(*ExecutionResult)
 	subscriberID   string
+
+	// lifecycle guards Start/Stop transitions; write-locked only at transition boundary.
+	lifecycle Locked[executorLifecycle]
+	// executing is true between Start() and Stop(). Atomic so IsExecuting() never contends.
+	executing atomic.Bool
+
+	// currentCommand is set for the duration of each command execution.
+	// atomic.Pointer eliminates lock contention on GetCurrentCommand().
+	currentCommand atomic.Pointer[Command]
+
+	// optMu protects options and resultCallback (rarely changed).
+	optMu          sync.RWMutex
+	options        ExecutionOptions
+	resultCallback func(*ExecutionResult)
+
+	wg sync.WaitGroup
 }
 
 // NewCommandExecutor creates a new command executor for the given session.
@@ -76,7 +94,7 @@ func NewCommandExecutor(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *detection.StatusDetector,
+	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 ) *CommandExecutor {
 	return &CommandExecutor{
@@ -95,7 +113,7 @@ func NewCommandExecutorWithOptions(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *detection.StatusDetector,
+	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 	options ExecutionOptions,
 ) *CommandExecutor {
@@ -112,30 +130,54 @@ func NewCommandExecutorWithOptions(
 
 // Start begins processing commands from the queue.
 func (ce *CommandExecutor) Start(ctx context.Context) error {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
-
-	if ce.executing {
-		return fmt.Errorf("command executor already started for session '%s'", ce.sessionName)
+	var startErr error
+	ce.lifecycle.Write(func(l *executorLifecycle) {
+		if l.ctx != nil {
+			startErr = fmt.Errorf("command executor already started for session '%s'", ce.sessionName)
+			return
+		}
+		if ce.responseStream == nil {
+			startErr = fmt.Errorf("response stream not initialized for session '%s'", ce.sessionName)
+			return
+		}
+		innerCtx, cancel := context.WithCancel(ctx)
+		l.ctx = innerCtx
+		l.cancel = cancel
+		ce.executing.Store(true)
+		ce.wg.Add(1)
+		go ce.executionLoop(innerCtx)
+	})
+	if startErr != nil {
+		return startErr
 	}
-
-	if ce.responseStream == nil {
-		return fmt.Errorf("response stream not initialized for session '%s'", ce.sessionName)
-	}
-
-	ce.ctx, ce.cancel = context.WithCancel(ctx)
-	ce.executing = true
-
-	// Start the execution loop
-	ce.wg.Add(1)
-	go ce.executionLoop()
-
 	log.Info("command executor started", "session", ce.sessionName)
 	return nil
 }
 
+// Stop stops the command executor and waits for completion.
+func (ce *CommandExecutor) Stop() error {
+	var cancelFn context.CancelFunc
+	ce.lifecycle.Write(func(l *executorLifecycle) {
+		if l.cancel == nil {
+			return
+		}
+		cancelFn = l.cancel
+		l.ctx = nil
+		l.cancel = nil
+	})
+	if cancelFn == nil {
+		return fmt.Errorf("command executor not started for session '%s'", ce.sessionName)
+	}
+	cancelFn()
+	ce.wg.Wait()
+	ce.executing.Store(false)
+	ce.currentCommand.Store(nil)
+	log.Info("command executor stopped", "session", ce.sessionName)
+	return nil
+}
+
 // executionLoop is the main execution loop that processes commands from the queue.
-func (ce *CommandExecutor) executionLoop() {
+func (ce *CommandExecutor) executionLoop(ctx context.Context) {
 	defer ce.wg.Done()
 	defer log.Info("command executor stopped", "session", ce.sessionName)
 
@@ -149,7 +191,7 @@ func (ce *CommandExecutor) executionLoop() {
 
 	for {
 		select {
-		case <-ce.ctx.Done():
+		case <-ctx.Done():
 			// Execution cancelled
 			return
 		default:
@@ -158,7 +200,7 @@ func (ce *CommandExecutor) executionLoop() {
 			if cmd == nil {
 				// No commands available, wait for notification while draining response channel
 				// to prevent "channel full" warnings when output arrives during idle periods
-				if !ce.waitForCommandOrDrain(responseCh) {
+				if !ce.waitForCommandOrDrain(ctx, responseCh) {
 					// Response channel closed - session is stopping, exit the loop
 					return
 				}
@@ -166,7 +208,7 @@ func (ce *CommandExecutor) executionLoop() {
 			}
 
 			// Execute the command
-			result := ce.executeCommand(cmd, responseCh)
+			result := ce.executeCommand(ctx, cmd, responseCh)
 
 			// Update command in queue
 			cmd.Status = CommandCompleted
@@ -185,8 +227,11 @@ func (ce *CommandExecutor) executionLoop() {
 			}
 
 			// Invoke callback if set
-			if ce.resultCallback != nil {
-				ce.resultCallback(result)
+			ce.optMu.RLock()
+			cb := ce.resultCallback
+			ce.optMu.RUnlock()
+			if cb != nil {
+				cb(result)
 			}
 		}
 	}
@@ -196,42 +241,33 @@ func (ce *CommandExecutor) executionLoop() {
 // to prevent buffer overflow when output arrives during idle periods.
 // Returns true if the caller should continue (timer fired or command ready),
 // false if the response channel closed (caller should exit).
-func (ce *CommandExecutor) waitForCommandOrDrain(responseCh <-chan ResponseChunk) bool {
-	// Create the timer once outside the loop. Using time.After() inside the loop
-	// allocates a new channel+timer on every iteration, causing massive GC pressure
-	// when response chunks are flowing (thousands of leaked timers per second).
+func (ce *CommandExecutor) waitForCommandOrDrain(ctx context.Context, responseCh <-chan ResponseChunk) bool {
 	timer := time.NewTimer(1 * time.Second)
 	defer timer.Stop()
 	for {
+		// Non-blocking drain: consume all buffered chunks without blocking the
+		// scheduler. This avoids the 6.6M goroutine wake-ups that occurred when
+		// responseCh was a select case (one wake-up per chunk arrival).
+		for len(responseCh) > 0 {
+			if _, ok := <-responseCh; !ok {
+				return false
+			}
+		}
 		select {
-		case <-ce.ctx.Done():
+		case <-ctx.Done():
 			return false
 		case <-ce.queue.NotifyChannel():
 			// New command available
 			return true
-		case _, ok := <-responseCh:
-			// Drain response chunks while idle - we don't need the data,
-			// just preventing channel overflow. Consume all buffered chunks
-			// in a tight loop so we re-enter the scheduler only once per burst
-			// rather than once per chunk.
-			if !ok {
-				return false
-			}
-			for len(responseCh) > 0 {
-				if _, ok := <-responseCh; !ok {
-					return false
-				}
-			}
-			// Continue draining
 		case <-timer.C:
-			// Periodic check for context cancellation
+			// Periodic wake-up to drain any chunks that accumulated since last iteration.
 			return true
 		}
 	}
 }
 
 // executeCommand executes a single command and returns the result.
-func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan ResponseChunk) *ExecutionResult {
+func (ce *CommandExecutor) executeCommand(ctx context.Context, cmd *Command, responseCh <-chan ResponseChunk) *ExecutionResult {
 	log.Info("executing command", "cmd_id", cmd.ID, "session", ce.sessionName, "text", cmd.Text)
 
 	result := &ExecutionResult{
@@ -242,9 +278,14 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 	}
 
 	// Mark command as executing
-	ce.mu.Lock()
-	ce.currentCommand = cmd
-	ce.mu.Unlock()
+	ce.currentCommand.Store(cmd)
+	defer ce.currentCommand.Store(nil)
+
+	// Snapshot options once at the start of execution so the ticker/timer use
+	// consistent values even if SetOptions is called concurrently.
+	ce.optMu.RLock()
+	opts := ce.options
+	ce.optMu.RUnlock()
 
 	// Update command status in queue
 	cmd.Status = CommandExecuting
@@ -265,15 +306,15 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 	// Monitor response and detect status changes
 	var outputBuffer []byte
 	lastStatus := detection.StatusUnknown
-	timeoutTimer := time.NewTimer(ce.options.Timeout)
+	timeoutTimer := time.NewTimer(opts.Timeout)
 	defer timeoutTimer.Stop()
 
-	statusCheckTicker := time.NewTicker(ce.options.StatusCheckInterval)
+	statusCheckTicker := time.NewTicker(opts.StatusCheckInterval)
 	defer statusCheckTicker.Stop()
 
 	for {
 		select {
-		case <-ce.ctx.Done():
+		case <-ctx.Done():
 			// Execution cancelled
 			result.Error = fmt.Errorf("execution cancelled")
 			result.EndTime = time.Now()
@@ -281,9 +322,9 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 
 		case <-timeoutTimer.C:
 			// Timeout
-			result.Error = fmt.Errorf("command execution timed out after %v", ce.options.Timeout)
+			result.Error = fmt.Errorf("command execution timed out after %v", opts.Timeout)
 			result.EndTime = time.Now()
-			log.Warn("command timed out", "cmd_id", cmd.ID, "timeout", ce.options.Timeout)
+			log.Warn("command timed out", "cmd_id", cmd.ID, "timeout", opts.Timeout)
 			return result
 
 		case chunk, ok := <-responseCh:
@@ -307,9 +348,9 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 			outputBuffer = append(outputBuffer, chunk.Data...)
 
 			// Check output size limit
-			if ce.options.MaxOutputSize > 0 && len(outputBuffer) > ce.options.MaxOutputSize {
+			if opts.MaxOutputSize > 0 && len(outputBuffer) > opts.MaxOutputSize {
 				// Keep only the last MaxOutputSize bytes
-				outputBuffer = outputBuffer[len(outputBuffer)-ce.options.MaxOutputSize:]
+				outputBuffer = outputBuffer[len(outputBuffer)-opts.MaxOutputSize:]
 			}
 
 		case <-statusCheckTicker.C:
@@ -327,8 +368,8 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 					lastStatus = status
 
 					// Check if terminal status reached
-					if ce.isTerminalStatus(status) {
-						result.Success = (status == detection.StatusReady)
+					if ce.isTerminalStatus(opts, status) {
+						result.Success = (status == detection.StatusIdle)
 						result.EndTime = time.Now()
 						result.Output = string(outputBuffer)
 						result.FinalStatus = status
@@ -341,8 +382,8 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 }
 
 // isTerminalStatus checks if a status indicates command completion.
-func (ce *CommandExecutor) isTerminalStatus(status detection.DetectedStatus) bool {
-	for _, terminalStatus := range ce.options.TerminalStatuses {
+func (ce *CommandExecutor) isTerminalStatus(opts ExecutionOptions, status detection.DetectedStatus) bool {
+	for _, terminalStatus := range opts.TerminalStatuses {
 		if status == terminalStatus {
 			return true
 		}
@@ -350,81 +391,56 @@ func (ce *CommandExecutor) isTerminalStatus(status detection.DetectedStatus) boo
 	return false
 }
 
-// Stop stops the command executor and waits for completion.
-func (ce *CommandExecutor) Stop() error {
-	ce.mu.Lock()
-	if !ce.executing {
-		ce.mu.Unlock()
-		return fmt.Errorf("command executor not started for session '%s'", ce.sessionName)
-	}
-	ce.mu.Unlock()
-
-	// Cancel context
-	if ce.cancel != nil {
-		ce.cancel()
-	}
-
-	// Wait for execution loop to finish
-	ce.wg.Wait()
-
-	ce.mu.Lock()
-	ce.executing = false
-	ce.currentCommand = nil
-	ce.mu.Unlock()
-
-	log.Info("command executor stopped", "session", ce.sessionName)
-	return nil
-}
-
 // IsExecuting returns whether the executor is currently running.
 func (ce *CommandExecutor) IsExecuting() bool {
-	ce.mu.RLock()
-	defer ce.mu.RUnlock()
-	return ce.executing
+	return ce.executing.Load()
 }
 
 // GetCurrentCommand returns the currently executing command, or nil if none.
 func (ce *CommandExecutor) GetCurrentCommand() *Command {
-	ce.mu.RLock()
-	defer ce.mu.RUnlock()
-	if ce.currentCommand == nil {
+	cmd := ce.currentCommand.Load()
+	if cmd == nil {
 		return nil
 	}
 	// Return a copy to prevent external modification
-	cmdCopy := *ce.currentCommand
+	cmdCopy := *cmd
 	return &cmdCopy
 }
 
 // SetResultCallback sets a callback function to be invoked after each command execution.
 func (ce *CommandExecutor) SetResultCallback(callback func(*ExecutionResult)) {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
+	ce.optMu.Lock()
+	defer ce.optMu.Unlock()
 	ce.resultCallback = callback
 }
 
 // SetOptions updates execution options (only applies to future commands).
 func (ce *CommandExecutor) SetOptions(options ExecutionOptions) {
-	ce.mu.Lock()
-	defer ce.mu.Unlock()
+	ce.optMu.Lock()
+	defer ce.optMu.Unlock()
 	ce.options = options
 }
 
 // GetOptions returns the current execution options.
 func (ce *CommandExecutor) GetOptions() ExecutionOptions {
-	ce.mu.RLock()
-	defer ce.mu.RUnlock()
+	ce.optMu.RLock()
+	defer ce.optMu.RUnlock()
 	return ce.options
 }
 
 // ExecuteImmediate executes a command immediately without using the queue.
 // This is useful for interactive commands that need immediate execution.
 func (ce *CommandExecutor) ExecuteImmediate(cmd *Command) (*ExecutionResult, error) {
-	ce.mu.RLock()
-	if !ce.executing {
-		ce.mu.RUnlock()
+	if !ce.executing.Load() {
 		return nil, fmt.Errorf("command executor not started")
 	}
-	ce.mu.RUnlock()
+	var innerCtx context.Context
+	ce.lifecycle.Read(func(l executorLifecycle) {
+		innerCtx = l.ctx
+	})
+	if innerCtx == nil {
+		return nil, fmt.Errorf("command executor not started")
+	}
 
 	// Subscribe to response stream for this execution
 	subscriberID := fmt.Sprintf("immediate_%s_%s", ce.sessionName, cmd.ID)
@@ -434,8 +450,7 @@ func (ce *CommandExecutor) ExecuteImmediate(cmd *Command) (*ExecutionResult, err
 	}
 	defer ce.responseStream.Unsubscribe(subscriberID)
 
-	// Execute the command
-	result := ce.executeCommand(cmd, responseCh)
+	result := ce.executeCommand(innerCtx, cmd, responseCh)
 	return result, nil
 }
 

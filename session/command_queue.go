@@ -124,10 +124,10 @@ func NewCommandQueueWithPersistence(sessionName string, persistDir string) (*Com
 // Higher priority commands are executed first.
 func (cq *CommandQueue) Enqueue(cmd *Command) error {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
 
 	// Check if command with this ID already exists
 	if _, exists := cq.commandMap[cmd.ID]; exists {
+		cq.mu.Unlock()
 		return fmt.Errorf("command with ID '%s' already exists in queue", cmd.ID)
 	}
 
@@ -147,10 +147,15 @@ func (cq *CommandQueue) Enqueue(cmd *Command) error {
 		// Channel already has notification, no need to add another
 	}
 
-	// Persist queue state if persistence is enabled
+	var snapshot []*Command
 	if cq.persistPath != "" {
-		if err := cq.saveUnsafe(); err != nil {
-			// Log error but don't fail the enqueue operation
+		snapshot = make([]*Command, len(cq.queue))
+		copy(snapshot, cq.queue)
+	}
+	cq.mu.Unlock() // release BEFORE disk I/O
+
+	if snapshot != nil {
+		if err := cq.saveSnapshot(snapshot); err != nil {
 			return fmt.Errorf("command enqueued but failed to persist: %w", err)
 		}
 	}
@@ -162,19 +167,24 @@ func (cq *CommandQueue) Enqueue(cmd *Command) error {
 // Returns nil if the queue is empty.
 func (cq *CommandQueue) Dequeue() *Command {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
 
 	if cq.queue.Len() == 0 {
+		cq.mu.Unlock()
 		return nil
 	}
 
 	cmd := heap.Pop(&cq.queue).(*Command)
 	delete(cq.commandMap, cmd.ID)
 
-	// Persist queue state if persistence is enabled
+	var snapshot []*Command
 	if cq.persistPath != "" {
-		if err := cq.saveUnsafe(); err != nil {
-			// Log error but don't fail the dequeue operation
+		snapshot = make([]*Command, len(cq.queue))
+		copy(snapshot, cq.queue)
+	}
+	cq.mu.Unlock() // release BEFORE disk I/O
+
+	if snapshot != nil {
+		if err := cq.saveSnapshot(snapshot); err != nil {
 			log.Error("failed to persist command queue state", "session", cq.sessionName, "err", err)
 		}
 	}
@@ -199,14 +209,15 @@ func (cq *CommandQueue) Peek() *Command {
 // Returns an error if the command is not found or is already executing.
 func (cq *CommandQueue) Cancel(id string) error {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
 
 	cmd, exists := cq.commandMap[id]
 	if !exists {
+		cq.mu.Unlock()
 		return fmt.Errorf("command '%s' not found in queue", id)
 	}
 
 	if cmd.Status == CommandExecuting {
+		cq.mu.Unlock()
 		return fmt.Errorf("cannot cancel command '%s' that is currently executing", id)
 	}
 
@@ -226,9 +237,15 @@ func (cq *CommandQueue) Cancel(id string) error {
 
 	delete(cq.commandMap, id)
 
-	// Persist queue state if persistence is enabled
+	var snapshot []*Command
 	if cq.persistPath != "" {
-		if err := cq.saveUnsafe(); err != nil {
+		snapshot = make([]*Command, len(cq.queue))
+		copy(snapshot, cq.queue)
+	}
+	cq.mu.Unlock() // release BEFORE disk I/O
+
+	if snapshot != nil {
+		if err := cq.saveSnapshot(snapshot); err != nil {
 			return fmt.Errorf("command cancelled but failed to persist: %w", err)
 		}
 	}
@@ -252,19 +269,25 @@ func (cq *CommandQueue) Get(id string) (*Command, error) {
 // Update updates the status and metadata of a command.
 func (cq *CommandQueue) Update(cmd *Command) error {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
 
 	existing, exists := cq.commandMap[cmd.ID]
 	if !exists {
+		cq.mu.Unlock()
 		return fmt.Errorf("command '%s' not found", cmd.ID)
 	}
 
 	// Update the command in place
 	*existing = *cmd
 
-	// Persist queue state if persistence is enabled
+	var snapshot []*Command
 	if cq.persistPath != "" {
-		if err := cq.saveUnsafe(); err != nil {
+		snapshot = make([]*Command, len(cq.queue))
+		copy(snapshot, cq.queue)
+	}
+	cq.mu.Unlock() // release BEFORE disk I/O
+
+	if snapshot != nil {
+		if err := cq.saveSnapshot(snapshot); err != nil {
 			return fmt.Errorf("command updated but failed to persist: %w", err)
 		}
 	}
@@ -312,14 +335,18 @@ func (cq *CommandQueue) ListByStatus(status CommandStatus) []*Command {
 // Clear removes all commands from the queue.
 func (cq *CommandQueue) Clear() error {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
 
 	cq.queue = make(priorityQueue, 0)
 	cq.commandMap = make(map[string]*Command)
 
-	// Persist queue state if persistence is enabled
+	var snapshot []*Command
 	if cq.persistPath != "" {
-		if err := cq.saveUnsafe(); err != nil {
+		snapshot = make([]*Command, 0)
+	}
+	cq.mu.Unlock() // release BEFORE disk I/O
+
+	if snapshot != nil {
+		if err := cq.saveSnapshot(snapshot); err != nil {
 			return fmt.Errorf("queue cleared but failed to persist: %w", err)
 		}
 	}
@@ -336,14 +363,23 @@ func (cq *CommandQueue) NotifyChannel() <-chan struct{} {
 // Save persists the queue state to disk.
 func (cq *CommandQueue) Save() error {
 	cq.mu.Lock()
-	defer cq.mu.Unlock()
-	return cq.saveUnsafe()
+	var snapshot []*Command
+	if cq.persistPath != "" {
+		snapshot = make([]*Command, len(cq.queue))
+		copy(snapshot, cq.queue)
+	}
+	cq.mu.Unlock()
+
+	if snapshot != nil {
+		return cq.saveSnapshot(snapshot)
+	}
+	return nil
 }
 
-// saveUnsafe saves the queue without acquiring the lock (internal use only).
-func (cq *CommandQueue) saveUnsafe() error {
+// saveSnapshot saves a pre-captured snapshot of the queue to disk (no lock held).
+func (cq *CommandQueue) saveSnapshot(commands []*Command) error {
 	if cq.persistPath == "" {
-		return fmt.Errorf("persistence not enabled for this queue")
+		return nil
 	}
 
 	// Create directory if it doesn't exist
@@ -359,7 +395,7 @@ func (cq *CommandQueue) saveUnsafe() error {
 		Timestamp   time.Time  `json:"timestamp"`
 	}{
 		SessionName: cq.sessionName,
-		Commands:    cq.queue,
+		Commands:    commands,
 		Timestamp:   time.Now(),
 	}
 
@@ -375,11 +411,7 @@ func (cq *CommandQueue) saveUnsafe() error {
 		return fmt.Errorf("failed to write queue data: %w", err)
 	}
 
-	if err := os.Rename(tempPath, cq.persistPath); err != nil {
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-
-	return nil
+	return os.Rename(tempPath, cq.persistPath)
 }
 
 // Load restores the queue state from disk.

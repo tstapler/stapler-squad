@@ -9,7 +9,7 @@ export const backdrop = style({
   display: "flex",
   alignItems: "flex-start",
   justifyContent: "center",
-  paddingTop: "20vh",
+  paddingTop: "max(8px, env(safe-area-inset-top, 8px))",
 });
 
 export const card = style({

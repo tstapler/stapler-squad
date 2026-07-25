@@ -1,15 +1,9 @@
 "use client";
 
 import { ClaudeMessage } from "@/gen/session/v1/session_pb";
+import { stripAnsi } from "@/lib/terminal/stripAnsi";
 import { useEffect, useRef, useState } from "react";
 import * as styles from "./HistoryCardPreview.css";
-
-// Strips ANSI escape sequences (SGR + OSC hyperlinks) without an npm dependency.
-function stripAnsi(str: string): string {
-  return str
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC sequences (hyperlinks, etc.)
-    .replace(/\x1b[@-Z\\-_]|\x1b\[[0-9;]*[A-Za-z]/g, ""); // CSI / single-char escapes
-}
 
 interface HistoryCardPreviewProps {
   entryId: string;

@@ -1,8 +1,13 @@
 version: "2"
 
+run:
+  # ponytail: single-threaded to avoid golangci-lint v2.11.4 race on //go:build go1.26 files
+  concurrency: 1
+
 linters:
   enable:
     - depguard
+    - exhaustive
     - forbidigo
     - gochecknoglobals
     - ineffassign
@@ -14,6 +19,8 @@ linters:
   disable:
     - errcheck
   settings:
+    exhaustive:
+      default-signifies-exhaustive: false
     depguard:
       rules:
         no_server_in_core:
@@ -33,6 +40,24 @@ linters:
           deny:
             - pkg: "io/ioutil"
               desc: "replaced by io and os packages since Go 1.16"
+        no_ent_in_services:
+          # activated-after: all server/services exclusions removed (refactor/storage-interface-cleanup P6)
+          files:
+            - "**/server/services/**/*.go"
+            # Temporarily excluded — session/ent still imported; removed-in: refactor/storage-interface-cleanup (P6)
+            - "!**/server/services/error_registry.go"
+            - "!**/server/services/analytics_escape_service.go"
+            - "!**/server/services/analytics_escape_service_test.go"
+            - "!**/server/services/workflow_service_test.go"
+            - "!**/server/services/workflow_service.go"
+            - "!**/server/services/backlog_service.go"
+            - "!**/server/services/backlog_service_query.go"
+            - "!**/server/services/backlog_service_lifecycle.go"
+            - "!**/server/services/backlog_service_triage.go"
+            - "!**/server/services/session_service.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/ent"
+              desc: "server/services must not import session/ent directly; use domain DTOs from session package"
     forbidigo:
       analyze-types: false
       forbid:
@@ -44,14 +69,49 @@ linters:
           msg: "use slog.InfoContext(ctx, ...) in new code; legacy log.XxxLog.Printf is being migrated"
         - pattern: '^LoadInstances$'
           msg: "LoadInstances() re-hydrates all sessions from disk and spawns PTY/tmux subprocesses — use FindLiveInstance fast path instead (see PerfFix-1)"
+        - pattern: 'ent\.IsNotFound'
+          msg: "use errors.Is(err, session.ErrNotFound) in server/services — wrap ent errors at the storage layer"
       exclude-godoc-examples: true
   exclusions:
     paths:
+      - "^\\.\\."
       - session/tmux/tmux_windows
       - web-app
       - \.stapler-squad
       - \.claude-squad
     rules:
+      # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
+      # All other packages use iota types with intentional default: clauses.
+      - path: "^server/"
+        linters: [exhaustive]
+      - path: "^session/[^d]"
+        linters: [exhaustive]
+      - path: "^session/d[^e]"
+        linters: [exhaustive]
+      - path: "^session/de[^t]"
+        linters: [exhaustive]
+      - path: "^session/det[^e]"
+        linters: [exhaustive]
+      - path: "^session/dete[^c]"
+        linters: [exhaustive]
+      - path: "^main\\.go"
+        linters: [exhaustive]
+      - path: "^github/"
+        linters: [exhaustive]
+      - path: "^executor/"
+        linters: [exhaustive]
+      - path: "^cmd/"
+        linters: [exhaustive]
+      - path: "^pkg/"
+        linters: [exhaustive]
+      - path: "^daemon/"
+        linters: [exhaustive]
+      - path: "^telemetry/"
+        linters: [exhaustive]
+      - path: "^testutil/"
+        linters: [exhaustive]
+      - path: "^profiling/"
+        linters: [exhaustive]
       # infoplist_darwin.go uses import "C" to force CGO linking for macOS codesigning.
       # The CGO preamble comment causes a C compiler parse error when golangci-lint
       # runs typecheck without the macOS build flags. Suppress the typecheck issue.
@@ -63,6 +123,8 @@ linters:
         text: "unknown type name 'cgo'"
       - linters: [typecheck]
         text: "expected ';' after top level declarator"
+      - linters: [typecheck]
+        text: "requires newer Go version"
       # LoadInstances: allow in the storage implementation itself, in bulk-startup wiring,
       # and in the fallback path of findInstanceFast (workspace_service.go) which is
       # intentionally guarded by the live-finder fast path.
@@ -84,7 +146,7 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       # Remaining services with intentional LoadInstances uses (health, backlog, etc.)
-      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
+      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "session/health\\.go"
@@ -98,6 +160,9 @@ linters:
       - path: "_test\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
+      - path: "_test\\.go"
+        linters: [forbidigo]
+        text: "exec\\.Command"
       # Allow fmt.Print* in main.go, test files, cmd/, and tests/demo/ (CLI/test output)
       - path: "main\\.go"
         linters: [forbidigo]
@@ -154,6 +219,20 @@ linters:
       - path: "^main\\.go"
         linters: [forbidigo]
         text: "log\\."
+      # ──────────────────────────────────────────────────────────────────────────
+      # forbidigo: ent.IsNotFound boundary guard
+      # server/services/backlog_service*.go still calls ent.IsNotFound directly —
+      # excluded until the storage-interface cleanup refactor (P6). The glob covers
+      # the base file AND all split files created in Phase 3 (P1):
+      # backlog_service_query.go, backlog_service_lifecycle.go, backlog_service_triage.go
+      # removed-in: refactor/storage-interface-cleanup (P6)
+      - path: "server/services/backlog_service.*\\.go"
+        linters: [forbidigo]
+        text: "ent\\.IsNotFound"
+      # session/ is the legitimate ent-wrapping layer; allowed to reference ent.IsNotFound
+      - path: "^session/"
+        linters: [forbidigo]
+        text: "ent\\.IsNotFound"
       # ──────────────────────────────────────────────────────────────────────────
       # gochecknoglobals: existing packages have globals from before this rule was
       # introduced. Suppress blanket per-package; new packages (pkg/warren,

@@ -32,6 +32,13 @@ type EntRepository struct {
 	client        *ent.Client
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
+
+	// itemChangePublisher is nil-safe — every hooked backlog mutation method
+	// nil-checks before calling it (publish is best-effort and never blocks
+	// or fails the underlying mutation). Wired via SetItemChangePublisher,
+	// typically by Storage.SetItemChangePublisher's forwarding call in
+	// server/dependencies.go.
+	itemChangePublisher ItemChangePublisher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -135,6 +142,7 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		SetCreatedAt(data.CreatedAt).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
 
@@ -187,11 +195,26 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.MCPServerURL != "" {
 		sessionCreate.SetMcpServerURL(data.MCPServerURL)
 	}
+	if data.InitialPrompt != "" {
+		sessionCreate.SetInitialPrompt(data.InitialPrompt)
+	}
 	if data.OneShot {
 		sessionCreate.SetOneShot(data.OneShot)
 	}
 	if data.Hidden {
 		sessionCreate.SetHidden(data.Hidden)
+	}
+	if data.GitHubPRURL != "" {
+		sessionCreate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubOwner != "" {
+		sessionCreate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionCreate.SetGithubRepo(data.GitHubRepo)
 	}
 
 	// Link project if specified (look up by name)
@@ -236,14 +259,13 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 		return fmt.Errorf("failed to create diff stats: %w", err)
 	}
 
-	// Create/associate tags
+	// Create/associate tags — collect all IDs then one bulk AddTagIDs.
 	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
-			// Get or create tag
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
-					// Create new tag
 					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
 					if err != nil {
 						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
@@ -252,11 +274,10 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
 				}
 			}
-
-			// Associate tag with session
-			if err := tx.Session.UpdateOne(sess).AddTags(t).Exec(ctx); err != nil {
-				return fmt.Errorf("failed to associate tag %s: %w", tagName, err)
-			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
 
@@ -330,6 +351,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		SetStatus(int(data.Status)).
 		SetUpdatedAt(data.UpdatedAt).
 		SetAutoYes(data.AutoYes).
+		SetAutonomousMode(data.AutonomousMode).
 		SetProgram(data.Program).
 		SetIsExpanded(data.IsExpanded)
 
@@ -396,6 +418,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.MCPServerURL != "" {
 		sessionUpdate.SetMcpServerURL(data.MCPServerURL)
 	}
+	if data.InitialPrompt != "" {
+		sessionUpdate.SetInitialPrompt(data.InitialPrompt)
+	}
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
 	} else {
@@ -403,6 +428,28 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	sessionUpdate.SetOneShot(data.OneShot)
 	sessionUpdate.SetHidden(data.Hidden)
+	if data.WorkflowID != "" {
+		sessionUpdate.SetWorkflowID(data.WorkflowID)
+	} else {
+		sessionUpdate.ClearWorkflowID()
+	}
+	if data.ArchivedAt != nil {
+		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
+	} else {
+		sessionUpdate.ClearArchivedAt()
+	}
+	if data.GitHubPRURL != "" {
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubOwner != "" {
+		sessionUpdate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionUpdate.SetGithubRepo(data.GitHubRepo)
+	}
 
 	// Update project link (look up by name or clear if empty)
 	if data.ProjectID != "" {
@@ -476,12 +523,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 
 	if len(data.Tags) > 0 {
+		tagIDs := make([]int, 0, len(data.Tags))
 		for _, tagName := range data.Tags {
-			// Get or create tag
 			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
 			if err != nil {
 				if ent.IsNotFound(err) {
-					// Create new tag
 					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
 					if err != nil {
 						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
@@ -490,16 +536,17 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
 				}
 			}
-
-			// Associate tag with session
-			if err := tx.Session.UpdateOne(sess).AddTags(t).Exec(ctx); err != nil {
-				return fmt.Errorf("failed to associate tag %s: %w", tagName, err)
-			}
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+			return fmt.Errorf("failed to associate tags: %w", err)
 		}
 	}
 
 	// Update Claude session if present
 	if data.ClaudeSession.ConversationUUID != "" {
+		var claudeSessionID int // set by either the create or update branch below
+
 		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
@@ -525,10 +572,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 					claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
 				}
 
-				_, err := claudeCreate.Save(ctx)
+				newClaude, err := claudeCreate.Save(ctx)
 				if err != nil {
 					return fmt.Errorf("failed to create claude session: %w", err)
 				}
+				claudeSessionID = newClaude.ID
 			} else {
 				return fmt.Errorf("failed to query claude session: %w", err)
 			}
@@ -562,13 +610,14 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 			if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existingClaude.ID))).Exec(ctx); err != nil {
 				return fmt.Errorf("failed to clear claude metadata: %w", err)
 			}
+			claudeSessionID = existingClaude.ID
 		}
 
-		// Add metadata entries
+		// Add metadata entries using the already-known Claude session ID.
+		// (pre-fix: this loop re-queried the same ClaudeSession row N times)
 		for key, value := range data.ClaudeSession.Metadata {
-			claudeSess, _ := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 			if _, err := tx.ClaudeMetadata.Create().
-				SetClaudeSessionID(claudeSess.ID).
+				SetClaudeSessionID(claudeSessionID).
 				SetKey(key).
 				SetValue(value).
 				Save(ctx); err != nil {
@@ -638,6 +687,26 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	}
 
 	return nil
+}
+
+// GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
+// for the session whose title (tmux session name) matches sessionUUID.
+// Returns "" if the session has no associated ClaudeSession.
+func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(sessionUUID)).
+		WithClaudeSession().
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("GetClaudeConversationUUIDBySessionUUID: %w", err)
+	}
+	if sess.Edges.ClaudeSession == nil {
+		return "", nil
+	}
+	return sess.Edges.ClaudeSession.ClaudeSessionID, nil
 }
 
 // Get retrieves a single session by title
@@ -735,6 +804,77 @@ func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]Instan
 		result[i] = *r.sessionToInstanceData(s)
 	}
 
+	return result, nil
+}
+
+// UpdateGitHubPRNumber persists a discovered PR number for a session.
+// Called by PRStatusPoller when it auto-discovers a PR for a branch-based session.
+func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, prNumber int) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrNumber(prNumber).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_number: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
+// Wrapped in a transaction for correctness under concurrent writes (M-6 fix).
+// The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
+// layer; the transaction is belt-and-suspenders for correctness.
+func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string, blob string) error {
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("UpdateSessionArtifacts: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	n, err := tx.Session.Update().
+		Where(session.Title(title)).
+		SetSessionArtifacts(blob).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session_artifacts: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return tx.Commit()
+}
+
+// GetSessionArtifacts loads the raw JSON artifact blob for a session.
+// Returns ("", nil) if the session exists but has no artifacts stored yet.
+func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(title)).
+		Select(session.FieldSessionArtifacts).
+		Only(ctx)
+	if err != nil {
+		return "", fmt.Errorf("GetSessionArtifacts: %w", err)
+	}
+	return sess.SessionArtifacts, nil
+}
+
+// GetAllSessionArtifacts returns a map of title → raw artifacts JSON for all sessions
+// that have a non-empty session_artifacts column. Single query replaces N per-session
+// queries in LoadInstances (M-4 fix).
+func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]string, error) {
+	rows, err := r.client.Session.Query().
+		Where(session.SessionArtifactsNEQ("")).
+		Select(session.FieldTitle, session.FieldSessionArtifacts).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetAllSessionArtifacts: %w", err)
+	}
+	result := make(map[string]string, len(rows))
+	for _, row := range rows {
+		result[row.Title] = row.SessionArtifacts
+	}
 	return result, nil
 }
 
@@ -867,6 +1007,16 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
+// nilIfEmptyJSON returns nil if j is empty, otherwise a *string containing the JSON.
+// Used at the ent boundary where AcceptanceCriteria is stored as a plain string.
+func nilIfEmptyJSON(j AcCriteriaJSON) *string {
+	if j == "" {
+		return nil
+	}
+	s := string(j)
+	return &s
+}
+
 // sessionToInstanceData converts an Ent Session entity to InstanceData
 func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data := &InstanceData{
@@ -881,7 +1031,9 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		CreatedAt:           sess.CreatedAt,
 		UpdatedAt:           sess.UpdatedAt,
 		AutoYes:             sess.AutoYes,
+		AutonomousMode:      sess.AutonomousMode,
 		Prompt:              sess.Prompt,
+		InitialPrompt:       sess.InitialPrompt,
 		Program:             sess.Program,
 		ExistingWorktree:    sess.ExistingWorktree,
 		Category:            sess.Category,
@@ -920,6 +1072,12 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
+	data.WorkflowID = sess.WorkflowID
+	data.ArchivedAt = sess.ArchivedAt
+	data.GitHubPRURL = sess.GithubPrURL
+	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubOwner = sess.GithubOwner
+	data.GitHubRepo = sess.GithubRepo
 
 	// Set session type
 	if sess.SessionType != "" {
@@ -1056,30 +1214,65 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 	result := make([]ApprovalRuleData, len(rules))
 	for i, rule := range rules {
 		result[i] = ApprovalRuleData{
-			ID:                  rule.RuleID,
-			Name:                rule.Name,
-			ToolName:            rule.ToolName,
-			ToolPattern:         rule.ToolPattern,
-			ToolCategory:        rule.ToolCategory,
-			CommandPattern:      rule.CommandPattern,
-			FilePattern:         rule.FilePattern,
-			CriteriaPrograms:    rule.CriteriaPrograms,
-			CriteriaSubcommands: rule.CriteriaSubcommands,
-			Decision:            rule.Decision,
-			RiskLevel:           rule.RiskLevel,
-			Reason:              rule.Reason,
-			Alternative:         rule.Alternative,
-			Priority:            rule.Priority,
-			Enabled:             rule.Enabled,
-			Source:              rule.Source,
-			CreatedAt:           rule.CreatedAt,
-			UpdatedAt:           rule.UpdatedAt,
+			ID:             rule.RuleID,
+			Name:           rule.Name,
+			ToolName:       rule.ToolName,
+			ToolPattern:    rule.ToolPattern,
+			ToolCategory:   rule.ToolCategory,
+			CommandPattern: rule.CommandPattern,
+			FilePattern:    rule.FilePattern,
+			Decision:       rule.Decision,
+			RiskLevel:      rule.RiskLevel,
+			Reason:         rule.Reason,
+			Alternative:    rule.Alternative,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+
+			Programs:              rule.Programs,
+			Subcommands:           rule.Subcommands,
+			BlockedSubcommands:    rule.BlockedSubcommands,
+			RequiredFlags:         rule.RequiredFlags,
+			ForbiddenFlags:        rule.ForbiddenFlags,
+			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
+			PythonModes:           rule.PythonModes,
+			SafePythonImportsOnly: rule.SafePythonImportsOnly,
 		}
 	}
 	return result, nil
 }
 
 func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) error {
+	programs := data.Programs
+	if programs == nil {
+		programs = []string{}
+	}
+	subcommands := data.Subcommands
+	if subcommands == nil {
+		subcommands = []string{}
+	}
+	blockedSubcommands := data.BlockedSubcommands
+	if blockedSubcommands == nil {
+		blockedSubcommands = []string{}
+	}
+	requiredFlags := data.RequiredFlags
+	if requiredFlags == nil {
+		requiredFlags = []string{}
+	}
+	forbiddenFlags := data.ForbiddenFlags
+	if forbiddenFlags == nil {
+		forbiddenFlags = []string{}
+	}
+	requiredFlagPrefixes := data.RequiredFlagPrefixes
+	if requiredFlagPrefixes == nil {
+		requiredFlagPrefixes = []string{}
+	}
+	pythonModes := data.PythonModes
+	if pythonModes == nil {
+		pythonModes = []string{}
+	}
 	return r.client.ApprovalRule.Create().
 		SetRuleID(data.ID).
 		SetName(data.Name).
@@ -1088,8 +1281,6 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetToolCategory(data.ToolCategory).
 		SetCommandPattern(data.CommandPattern).
 		SetFilePattern(data.FilePattern).
-		SetCriteriaPrograms(data.CriteriaPrograms).
-		SetCriteriaSubcommands(data.CriteriaSubcommands).
 		SetDecision(data.Decision).
 		SetRiskLevel(data.RiskLevel).
 		SetReason(data.Reason).
@@ -1097,6 +1288,14 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetPriority(data.Priority).
 		SetEnabled(data.Enabled).
 		SetSource(data.Source).
+		SetPrograms(programs).
+		SetSubcommands(subcommands).
+		SetBlockedSubcommands(blockedSubcommands).
+		SetRequiredFlags(requiredFlags).
+		SetForbiddenFlags(forbiddenFlags).
+		SetRequiredFlagPrefixes(requiredFlagPrefixes).
+		SetPythonModes(pythonModes).
+		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

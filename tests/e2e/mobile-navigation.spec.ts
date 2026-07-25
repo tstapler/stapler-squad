@@ -1,4 +1,10 @@
-// @feature ui:mobile-navigation, ui:session-list, ui:bottom-nav
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: mobile-navigation — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['ui-mobile-navigation'], // TODO: add to catalog
+  FEATURE_CATALOG['session-list'],
+  // FEATURE_CATALOG['ui-bottom-nav'], // TODO: add to catalog
+] as const;
 // E2E verification for three mobile UX bug fixes:
 //  E2E-1: Session card tap switches to detail pane on mobile (REQ-1a)
 //  E2E-2: Session list container is scrollable (REQ-2a)

@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-change-program
 
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
@@ -7,6 +8,7 @@ import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import {
   desktopActions,
   overflowContainer,
@@ -52,13 +54,21 @@ export interface SessionActionsOverflowProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
   onRenameRequest?: () => void;
   /** Trigger workspace switch in parent (SessionDetail-specific) */
   onWorkspaceSwitchRequest?: () => void;
+  /** Save a new program for the session. Empty string = system default. */
+  onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
+
+const menuSeparator = (
+  <div role="separator" style={{ height: 1, background: "var(--border-color)", margin: "4px 0" }} />
+);
 
 export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, SessionActionsOverflowProps>(function SessionActionsOverflow({
   session,
@@ -76,16 +86,20 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onCreateCheckpoint,
   onRunOneShot,
   onSetRateLimitEnabled,
+  onToggleAutonomousMode,
+  onSteerAutonomousSession,
   onClearConversationState,
   onUpdateTags,
   onRenameRequest,
   onWorkspaceSwitchRequest,
+  onChangeProgram,
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
   const isReady = session.status === SessionStatus.NEEDS_APPROVAL;
   const isRunning = session.status === SessionStatus.ACTIVE;  // ACTIVE covers legacy RUNNING (same wire value via allow_alias)
   const isHibernated = session.status === SessionStatus.HIBERNATED;
   const isCreating = session.status === SessionStatus.CREATING;
+  const isStopped = session.status === SessionStatus.STOPPED;
 
   const [showOverflow, setShowOverflow] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
@@ -102,6 +116,25 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
   const [isRunningOneShot, setIsRunningOneShot] = useState(false);
   const [oneShotResult, setOneShotResult] = useState<string | null>(null);
+  const [isAutonomousConfirmOpen, setIsAutonomousConfirmOpen] = useState(false);
+  const [isSteerOpen, setIsSteerOpen] = useState(false);
+  const [steerMessage, setSteerMessage] = useState("");
+  const [isClearConversationConfirmOpen, setIsClearConversationConfirmOpen] = useState(false);
+  const [isProgramPickerOpen, setIsProgramPickerOpen] = useState(false);
+  const [programPickerValue, setProgramPickerValue] = useState(session.program || "");
+  const [isSavingProgram, setIsSavingProgram] = useState(false);
+  const [programError, setProgramError] = useState("");
+  const [isProgramRestartConfirmOpen, setIsProgramRestartConfirmOpen] = useState(false);
+  const [pendingProgramValue, setPendingProgramValue] = useState("");
+  const availablePrograms = useAvailablePrograms();
+
+  // Keep the picker's selected value in sync with the session while the dialog is
+  // open — otherwise a concurrent server-side change (e.g. the capacity-monitor
+  // auto-fallback switching programs) leaves a stale dialog whose Save would
+  // silently clobber that change back to the value it had when opened.
+  useEffect(() => {
+    if (isProgramPickerOpen) setProgramPickerValue(session.program || "");
+  }, [session.program, isProgramPickerOpen]);
 
   const overflowContainerRef = useRef<HTMLDivElement>(null);
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
@@ -109,17 +142,26 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const restartDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const checkpointDialogRef = useRef<HTMLDivElement>(null);
+  const autonomousConfirmDialogRef = useRef<HTMLDivElement>(null);
+  const steerDialogRef = useRef<HTMLDivElement>(null);
+  const clearConversationDialogRef = useRef<HTMLDivElement>(null);
+  const programConfirmDialogRef = useRef<HTMLDivElement>(null);
   const restartTriggerRef = useRef<HTMLButtonElement>(null);
   const checkpointTriggerRef = useRef<HTMLButtonElement>(null);
+  const clearConversationTriggerRef = useRef<HTMLButtonElement>(null);
 
   useFocusTrap(overflowMenuRef, showOverflow);
   useFocusTrap(restartDialogRef, isRestartConfirmOpen, restartTriggerRef);
   useFocusTrap(deleteDialogRef, isDeleteConfirmOpen);
   useFocusTrap(checkpointDialogRef, isCheckpointOpen, checkpointTriggerRef);
+  useFocusTrap(autonomousConfirmDialogRef, isAutonomousConfirmOpen);
+  useFocusTrap(steerDialogRef, isSteerOpen);
+  useFocusTrap(clearConversationDialogRef, isClearConversationConfirmOpen, clearConversationTriggerRef);
+  useFocusTrap(programConfirmDialogRef, isProgramRestartConfirmOpen);
 
   useEffect(() => {
     if (showOverflow && overflowMenuRef.current) {
-      const first = overflowMenuRef.current.querySelector<HTMLElement>('[role="menuitem"]');
+      const first = overflowMenuRef.current.querySelector<HTMLElement>('[role="menuitem"],[role="menuitemcheckbox"]');
       first?.focus();
     }
   }, [showOverflow]);
@@ -187,6 +229,20 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     }
   };
 
+  const commitProgramChange = async (program: string) => {
+    setIsSavingProgram(true);
+    setProgramError("");
+    try {
+      await onChangeProgram?.(session.id, program);
+      return true;
+    } catch (err) {
+      setProgramError(err instanceof Error ? err.message : "Failed to change program.");
+      return false;
+    } finally {
+      setIsSavingProgram(false);
+    }
+  };
+
   const handleCheckpointSubmit = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!checkpointLabel.trim()) return;
@@ -205,6 +261,18 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
       setIsCreatingCheckpoint(false);
     }
   };
+
+  // Group visibility booleans — used to decide whether to render separators.
+  const hasGroup1 = !!(
+    (!(isPaused || isReady) && !isStopped && onResume) ||
+    (isRunning && !isCreating && onPause) ||
+    (isRunning && onHibernate) ||
+    (isHibernated && onResumeFromHibernation)
+  );
+  const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
+  const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode);
+  const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
 
   return (
     <>
@@ -330,6 +398,120 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
         document.body
       )}
 
+      {/* C2: Confirmation dialog before enabling autonomous mode */}
+      {isAutonomousConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsAutonomousConfirmOpen(false); }}>
+          <div
+            ref={autonomousConfirmDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="autonomousDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsAutonomousConfirmOpen(false); }}
+          >
+            <h3 id="autonomousDialogTitle">Run Autonomously</h3>
+            <p>Autonomous mode will inject up to 20 AI-generated prompts into &quot;{session.title}&quot; automatically.</p>
+            <p className={warningText}>The session will run without user input until it completes or gets stuck. You can disable it at any time from this menu.</p>
+            <div className={dialogActions}>
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleAutonomousMode?.(session.id, true); setIsAutonomousConfirmOpen(false); }}
+                className={submitButton}
+              >
+                Run Autonomously
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsAutonomousConfirmOpen(false); }} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* M5: Steer dialog for mid-run direction */}
+      {isSteerOpen && createPortal(
+        <div className={renameDialog} onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }}>
+          <div
+            ref={steerDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="steerDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="steerDialogTitle">Give Direction</h3>
+            <p>Send a steering instruction to &quot;{session.title}&quot;:</p>
+            <input
+              type="text"
+              value={steerMessage}
+              onChange={(e) => setSteerMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && steerMessage.trim()) {
+                  onSteerAutonomousSession?.(session.id, steerMessage.trim());
+                  setIsSteerOpen(false);
+                  setSteerMessage("");
+                }
+                if (e.key === "Escape") { setIsSteerOpen(false); setSteerMessage(""); }
+              }}
+              placeholder="e.g. Focus on the UI tests first"
+              className={renameInput}
+              autoFocus
+            />
+            <div className={dialogActions}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (steerMessage.trim()) {
+                    onSteerAutonomousSession?.(session.id, steerMessage.trim());
+                    setIsSteerOpen(false);
+                    setSteerMessage("");
+                  }
+                }}
+                disabled={!steerMessage.trim()}
+                className={submitButton}
+              >
+                Send
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); setIsSteerOpen(false); setSteerMessage(""); }} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* UX-003: Clear Conversation confirmation dialog */}
+      {isClearConversationConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsClearConversationConfirmOpen(false); }}>
+          <div
+            ref={clearConversationDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clearConversationDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsClearConversationConfirmOpen(false); }}
+          >
+            <h3 id="clearConversationDialogTitle">Clear Conversation</h3>
+            <p className={warningText}>Clear conversation history? This will erase the AI&apos;s memory of this session and cannot be undone.</p>
+            <div className={dialogActions}>
+              <button
+                onClick={(e) => { e.stopPropagation(); void onClearConversationState?.(session.id); setIsClearConversationConfirmOpen(false); }}
+                className={dangerButton}
+              >
+                Clear Conversation
+              </button>
+              <button autoFocus onClick={(e) => { e.stopPropagation(); setIsClearConversationConfirmOpen(false); }} className={cancelButton}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       <div className={desktopActions}>
         {showPrimaryAction && (isPaused || isReady) && (
           <button
@@ -351,6 +533,17 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             <span aria-hidden="true">⏸️</span> Pause
           </button>
         )}
+        {/* BUG-001 Fix 4a: Primary Restart button for STOPPED sessions */}
+        {showPrimaryAction && isStopped && onRestart && (
+          <button
+            className={actionButton}
+            onClick={(e) => { e.stopPropagation(); setIsRestartConfirmOpen(true); }}
+            aria-label={`Restart stopped session ${session.title}`}
+            title="Session stopped — restart to resume working"
+          >
+            <span aria-hidden="true">🔄</span> Restart
+          </button>
+        )}
 
         <div ref={overflowContainerRef} className={overflowContainer}>
           <button
@@ -358,7 +551,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             id={`overflow-btn-${session.id}`}
             className={buttonClassName ?? overflowButton}
             onClick={openMenu}
-            aria-label="More session actions"
+            aria-label={session.autonomousMode ? "More session actions (autonomous mode active)" : "More session actions"}
             aria-expanded={showOverflow}
             aria-haspopup="menu"
             aria-controls={`overflow-menu-${session.id}`}
@@ -376,7 +569,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => { if (e.key === "Escape") setShowOverflow(false); }}
             >
-              {!(isPaused || isReady) && onResume && (
+              {/* Group 1: Session control */}
+              {!(isPaused || isReady) && !isStopped && onResume && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onResume(); }}
                   aria-label={`Resume session ${session.title}`}
@@ -384,7 +578,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">▶️</span> Resume
                 </button>
               )}
-              {!isRunning && !isCreating && onPause && (
+              {/* BUG-001 Fix 4b: Only show Pause when session is running */}
+              {isRunning && !isCreating && onPause && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onPause(); }}
                   aria-label={`Pause session ${session.title}`}
@@ -408,23 +603,17 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">▶️</span> Resume
                 </button>
               )}
-              {onRenameRequest && (
+
+              {/* Group 2: Workflow */}
+              {hasGroup1 && hasGroup2 && menuSeparator}
+              {onRunOneShot && (
                 <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
-                  aria-label={`Rename session ${session.title}`}
+                  onClick={(e) => { close(); handleRunOneShot(e); }}
+                  disabled={isRunningOneShot}
+                  aria-label={`Create PR for session ${session.title}`}
                 >
-                  <span aria-hidden="true">✏️</span> Rename
-                </button>
-              )}
-              {onRestart && !isCreating && (
-                <button
-                  ref={restartTriggerRef}
-                  role="menuitem"
-                  className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
-                  onClick={(e) => { e.stopPropagation(); close(); setIsRestartConfirmOpen(true); }}
-                  aria-label={`Restart session ${session.title}`}
-                >
-                  <span aria-hidden="true">🔄</span> Restart
+                  <span aria-hidden="true">🚀</span>{" "}
+                  {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Retry?" : "Create PR"}
                 </button>
               )}
               {onCreateCheckpoint && (
@@ -438,22 +627,31 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">📍</span> Checkpoint
                 </button>
               )}
+
+              {/* Group 3: Organization */}
+              {(hasGroup1 || hasGroup2) && hasGroup3 && menuSeparator}
+              {onRenameRequest && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); onRenameRequest(); }}
+                  aria-label={`Rename session ${session.title}`}
+                >
+                  <span aria-hidden="true">✏️</span> Rename
+                </button>
+              )}
+              {onChangeProgram && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setProgramError(""); setIsProgramPickerOpen(true); }}
+                  aria-label={`Change program for session ${session.title}`}
+                >
+                  <span aria-hidden="true">⚙️</span> Change Program
+                </button>
+              )}
               {onClone && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onClone(); }}
                   aria-label={`Clone session ${session.title}`}
                 >
                   <span aria-hidden="true">⊕</span> Clone
-                </button>
-              )}
-              {onRunOneShot && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { close(); handleRunOneShot(e); }}
-                  disabled={isRunningOneShot}
-                  aria-label={`Create PR for session ${session.title}`}
-                >
-                  <span aria-hidden="true">🚀</span>{" "}
-                  {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Retry?" : "Create PR"}
                 </button>
               )}
               {onOpenInNewPane && (
@@ -472,15 +670,6 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">🏷️</span> Edit Tags
                 </button>
               )}
-              {onSetRateLimitEnabled && (
-                <button role="menuitem" className={overflowMenuItem}
-                  onClick={(e) => { e.stopPropagation(); close(); onSetRateLimitEnabled(session.id, !session.rateLimitEnabled); }}
-                  aria-label={session.rateLimitEnabled ? `Disable auto-resume for ${session.title}` : `Enable auto-resume for ${session.title}`}
-                >
-                  <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span>{" "}
-                  {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
-                </button>
-              )}
               {onNewWorkspace && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onNewWorkspace(); }}
@@ -497,12 +686,73 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">⎇</span> Switch Workspace
                 </button>
               )}
-              {onClearConversationState && (
+
+              {/* Group 4: Mode toggles — auto-resume and autonomous mode */}
+              {(hasGroup1 || hasGroup2 || hasGroup3) && hasGroup4 && menuSeparator}
+              {onSetRateLimitEnabled && (
                 <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); onSetRateLimitEnabled(session.id, !session.rateLimitEnabled); }}
+                  aria-label={session.rateLimitEnabled ? `Disable auto-resume for ${session.title}` : `Enable auto-resume for ${session.title}`}
+                >
+                  <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span>{" "}
+                  {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
+                </button>
+              )}
+              {onToggleAutonomousMode && (
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={session.autonomousMode}
+                  className={overflowMenuItem}
+                  title="AI will inject prompts automatically until the task is complete (up to 20 turns)."
+                  aria-label={session.autonomousMode ? `Stop running ${session.title} autonomously` : `Run ${session.title} autonomously`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    close();
+                    if (!session.autonomousMode) {
+                      setIsAutonomousConfirmOpen(true);
+                    } else {
+                      onToggleAutonomousMode(session.id, false);
+                    }
+                  }}
+                >
+                  <span aria-hidden="true">{session.autonomousMode ? "⏹" : "🤖"}</span>{" "}
+                  {session.autonomousMode ? "Stop running autonomously" : "Run autonomously"}
+                </button>
+              )}
+              {/* M5: Steer mid-run — only visible when autonomous mode is active */}
+              {onSteerAutonomousSession && session.autonomousMode && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setSteerMessage(""); setIsSteerOpen(true); }}
+                  aria-label={`Give direction to ${session.title}`}
+                >
+                  <span aria-hidden="true">🧭</span> Give direction
+                </button>
+              )}
+
+              {/* Group 5: Destructive */}
+              {(hasGroup1 || hasGroup2 || hasGroup3 || hasGroup4) && hasGroup5 && menuSeparator}
+              {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
+              {onClearConversationState && (
+                <button
+                  ref={clearConversationTriggerRef}
+                  role="menuitem"
+                  className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
                   onClick={(e) => { e.stopPropagation(); close(); void onClearConversationState(session.id); }}
                   aria-label={`Clear conversation state for session ${session.title}`}
                 >
                   <span aria-hidden="true">🗑️</span> Clear Conversation
+                </button>
+              )}
+              {/* UX-009: Restart moved to Group 5 (destructive group), before Delete */}
+              {onRestart && !isCreating && (
+                <button
+                  ref={restartTriggerRef}
+                  role="menuitem"
+                  className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); setIsRestartConfirmOpen(true); }}
+                  aria-label={`Restart session ${session.title}`}
+                >
+                  <span aria-hidden="true">🔄</span> Restart
                 </button>
               )}
               {onDelete && (
@@ -519,6 +769,114 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
           )}
         </div>
       </div>
+
+      {/* ── Program picker dialog ── */}
+      {isProgramPickerOpen && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Change program"
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.5)",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setIsProgramPickerOpen(false); }}
+        >
+          <div className={confirmDialog} style={{ minWidth: 300 }} onClick={(e) => e.stopPropagation()}>
+            <div className={dialogContent}>
+              <strong>Change Program</strong>
+              <p style={{ fontSize: 13, margin: "8px 0 4px", color: "var(--text-secondary)" }}>
+                Select a program for <em>{session.title}</em>.
+                {isRunning && " The session will restart."}
+              </p>
+              <select
+                value={programPickerValue}
+                onChange={(e) => setProgramPickerValue(e.target.value)}
+                style={{
+                  width: "100%", padding: "6px 8px", fontSize: 13,
+                  background: "var(--card-background)", color: "var(--text-primary)",
+                  border: "1px solid var(--border-color)", borderRadius: 6,
+                }}
+                autoFocus
+              >
+                <option value="">System default</option>
+                {availablePrograms.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+                {programPickerValue && !availablePrograms.some((p) => p.value === programPickerValue) && (
+                  <option value={programPickerValue}>{programPickerValue}</option>
+                )}
+              </select>
+              {programError && <p className={errorMessage}>{programError}</p>}
+            </div>
+            <div className={dialogActions}>
+              <button
+                className={submitButton}
+                disabled={isSavingProgram}
+                onClick={async () => {
+                  if (isRunning) {
+                    // Active sessions restart on a program change — require an
+                    // explicit second confirmation, matching Restart/Delete.
+                    setPendingProgramValue(programPickerValue);
+                    setProgramError("");
+                    setIsProgramPickerOpen(false);
+                    setIsProgramRestartConfirmOpen(true);
+                    return;
+                  }
+                  const ok = await commitProgramChange(programPickerValue);
+                  if (ok) setIsProgramPickerOpen(false);
+                }}
+              >
+                {isSavingProgram ? "Saving…" : "Save"}
+              </button>
+              <button className={cancelButton} onClick={() => { setIsProgramPickerOpen(false); setProgramError(""); }}>Cancel</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Program-change restart confirmation — only reached for Active sessions */}
+      {isProgramRestartConfirmOpen && createPortal(
+        <div className={confirmDialog} onClick={(e) => { e.stopPropagation(); setIsProgramRestartConfirmOpen(false); }}>
+          <div
+            ref={programConfirmDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="programConfirmDialogTitle"
+            className={dialogContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setIsProgramRestartConfirmOpen(false); }}
+          >
+            <h3 id="programConfirmDialogTitle">Change Program</h3>
+            <p>Switch &quot;{session.title}&quot; to a different program?</p>
+            <p className={warningText}>This will terminate the current process and start a new one with the new program.</p>
+            {programError && <p className={errorMessage}>{programError}</p>}
+            <div className={dialogActions}>
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const ok = await commitProgramChange(pendingProgramValue);
+                  if (ok) setIsProgramRestartConfirmOpen(false);
+                }}
+                disabled={isSavingProgram}
+                className={submitButton}
+              >
+                {isSavingProgram ? "Saving…" : "Change & Restart"}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setIsProgramRestartConfirmOpen(false); setProgramError(""); }}
+                disabled={isSavingProgram}
+                className={cancelButton}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 });

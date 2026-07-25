@@ -19,75 +19,107 @@ import (
 )
 
 // ToInstanceData converts an Instance to its serializable form
+//
+// Builds a fresh snapshot via sendSyncErr rather than reading the cached
+// Snapshot(): callers like Storage.UpdateInstance/SaveInstancesSync routinely
+// mutate exported fields (Tags, Category, ...) directly and expect the very
+// next ToInstanceData() call to reflect that — Snapshot()'s cache only
+// refreshes when an actor command republishes it, so those direct-mutation
+// callers would see stale data (caught by TestStorage_UpdateInstance /
+// TestStorage_SaveInstancesSync). Routing the build through sendSyncErr gets
+// a fresh buildSnapshot(s.inst) (current field values, actor-mutation or not)
+// while still serializing against concurrent actor commands: with a live
+// actor this blocks until the mailbox delivers it, matching every other
+// actor command's ordering; with no live actor (tests, pre-NewLiveInstance)
+// it runs synchronously on the calling goroutine, same as before.
+// Do not call from within a sendSyncErr/send/sendCtx closure — see actor.go.
+// LaunchCommand is not in the snapshot (set once during Start) and is read directly.
+// gitManager and claudeSession sub-objects have their own synchronisation.
 func (i *Instance) ToInstanceData() InstanceData {
+	var snap *InstanceSnapshot
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
+		// mutate fields directly under i.mu.Lock() from outside the actor — see
+		// runActor's doc comment in actor.go.
+		s.inst.mu.Lock()
+		snap = buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		return nil
+	})
+
 	data := InstanceData{
-		Title:                i.Title,
-		UUID:                 i.UUID,
-		Path:                 i.Path,
-		WorkingDir:           i.WorkingDir,
-		Branch:               i.Branch,
-		Status:               i.Status,
-		Height:               i.Height,
-		Width:                i.Width,
-		CreatedAt:            i.CreatedAt,
+		Title:                snap.Title,
+		UUID:                 snap.UUID,
+		Path:                 snap.Path,
+		WorkingDir:           snap.WorkingDir,
+		Branch:               snap.Branch,
+		Status:               snap.Status,
+		Height:               snap.Height,
+		Width:                snap.Width,
+		CreatedAt:            snap.CreatedAt,
 		UpdatedAt:            time.Now(),
-		Program:              i.Program,
-		AutoYes:              i.AutoYes,
-		Prompt:               i.Prompt,
-		Category:             i.Category,
-		IsExpanded:           i.IsExpanded,
-		Tags:                 i.Tags, // Include tags in serialization
-		SessionType:          i.SessionType,
-		TmuxPrefix:           i.TmuxPrefix,
-		LastTerminalUpdate:   i.LastTerminalUpdate,
-		LastMeaningfulOutput: i.LastMeaningfulOutput,
-		LastOutputSignature:  i.LastOutputSignature,
-		LastAddedToQueue:     i.LastAddedToQueue,
-		LastViewed:           i.LastViewed,
-		LastAcknowledged:     i.LastAcknowledged,
+		Program:              snap.Program,
+		AutoYes:              snap.AutoYes,
+		Prompt:               snap.Prompt,
+		InitialPrompt:        snap.InitialPrompt,
+		Category:             snap.Category,
+		IsExpanded:           snap.IsExpanded,
+		Tags:                 snap.Tags, // Include tags in serialization
+		SessionType:          snap.SessionType,
+		TmuxPrefix:           snap.TmuxPrefix,
+		TmuxServerSocket:     snap.TmuxServerSocket,
+		LastTerminalUpdate:   snap.LastTerminalUpdate,
+		LastMeaningfulOutput: snap.LastMeaningfulOutput,
+		LastOutputSignature:  snap.LastOutputSignature,
+		LastAddedToQueue:     snap.LastAddedToQueue,
+		LastViewed:           snap.LastViewed,
+		LastAcknowledged:     snap.LastAcknowledged,
 		// Prompt detection and interaction tracking
-		LastPromptDetected:   i.LastPromptDetected,
-		LastPromptSignature:  i.LastPromptSignature,
-		LastUserResponse:     i.LastUserResponse,
-		ProcessingGraceUntil: i.ProcessingGraceUntil,
+		LastPromptDetected:   snap.LastPromptDetected,
+		LastPromptSignature:  snap.LastPromptSignature,
+		LastUserResponse:     snap.LastUserResponse,
+		ProcessingGraceUntil: snap.ProcessingGraceUntil,
 		// GitHub integration fields
-		GitHubPRNumber:  i.GitHubPRNumber,
-		GitHubPRURL:     i.GitHubPRURL,
-		GitHubOwner:     i.GitHubOwner,
-		GitHubRepo:      i.GitHubRepo,
-		GitHubSourceRef: i.GitHubSourceRef,
-		ClonedRepoPath:  i.ClonedRepoPath,
+		GitHubPRNumber:  snap.GitHub.GitHubPRNumber,
+		GitHubPRURL:     snap.GitHub.GitHubPRURL,
+		GitHubOwner:     snap.GitHub.GitHubOwner,
+		GitHubRepo:      snap.GitHub.GitHubRepo,
+		GitHubSourceRef: snap.GitHub.GitHubSourceRef,
+		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// GitHub integration fields
-		GitHubIsFork: i.GitHubIsFork,
+		GitHubIsFork: snap.GitHub.GitHubIsFork,
 		// PR status fields (populated by PRStatusPoller)
-		GitHubPRState:          i.GitHubPRState,
-		GitHubPRIsDraft:        i.GitHubPRIsDraft,
-		GitHubPRPriority:       i.GitHubPRPriority,
-		GitHubApprovedCount:    i.GitHubApprovedCount,
-		GitHubChangesReqCount:  i.GitHubChangesReqCount,
-		GitHubCheckConclusion:  i.GitHubCheckConclusion,
-		GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
-		LastPRStatusCheck:      i.LastPRStatusCheck,
+		GitHubPRState:          snap.GitHub.GitHubPRState,
+		GitHubPRIsDraft:        snap.GitHub.GitHubPRIsDraft,
+		GitHubPRPriority:       snap.GitHub.GitHubPRPriority,
+		GitHubApprovedCount:    snap.GitHub.GitHubApprovedCount,
+		GitHubChangesReqCount:  snap.GitHub.GitHubChangesReqCount,
+		GitHubCheckConclusion:  snap.GitHub.GitHubCheckConclusion,
+		GitHubPRStatusTerminal: snap.GitHub.GitHubPRStatusTerminal,
+		LastPRStatusCheck:      snap.GitHub.LastPRStatusCheck,
 		// Crew autonomy mode
-		AutonomousMode: i.AutonomousMode,
+		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      i.Checkpoints,
-		ActiveCheckpoint: i.ActiveCheckpoint,
-		ForkedFromID:     i.ForkedFromID,
+		Checkpoints:      snap.Checkpoints,
+		ActiveCheckpoint: snap.ActiveCheckpoint,
+		ForkedFromID:     snap.ForkedFromID,
 		// History file linkage
-		HistoryFilePath: i.HistoryFilePath,
+		HistoryFilePath: snap.HistoryFilePath,
 		// One-shot mode
-		OneShot: i.OneShot,
+		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
-		Hidden: i.Hidden,
+		Hidden: snap.Hidden,
 		// Project association
-		ProjectID: i.ProjectID,
-		// Full launch command for diagnostics
+		ProjectID: snap.ProjectID,
+		// Full launch command for diagnostics (not in snapshot — set once during Start)
 		LaunchCommand: i.LaunchCommand,
 		// MCP server URL for re-injection on restart
-		MCPServerURL: i.MCPServerURL,
+		MCPServerURL: snap.MCPServerURL,
 		// Pause reason — persisted so it survives restarts
-		PauseReason: i.PauseReason,
+		PauseReason: snap.PauseReason,
+		// Workflow linkage and archive state
+		WorkflowID: snap.WorkflowID,
+		ArchivedAt: snap.ArchivedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -95,7 +127,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		data.Worktree = GitWorktreeData{
 			RepoPath:      i.gitManager.GetRepoPath(),
 			WorktreePath:  i.gitManager.GetWorktreePath(),
-			SessionName:   i.Title,
+			SessionName:   snap.Title,
 			BranchName:    i.gitManager.GetBranchName(),
 			BaseCommitSHA: i.gitManager.GetBaseCommitSHA(),
 		}
@@ -116,13 +148,33 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 	// Always wire the squad session ID from Instance.UUID so the API response
 	// always carries both identifiers in the ClaudeSession sub-object.
-	data.ClaudeSession.SquadSessionID = i.UUID
+	data.ClaudeSession.SquadSessionID = snap.UUID
 
 	return data
 }
 
 // FromInstanceData creates a new Instance from serialized data
+// FromInstanceData reconstructs an *Instance from persisted data, starting it
+// synchronously (hot-attaching to an already-live tmux session or cold-restoring
+// one) before returning. Use for on-demand single-instance loads (e.g.
+// Registry.Acquire) where the caller needs a ready instance immediately.
+//
+// Bulk startup loads should use fromInstanceData(data, true) via LoadInstances
+// instead — starting every instance synchronously here is what made server
+// startup block on restoring all sessions (including cold-relaunching every
+// dead one) before the HTTP server could bind. See server/dependencies.go's
+// "Step 6" background goroutine, which already exists to start un-started
+// instances asynchronously once the deferred path skips Start() here.
 func FromInstanceData(data InstanceData) (*Instance, error) {
+	return fromInstanceData(data, false)
+}
+
+// fromInstanceData is the shared implementation. When deferStart is true, the
+// Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
+// tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
+// the synchronous Start() call, leaving Instance.Started() false so the async
+// Step 6 loop in BuildRuntimeDeps picks it up off the startup critical path.
+func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// MIGRATION: Fix corrupted paths from before defensive tilde expansion was added
 	// Detect paths like "/absolute/path/~/other/path" and fix them
 	migratedPath := data.Path
@@ -161,23 +213,25 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:       data.Title,
-		UUID:        data.UUID,
-		Path:        migratedPath, // Use migrated path
-		WorkingDir:  data.WorkingDir,
-		Branch:      data.Branch,
-		Status:      data.Status,
-		Height:      data.Height,
-		Width:       data.Width,
-		CreatedAt:   data.CreatedAt,
-		UpdatedAt:   data.UpdatedAt,
-		Program:     data.Program,
-		Prompt:      data.Prompt,
-		Category:    data.Category,
-		IsExpanded:  data.IsExpanded,
-		Tags:        tags, // Use migrated tags (includes category if needed)
-		SessionType: data.SessionType,
-		TmuxPrefix:  data.TmuxPrefix,
+		Title:            data.Title,
+		UUID:             data.UUID,
+		Path:             migratedPath, // Use migrated path
+		WorkingDir:       data.WorkingDir,
+		Branch:           data.Branch,
+		Status:           data.Status,
+		Height:           data.Height,
+		Width:            data.Width,
+		CreatedAt:        data.CreatedAt,
+		UpdatedAt:        data.UpdatedAt,
+		Program:          data.Program,
+		Prompt:           data.Prompt,
+		InitialPrompt:    data.InitialPrompt,
+		Category:         data.Category,
+		IsExpanded:       data.IsExpanded,
+		Tags:             tags, // Use migrated tags (includes category if needed)
+		SessionType:      data.SessionType,
+		TmuxPrefix:       data.TmuxPrefix,
+		TmuxServerSocket: data.TmuxServerSocket,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -234,6 +288,9 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		MCPServerURL: data.MCPServerURL,
 		// Pause reason
 		PauseReason: data.PauseReason,
+		// Workflow linkage and archive state
+		WorkflowID: data.WorkflowID,
+		ArchivedAt: data.ArchivedAt,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment
@@ -243,6 +300,11 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	// Initialize TagManager backed by the Instance.Tags slice
 	instance.tagManager = NewTagManager(&instance.Tags)
+
+	// Shell registry is not part of InstanceData and defaults to nil; initialize
+	// it so restored instances can spawn/track shells (see ShellRegistry's
+	// nil-receiver-safe methods, which otherwise silently no-op).
+	instance.initShellRegistry()
 
 	// Sync atomic shadow fields so lock-free readers see the correct initial values.
 	instance.SyncAtomicTimestamps()
@@ -302,7 +364,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	}
 
 	if instance.Paused() {
-		instance.started = true
+		instance.started.Store(true)
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
 			tmuxPrefix = "staplersquad_"
@@ -337,13 +399,16 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		if instance.processManager.IsAlive() {
 			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
 			instance.loadStatus(Active)
-			if err := instance.Start(false); err != nil {
+			if deferStart {
+				// Leave started=false: the async Step 6 loop will call Start(false)
+				// and hot-attach to this already-live session off the critical path.
+			} else if err := instance.Start(false); err != nil {
 				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
 				instance.loadStatus(Stopped)
-				instance.started = true
+				instance.started.Store(true)
 			}
 		} else {
-			instance.started = true
+			instance.started.Store(true)
 		}
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
@@ -362,12 +427,37 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 					instance.Title, instance.Program, tmuxPrefix))
 			}
 		}
-		instance.started = true
+		instance.started.Store(true)
 	} else {
-		if err := instance.Start(false); err != nil {
+		// Wire the tmux session object first (mirrors the Paused/Stopped/Hibernated
+		// branches above) so initTmuxSession()'s HasSession() check correctly detects
+		// an already-running tmux session instead of unconditionally treating every
+		// restore as a fresh launch. Without this, HasSession() is false on this
+		// freshly-constructed Instance regardless of whether the real tmux session
+		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
+		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// for every Active session, even ones that were never actually down.
+		tmuxPrefix := instance.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if tb, ok := instance.processManager.(*TmuxBackend); ok {
+			if instance.TmuxServerSocket != "" {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
+			} else {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
+			}
+		}
+		if deferStart {
+			// Leave started=false: the async Step 6 loop in BuildRuntimeDeps calls
+			// Start(false) later, off the startup critical path. That loop already
+			// hot-attaches to a live tmux session or cold-restores a dead one —
+			// the same logic this branch would otherwise run synchronously here.
+		} else if err := instance.Start(false); err != nil {
 			return nil, err
 		}
 	}
 
+	finishInstanceConstruction(instance)
 	return instance, nil
 }

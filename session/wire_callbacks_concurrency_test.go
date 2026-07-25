@@ -6,22 +6,22 @@ import (
 )
 
 // TestWireRateLimitCallbacks_NoDeadlock verifies that wireRateLimitCallbacks
-// can be called while holding the stateMutex. This prevents a self-deadlock
-// that previously occurred because wireRateLimitCallbacks called GetController(),
-// which attempted to acquire an RLock while the same goroutine held the Lock.
+// can be called while holding the instance write lock (i.mu). This prevents a
+// self-deadlock that previously occurred because wireRateLimitCallbacks called
+// GetController(), which attempted to acquire i.mu.RLock while i.mu.Lock() was
+// already held on the same goroutine.
+//
+// After the stateMutex→mu rename + ControllerManager.mu split, GetController()
+// uses controllerManager.mu instead of i.mu, so no self-deadlock is possible.
 func TestWireRateLimitCallbacks_NoDeadlock(t *testing.T) {
 	i := &Instance{}
 
-	// Pre-fix, this would deadlock because GetController() (called by wireRateLimitCallbacks)
-	// tries to acquire RLock while stateMutex.Lock() is held.
-
 	done := make(chan bool)
 	go func() {
-		i.stateMutex.Lock()
-		defer i.stateMutex.Unlock()
+		i.mu.Lock()
+		defer i.mu.Unlock()
 
-		// The fix is to pass the controller directly to avoid re-acquiring the lock.
-		// Passing nil is sufficient to verify that the method itself doesn't lock anymore.
+		// Passing nil verifies the method itself doesn't attempt to re-acquire i.mu.
 		i.wireRateLimitCallbacks(nil)
 		done <- true
 	}()
@@ -30,6 +30,6 @@ func TestWireRateLimitCallbacks_NoDeadlock(t *testing.T) {
 	case <-done:
 		// Success: no deadlock
 	case <-time.After(1 * time.Second):
-		t.Fatal("Deadlock detected: wireRateLimitCallbacks still attempts to acquire a lock, causing a self-deadlock when called from a locked context (e.g., StartController)")
+		t.Fatal("Deadlock detected: wireRateLimitCallbacks re-acquires i.mu from within a locked context")
 	}
 }

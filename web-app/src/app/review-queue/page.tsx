@@ -63,8 +63,11 @@ function ReviewQueueContent() {
     [runOneShot]
   );
 
-  // Acknowledge function for dismissing sessions from the modal
-  const { acknowledgeSession } = useReviewQueueContext();
+  // Acknowledge function for dismissing sessions from the modal.
+  // allQueueItems is the unfiltered Redux store list — used as the existence oracle in the
+  // "deleted externally" effect below so that a status transition to ACTIVE/PROCESSING
+  // (which filters the session from the visible queue) does not spuriously trigger auto-advance.
+  const { acknowledgeSession, items: allQueueItems } = useReviewQueueContext();
 
   // Review queue items for navigation (next/previous)
   const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);
@@ -231,13 +234,18 @@ function ReviewQueueContent() {
   }, [acknowledgeSession, handleAutoAdvance]);
 
   // Auto-advance when the currently selected session is deleted externally (not via dismiss/acknowledge).
-  // reviewQueueItems updates as soon as the Redux removeItem dispatch fires from the sessionDeleted event,
-  // so this catches the case where another tab or the session list deletes the session.
+  // Uses allQueueItems (the unfiltered Redux store) rather than reviewQueueItems (visible filtered list)
+  // so that a session transitioning to ACTIVE/PROCESSING — which is filtered from the visible queue but
+  // remains in the store — does not incorrectly trigger auto-advance.
+  // reviewQueueItems is kept as the dep so the effect fires when the visible queue changes (the moment
+  // we need to re-evaluate), but the guard checks allQueueItems to distinguish "filtered out" from "removed".
+  // force=false so the user's auto-advance preference is respected even on genuine removals (e.g. after
+  // approving/denying a permission request — the user may still want to watch the session continue).
   useEffect(() => {
     if (!selectedSession) return;
-    const stillInQueue = reviewQueueItems.some((s) => s.id === selectedSession.id);
+    const stillInQueue = allQueueItems.some((item) => item.sessionId === selectedSession.id);
     if (!stillInQueue) {
-      handleAutoAdvance(selectedSession.id, true);
+      handleAutoAdvance(selectedSession.id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewQueueItems]);
@@ -250,28 +258,19 @@ function ReviewQueueContent() {
 
   return (
     <div className={styles.page}>
-      <main id="main-content" className={styles.main}>
-        {/* Auto-advance preference toolbar */}
-        <div className={styles.toolbar}>
-          <label className={styles.autoAdvanceLabel}>
-            <input
-              type="checkbox"
-              checked={autoAdvance}
-              onChange={(e) => {
-                setAutoAdvance(e.target.checked);
-                localStorage.setItem("review-queue-auto-advance", String(e.target.checked));
-              }}
-            />
-            Auto-advance after action
-          </label>
-        </div>
+      <div id="main-content" className={styles.main}>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
           onRunOneShot={handleRunOneShot}
+          autoAdvance={autoAdvance}
+          onAutoAdvanceChange={(val) => {
+            setAutoAdvance(val);
+            localStorage.setItem("review-queue-auto-advance", String(val));
+          }}
         />
-      </main>
+      </div>
 
       {/* Session detail modal with terminal view */}
       {selectedSession && (
@@ -354,14 +353,14 @@ function ReviewQueueContent() {
 function ReviewQueueSkeleton() {
   return (
     <div className={styles.page}>
-      <main id="main-content" className={styles.main} aria-busy="true" aria-label="Loading review queue">
+      <div id="main-content" className={styles.main} aria-busy="true" aria-label="Loading review queue">
         <div className={styles.skeletonHeader} />
         <div className={styles.skeletonList}>
           {[1, 2, 3].map((i) => (
             <div key={i} className={styles.skeletonCard} aria-hidden="true" />
           ))}
         </div>
-      </main>
+      </div>
     </div>
   );
 }

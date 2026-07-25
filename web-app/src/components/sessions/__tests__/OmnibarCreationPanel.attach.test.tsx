@@ -27,6 +27,7 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   newProjectSessionType: "new_worktree",
   firstPrompt: "",
   createIfMissing: false,
+  autonomousMode: false,
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {
@@ -350,5 +351,24 @@ describe("FT3-09: onAttachedImagesChange called with empty array when all remove
       const lastCall = calls[calls.length - 1][0] as string[];
       expect(lastCall).toEqual([]);
     });
+  });
+});
+
+// ─── U-TS-19: Source code verification for initial prompt hint text ───────────
+// NOTE: The OmnibarCreationPanel requires fetch mock configuration that is
+// specific to the FT3-* tests. This static check verifies the source file
+// directly to avoid mock infrastructure complexity.
+describe("OmnibarCreationPanel > initial prompt hint text", () => {
+  it("OmnibarCreationPanel > initial prompt hint text matches new wording", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const filePath = path.resolve(__dirname, "../OmnibarCreationPanel.tsx");
+    const source = fs.readFileSync(filePath, "utf-8");
+
+    // New wording must be present
+    expect(source).toContain("typed into the session terminal");
+    // Old wording must not be present
+    expect(source).not.toContain("injected as CLAUDE.md");
+    expect(source).not.toContain("injected via CLAUDE.md");
   });
 });

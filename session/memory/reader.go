@@ -5,11 +5,18 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/process"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// panePIDsTimeout bounds the list-panes subprocess used to measure a
+// session's memory. Previously this used context.Background() with no bound
+// at all -- a hung tmux call here would hold an exec-gate slot indefinitely.
+const panePIDsTimeout = 5 * time.Second
 
 // Reader reports system and per-session memory usage.
 type Reader interface {
@@ -58,8 +65,18 @@ func (g *GopsutilReader) SessionRSSMB(tmuxSessionName string) (int64, error) {
 
 // panePIDs runs `tmux list-panes -t <name> -F '#{pane_pid}'` and returns the PIDs.
 func panePIDs(sessionName string) ([]int32, error) {
-	ctx := context.Background()
-	cmd := safeexec.CommandContext(ctx, "tmux", "list-panes", "-t", sessionName, "-F", "#{pane_pid}")
+	socket := tmux.ResolveSocket("")
+	ctx, cancel := context.WithTimeout(context.Background(), panePIDsTimeout)
+	defer cancel()
+
+	release, err := tmux.AcquireExecSlot(ctx, socket.String())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	args := socket.Args("list-panes", "-t", sessionName, "-F", "#{pane_pid}")
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

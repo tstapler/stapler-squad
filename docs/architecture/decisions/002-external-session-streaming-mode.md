@@ -1,6 +1,16 @@
 # ADR-002: Streaming Mode for External Sessions
 
 ## Status
+Superseded (2026-07-02) — the "state"/"raw-compressed"/"hybrid" streaming modes
+described below were never fully wired into `streamViaTmuxCapturePane` (it always
+sent raw `TerminalData_Output` regardless of the requested mode) and have since
+been removed, along with `terminal.StateGenerator`, `StateApplicator.ts`, and the
+`streaming_mode` proto field. External sessions use plain raw tmux capture-pane
+polling — the same "raw" path as managed sessions. See
+`docs/terminal-streaming-proposal.md` for why raw streaming was chosen over
+MOSH-style state synchronization. Left below for historical context.
+
+## Status (original)
 Accepted
 
 ## Context

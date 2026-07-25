@@ -1,5 +1,5 @@
 import React from "react";
-import { renderHook } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { ApprovalsProvider, useApprovalsContext } from "../ApprovalsContext";
 
 // ---------------------------------------------------------------------------
@@ -9,23 +9,24 @@ import { ApprovalsProvider, useApprovalsContext } from "../ApprovalsContext";
 const mockRefetch = jest.fn().mockResolvedValue(undefined);
 const mockResolveApproval = jest.fn().mockResolvedValue({ data: undefined });
 
+// Mutable approvals array so individual tests can override it
+let mockApprovalData = [
+  {
+    id: "a1",
+    sessionId: "s1",
+    secondsRemaining: 30,
+    toolName: "bash",
+    toolInput: {},
+    cwd: "/tmp",
+    permissionMode: "default",
+    createdAt: undefined,
+    expiresAt: undefined,
+  },
+];
+
 jest.mock("@/lib/api/approvalsApi", () => ({
   useGetApprovalsQuery: () => ({
-    data: {
-      approvals: [
-        {
-          id: "a1",
-          sessionId: "s1",
-          secondsRemaining: 30,
-          toolName: "bash",
-          toolInput: {},
-          cwd: "/tmp",
-          permissionMode: "default",
-          createdAt: undefined,
-          expiresAt: undefined,
-        },
-      ],
-    },
+    data: { approvals: mockApprovalData },
     isLoading: false,
     error: null,
     refetch: mockRefetch,
@@ -48,6 +49,20 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe("ApprovalsContext", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Reset to default single-approval data
+    mockApprovalData = [
+      {
+        id: "a1",
+        sessionId: "s1",
+        secondsRemaining: 30,
+        toolName: "bash",
+        toolInput: {},
+        cwd: "/tmp",
+        permissionMode: "default",
+        createdAt: undefined,
+        expiresAt: undefined,
+      },
+    ];
   });
 
   describe("useApprovalsContext outside ApprovalsProvider", () => {
@@ -136,6 +151,106 @@ describe("ApprovalsContext", () => {
       await result.current.refresh();
 
       expect(mockRefetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("clearForSession", () => {
+    it("T-UNIT-TS-001: clearForSession_should_filterApprovals_When_sessionIdIsCleared", async () => {
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      // Initially s1's approval is present
+      expect(result.current.approvals).toHaveLength(1);
+      expect(result.current.approvals[0].sessionId).toBe("s1");
+
+      // clearForSession is called synchronously for the optimistic clear
+      act(() => {
+        result.current.clearForSession("s1");
+      });
+
+      // Approval for s1 should be filtered out immediately
+      expect(result.current.approvals.filter(a => a.sessionId === "s1")).toHaveLength(0);
+    });
+
+    it("T-UNIT-TS-002: clearForSession_should_decrementPendingCount_When_sessionIsCleared", async () => {
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      expect(result.current.pendingCount).toBe(1);
+
+      act(() => {
+        result.current.clearForSession("s1");
+      });
+
+      expect(result.current.pendingCount).toBe(0);
+    });
+
+    it("T-UNIT-TS-003: clearForSession_should_notAffectOtherSessions_When_differentSessionIdCleared", async () => {
+      mockApprovalData = [
+        { id: "a1", sessionId: "s1", secondsRemaining: 30, toolName: "bash", toolInput: {}, cwd: "/tmp", permissionMode: "default", createdAt: undefined, expiresAt: undefined },
+        { id: "a2", sessionId: "s2", secondsRemaining: 60, toolName: "bash", toolInput: {}, cwd: "/tmp", permissionMode: "default", createdAt: undefined, expiresAt: undefined },
+      ];
+
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      expect(result.current.approvals).toHaveLength(2);
+
+      act(() => {
+        result.current.clearForSession("s1");
+      });
+
+      // s2's approval must still be present
+      expect(result.current.approvals.filter(a => a.sessionId === "s2")).toHaveLength(1);
+      expect(result.current.pendingCount).toBe(1);
+    });
+
+    it("T-UNIT-TS-007: clearForSession_should_beNoOp_When_sessionHasNoApprovals", async () => {
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      const initialCount = result.current.pendingCount;
+
+      act(() => {
+        result.current.clearForSession("no-approvals-session");
+      });
+
+      // Count unchanged — clearing an empty session is a no-op
+      expect(result.current.pendingCount).toBe(initialCount);
+    });
+
+    it("T-UNIT-TS-008: clearForSession_should_exposeClearedSessions_When_sessionInClearedSet", async () => {
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      expect(result.current.clearedSessions.has("s1")).toBe(false);
+
+      act(() => {
+        result.current.clearForSession("s1");
+      });
+
+      expect(result.current.clearedSessions.has("s1")).toBe(true);
+    });
+
+    it("T-UNIT-TS-010: FALLBACK_CONTEXT_should_includeNoop_When_usedOutsideProvider", () => {
+      const { result } = renderHook(() => useApprovalsContext());
+
+      expect(typeof result.current.clearForSession).toBe("function");
+      expect(result.current.clearedSessions).toBeDefined();
+      expect(result.current.clearedSessions.has("anything")).toBe(false);
+
+      // Should not throw
+      expect(() => result.current.clearForSession("any-session")).not.toThrow();
+    });
+
+    it("T-UNIT-TS-009: clearForSession_should_callRefetch_When_invoked", async () => {
+      const { result } = renderHook(() => useApprovalsContext(), { wrapper });
+
+      act(() => {
+        result.current.clearForSession("s1");
+      });
+
+      // Wait for the async refetch to be called
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 });

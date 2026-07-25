@@ -12,6 +12,8 @@ export class BacklogPage {
   readonly lifecycleDiagram: Locator;
   readonly filterZeroState: Locator;
   readonly clearFiltersButton: Locator;
+  readonly tourButton: Locator;
+  readonly tourModal: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -25,6 +27,8 @@ export class BacklogPage {
     this.lifecycleDiagram = page.locator('[data-testid="backlog-lifecycle-diagram"]');
     this.filterZeroState = page.locator('[data-testid="backlog-filter-zero-state"]');
     this.clearFiltersButton = page.locator('[data-testid="backlog-clear-filters-button"]');
+    this.tourButton = page.locator('[data-testid="backlog-tour-button"]');
+    this.tourModal = page.locator('[data-testid="backlog-tour-modal"]');
   }
 
   async goto() {
@@ -54,6 +58,30 @@ export class BacklogPage {
 
   getTableRows(): Locator {
     return this.page.locator('[data-testid="backlog-table-row"]');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sort / group by repository
+  // ---------------------------------------------------------------------------
+
+  getRepositoryColumnHeader(): Locator {
+    return this.page.locator('[data-testid="backlog-col-repo-path"]');
+  }
+
+  getGroupBySelect(): Locator {
+    return this.page.locator('[data-testid="backlog-group-by-select"]');
+  }
+
+  async selectGroupBy(value: 'none' | 'repoPath') {
+    await this.getGroupBySelect().selectOption(value);
+  }
+
+  getGroupHeaders(): Locator {
+    return this.page.locator('[data-testid="backlog-group-header"]');
+  }
+
+  async getRowRepoPaths(): Promise<string[]> {
+    return this.getTableRows().locator('[data-testid="backlog-repo-path-cell"]').allTextContents();
   }
 
   async openEmptyStateForm() {
@@ -130,7 +158,7 @@ export class BacklogPage {
     await this.page.waitForSelector('[data-testid="backlog-form-modal"]', { timeout: 5000 });
   }
 
-  async fillNewItemForm(title: string, options?: { priority?: number; addAcCriterion?: string }) {
+  async fillNewItemForm(title: string, options?: { priority?: number; addAcCriterion?: string; repoPath?: string }) {
     const titleInput = this.page.locator('[data-testid="backlog-title-input"]');
     await titleInput.fill(title);
 
@@ -145,11 +173,29 @@ export class BacklogPage {
       const criterionInput = this.page.locator('[data-testid="backlog-criterion-text-0"]');
       await criterionInput.fill(options.addAcCriterion);
     }
+
+    if (options?.repoPath) {
+      const repoPathInput = this.page.locator('[data-testid="backlog-repo-path-input"]');
+      await repoPathInput.fill(options.repoPath);
+    }
   }
 
   async submitNewItemForm() {
     const submitButton = this.page.locator('[data-testid="backlog-form-submit"]');
     await submitButton.click();
+  }
+
+  /**
+   * Selects a pipeline mode option in the new/edit item form's radio group
+   * (Epic 3.2 — BacklogItemForm.tsx). `slug` is the PipelineMode's slug; use
+   * "default" for the built-in default option.
+   */
+  getPipelineModeOption(slug: string): Locator {
+    return this.page.getByTestId(`backlog-pipeline-mode-${slug}`);
+  }
+
+  async selectPipelineMode(slug: string) {
+    await this.getPipelineModeOption(slug).click();
   }
 
   async cancelNewItemForm() {
@@ -212,5 +258,35 @@ export class BacklogPage {
     await markReadyBtn.click();
     // Wait for status to update in the detail pane
     await expect(this.getDetailStatusBadge()).toContainText('Ready', { timeout: 10000 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // backlog-event-driven-updates: live-update surfaces (list row, connection
+  // indicator, board columns)
+  // ---------------------------------------------------------------------------
+
+  getConnectionIndicator(): Locator {
+    return this.page.getByTestId('connection-indicator');
+  }
+
+  getRowById(itemId: string): Locator {
+    return this.page.locator(`[data-testid="backlog-table-row"][data-item-id="${itemId}"]`);
+  }
+
+  async gotoBoard() {
+    await this.page.goto('/backlog/board');
+    await this.page.waitForSelector('[data-testid="backlog-board"]', { timeout: 15000 });
+  }
+
+  getColumn(status: string): Locator {
+    return this.page.locator(`[data-testid="backlog-column-${status}"]`);
+  }
+
+  getCardInColumn(status: string, itemId: string): Locator {
+    return this.getColumn(status).locator(`[data-item-id="${itemId}"]`);
+  }
+
+  getExitingCards(): Locator {
+    return this.page.getByTestId('backlog-card-exiting');
   }
 }

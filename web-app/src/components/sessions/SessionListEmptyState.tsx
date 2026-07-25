@@ -9,9 +9,8 @@ export function SessionListEmptyState() {
       <span className={icon} aria-hidden="true">⌘</span>
       <p className={headline}>No sessions yet</p>
       <p className={body}>
-        Press <kbd className={kbd}>⌘K</kbd> or <kbd className={kbd}>Ctrl+K</kbd> to create your first session
+        Press <kbd className={kbd}>⌘K</kbd> or <kbd className={kbd}>Ctrl+K</kbd> to create a session or paste a GitHub URL
       </p>
-      <p className={hint}>or paste a GitHub URL</p>
     </div>
   );
 }

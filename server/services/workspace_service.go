@@ -1,10 +1,17 @@
 package services
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -33,6 +40,25 @@ type LiveInstanceFinder interface {
 	FindLiveInstance(id string) *session.Instance
 }
 
+// branchCacheEntry holds a cached branch list for a repository path.
+// Moved from session_service.go together with ListBranches (ADR-001, Story 1.4).
+type branchCacheEntry struct {
+	branches []string
+	cachedAt time.Time
+}
+
+// vcsStatusCacheEntry caches the full VCSStatus result for a working directory.
+type vcsStatusCacheEntry struct {
+	status   *vc.VCSStatus
+	cachedAt time.Time
+}
+
+const branchCacheTTL = 5 * time.Minute
+
+// vcsStatusCacheTTL caps repeated git subprocess overhead for frequent GetVCSStatus
+// polls. 15 s matches the GitProvider.branchCacheTTL and keeps the UI feeling fresh.
+const vcsStatusCacheTTL = 15 * time.Second
+
 // WorkspaceService handles all VCS/workspace RPC methods.
 //
 // These methods operate on session workspace state (git/jj status, branch
@@ -44,6 +70,14 @@ type WorkspaceService struct {
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
+	// branchCache caches git branch lists per repo path. ADR-002.
+	// Moved here from SessionService (Story 1.4 — ListBranches was the odd one out
+	// next to GetVCSStatus/GetWorkspaceInfo/ListWorkspaceTargets/SwitchWorkspace,
+	// which all already lived in WorkspaceService).
+	branchCache sync.Map // map[string]branchCacheEntry
+	// vcsStatusCache caches full VCSStatus results per workdir to avoid spawning 6+
+	// git subprocesses on every poll. Keyed by workdir path.
+	vcsStatusCache sync.Map // map[string]vcsStatusCacheEntry
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -115,6 +149,16 @@ func (ws *WorkspaceService) GetVCSStatus(
 		}), nil
 	}
 
+	// Fast path: return cached status if still fresh.
+	if cached, ok := ws.vcsStatusCache.Load(workDir); ok {
+		entry := cached.(vcsStatusCacheEntry)
+		if time.Since(entry.cachedAt) < vcsStatusCacheTTL {
+			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+				VcsStatus: vcsStatusToProto(entry.status),
+			}), nil
+		}
+	}
+
 	var provider vc.VCSProvider
 	gitProvider, err := vc.NewGitProvider(workDir)
 	if err != nil {
@@ -135,6 +179,8 @@ func (ws *WorkspaceService) GetVCSStatus(
 			Error: fmt.Sprintf("failed to get VCS status: %v", err),
 		}), nil
 	}
+
+	ws.vcsStatusCache.Store(workDir, vcsStatusCacheEntry{status: status, cachedAt: time.Now()})
 
 	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
 		VcsStatus: vcsStatusToProto(status),
@@ -277,6 +323,8 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		return nil, err
 	}
 
+	preWorkDir := instance.Workspace().EffectivePath
+
 	var switchType session.WorkspaceSwitchType
 	switch req.Msg.SwitchType {
 	case sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_DIRECTORY:
@@ -341,6 +389,9 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		}
 	}
 
+	// Evict the status cache for the old path; the new path will be repopulated on next poll.
+	ws.vcsStatusCache.Delete(preWorkDir)
+
 	if ws.eventBus != nil {
 		ws.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"workspace", "branch"}))
 	}
@@ -352,7 +403,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		CurrentRevision:  result.CurrentRevision,
 		VcsType:          protoVCSType,
 		ChangesHandled:   result.ChangesHandled,
-		Session:          adapters.InstanceToProto(instance),
+		Session:          adapters.InstanceToProto(instance, nil),
 	}), nil
 }
 
@@ -432,9 +483,129 @@ func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
 
 func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 	return &sessionv1.FileChange{
-		Path:     f.Path,
-		Status:   fileStatusToProto(f.Status),
-		IsStaged: f.IsStaged,
-		OldPath:  f.OldPath,
+		Path:      f.Path,
+		Status:    fileStatusToProto(f.Status),
+		IsStaged:  f.IsStaged,
+		OldPath:   f.OldPath,
+		Additions: int32(f.Additions),
+		Deletions: int32(f.Deletions),
 	}
+}
+
+// ListBranches returns the git branches for a given repository path.
+// Results are cached per repo path with a 5-minute TTL. ADR-002.
+// Moved from SessionService (Story 1.4 — was the odd one out next to the four
+// workspace methods that already delegated here).
+func (ws *WorkspaceService) ListBranches(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListBranchesRequest],
+) (*connect.Response[sessionv1.ListBranchesResponse], error) {
+	repoPath := req.Msg.GetRepoPath()
+	if repoPath == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path is required"))
+	}
+
+	// Normalize and validate the path: must resolve within the user's home directory.
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", err))
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cannot determine home directory: %w", err))
+	}
+	if !strings.HasPrefix(absPath, homeDir+string(filepath.Separator)) && absPath != homeDir {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path must be within the user home directory"))
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path does not exist: %w", err))
+	}
+
+	maxResults := int(req.Msg.GetMaxResults())
+	if maxResults <= 0 {
+		maxResults = 200
+	}
+	filter := req.Msg.GetFilter()
+
+	// Serve from cache if still fresh.
+	if entry, ok := ws.branchCache.Load(absPath); ok {
+		cached := entry.(branchCacheEntry)
+		if time.Since(cached.cachedAt) < branchCacheTTL {
+			branches := filterBranches(cached.branches, filter, maxResults)
+			return connect.NewResponse(&sessionv1.ListBranchesResponse{
+				Branches:   branches,
+				TotalCount: int32(len(branches)),
+				Truncated:  false,
+			}), nil
+		}
+	}
+
+	// Run git for-each-ref with a 2-second timeout.
+	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	refSpec := "refs/heads"
+	if req.Msg.GetIncludeRemote() {
+		refSpec = "refs/"
+	}
+	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	start := time.Now()
+	runErr := cmd.Run()
+	latencyMs := time.Since(start).Milliseconds()
+	log.Info("[ListBranches] branch list", "latency_ms", latencyMs, "repo", absPath)
+
+	truncated := false
+	if runErr != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			// Timeout: return whatever partial output was collected.
+			truncated = true
+		} else {
+			// git failed (not a git repo, etc.): return empty list, not an error.
+			log.Warn("[ListBranches] git for-each-ref failed", "repo", absPath, "err", runErr)
+			return connect.NewResponse(&sessionv1.ListBranchesResponse{
+				Branches:   []string{},
+				TotalCount: 0,
+				Truncated:  false,
+			}), nil
+		}
+	}
+
+	var all []string
+	scanner := bufio.NewScanner(&out)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			all = append(all, line)
+		}
+	}
+
+	// Cache the full unfiltered list.
+	ws.branchCache.Store(absPath, branchCacheEntry{branches: all, cachedAt: time.Now()})
+
+	branches := filterBranches(all, filter, maxResults)
+	return connect.NewResponse(&sessionv1.ListBranchesResponse{
+		Branches:   branches,
+		TotalCount: int32(len(branches)),
+		Truncated:  truncated,
+	}), nil
+}
+
+// filterBranches applies a case-insensitive substring filter and caps results at maxResults.
+// Moved from session_service.go together with ListBranches (Story 1.4).
+func filterBranches(all []string, filter string, maxResults int) []string {
+	lowerFilter := strings.ToLower(filter)
+	var result []string
+	for _, b := range all {
+		if filter == "" || strings.Contains(strings.ToLower(b), lowerFilter) {
+			result = append(result, b)
+			if len(result) >= maxResults {
+				break
+			}
+		}
+	}
+	return result
 }

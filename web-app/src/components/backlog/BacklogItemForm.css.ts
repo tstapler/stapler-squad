@@ -109,6 +109,27 @@ export const checkboxLabel = style({
   cursor: "pointer",
 });
 
+export const checkboxHint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginLeft: vars.space["6"],
+});
+
+export const pipelineModeEmptyHint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const pipelineModeEmptyHintLink = style({
+  color: vars.color.primary,
+  textDecoration: "none",
+  selectors: {
+    "&:hover": {
+      textDecoration: "underline",
+    },
+  },
+});
+
 export const acSection = style({
   display: "flex",
   flexDirection: "column",
@@ -250,6 +271,78 @@ export const errorMessage = style({
   color: vars.color.error,
   fontSize: vars.fontSize.xs,
   marginTop: vars.space["1"],
+});
+
+export const descriptionHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space["2"],
+  flexWrap: "wrap",
+});
+
+export const descriptionToolbar = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+});
+
+export const descriptionTab = style({
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: "transparent",
+  color: vars.color.textMuted,
+  border: `1px solid transparent`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  ":hover": {
+    color: vars.color.textPrimary,
+  },
+});
+
+export const descriptionTabActive = style([
+  descriptionTab,
+  {
+    color: vars.color.textPrimary,
+    background: vars.color.accentBg,
+    borderColor: vars.color.borderMuted,
+  },
+]);
+
+export const attachButton = style({
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  background: "transparent",
+  color: vars.color.primary,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  ":hover": {
+    background: vars.color.accentBg,
+  },
+  ":disabled": {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
+});
+
+export const hiddenFileInput = style({
+  display: "none",
+});
+
+export const previewBox = style({
+  minHeight: "80px",
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  background: vars.color.inputBackground,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: vars.radii.md,
+  boxSizing: "border-box",
+});
+
+export const previewEmpty = style({
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.sm,
+  fontStyle: "italic",
 });
 
 export const twoColumn = style({

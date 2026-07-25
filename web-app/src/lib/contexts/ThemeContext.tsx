@@ -45,7 +45,13 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext);
   if (!ctx) {
-    throw new Error("useTheme must be used within a ThemeProvider");
+    // Return a no-op fallback when used outside a ThemeProvider.
+    // This allows components to be rendered in test environments or embedded contexts.
+    return {
+      theme: "clean" as ThemeName,
+      setTheme: () => {},
+      availableThemes: [],
+    };
   }
   return ctx;
 }

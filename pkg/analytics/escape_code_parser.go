@@ -5,11 +5,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
-	"hash/fnv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/spaolacci/murmur3"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 )
 
 // EscapeCategory represents the type of escape sequence
@@ -36,7 +40,6 @@ const (
 // ParsedEscapeCode represents a single parsed escape sequence
 type ParsedEscapeCode struct {
 	RawBytes    []byte         // Original bytes
-	HexEncoded  string         // Hex representation for display
 	Category    EscapeCategory // Type of sequence
 	Description string         // Human-readable description
 	StartOffset int            // Position in original data
@@ -45,19 +48,25 @@ type ParsedEscapeCode struct {
 
 // EscapeCodeParser extracts escape sequences from terminal output
 type EscapeCodeParser struct {
-	store             *EscapeCodeStore
-	sessionID         string
+	store *EscapeCodeStore
+	// sessionID is read from both the Stage 1 (PTY read) and Stage 2 (WebSocket output)
+	// goroutines and written by SetStableSessionID once the owning session's stable UUID
+	// becomes known (after construction, before or after Start — either is safe).
+	sessionID         atomic.Pointer[string]
 	enabled           bool
 	partialBuffer     []byte // Buffer for partial escape sequences between chunks
 	writer            EscapeEventWriter
 	captureLevel      string // "full", "summary", "off"
 	redactOSCPayloads bool
 	samplingRate      float64
-	chunkSeqNum       int64 // incremented per Parse call (Stage 1)
-	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2, independent counter)
+	chunkSeqNum       int64 // incremented per Parse call (Stage 1 goroutine only)
+	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2 goroutine only)
 	correlator        *MangleCorrelator
-	totalSequences    int64 // total escape sequences emitted
-	totalMangled      int64 // total sequences flagged as mangled
+	// totalSequences/totalMangled are written from both the Stage 1 (PTY read) and
+	// Stage 2 (WebSocket output) goroutines via emitEventWithStageAndSeq, so they
+	// must be atomic rather than plain int64.
+	totalSequences atomic.Int64 // total escape sequences emitted
+	totalMangled   atomic.Int64 // total sequences flagged as mangled
 }
 
 // ParserStats holds lifetime counters for a parser session.
@@ -70,19 +79,20 @@ type ParserStats struct {
 // GetStats returns lifetime counters for this parser.
 func (p *EscapeCodeParser) GetStats() ParserStats {
 	return ParserStats{
-		TotalSequences: p.totalSequences,
-		TotalMangled:   p.totalMangled,
+		TotalSequences: p.totalSequences.Load(),
+		TotalMangled:   p.totalMangled.Load(),
 	}
 }
 
 // NewEscapeCodeParser creates a new parser with the given store and session ID
 func NewEscapeCodeParser(store *EscapeCodeStore, sessionID string) *EscapeCodeParser {
-	return &EscapeCodeParser{
+	p := &EscapeCodeParser{
 		store:         store,
-		sessionID:     sessionID,
 		enabled:       false,
 		partialBuffer: nil,
 	}
+	p.sessionID.Store(&sessionID)
+	return p
 }
 
 // SetEventWriter configures the event writer and capture settings.
@@ -93,9 +103,48 @@ func (p *EscapeCodeParser) SetEventWriter(w EscapeEventWriter, captureLevel stri
 	p.samplingRate = samplingRate
 }
 
+// SetStableSessionID overrides the session identifier recorded on emitted events.
+// Used to switch from the tmux session name (used at construction time) to the
+// stable session UUID once it is known, so escape_event rows can be correlated
+// with the same session identifier the rest of the app uses. Safe to call at any
+// time, including concurrently with Parse/ParseStage2 on a running stream — the
+// name matches ResponseStream.SetStableSessionID, which wraps it, so both ends of
+// this wiring are textually distinguishable from tmux-name-keyed setters (like
+// detection.StatusDetector.SetSessionID) called nearby at the same call site.
+func (p *EscapeCodeParser) SetStableSessionID(id string) {
+	p.sessionID.Store(&id)
+}
+
+// currentSessionID returns the session identifier to record on emitted events.
+func (p *EscapeCodeParser) currentSessionID() string {
+	if id := p.sessionID.Load(); id != nil {
+		return *id
+	}
+	return ""
+}
+
 // SetCorrelator attaches a MangleCorrelator to this parser for Stage 1/2 mangle detection.
 func (p *EscapeCodeParser) SetCorrelator(c *MangleCorrelator) {
 	p.correlator = c
+}
+
+// RunCorrelatorEviction runs the attached correlator's eviction loop until ctx
+// is cancelled. No-op if no correlator or writer is configured (e.g.
+// capture_level=off). Blocks the calling goroutine — callers that need this to
+// run in the background must launch it themselves (e.g. `go p.RunCorrelatorEviction(ctx)`,
+// ideally tracked with the same WaitGroup used for their other background work
+// so a "Stop" method can block until this has actually exited too). Recovers
+// from panics so a bug here can't take down the whole process.
+func (p *EscapeCodeParser) RunCorrelatorEviction(ctx context.Context) {
+	if p.correlator == nil || p.writer == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("mangle correlator eviction loop panicked", "recover", r)
+		}
+	}()
+	p.correlator.StartEviction(ctx, p.writer)
 }
 
 // SetEnabled enables or disables escape code parsing
@@ -114,7 +163,7 @@ func (p *EscapeCodeParser) IsEnabled() bool {
 func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	p.chunkSeqNum++
 
-	if !p.enabled || p.store == nil || len(data) == 0 {
+	if !p.enabled || p.store == nil || len(data) == 0 || p.captureLevel == "off" {
 		return data
 	}
 
@@ -133,8 +182,9 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	codes := p.extractEscapeSequences(parseData)
 
 	// Record each code to the store and emit events
+	sessionID := p.currentSessionID()
 	for _, code := range codes {
-		p.store.Record(p.sessionID, code.RawBytes, code.Category, code.Description)
+		p.store.Record(sessionID, code.RawBytes, code.Category, code.Description)
 		p.emitEvent(code, sessionSeq)
 	}
 
@@ -189,7 +239,7 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 	}
 
 	record := EscapeEventRecord{
-		SessionID:       p.sessionID,
+		SessionID:       p.currentSessionID(),
 		Stage:           stage,
 		SequenceType:    string(code.Category),
 		SequenceSubtype: subtype,
@@ -205,9 +255,9 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 		record.PayloadHash = hex.EncodeToString(h[:])[:16]
 		record.RawBytes = code.RawBytes
 	case "summary":
-		h := fnv.New64a()
-		h.Write(code.RawBytes)
-		record.PayloadHash = fmt.Sprintf("%016x", h.Sum64())
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], murmur3.Sum64(code.RawBytes))
+		record.PayloadHash = hex.EncodeToString(buf[:])
 	}
 
 	// Apply OSC redaction
@@ -224,14 +274,27 @@ func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessi
 		}
 	}
 
-	// Record Stage 1 observation for mangle correlation
+	// Mangle correlation: Stage 1 observations are recorded for later comparison;
+	// Stage 2 observations are checked against the matching Stage 1 record (if any).
+	// Correlation is ordinal per (session, sequence type), not by byte offset — Stage 1
+	// and Stage 2 arrive via two independent tmux client attachments with no shared clock,
+	// so the Nth sequence of a type is matched to the Nth sequence of that type, not to a
+	// specific byte position. See MangleCorrelator's doc comment for the full rationale.
+	// A record with no payload hash (redacted OSC payloads) can't be correlated.
 	if p.correlator != nil && record.PayloadHash != "" {
-		p.correlator.RecordStage1(record.SessionID, record.SessionSeq, record.PayloadHash, record.ByteLen)
+		switch stage {
+		case StagePTYRead:
+			p.correlator.RecordStage1(record.SessionID, record.SequenceType, record.PayloadHash, record.ByteLen)
+		case StageTransport:
+			mangled, mangleType := p.correlator.CheckStage2(record.SessionID, record.SequenceType, record.PayloadHash, record.ByteLen)
+			record.Mangled = mangled
+			record.MangleType = mangleType
+		}
 	}
 
-	p.totalSequences++
+	p.totalSequences.Add(1)
 	if record.Mangled {
-		p.totalMangled++
+		p.totalMangled.Add(1)
 	}
 
 	p.writer.WriteEscapeEvent(context.Background(), record)
@@ -276,8 +339,8 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 
 		// Found an ESC, try to parse a complete sequence
 		code, consumed := p.parseSequenceAt(data, i)
-		if consumed > 0 && code != nil {
-			codes = append(codes, *code)
+		if consumed > 0 {
+			codes = append(codes, code)
 			i += consumed
 		} else {
 			// Not a valid sequence or incomplete, skip the ESC
@@ -288,16 +351,16 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 	return codes
 }
 
-// parseSequenceAt attempts to parse an escape sequence starting at offset
-// Returns the parsed code and number of bytes consumed
-func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEscapeCode, int) {
+// parseSequenceAt attempts to parse an escape sequence starting at offset.
+// Returns (code, consumed); consumed == 0 means no sequence found.
+func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset >= len(data) || data[offset] != 0x1b {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Need at least 2 bytes for any escape sequence
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	secondByte := data[offset+1]
@@ -326,14 +389,14 @@ func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEsca
 		if secondByte >= 0x40 && secondByte <= 0x5F {
 			return p.parseSimpleEscape(data, offset)
 		}
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 }
 
 // parseCSI parses a CSI sequence: ESC [ params... final
-func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Find the terminator (letter A-Z or a-z)
@@ -361,14 +424,15 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			end++
 			continue
 		}
-		// Terminator: letter
-		if (b >= 0x40 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) {
+		// Terminator: final byte per ECMA-48 (0x40-0x7E), not just letters —
+		// e.g. '@' (Insert Character) and '~' (used by many real xterm
+		// sequences) are valid CSI final bytes outside the A-Z/a-z range.
+		if ansi.IsCSIFinalByte(b) {
 			end++
 			rawBytes := data[offset:end]
 			category, description := p.categorizeCSI(rawBytes, isPrivate, hasParams)
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: description,
 				StartOffset: offset,
@@ -376,17 +440,17 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			}, end - offset
 		}
 		// Invalid character - not a valid CSI sequence
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// No terminator found - incomplete sequence
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseOSC parses an OSC sequence: ESC ] ... BEL or ESC ] ... ESC \
-func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for BEL (0x07) or ST (ESC \)
@@ -394,9 +458,8 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// BEL terminator
 		if data[end] == 0x07 {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -406,9 +469,8 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// ESC \ terminator (ST)
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -417,13 +479,13 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseStringSequence parses DCS, PM, APC, SOS sequences ending with ST
-func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for ST (ESC \) or single-byte ST (0x9C)
@@ -431,9 +493,8 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// ESC \ terminator
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -443,9 +504,8 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// Single-byte ST (C1)
 		if data[end] == 0x9C {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -454,42 +514,69 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseCharset parses character set designation sequences
-func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// ESC ( X, ESC ) X, ESC * X, ESC + X
 	rawBytes := data[offset : offset+3]
+	// pre-built constants for the common 12 combinations avoid a string concat per call.
 	var desc string
+	slot := data[offset+2] // charset selector byte
 	switch data[offset+1] {
 	case '(':
-		desc = "Designate G0 character set"
-	case ')':
-		desc = "Designate G1 character set"
-	case '*':
-		desc = "Designate G2 character set"
-	case '+':
-		desc = "Designate G3 character set"
-	}
-	if len(data) > offset+2 {
-		switch data[offset+2] {
+		switch slot {
 		case 'B':
-			desc += " (ASCII)"
+			desc = "Designate G0 character set (ASCII)"
 		case '0':
-			desc += " (DEC Special Graphics)"
+			desc = "Designate G0 character set (DEC Special Graphics)"
 		case 'A':
-			desc += " (UK)"
+			desc = "Designate G0 character set (UK)"
+		default:
+			desc = "Designate G0 character set"
+		}
+	case ')':
+		switch slot {
+		case 'B':
+			desc = "Designate G1 character set (ASCII)"
+		case '0':
+			desc = "Designate G1 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G1 character set (UK)"
+		default:
+			desc = "Designate G1 character set"
+		}
+	case '*':
+		switch slot {
+		case 'B':
+			desc = "Designate G2 character set (ASCII)"
+		case '0':
+			desc = "Designate G2 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G2 character set (UK)"
+		default:
+			desc = "Designate G2 character set"
+		}
+	case '+':
+		switch slot {
+		case 'B':
+			desc = "Designate G3 character set (ASCII)"
+		case '0':
+			desc = "Designate G3 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G3 character set (UK)"
+		default:
+			desc = "Designate G3 character set"
 		}
 	}
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategoryCharset,
 		Description: desc,
 		StartOffset: offset,
@@ -498,17 +585,16 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeC
 }
 
 // parseSimpleEscape parses simple 2-byte escape sequences
-func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	rawBytes := data[offset : offset+2]
 	desc := DescribeSimpleEscape(data[offset+1])
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategorySimple,
 		Description: desc,
 		StartOffset: offset,

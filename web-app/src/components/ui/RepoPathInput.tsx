@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, useId } from "react"
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
+import { isGitHubRef, parseGitHubRef, getRepoFullName } from "@/lib/github/urlParser";
 import * as styles from "./RepoPathInput.css";
 
 interface RepoPathInputProps {
@@ -14,6 +15,16 @@ interface RepoPathInputProps {
   error?: string;
   placeholder?: string;
   required?: boolean;
+  /** Optional helper text rendered under the input, e.g. explaining the expected format. */
+  hint?: string;
+  /**
+   * When true, live-detect a GitHub URL/shorthand in the value and render an
+   * inline confirmation of what will happen on save (clone to a local path),
+   * instead of leaving the user to guess whether a pasted URL is supported.
+   */
+  detectGitHubUrl?: boolean;
+  /** Called (in addition to onChange) when an entry is picked from the dropdown, not on every keystroke. */
+  onSelect?: (entry: CompletionEntry) => void;
   "data-testid"?: string;
 }
 
@@ -32,6 +43,9 @@ export function RepoPathInput({
   error,
   placeholder = "/path/to/repo",
   required = false,
+  hint,
+  detectGitHubUrl = false,
+  onSelect,
   "data-testid": testId,
 }: RepoPathInputProps) {
   const generatedId = useId();
@@ -47,6 +61,11 @@ export function RepoPathInput({
     enabled: value.length > 0,
     directoriesOnly: true,
   });
+
+  const detectedRepo = useMemo(() => {
+    if (!detectGitHubUrl || !value.trim() || !isGitHubRef(value)) return null;
+    return parseGitHubRef(value);
+  }, [detectGitHubUrl, value]);
 
   const { allEntries, historyCount } = useMemo(() => {
     const filtered = historyPaths.filter(
@@ -82,10 +101,11 @@ export function RepoPathInput({
   const handleSelect = useCallback(
     (entry: CompletionEntry) => {
       onChange(entry.path);
+      onSelect?.(entry);
       setOpen(false);
       setSelectedIndex(-1);
     },
-    [onChange]
+    [onChange, onSelect]
   );
 
   const handleKeyDown = useCallback(
@@ -174,6 +194,15 @@ export function RepoPathInput({
             historyCount={historyCount}
           />
         </div>
+      )}
+      {detectedRepo ? (
+        <span className={styles.githubHint} data-testid="repo-path-github-hint">
+          Will clone {getRepoFullName(detectedRepo)} to{" "}
+          {`~/.stapler-squad/repos/github.com/${detectedRepo.owner}/${detectedRepo.repo}`} when
+          you save.
+        </span>
+      ) : (
+        hint && <span className={styles.hint}>{hint}</span>
       )}
     </div>
   );

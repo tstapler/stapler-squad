@@ -34,6 +34,11 @@ jobs:
           go-version: '1.23'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -54,13 +59,13 @@ jobs:
       - name: Install Playwright + test dependencies
         run: |
           cd tests/e2e
-          npm install
+          pnpm install --frozen-lockfile
           npx playwright install chromium --with-deps
 
       - name: Start test server
         run: |
-          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=ux-${{ github.run_id }} \
-            ./stapler-squad --tmux-keep-server &
+          STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local \
+            ./stapler-squad --tmux-keep-server > /tmp/server.log 2>&1 &
           echo $! > /tmp/server.pid
 
           for i in $(seq 1 30); do
@@ -70,6 +75,12 @@ jobs:
             fi
             sleep 1
           done
+
+          echo "--- debug mutate-create smoke test ---"
+          curl -s -X POST http://localhost:8543/api/debug/backlog/mutate-create \
+            -H "Content-Type: application/json" \
+            -d '{"title":"ci-smoke-test","status":"idea","priority":3}' \
+            -w "\nHTTP_STATUS:%{http_code}\n"
 
       - name: Run Axe accessibility tests
         id: axe
@@ -128,10 +139,12 @@ jobs:
       - name: Stop test server
         if: always()
         run: |
+          echo "--- server.log (last 200 lines) ---"
+          tail -n 200 /tmp/server.log 2>/dev/null || echo "(no server.log)"
           if [ -f /tmp/server.pid ]; then
             kill "$(cat /tmp/server.pid)" 2>/dev/null || true
           fi
-          pkill -f "stapler-squad.*ux-${{ github.run_id }}" 2>/dev/null || true
+          pkill -f "stapler-squad.*e2e-local" 2>/dev/null || true
 
       - name: Post UX analysis PR comment
         if: always() && github.event_name == 'pull_request'

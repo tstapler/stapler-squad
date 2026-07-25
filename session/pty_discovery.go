@@ -4,12 +4,13 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -27,13 +28,19 @@ type paneEntry struct {
 // Returns a map keyed by session name; only the first pane per session is kept.
 // socket is the tmux server socket name (empty = default server).
 func batchPTYInfo(socket string) map[string]paneEntry {
-	args := []string{"list-panes", "-a", "-F", "#{session_name} #{pane_tty} #{pane_pid}"}
-	if socket != "" {
-		args = append([]string{"-L", socket}, args...)
-	}
+	resolved := tmux.ResolveSocket(socket)
+	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_tty} #{pane_pid}")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "tmux", args...)
+
+	// Background poller: skip this tick rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(resolved.String())
+	if !ok {
+		return nil
+	}
+	defer release()
+
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -121,28 +128,44 @@ func parseProcessState(state string) PTYStatus {
 // a session has produced new output since the last capture, without spawning capture-pane.
 // Returns nil when tmux is unavailable.
 func batchPaneActivity(socket string) map[string]time.Time {
-	args := []string{"list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}"}
-	if socket != "" {
-		args = append([]string{"-L", socket}, args...)
-	}
+	resolved := tmux.ResolveSocket(socket)
+	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "tmux", args...)
+
+	// Background poller: skip this tick rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(resolved.String())
+	if !ok {
+		return nil
+	}
+	defer release()
+
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
+	// Parse bytes directly: no string(output) copy, no strings.Split allocation.
 	result := make(map[string]time.Time)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
+	rem := output
+	for len(rem) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(rem, '\n'); idx >= 0 {
+			line = bytes.TrimSpace(rem[:idx])
+			rem = rem[idx+1:]
+		} else {
+			line = bytes.TrimSpace(rem)
+			rem = rem[:0]
+		}
+		spaceIdx := bytes.IndexByte(line, ' ')
+		if spaceIdx <= 0 || spaceIdx >= len(line)-1 {
 			continue
 		}
-		sessionName := parts[0]
+		sessionName := string(line[:spaceIdx])
 		if _, exists := result[sessionName]; exists {
 			continue // keep first pane per session
 		}
-		ts, err := strconv.ParseInt(parts[1], 10, 64)
+		ts, err := strconv.ParseInt(string(line[spaceIdx+1:]), 10, 64)
 		if err != nil {
 			continue
 		}
@@ -180,8 +203,14 @@ func batchIsClaudeProcess(pids []int) map[int]bool {
 		if err != nil {
 			continue
 		}
-		cmdLine := strings.ToLower(line[spaceIdx+1:])
-		result[pid] = strings.Contains(cmdLine, "claude")
+		// Extract only the program name (first token) and compare basename exactly.
+		// Substring match on the full command line would cause false positives for
+		// paths like /home/claude/... or wrappers like claude-code.
+		prog := line[spaceIdx+1:]
+		if end := strings.IndexByte(prog, ' '); end >= 0 {
+			prog = prog[:end]
+		}
+		result[pid] = strings.ToLower(filepath.Base(prog)) == "claude"
 	}
 	return result
 }
@@ -269,6 +298,7 @@ type PTYDiscovery struct {
 	refreshRate   time.Duration
 	config        PTYDiscoveryConfig // Discovery configuration
 	sessionLister tmux.SessionLister // nil = use exec fallback
+	refreshing    atomic.Bool        // true while a Refresh() from monitorLoop is in flight
 }
 
 // NewPTYDiscovery creates a new PTY discovery service with default configuration.
@@ -398,13 +428,28 @@ func (pd *PTYDiscovery) monitorLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := pd.Refresh(); err != nil {
+			if ran, err := pd.tryRefreshOnce(); !ran {
+				log.Debug("PTY discovery: skipping tick, previous refresh still running")
+			} else if err != nil {
 				log.Error("PTY discovery refresh failed", "err", err)
 			}
 		case <-pd.stopCh:
 			return
 		}
 	}
+}
+
+// tryRefreshOnce runs Refresh() unless a previous call (from a concurrent tick)
+// is still in flight, in which case it returns ran=false without calling
+// Refresh() again. This poller fires every refreshRate (default 5s) forever
+// regardless of session count, and a slow tmux call (server under load) must
+// not cause ticks to pile up as concurrent Refresh() calls.
+func (pd *PTYDiscovery) tryRefreshOnce() (ran bool, err error) {
+	if !pd.refreshing.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	defer pd.refreshing.Store(false)
+	return true, pd.Refresh()
 }
 
 // discoverPTYs performs the actual PTY discovery.
@@ -510,28 +555,6 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 	return connections
 }
 
-// getPTYInfoFromTmux gets PTY path and PID from tmux for a single session.
-// Used as a fallback when no batch pane info is available.
-func (pd *PTYDiscovery) getPTYInfoFromTmux(sessionName string) (string, int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", sessionName,
-		"#{pane_tty}:#{pane_pid}")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to get tmux pane info: %w", err)
-	}
-	parts := strings.Split(strings.TrimSpace(string(output)), ":")
-	if len(parts) != 2 {
-		return "", 0, fmt.Errorf("unexpected tmux output format: %s", string(output))
-	}
-	pid, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return "", 0, fmt.Errorf("invalid PID '%s': %w", parts[1], err)
-	}
-	return parts[0], pid, nil
-}
-
 // discoverOrphanedPTYs finds unmanaged Claude processes in stapler-squad tmux sessions.
 // Uses batched subprocess calls; accepts a precomputed managedPIDs set to avoid O(n²) work.
 // paneInfoMap is the result of a prior batchPTYInfo("") call (may be nil).
@@ -543,6 +566,13 @@ func (pd *PTYDiscovery) discoverOrphanedPTYs() []*PTYConnection {
 func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]paneEntry, managedPIDs map[int]bool) []*PTYConnection {
 	connections := make([]*PTYConnection, 0)
 
+	// Resolved once and reused for the per-session fallback below: the
+	// enumerate call and the per-session lookup must target the same server,
+	// or the fallback silently queries the wrong socket in test mode (the
+	// session it just enumerated on the isolated socket won't exist on the
+	// real default one).
+	resolvedSocket := tmux.ResolveSocket("")
+
 	// Collect session names: prefer the injected SessionLister to avoid exec forks.
 	var sessionNames []string
 	if pd.sessionLister != nil && pd.sessionLister.IsHealthy() {
@@ -553,8 +583,17 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		cmd := safeexec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+
+		// Background poller: skip this source for the tick rather than queue
+		// behind interactive traffic.
+		release, ok := tmux.TryAcquireExecSlot(resolvedSocket.String())
+		if !ok {
+			return connections
+		}
+		args := resolvedSocket.Args("list-sessions", "-F", "#{session_name}")
+		cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 		output, err := cmd.Output()
+		release()
 		if err != nil {
 			return connections
 		}
@@ -584,7 +623,7 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 			}
 		} else {
 			// Fallback: individual tmux call (only when no batch map provided).
-			pty, pid, err := pd.getPTYInfoFromTmux(sessionName)
+			pty, pid, err := pd.getPTYInfoFromTmuxWithSocket(sessionName, resolvedSocket)
 			if err != nil {
 				continue
 			}
@@ -638,11 +677,12 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 // paneInfoMap is a pre-fetched batch result for socket (nil = fetch individually as fallback).
 // managedPIDs is the set of PIDs already tracked; used to skip duplicates.
 func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[string]paneEntry, managedPIDs map[int]bool) []*PTYConnection {
+	resolvedSocket := tmux.ResolveSocket(socket)
 	connections := make([]*PTYConnection, 0)
 
 	// Collect session names via the registry (no exec) when possible.
 	var sessionNames []string
-	if socket == "" && pd.sessionLister != nil && pd.sessionLister.IsHealthy() {
+	if resolvedSocket == "" && pd.sessionLister != nil && pd.sessionLister.IsHealthy() {
 		m := pd.sessionLister.ListSessions()
 		for name := range m {
 			sessionNames = append(sessionNames, name)
@@ -650,13 +690,16 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		var cmd *exec.Cmd
-		if socket != "" {
-			cmd = safeexec.CommandContext(ctx, "tmux", "-L", socket, "list-sessions", "-F", "#{session_name}")
-		} else {
-			cmd = safeexec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+
+		// Background poller: skip this source for the tick rather than queue
+		// behind interactive traffic.
+		release, ok := tmux.TryAcquireExecSlot(resolvedSocket.String())
+		if !ok {
+			return connections
 		}
+		cmd := safeexec.CommandContext(ctx, tmux.Binary(), resolvedSocket.Args("list-sessions", "-F", "#{session_name}")...)
 		output, err := cmd.Output()
+		release()
 		if err != nil {
 			return connections
 		}
@@ -684,9 +727,9 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 				continue
 			}
 		} else {
-			pty, pid, err := pd.getPTYInfoFromTmuxWithSocket(sessionName, socket)
+			pty, pid, err := pd.getPTYInfoFromTmuxWithSocket(sessionName, resolvedSocket)
 			if err != nil {
-				log.Debug("failed to get PTY info for external session", "session", sessionName, "socket", socket, "err", err)
+				log.Debug("failed to get PTY info for external session", "session", sessionName, "socket", resolvedSocket.String(), "err", err)
 				continue
 			}
 			info = paneEntry{pty: pty, pid: pid}
@@ -724,7 +767,7 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 			Status:          status,
 			LastActivity:    time.Now(),
 			IsManaged:       false,
-			TmuxSocket:      socket,
+			TmuxSocket:      resolvedSocket.String(),
 			TmuxSessionName: c.sessionName,
 			CanAttach:       pd.config.CanAttachExternal(),
 			CanDestroy:      false,
@@ -734,19 +777,21 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 	return connections
 }
 
-// getPTYInfoFromTmuxWithSocket gets PTY path and PID from tmux with socket support
-// This is similar to getPTYInfoFromTmux but supports specifying a tmux server socket
-func (pd *PTYDiscovery) getPTYInfoFromTmuxWithSocket(sessionName string, socket string) (string, int, error) {
+// getPTYInfoFromTmuxWithSocket gets PTY path and PID from tmux for a single
+// session, targeting the given (already-resolved) socket.
+func (pd *PTYDiscovery) getPTYInfoFromTmuxWithSocket(sessionName string, socket tmux.Socket) (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var cmd *exec.Cmd
-	if socket != "" {
-		cmd = safeexec.CommandContext(ctx, "tmux", "-L", socket, "display-message", "-p", "-t", sessionName,
-			"#{pane_tty}:#{pane_pid}")
-	} else {
-		cmd = safeexec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", sessionName,
-			"#{pane_tty}:#{pane_pid}")
+
+	// Background poller: skip this candidate rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(socket.String())
+	if !ok {
+		return "", 0, fmt.Errorf("failed to get tmux pane info: exec gate busy")
 	}
+	defer release()
+
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), socket.Args("display-message", "-p", "-t", sessionName,
+		"#{pane_tty}:#{pane_pid}")...)
 
 	output, err := cmd.Output()
 	if err != nil {

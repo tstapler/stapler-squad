@@ -19,11 +19,15 @@ export const routes = {
   settingsUnfinished: "/settings/unfinished",
   insights: "/insights",
   settingsFeatures: "/settings/features",
+  settingsBacklogSources: "/settings/backlog-sources",
+  settingsPipelineModes: "/settings/pipeline-modes",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
+  workflows: "/workflows",
   login: "/login",
   account: "/account",
   escapeAnalytics: "/analytics/escape",
+  files: "/files",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });

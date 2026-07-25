@@ -9,7 +9,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -57,10 +56,20 @@ func init() {
 //
 // See: https://github.com/tmux/tmux/wiki/Control-Mode
 func (t *TmuxSession) StartControlMode() error {
-	// Check if control mode is already running
+	// Serialize concurrent first-time starts. Held for the full fork+init sequence
+	// to prevent two callers from both passing the controlModeCmd==nil check.
+	t.controlModeStartMu.Lock()
+	defer t.controlModeStartMu.Unlock()
+
+	// Increment refcount if already running — atomic under the same lock that
+	// protects controlModeCmd so no TOCTOU between check and increment.
+	t.controlModeSubMu.Lock()
 	if t.controlModeCmd != nil {
-		return nil // Already started
+		t.controlModeRefCount++
+		t.controlModeSubMu.Unlock()
+		return nil // Already running; just bumped the refcount
 	}
+	t.controlModeSubMu.Unlock()
 
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
@@ -86,27 +95,27 @@ func (t *TmuxSession) StartControlMode() error {
 
 	// Start the control mode process
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
+		stdin.Close()
+		stderr.Close()
 		return fmt.Errorf("failed to start control mode for session '%s': %w", t.sanitizedName, err)
 	}
 	TrackChildPID(cmd.Process.Pid, "tmux control-mode session="+t.sanitizedName)
 
-	// Store control mode infrastructure
+	// Store all infrastructure and initialize subscriber state atomically under subMu.
+	t.controlModeSubMu.Lock()
 	t.controlModeCmd = cmd
 	t.controlModeStdout = stdout
 	t.controlModeStdin = stdin
 	t.controlModeDone = make(chan struct{})
-
-	// Initialize priority send queues and sender-exit signal.
 	t.highPriSendCh = make(chan cmSendReq, 64)
 	t.normPriSendCh = make(chan cmSendReq, 256)
 	t.cmSenderExited = make(chan struct{})
-
-	// Initialize subscriber map and reset exited flag
-	t.controlModeSubMu.Lock()
 	if t.controlModeSubscribers == nil {
 		t.controlModeSubscribers = make(map[string]chan []byte)
 	}
 	t.controlModeExited = false
+	t.controlModeRefCount = 1
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
@@ -119,20 +128,45 @@ func (t *TmuxSession) StartControlMode() error {
 }
 
 // StopControlMode stops the control mode streaming and cleans up resources.
+// With refcounting, this only actually stops the underlying process when the last
+// caller disconnects. Intermediate callers decrement the refcount and return early.
 func (t *TmuxSession) StopControlMode() error {
+	// Serialize with StartControlMode to prevent races during the 0→1 and 1→0 transitions.
+	t.controlModeStartMu.Lock()
+	defer t.controlModeStartMu.Unlock()
+
+	// Decrement refcount under the lock. Only proceed to teardown when the count
+	// reaches zero (i.e., this is the last caller).
+	t.controlModeSubMu.Lock()
+	if t.controlModeRefCount > 0 {
+		t.controlModeRefCount--
+	} else {
+		log.Warn("StopControlMode called with refcount already 0", "session", t.sanitizedName)
+	}
+	remaining := t.controlModeRefCount
+	t.controlModeSubMu.Unlock()
+
+	if remaining > 0 {
+		return nil // Other callers still active; leave the process running.
+	}
+
 	if t.controlModeCmd == nil {
-		return nil // Not running
+		return nil // Not running (or already stopped by a prior call).
 	}
 
 	// Mark as intentional before closing anything so that the scanner-EOF path
 	// in readControlModeOutput() knows not to fire the onExit callback.
 	t.intentionalStop.Store(true)
 
-	// Signal termination — this causes runCMSender to drain its queues and exit.
+	// Signal termination — close controlModeDone under a lock to prevent
+	// a panic if readControlModeOutput's unilateral-exit path has already nilled
+	// this channel before we reach teardown.
+	t.controlModeSubMu.Lock()
 	if t.controlModeDone != nil {
 		close(t.controlModeDone)
 		t.controlModeDone = nil
 	}
+	t.controlModeSubMu.Unlock()
 
 	// Wait for the sender goroutine to exit before closing stdin. The sender
 	// owns all stdin writes; closing stdin underneath it would panic or corrupt state.
@@ -146,8 +180,12 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 
 	// Nil out send queues so cmEnabled() returns false immediately.
+	// Must be done under controlModeSubMu to prevent data races with
+	// SendInputViaControlMode and enqueueCMCommand which read these fields.
+	t.controlModeSubMu.Lock()
 	t.highPriSendCh = nil
 	t.normPriSendCh = nil
+	t.controlModeSubMu.Unlock()
 
 	// Close stdin to signal tmux to exit.
 	t.cmdSendMu.Lock()
@@ -182,15 +220,17 @@ func (t *TmuxSession) StopControlMode() error {
 		t.controlModeStdout = nil
 	}
 
-	// Close all subscriber channels
+	// Close all subscriber channels and nil the cmd/refcount under the same lock
+	// so that StartControlMode() cannot observe a stale non-nil cmd after teardown.
 	t.controlModeSubMu.Lock()
 	for id, ch := range t.controlModeSubscribers {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	t.controlModeCmd = nil
+	t.controlModeRefCount = 0
 	t.controlModeSubMu.Unlock()
 
-	t.controlModeCmd = nil
 	return nil
 }
 
@@ -209,8 +249,15 @@ func (t *TmuxSession) readControlModeOutput() {
 		case <-doneCh:
 			return
 		default:
-			line := scanner.Text()
-			t.processControlModeLine(line)
+			// %output is the hot case (every terminal frame). Handle it in-place using
+			// scanner.Bytes() — no string allocation — falling back to scanner.Text() for
+			// all other (infrequent) events, which may pass sub-strings to async loggers.
+			b := scanner.Bytes()
+			if hasOutputPrefix(b) {
+				t.handleOutputBytes(b)
+			} else {
+				t.processControlModeLine(scanner.Text())
+			}
 		}
 	}
 
@@ -238,6 +285,8 @@ func (t *TmuxSession) readControlModeOutput() {
 
 	// Control mode process has exited. Close all subscriber channels and drain pending
 	// commands so that waiting goroutines detect end-of-stream and unblock.
+	// Also reset refcount and cmd so that a subsequent StartControlMode() can fork a
+	// fresh process instead of fast-returning against a dead (but non-nil) cmd (ARCH-1).
 	t.controlModeSubMu.Lock()
 	t.controlModeExited = true
 	for _, ch := range t.pendingCmds {
@@ -251,6 +300,9 @@ func (t *TmuxSession) readControlModeOutput() {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	// Reset so that the next StartControlMode() call sees a clean slate.
+	t.controlModeRefCount = 0
+	t.controlModeCmd = nil
 	t.controlModeSubMu.Unlock()
 
 	// Scanner-EOF fallback: if the pipe closed without a %exit notification (e.g. the
@@ -312,21 +364,13 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		return
 	}
 
-	fields := strings.SplitN(line, " ", 3)
-	notificationType := fields[0]
+	notificationType, rest, _ := strings.Cut(line, " ")
 
 	switch notificationType {
 	case "%output":
-		// %output %PANE_ID DATA — broadcast even inside a command response block.
-		if len(fields) >= 3 {
-			paneID := fields[1]
-			encodedData := fields[2]
-			data := t.decodeControlModeOutput(encodedData)
-			if len(data) > 0 {
-				t.broadcastControlModeUpdate(data)
-				log.Debug("control mode output", "session", t.sanitizedName, "pane", paneID, "bytes", len(data))
-			}
-		}
+		// Hot path is handled by handleOutputBytes in the scanner loop (no string alloc).
+		// This case is kept as fallback for tests and any caller that uses processControlModeLine directly.
+		t.handleOutputBytes([]byte(line))
 
 	case "%begin":
 		// Start of a command response. If we're already in a response (unexpected
@@ -366,8 +410,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		if t.inCmdResp {
 			// Error description lines appear between %begin and %error in the body buffer.
 			errMsg := strings.TrimSpace(t.cmdBodyBuf.String())
-			if errMsg == "" && len(fields) >= 2 {
-				errMsg = strings.Join(fields[1:], " ")
+			if errMsg == "" && rest != "" {
+				errMsg = rest
 			}
 			if t.curCmdCh != nil {
 				select {
@@ -379,8 +423,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			t.inCmdResp = false
 			t.cmdBodyBuf.Reset()
 		} else {
-			if len(fields) >= 2 {
-				log.Error("control mode error", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+			if rest != "" {
+				log.Error("control mode error", "session", t.sanitizedName, "detail", rest)
 			}
 		}
 
@@ -401,6 +445,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		// path in readControlModeOutput() does the same drain, but there is a race
 		// window between %exit and EOF where runCMSender can append a new resultCh
 		// to pendingCmds after the EOF drain has already run, leaving it orphaned.
+		// Also reset refcount and cmd so that StartControlMode() can fork a fresh
+		// process after this unilateral exit (ARCH-1).
 		t.controlModeSubMu.Lock()
 		if !t.controlModeExited {
 			t.controlModeExited = true
@@ -415,6 +461,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 				close(ch)
 				delete(t.controlModeSubscribers, id)
 			}
+			// Reset so the next StartControlMode() call sees a clean slate.
+			t.controlModeRefCount = 0
+			t.controlModeCmd = nil
 		}
 		t.controlModeSubMu.Unlock()
 
@@ -428,8 +477,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-closed":
-		if len(fields) >= 2 {
-			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+		if rest != "" {
+			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", rest)
 		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -440,8 +489,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-changed":
-		if len(fields) >= 3 {
-			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", fields[2])
+		_, newSession, _ := strings.Cut(rest, " ")
+		if newSession != "" {
+			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", newSession)
 		}
 
 	default:
@@ -526,7 +576,10 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 // Background operations (capture-pane, resize, display-message) use this path.
 // User input calls SendInputViaControlMode which enqueues directly to highPriSendCh.
 func (t *TmuxSession) sendCMCommand(ctx context.Context, args ...string) (string, error) {
-	return t.enqueueCMCommand(ctx, t.normPriSendCh, args...)
+	t.controlModeSubMu.RLock()
+	ch := t.normPriSendCh
+	t.controlModeSubMu.RUnlock()
+	return t.enqueueCMCommand(ctx, ch, args...)
 }
 
 // enqueueCMCommand is the shared implementation: builds the request, sends it to
@@ -552,50 +605,71 @@ func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, a
 	}
 }
 
+// octalVal maps ASCII byte → its octal digit value (0–7); zero for non-octal bytes.
+// Inline table eliminates strconv.ParseUint call and error allocation on every %output event.
+var octalVal [256]byte
+
+func init() {
+	for c := byte('0'); c <= '7'; c++ {
+		octalVal[c] = c - '0'
+	}
+}
+
+// outputLinePrefix is the literal prefix of every tmux control mode %output notification.
+var outputLinePrefix = []byte("%output ")
+
+// hasOutputPrefix reports whether b starts with "%output ".
+func hasOutputPrefix(b []byte) bool {
+	return bytes.HasPrefix(b, outputLinePrefix)
+}
+
+// handleOutputBytes processes a %output line from scanner.Bytes() without allocating a string.
+// Format: %output %PANE_ID DATA
+func (t *TmuxSession) handleOutputBytes(b []byte) {
+	// Skip "%output " prefix (8 bytes).
+	rest := b[8:]
+	// Find the space separating pane ID from encoded data.
+	spaceIdx := bytes.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		return
+	}
+	encodedData := rest[spaceIdx+1:]
+	if len(encodedData) == 0 {
+		return
+	}
+	data := t.decodeControlModeOutput(encodedData)
+	if len(data) > 0 {
+		t.broadcastControlModeUpdate(data)
+		log.Debug("control mode output", "session", t.sanitizedName, "bytes", len(data))
+	}
+}
+
 // decodeControlModeOutput decodes tmux control mode output format.
 // Control mode replaces characters < ASCII 32 and backslash with octal escape sequences (\ooo).
 // For example: "hello\012world" represents "hello\nworld"
-func (t *TmuxSession) decodeControlModeOutput(encoded string) []byte {
-	var result bytes.Buffer
-
+func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
+	// Pre-allocate at input length: decoded output is never longer than the encoded input
+	// (octal escapes encode 1 byte as 4 chars, so the decode is always ≤ len(encoded)).
+	result := make([]byte, 0, len(encoded))
 	i := 0
 	for i < len(encoded) {
 		if encoded[i] == '\\' && i+3 < len(encoded) {
-			// Check for octal escape sequence (\ooo)
-			octal := encoded[i+1 : i+4]
-			if isOctalDigits(octal) {
-				// Parse octal value
-				value, err := strconv.ParseUint(octal, 8, 8)
-				if err == nil {
-					result.WriteByte(byte(value))
-					i += 4 // Skip \ooo
-					continue
-				}
+			a, b, c := encoded[i+1], encoded[i+2], encoded[i+3]
+			if a >= '0' && a <= '7' && b >= '0' && b <= '7' && c >= '0' && c <= '7' {
+				result = append(result, octalVal[a]<<6|octalVal[b]<<3|octalVal[c])
+				i += 4
+				continue
 			}
 		}
-
-		// Regular character (not an octal escape)
-		result.WriteByte(encoded[i])
+		result = append(result, encoded[i])
 		i++
 	}
-
-	return result.Bytes()
-}
-
-// isOctalDigits checks if a string contains exactly 3 octal digits (0-7).
-func isOctalDigits(s string) bool {
-	if len(s) != 3 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '7' {
-			return false
-		}
-	}
-	return true
+	return result
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
+// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
+// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 	t.controlModeSubMu.RLock()
 	defer t.controlModeSubMu.RUnlock()
@@ -660,7 +734,9 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	if len(data) == 0 {
 		return nil
 	}
+	t.controlModeSubMu.RLock()
 	ch := t.highPriSendCh
+	t.controlModeSubMu.RUnlock()
 	if ch == nil {
 		return ErrControlModeNotRunning
 	}

@@ -10,8 +10,8 @@
  *  T-PITFALL-002: Hyphenated bare text resolves to SessionSearch
  */
 
-import { InputType } from "@/lib/omnibar/types";
-import { createDefaultRegistry } from "@/lib/omnibar/detector";
+import { InputType, DetectionResult } from "@/lib/omnibar/types";
+import { createDefaultRegistry, DetectorRegistry, Detector } from "@/lib/omnibar/detector";
 
 describe("Detector", () => {
   // Use a fresh registry per test-suite to avoid singleton state leakage
@@ -91,6 +91,112 @@ describe("Detector", () => {
     it("hyphenated bare text resolves to SessionSearch (T-PITFALL-002)", () => {
       const result = registry.detect("my-feature");
       expect(result.type).toBe(InputType.SessionSearch);
+    });
+  });
+
+  describe("default registry @-prefix fallthrough", () => {
+    it("should_returnSessionSearch_When_atPrefixedInputAndNoWorkflowDetectorRegistered", () => {
+      // WorkflowDetector is NOT in the default registry; @-prefixed input should
+      // fall through to SessionSearch (the catch-all), never resolve to Workflow.
+      const result = registry.detect("@daily-standup");
+      expect(result.type).not.toBe(InputType.Workflow);
+      expect(result.type).toBe(InputType.SessionSearch);
+    });
+  });
+
+  // AC3: an unhandled exception thrown by one detector must not silently abandon
+  // detection — lower-priority detectors (and the next debounce tick) must still run.
+  describe("detector exception handling (AC3)", () => {
+    class ThrowingDetector implements Detector {
+      name = "Throwing";
+      priority = 1; // runs before every default detector
+      detect(): DetectionResult | null {
+        throw new Error("boom");
+      }
+    }
+
+    let consoleErrorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
+    it("detect() falls through to a lower-priority detector when a higher-priority one throws", () => {
+      registry.register(new ThrowingDetector());
+      const result = registry.detect("squad");
+      expect(result.type).toBe(InputType.SessionSearch);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+
+    it("detect() still returns Unknown (not a crash) when every registered detector throws", () => {
+      const isolated = new DetectorRegistry();
+      isolated.register(new ThrowingDetector());
+      const result = isolated.detect("anything");
+      expect(result.type).toBe(InputType.Unknown);
+    });
+
+    it("a throw on one debounce tick does not break detection on the next", () => {
+      const flaky = new ThrowingDetector();
+      registry.register(flaky);
+      expect(registry.detect("squad").type).toBe(InputType.SessionSearch);
+
+      // Simulate the detector recovering (e.g. transient error) on a later tick —
+      // the registry itself carries no broken state from the earlier throw.
+      registry.unregister(flaky);
+      expect(registry.detect("squad").type).toBe(InputType.SessionSearch);
+    });
+  });
+
+  // detectAll() mirrors detect()'s try/catch around each detector.detect() call
+  // but was added without its own test coverage — verify the same resilience
+  // guarantees hold: a throwing detector must not prevent detectAll() from
+  // returning results collected from the other, non-throwing detectors.
+  describe("detectAll() exception handling", () => {
+    class ThrowingDetector implements Detector {
+      name = "Throwing";
+      priority = 1; // runs before every default detector
+      detect(): DetectionResult | null {
+        throw new Error("boom");
+      }
+    }
+
+    let consoleErrorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
+    it("does not throw and still returns results from other detectors when one detector throws", () => {
+      registry.register(new ThrowingDetector());
+
+      let results: DetectionResult[] = [];
+      expect(() => {
+        results = registry.detectAll("squad");
+      }).not.toThrow();
+
+      expect(results.some((r) => r.type === InputType.SessionSearch)).toBe(true);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+
+    it("returns an empty array (not a crash) when every registered detector throws", () => {
+      const isolated = new DetectorRegistry();
+      isolated.register(new ThrowingDetector());
+
+      let results: DetectionResult[] = [];
+      expect(() => {
+        results = isolated.detectAll("anything");
+      }).not.toThrow();
+
+      expect(results).toEqual([]);
+      expect(consoleErrorSpy).toHaveBeenCalled();
     });
   });
 });

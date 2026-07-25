@@ -5,7 +5,7 @@ package procinfo
 import (
 	"fmt"
 
-	"github.com/shirou/gopsutil/v3/process"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // ProcessInspector wraps gopsutil process inspection for macOS.

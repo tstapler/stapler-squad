@@ -5,6 +5,7 @@ package tmux_test
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,8 +21,13 @@ import (
 // cleanup that kills the isolated server when the test finishes.
 func newIsolatedSocket(t *testing.T) string {
 	t.Helper()
-	// Embed PID so TestMain watchdog can reap this socket on SIGKILL.
-	socket := fmt.Sprintf("integration_%d_%s", os.Getpid(), t.Name())
+	// Embed PID (so TestMain's watchdog can still reap this socket by its
+	// "integration_" prefix on SIGKILL) plus a random suffix: t.Name() alone
+	// collides across repeated runs of the same test in one process (-count=N,
+	// or any other reason the same test body executes twice), racing one
+	// run's teardown against the next run's setup on the same socket path --
+	// observed as an intermittent "server exited unexpectedly" failure.
+	socket := fmt.Sprintf("integration_%d_%s_%d", os.Getpid(), t.Name(), rand.Int63())
 	// Replace characters that are invalid in tmux socket names.
 	safeSocket := ""
 	for _, c := range socket {
@@ -37,6 +43,32 @@ func newIsolatedSocket(t *testing.T) string {
 	return safeSocket
 }
 
+// newSessionWithRetry runs `tmux -L socket new-session <args...>`, retrying up
+// to 3 times with short backoff. Under heavy concurrent tmux usage (many
+// packages each running real tmux servers during `go test ./...`), a fresh
+// server can transiently report "server exited unexpectedly" on its first
+// session-creation attempt even though the socket is otherwise healthy --
+// the same class of transient failure EnsureServerRunning recovers from in
+// session/tmux/tmux.go. Fails the test if every attempt fails.
+func newSessionWithRetry(t *testing.T, socket string, args ...string) {
+	t.Helper()
+	fullArgs := append([]string{"-L", socket, "new-session"}, args...)
+	const maxAttempts = 3
+	var lastErr error
+	var lastOut []byte
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		out, err := exec.Command("tmux", fullArgs...).CombinedOutput()
+		if err == nil {
+			return
+		}
+		lastErr, lastOut = err, out
+		if attempt < maxAttempts-1 {
+			time.Sleep(time.Duration(100*(1<<uint(attempt))) * time.Millisecond)
+		}
+	}
+	t.Fatalf("new-session failed after %d attempts: %v (%s)", maxAttempts, lastErr, lastOut)
+}
+
 // startIsolatedRegistry starts a tmux server on an isolated socket, creates the
 // keepalive session (required by TmuxServerRegistry's control-mode attach), and
 // returns a running registry whose context is cancelled by t.Cleanup.
@@ -50,9 +82,7 @@ func startIsolatedRegistry(t *testing.T) (*tmux.TmuxServerRegistry, string) {
 	// TmuxPrefix+"keepalive" is the name that TmuxServerRegistry.startControlMode
 	// attaches to. "sleep 300" keeps the session alive for the test duration.
 	keepaliveName := tmux.TmuxPrefix + "keepalive"
-	if out, err := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", keepaliveName, "sleep 300").CombinedOutput(); err != nil {
-		t.Fatalf("create keepalive session: %v (%s)", err, out)
-	}
+	newSessionWithRetry(t, socket, "-d", "-s", keepaliveName, "sleep 300")
 
 	registry := tmux.NewTmuxServerRegistry(socket)
 
@@ -65,6 +95,16 @@ func startIsolatedRegistry(t *testing.T) (*tmux.TmuxServerRegistry, string) {
 
 	return registry, socket
 }
+
+// registryPollTimeout is used for every timing assertion in this file that
+// depends on the registry's control-mode connection being up and synced.
+// reconnectLoop's exponential backoff (100ms, 200ms, 400ms, 800ms, ...) means
+// a connection that happens to reconnect once or twice right before an
+// assertion can burn most of a 1s budget on the reconnect delay alone, before
+// syncSessions even runs -- observed under heavy concurrent tmux load (many
+// packages each running real tmux servers during `go test ./...`). 3s
+// comfortably covers a few backoff cycles plus sync time.
+const registryPollTimeout = 3 * time.Second
 
 // pollUntil polls fn until it returns true or the timeout expires.
 // It calls t.Fatal with msg if the timeout is exceeded.
@@ -92,7 +132,7 @@ func TestTmuxServerRegistry_StartsHealthy(t *testing.T) {
 	t.Fatal("registry did not become healthy within 2 seconds")
 }
 
-// Test 2: Creating a tmux session reflects in SessionExists within 1 second.
+// Test 2: Creating a tmux session reflects in SessionExists within registryPollTimeout.
 // The registry syncs its session map on every reconnect cycle (~100ms), so even
 // in headless environments where the control-mode connection is short-lived a
 // new session becomes visible on the next syncSessions pass.
@@ -100,31 +140,27 @@ func TestTmuxServerRegistry_SessionCreated(t *testing.T) {
 	registry, socket := startIsolatedRegistry(t)
 
 	sessionName := "testcreated"
-	if out, err := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", sessionName).CombinedOutput(); err != nil {
-		t.Fatalf("new-session: %v (%s)", err, out)
-	}
+	newSessionWithRetry(t, socket, "-d", "-s", sessionName)
 	t.Cleanup(func() {
 		exec.Command("tmux", "-L", socket, "kill-session", "-t", sessionName).Run() //nolint:errcheck
 	})
 
-	pollUntil(t, time.Second, "session not visible in registry within 1s", func() bool {
+	pollUntil(t, registryPollTimeout, "session not visible in registry within 3s", func() bool {
 		return registry.SessionExists(sessionName)
 	})
 }
 
-// Test 3: Killing a tmux session closes SubscribePaneExit channel within 1 second.
+// Test 3: Killing a tmux session closes SubscribePaneExit channel within registryPollTimeout.
 // In headless mode the registry detects the disappearance via syncSessions on
 // the next reconnect cycle and fires firePaneExit for gone sessions.
 func TestTmuxServerRegistry_PaneExitChannel(t *testing.T) {
 	registry, socket := startIsolatedRegistry(t)
 
 	sessionName := "testpaneexit"
-	if out, err := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", sessionName).CombinedOutput(); err != nil {
-		t.Fatalf("new-session: %v (%s)", err, out)
-	}
+	newSessionWithRetry(t, socket, "-d", "-s", sessionName)
 
 	// Wait until the registry knows about the session so it can detect its removal.
-	pollUntil(t, time.Second, "session not visible in registry before subscribing", func() bool {
+	pollUntil(t, registryPollTimeout, "session not visible in registry before subscribing", func() bool {
 		return registry.SessionExists(sessionName)
 	})
 
@@ -140,8 +176,13 @@ func TestTmuxServerRegistry_PaneExitChannel(t *testing.T) {
 	select {
 	case <-exitCh:
 		// channel closed as expected
-	case <-time.After(time.Second):
-		t.Fatal("SubscribePaneExit channel not closed within 1s after kill-session")
+	case <-time.After(3 * time.Second):
+		// reconnectLoop's exponential backoff (100ms, 200ms, 400ms, 800ms, ...) means
+		// a control-mode connection that happened to reconnect once or twice right
+		// before kill-session can burn most of a 1s budget on the reconnect delay
+		// alone, before syncSessions even runs -- observed under heavy concurrent
+		// tmux load. 3s comfortably covers a few backoff cycles plus sync time.
+		t.Fatal("SubscribePaneExit channel not closed within 3s after kill-session")
 	}
 }
 
@@ -150,16 +191,14 @@ func TestTmuxServerRegistry_ListSessions(t *testing.T) {
 	registry, socket := startIsolatedRegistry(t)
 
 	for _, name := range []string{"foo", "bar"} {
-		if out, err := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", name).CombinedOutput(); err != nil {
-			t.Fatalf("new-session %s: %v (%s)", name, err, out)
-		}
+		newSessionWithRetry(t, socket, "-d", "-s", name)
 	}
 	t.Cleanup(func() {
 		exec.Command("tmux", "-L", socket, "kill-session", "-t", "bar").Run() //nolint:errcheck
 	})
 
 	// Wait for both sessions to appear.
-	pollUntil(t, time.Second, "sessions 'foo' and 'bar' not both visible within 1s", func() bool {
+	pollUntil(t, registryPollTimeout, "sessions 'foo' and 'bar' not both visible within 3s", func() bool {
 		sessions := registry.ListSessions()
 		return sessions["foo"] && sessions["bar"]
 	})
@@ -169,7 +208,7 @@ func TestTmuxServerRegistry_ListSessions(t *testing.T) {
 		t.Fatalf("kill-session foo: %v (%s)", err, out)
 	}
 
-	pollUntil(t, time.Second, "'foo' still visible in ListSessions after kill", func() bool {
+	pollUntil(t, registryPollTimeout, "'foo' still visible in ListSessions after kill", func() bool {
 		sessions := registry.ListSessions()
 		return !sessions["foo"] && sessions["bar"]
 	})
@@ -180,12 +219,10 @@ func TestTmuxServerRegistry_ConcurrentSubscriptions(t *testing.T) {
 	registry, socket := startIsolatedRegistry(t)
 
 	sessionName := "concurrent-test"
-	if out, err := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", sessionName).CombinedOutput(); err != nil {
-		t.Fatalf("new-session: %v (%s)", err, out)
-	}
+	newSessionWithRetry(t, socket, "-d", "-s", sessionName)
 
 	// Wait until the registry sees the session.
-	pollUntil(t, time.Second, "session not visible before concurrent subscriptions", func() bool {
+	pollUntil(t, registryPollTimeout, "session not visible before concurrent subscriptions", func() bool {
 		return registry.SessionExists(sessionName)
 	})
 
@@ -210,7 +247,7 @@ func TestTmuxServerRegistry_ConcurrentSubscriptions(t *testing.T) {
 		t.Fatalf("kill-session: %v (%s)", err, out)
 	}
 
-	timeout := time.After(time.Second)
+	timeout := time.After(registryPollTimeout)
 	for i, ch := range channels {
 		if ch == nil {
 			t.Errorf("goroutine %d: channel is nil", i)

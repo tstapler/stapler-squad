@@ -1,12 +1,18 @@
 "use client";
 
 import { SubStatus } from "@/gen/session/v1/types_pb";
+import { assertNever } from "@/lib/utils/assertNever";
 import {
   chipNeedsApproval,
+  chipInputRequired,
   chipProcessing,
   chipError,
   chipTestsFailing,
   chipRateLimited,
+  chipIdle,
+  chipReady,
+  chipSuccess,
+  chipWaitingForAgent,
   spinner,
 } from "./SubStatusChip.css";
 
@@ -16,11 +22,28 @@ interface SubStatusChipProps {
 
 /**
  * SubStatusChip renders a small inline chip showing fine-grained session activity.
- * Returns null for UNSPECIFIED and IDLE — those states do not need a visible indicator.
- * Only intended for sessions with lifecycle status ACTIVE.
+ * Returns null for UNSPECIFIED only.
+ *
+ * Note: SessionRow filters out IDLE and READY before rendering this component —
+ * those states are intentionally suppressed in the list view as low-signal noise.
+ * Direct callers (e.g. detail headers) may still render IDLE/READY chips.
  */
 export function SubStatusChip({ subStatus }: SubStatusChipProps) {
+  // Guard against undefined subStatus (e.g. when session proto field is not set)
+  if (subStatus === undefined || subStatus === null) return null;
   switch (subStatus) {
+    case SubStatus.WAITING_FOR_AGENT:
+      return (
+        <span
+          className={chipWaitingForAgent}
+          role="status"
+          aria-label="Waiting for agents"
+          title="Claude is waiting for background agents to finish"
+        >
+          ⏳ Waiting for Agents
+        </span>
+      );
+
     case SubStatus.PROCESSING:
       return (
         <span
@@ -42,7 +65,19 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
           aria-label="Needs approval"
           title="Waiting for your approval on a tool request"
         >
-          🔔 Needs Approval
+          ⚠ Approve Tool Use
+        </span>
+      );
+
+    case SubStatus.INPUT_REQUIRED:
+      return (
+        <span
+          className={chipInputRequired}
+          role="status"
+          aria-label="Input needed"
+          title="Waiting for you to type a response or select an option"
+        >
+          ⌨ Your Input Needed
         </span>
       );
 
@@ -83,8 +118,45 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
       );
 
     case SubStatus.IDLE:
+      return (
+        <span
+          className={chipIdle}
+          role="status"
+          aria-label="Session is idle"
+          title="Session is idle — waiting for your input"
+        >
+          ● Idle
+        </span>
+      );
+
+    case SubStatus.READY:
+      return (
+        <span
+          className={chipReady}
+          role="status"
+          aria-label="Ready for your next instruction"
+          title="Session is at the prompt — ready for your next message"
+        >
+          ● Ready
+        </span>
+      );
+
+    case SubStatus.SUCCESS:
+      return (
+        <span
+          className={chipSuccess}
+          role="status"
+          aria-label="Task complete"
+          title="Task completed successfully"
+        >
+          ✓ Done
+        </span>
+      );
+
     case SubStatus.UNSPECIFIED:
+      return null;
     default:
+      assertNever(subStatus);
       return null;
   }
 }

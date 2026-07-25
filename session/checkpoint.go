@@ -27,6 +27,10 @@ type Checkpoint struct {
 	ConvLineCount uint64    `json:"conv_line_count,omitempty"`
 	GitCommitSHA  string    `json:"git_commit_sha,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
+
+	// New: CLI-agnostic checkpoint details.
+	CanonicalTurnIndex int    `json:"canonical_turn_index,omitempty"`
+	CanonicalPath      string `json:"canonical_path,omitempty"`
 }
 
 // CheckpointList is a slice of Checkpoints with helper methods.

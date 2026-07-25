@@ -82,3 +82,39 @@ func TestTransitionToErrorInCallback(t *testing.T) {
 		t.Errorf("test setup: instance should be Stopped, got %s", inst.Status)
 	}
 }
+
+// TestDestroy_FiresEventStopped_EvenWhenNeverStarted verifies BUG-027's fix:
+// Destroy() must notify lifecycle listeners (e.g. BacklogLifecycleListener's
+// ItemSession.EndedAt bookkeeping) on every operator-initiated stop, not just
+// natural process exits. This covers the not-started early-return path — the
+// case a real live instance never hits, but the bare &Instance{} test double
+// used elsewhere in this file exercises cheaply without a real tmux/process
+// manager, since !i.started.Load() short-circuits before any real teardown.
+func TestDestroy_FiresEventStopped_EvenWhenNeverStarted(t *testing.T) {
+	inst := &Instance{Title: "destroy-event-test"}
+
+	var gotEvent LifecycleEvent
+	var gotReason string
+	fired := false
+	inst.RegisterLifecycleListener(&funcLifecycleListener{
+		fn: func(event LifecycleEvent, reason string) {
+			fired = true
+			gotEvent = event
+			gotReason = reason
+		},
+	})
+
+	if err := inst.Destroy(); err != nil {
+		t.Fatalf("Destroy() on a never-started instance should not error, got: %v", err)
+	}
+
+	if !fired {
+		t.Fatal("expected Destroy() to fire a lifecycle event, but none was fired")
+	}
+	if gotEvent != EventStopped {
+		t.Errorf("expected EventStopped, got %v", gotEvent)
+	}
+	if gotReason == "" {
+		t.Error("expected a non-empty reason for the EventStopped fire")
+	}
+}

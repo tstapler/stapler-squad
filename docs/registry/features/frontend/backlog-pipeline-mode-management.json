@@ -1,0 +1,12 @@
+{
+  "id": "backlog-pipeline-mode-management",
+  "type": "frontend",
+  "name": "Pipeline mode management page (create/edit/enable/disable/delete)",
+  "component": "PipelineModesPage",
+  "path": "web-app/src/app/settings/pipeline-modes/page.tsx",
+  "filePath": "web-app/src/app/settings/pipeline-modes/page.tsx",
+  "markerLine": 2,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-16T07:36:06Z"
+}

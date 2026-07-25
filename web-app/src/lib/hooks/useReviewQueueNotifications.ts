@@ -5,6 +5,8 @@ import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import {
   playNotificationSound,
   showBrowserNotification,
+  closeNativeNotification,
+  notificationTag,
   NotificationSound,
 } from "@/lib/utils/notifications";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -130,7 +132,7 @@ export function useReviewQueueNotifications(
     onAcknowledge,
   } = options;
 
-  const { showSessionNotification, addToHistoryOnly, markAsReadBySessionId } = useNotifications();
+  const { showSessionNotification, addToHistoryOnly, markAsReadBySessionId, removeToastBySessionId } = useNotifications();
 
   // Track previous items to detect removals (used only for markAsReadBySessionId)
   const previousItemsRef = useRef<Set<string>>(new Set());
@@ -256,7 +258,7 @@ export function useReviewQueueNotifications(
 
           showBrowserNotification(notificationTitle, {
             body,
-            tag: `review-queue-tier1-${tier1Items[0].sessionId}`,
+            tag: notificationTag.tier1Review(tier1Items[0].sessionId),
             requireInteraction: true, // Tier 1: persist in OS notification center
           });
         }
@@ -316,6 +318,7 @@ export function useReviewQueueNotifications(
     );
     if (removedIds.length > 0) {
       markAsReadBySessionId(removedIds);
+      removeToastBySessionId(removedIds); // FR-4: dismiss active toasts for removed sessions
       removedIds.forEach((id) => {
         notifiedItemsRef.current.delete(id);
         // Cancel any pending dwell timer for items that left before dwell expired
@@ -324,6 +327,8 @@ export function useReviewQueueNotifications(
           clearTimeout(timer);
           pendingDwellRef.current.delete(id);
         }
+        // FR-5: close native OS notification for this session
+        closeNativeNotification(notificationTag.tier1Review(id));
       });
     }
 
@@ -340,6 +345,7 @@ export function useReviewQueueNotifications(
     onNavigateToSession,
     handleAcknowledge,
     markAsReadBySessionId,
+    removeToastBySessionId,
     showSessionNotification,
     addToHistoryOnly,
   ]);

@@ -29,7 +29,7 @@ function encodeEnvelope(flags: number, data: Uint8Array): Uint8Array {
   return buf;
 }
 
-async function* fromWebSocket(
+export async function* fromWebSocket(
   ws: WebSocket,
   signal: AbortSignal | undefined
 ): AsyncGenerator<Uint8Array> {
@@ -44,7 +44,15 @@ async function* fromWebSocket(
 
   ws.onmessage = (e) => push(new Uint8Array(e.data as ArrayBuffer));
   ws.onerror = () => push(new ConnectError("WebSocket error", Code.Unavailable));
-  ws.onclose = () => push(null);
+  ws.onclose = (ev: CloseEvent) => {
+    if (signal?.aborted || ev.code === 1000) {
+      push(null); // intentional close (1000=normal) or signal abort
+    } else {
+      // Code 1001 (Going Away / server restart) sets wasClean=true via TCP FIN but IS retriable.
+      // Only 1000 and explicit signal abort are treated as non-retriable clean closes.
+      push(new ConnectError("WebSocket closed", Code.Unavailable, new Headers({ "ws-close-code": String(ev.code) })));
+    }
+  };
 
   const abortHandler = () => {
     ws.close();

@@ -9,9 +9,12 @@
  *   Pre-fix failure: step 4 would find terminal panel still aria-hidden after rerender.
  *
  * Bug 4 — Duplicate chrome layers:
- *   `SessionDetail` always rendered its own header + tab strip, stacking on top
- *   of PaneHeader when used in a tiling pane. Fix: `embedded` prop suppresses them.
- *   Pre-fix failure: `embedded` prop didn't exist; header/tabs always rendered.
+ *   `SessionDetail` always rendered its own title header, stacking on top of
+ *   `PaneHeader`'s title when used in a tiling pane. Fix: `embedded` prop suppresses
+ *   the title header only. The tab strip is NOT suppressed: `PaneHeader` no longer
+ *   renders its own tab switcher (it was a redundant, less-capable duplicate of this
+ *   tab strip — see PaneHeader.tsx), so this tab strip is now the sole tab UI in
+ *   both embedded and non-embedded contexts.
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
@@ -108,11 +111,11 @@ describe("SessionDetail — embedded mode (Bug 4)", () => {
     expect(screen.queryByTestId("session-header")).not.toBeInTheDocument();
   });
 
-  it("does NOT render the tab strip when embedded=true", () => {
+  it("still renders the tab strip when embedded=true (it's the only tab UI)", () => {
     render(
       <SessionDetail session={makeSession()} embedded onClose={jest.fn()} />
     );
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
   });
 
   it("renders the title header when embedded is not set", () => {

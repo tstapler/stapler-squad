@@ -1,7 +1,5 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"fmt"
@@ -37,7 +35,7 @@ type ResponseStream struct {
 	sessionName  string
 	ptyAccess    *PTYAccess
 	subscribers  map[string]*Subscriber
-	mu           deadlock.RWMutex
+	mu           sync.RWMutex
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -46,8 +44,14 @@ type ResponseStream struct {
 	escapeParser *analytics.EscapeCodeParser // For escape code analytics
 	onOutput     func()                      // Called on every PTY read with data (for event-driven activity tracking)
 	OnEOF        func()                      // Called when the PTY exits unexpectedly (program exit, not Stop())
-	exitTail     []byte                      // Rolling buffer of last exitTailSize bytes; logged on PTY EOF
 }
+
+// mangleCorrelatorTTL is how long a Stage 1 observation waits for its matching
+// Stage 2 observation before being evicted and recorded as "stripped".
+const mangleCorrelatorTTL = 5 * time.Second
+
+// mangleCorrelatorMaxPending bounds the correlator's in-memory pending map.
+const mangleCorrelatorMaxPending = 10000
 
 // newEscapeParserForSession creates and configures an EscapeCodeParser for a session,
 // wiring in the global escape event writer and config-driven settings.
@@ -55,8 +59,12 @@ func newEscapeParserForSession(sessionName string) *analytics.EscapeCodeParser {
 	cfg := loadAnalyticsConfig()
 	parser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
 	writer := analytics.GetGlobalEscapeWriter()
-	if cfg.captureLevel != "off" {
+	// If the writer is a Noop (no analytics DB configured) or captureLevel is "off",
+	// skip all extraction work — there is nothing to write to.
+	_, isNoop := writer.(analytics.NoopEscapeEventWriter)
+	if cfg.captureLevel != "off" && !isNoop {
 		parser.SetEventWriter(writer, cfg.captureLevel, cfg.redactOSC, cfg.samplingRate)
+		parser.SetCorrelator(analytics.NewMangleCorrelator(mangleCorrelatorTTL, mangleCorrelatorMaxPending))
 	} else {
 		parser.SetEventWriter(analytics.NoopEscapeEventWriter{}, "off", true, 0)
 	}
@@ -129,6 +137,17 @@ func (rs *ResponseStream) SetOnOutput(fn func()) {
 	rs.onOutput = fn
 }
 
+// SetStableSessionID switches the escape parser's recorded session identifier
+// from the tmux session name (used at construction time, before the owning
+// Instance's stable UUID is available) to the stable UUID. This only affects
+// how escape_event rows are tagged — it does not change rs.sessionName, which
+// is still used for logging, PTY naming, and history keyed off the tmux name.
+func (rs *ResponseStream) SetStableSessionID(id string) {
+	if rs.escapeParser != nil && id != "" {
+		rs.escapeParser.SetStableSessionID(id)
+	}
+}
+
 // Start begins streaming responses from the PTY to all subscribers.
 // This is a non-blocking call that starts a background goroutine.
 // Use the provided context to stop the stream.
@@ -144,12 +163,26 @@ func (rs *ResponseStream) Start(ctx context.Context) error {
 		return fmt.Errorf("PTY access not initialized for session '%s'", rs.sessionName)
 	}
 
-	rs.ctx, rs.cancel = context.WithCancel(ctx)
+	innerCtx, cancel := context.WithCancel(ctx)
+	rs.ctx = innerCtx
+	rs.cancel = cancel
 	rs.started = true
+
+	// Start the mangle-correlator eviction loop (no-op if no correlator is attached,
+	// e.g. capture_level=off). Tied to innerCtx so it stops when the stream stops, and
+	// tracked by rs.wg like streamLoop so Stop() genuinely blocks until both have exited
+	// (Stop()'s doc comment promises full drain, not "everything but this one goroutine").
+	if rs.escapeParser != nil {
+		rs.wg.Add(1)
+		go func() {
+			defer rs.wg.Done()
+			rs.escapeParser.RunCorrelatorEviction(innerCtx)
+		}()
+	}
 
 	// Start the streaming goroutine
 	rs.wg.Add(1)
-	go rs.streamLoop()
+	go rs.streamLoop(innerCtx)
 
 	log.Info("response stream started", "session", rs.sessionName)
 	return nil
@@ -169,7 +202,7 @@ func (rs *ResponseStream) logEscapeAnalyticsSummary() {
 }
 
 // streamLoop is the main streaming loop that reads from PTY and broadcasts to subscribers.
-func (rs *ResponseStream) streamLoop() {
+func (rs *ResponseStream) streamLoop(ctx context.Context) {
 	defer rs.wg.Done()
 	defer rs.logEscapeAnalyticsSummary()
 	defer log.Info("response stream stopped", "session", rs.sessionName)
@@ -179,16 +212,13 @@ func (rs *ResponseStream) streamLoop() {
 
 	for {
 		select {
-		case <-rs.ctx.Done():
+		case <-ctx.Done():
 			// Stream was cancelled
 			rs.closeAllSubscribers()
 			return
 		default:
 			// Try to read from PTY with timeout
-			rs.ptyAccess.mu.RLock()
-			pty := rs.ptyAccess.pty
-			closed := rs.ptyAccess.closed
-			rs.ptyAccess.mu.RUnlock()
+			pty, closed := rs.ptyAccess.GetFile()
 
 			if closed {
 				// PTY is closed, stop streaming
@@ -246,21 +276,7 @@ func (rs *ResponseStream) streamLoop() {
 			}
 
 			if n > 0 {
-				// Update rolling pre-exit tail buffer (keeps last exitTailSize bytes).
-				rs.mu.Lock()
-				combined := append(rs.exitTail, readBuf[:n]...)
-				if len(combined) > exitTailSize {
-					combined = combined[len(combined)-exitTailSize:]
-				}
-				rs.exitTail = combined
-				rs.mu.Unlock()
-
-				// Got some data, broadcast to subscribers
-				chunk := ResponseChunk{
-					Data:      make([]byte, n),
-					Timestamp: time.Now(),
-				}
-				copy(chunk.Data, readBuf[:n])
+				data := readBuf[:n] // direct slice — valid until next pty.Read call
 
 				// Notify activity listener (e.g. IdleDetector.RecordActivity)
 				if rs.onOutput != nil {
@@ -274,26 +290,39 @@ func (rs *ResponseStream) streamLoop() {
 					sessionSeq = rs.ptyAccess.buffer.TotalBytesWritten()
 				}
 
-				// Parse escape codes for analytics (passthrough - doesn't modify data)
+				// Parse escape codes (synchronous, no reference retained after return)
 				if rs.escapeParser != nil {
-					rs.escapeParser.Parse(chunk.Data, sessionSeq)
+					rs.escapeParser.Parse(data, sessionSeq)
 				}
 
-				// Also write to circular buffer for history
+				// Write to circular buffer (copies data internally, no reference retained)
 				if rs.ptyAccess.buffer != nil {
-					rs.ptyAccess.buffer.Write(chunk.Data)
+					rs.ptyAccess.buffer.Write(data)
 				}
 
-				rs.broadcast(chunk)
+				// Broadcast to subscribers — only allocates a copy when subscribers exist.
+				rs.broadcast(data)
 			}
 		}
 	}
 }
 
-// broadcast sends a response chunk to all subscribers.
-func (rs *ResponseStream) broadcast(chunk ResponseChunk) {
+// broadcast sends data to all subscribers.
+// Allocation of the ResponseChunk and its Data copy is deferred until inside the lock
+// so we pay zero allocation cost when no subscribers are registered.
+func (rs *ResponseStream) broadcast(data []byte) {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
+
+	if len(rs.subscribers) == 0 {
+		return
+	}
+
+	chunk := ResponseChunk{
+		Data:      make([]byte, len(data)),
+		Timestamp: time.Now(),
+	}
+	copy(chunk.Data, data)
 
 	for id, sub := range rs.subscribers {
 		select {
@@ -454,15 +483,11 @@ func (rs *ResponseStream) GetTotalBytesWritten() int64 {
 	return rs.ptyAccess.buffer.TotalBytesWritten()
 }
 
-// GetExitTail returns a copy of the last bytes seen before the PTY exited.
-// Returns nil if the stream has not yet exited or no output was captured.
+// GetExitTail returns the last exitTailSize bytes from the circular buffer.
+// The circular buffer already holds this data; no separate rolling copy is needed.
 func (rs *ResponseStream) GetExitTail() []byte {
-	rs.mu.RLock()
-	defer rs.mu.RUnlock()
-	if len(rs.exitTail) == 0 {
+	if rs.ptyAccess == nil {
 		return nil
 	}
-	out := make([]byte, len(rs.exitTail))
-	copy(out, rs.exitTail)
-	return out
+	return rs.ptyAccess.GetRecentOutput(exitTailSize)
 }

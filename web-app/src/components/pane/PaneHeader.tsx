@@ -2,7 +2,7 @@
 
 import { LayoutList, LayoutDashboard, Columns2, Rows2, Maximize2, X } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
-import type { LeafPane, SessionDetailTab, PaneViewKind } from "@/lib/pane/paneTypes";
+import type { LeafPane, PaneViewKind } from "@/lib/pane/paneTypes";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
 import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOverflow";
 import {
@@ -11,30 +11,7 @@ import {
   paneHeaderButton,
   paneHeaderActions,
   paneCloseButton,
-  paneTabButton,
 } from "@/styles/pane/paneHeader.css";
-
-const TAB_LABELS: Record<SessionDetailTab, string> = {
-  terminal: "Term",
-  diff: "Diff",
-  vcs: "VCS",
-  logs: "Logs",
-  info: "Info",
-  files: "Files",
-  browser: "Browser",
-};
-
-const TAB_FULL_LABELS: Record<SessionDetailTab, string> = {
-  terminal: "Terminal",
-  diff: "Diff",
-  vcs: "Version Control",
-  logs: "Logs",
-  info: "Session Info",
-  files: "Files",
-  browser: "Browser",
-};
-
-const ALL_TABS: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info", "files", "browser"];
 
 interface PaneHeaderProps {
   pane: LeafPane;
@@ -42,7 +19,6 @@ interface PaneHeaderProps {
   isFocused: boolean;
   onClose: () => void;
   onFocus: () => void;
-  onTabChange: (tab: SessionDetailTab) => void;
   onZoom: () => void;
   onSetView?: (viewKind: PaneViewKind) => void;
   splitButtonVisible?: boolean;
@@ -56,7 +32,6 @@ export function PaneHeader({
   isFocused: _isFocused,
   onClose,
   onFocus,
-  onTabChange,
   onZoom,
   onSetView,
   splitButtonVisible,
@@ -81,23 +56,6 @@ export function PaneHeader({
       </span>
 
       <div className={paneHeaderActions}>
-        {/* Tab switcher buttons (only for session-detail panes with a session) */}
-        {!isListPane && session &&
-          ALL_TABS.map((tab) => (
-            <button
-              key={tab}
-              className={paneTabButton({ active: pane.activeTab === tab })}
-              onClick={(e) => {
-                e.stopPropagation();
-                onTabChange(tab);
-              }}
-              title={TAB_FULL_LABELS[tab]}
-              aria-label={`Switch to ${TAB_FULL_LABELS[tab]} tab`}
-            >
-              {TAB_LABELS[tab]}
-            </button>
-          ))}
-
         {/* Session actions overflow menu */}
         {!isListPane && session && (
           <div onClick={(e) => e.stopPropagation()}>
@@ -113,6 +71,8 @@ export function PaneHeader({
               onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
               onRunOneShot={(id) => cockpit.onRunOneShot(id)}
               onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
+              onToggleAutonomousMode={(id, enabled) => cockpit.onToggleAutonomousMode(id, enabled)}
+              onSteerAutonomousSession={(id, msg) => cockpit.onSteerAutonomousSession(id, msg)}
               onClearConversationState={(id) => cockpit.onClearConversationState(id)}
               onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}
             />

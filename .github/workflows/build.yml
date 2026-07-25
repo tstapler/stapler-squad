@@ -12,7 +12,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -29,11 +29,15 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
       - 'third_party/tmux/**'
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +49,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Generate protos and build web UI
         uses: ./.github/actions/prepare
@@ -61,6 +68,52 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # web-build-smoke: proves `make web-build` succeeds standalone on a bare
+  # checkout, with none of the manual buf/pnpm pre-steps that `prepare` (above)
+  # runs by hand. `prepare` bypasses the Makefile's own dependency graph, so it
+  # cannot catch a missing prerequisite there (e.g. `web-app/out` not depending
+  # on `proto-gen` — see #144). This job exercises the exact entry point
+  # documented in CLAUDE.md/README (`make web-build`) the way a fresh clone
+  # actually would.
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-build-smoke:
+    name: make web-build (clean checkout smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: '1.41.0'
+
+      - name: make web-build (no manual pre-steps)
+        run: make web-build
+
+      - name: Verify proto bindings were generated
+        run: test -f web-app/src/gen/session/v1/session_pb.ts
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # test: runs on linux/amd64 only. Does NOT gate the build matrix — binaries
   # are published regardless of test failures so the build artifact is always
   # available for manual verification. Lint runs in its own workflow (lint.yml).
@@ -71,6 +124,9 @@ jobs:
     needs: prepare
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -103,6 +159,9 @@ jobs:
             -covermode=atomic ./server/... ./session/... ./config/... \
             || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
 
+      - name: Run scanner unit tests
+        run: cd tools/scanner && go test ./...
+
       - name: Coverage gate
         uses: vladopajic/go-test-coverage@v2
         with:
@@ -110,6 +169,11 @@ jobs:
           global-threshold: 60
           local-threshold: 0
           badge-file-name: coverage.svg
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
 
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4
@@ -119,7 +183,7 @@ jobs:
       - name: Generate feature E2E coverage report
         id: coverage
         run: |
-          cd tools/coverage && npm install --silent
+          cd tools/coverage && pnpm install --silent
           OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")
@@ -173,18 +237,12 @@ jobs:
               exit 1
             fi
           done
-        continue-on-error: true
+          # Also validate the typed catalog
+          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
 
-      - name: Benchmark comparison (advisory, PR only)
-        if: github.event_name == 'pull_request'
-        run: |
-          go install golang.org/x/perf/cmd/benchstat@latest
-          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=BenchmarkNavigation -benchmem -count=5 ./... \
-            -timeout=15m > bench-current.txt || true
-          if [ -f bench-baseline.txt ]; then
-            benchstat bench-baseline.txt bench-current.txt || true
-          fi
-        continue-on-error: true
+      # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
+      # which posts a PR comment via benchstat. Removed dead step that ran
+      # BenchmarkNavigation (a non-existent benchmark) for 15 min per PR.
 
       - name: Integration coverage (advisory)
         run: |
@@ -226,6 +284,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -269,6 +330,9 @@ jobs:
     needs: prepare
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -289,18 +353,34 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # benchmark-gate: runs on main-merge only. Fails if any benchmark regresses
-  # more than 20%. PRs get advisory comments only (never blocked).
+  # more than 20%. PRs get advisory comments only via benchmark.yml (never blocked).
   # 20% threshold is deliberate — tmux-touching benchmarks have 15-25% natural
-  # variance on shared runners. Use count=10 + utest for statistical significance.
+  # variance on shared runners. count=5 + utest for statistical significance.
+  #
+  # Baseline persisted via GitHub Actions cache (key "bench-gate-<run_id>",
+  # restored by "bench-gate-" prefix match) — not committed to git; a prior
+  # version of this job committed the baseline to `benchmarks/` on every
+  # push to main, which flooded the commit history for very little value.
+  # Uses same concurrency group as benchmark.yml to prevent 5 concurrent
+  # runs colliding.
   # ─────────────────────────────────────────────────────────────────────────────
   benchmark-gate:
     name: Benchmark Gate (main only)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [prepare, test]
+    permissions:
+      contents: read
+      pull-requests: read
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    concurrency:
+      group: baseline-push-main
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
+          lfs: true
+          submodules: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
@@ -328,33 +408,47 @@ jobs:
         if: steps.tmux-cache.outputs.cache-hit != 'true'
         run: ./scripts/build-tmux.sh
 
-      - name: Run benchmarks (count=10 for significance)
+      - name: Run benchmarks (count=5 for significance)
         run: |
-          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=10 \
-            ./... -timeout=30m > bench-current.txt
+          # -run='^$'  benchmarks only (no tests)
+          # -short     skip integration benchmarks that spawn real processes
+          # -count=5   statistically meaningful for ≥20% regression detection
+          # -timeout=10m per package (search/unfinished are legitimately slow)
+          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=5 \
+            -run='^$' -short ./... -timeout=10m > bench-current.txt
 
-      - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+      - name: Install benchstat (pinned)
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
+
+      - name: Restore benchmark baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmarks/go/benchmark-gate-baseline.txt
+          key: bench-gate-
+          restore-keys: |
+            bench-gate-
 
       - name: Compare against baseline (20% threshold)
         run: |
-          if [ ! -f bench-baseline.txt ]; then
-            echo "No baseline found — treating this run as the new baseline (no regression check)"
-            cp bench-current.txt bench-baseline.txt
+          BASELINE=benchmarks/go/benchmark-gate-baseline.txt
+          if [ ! -f "$BASELINE" ]; then
+            echo "No baseline found — will be established on this run (no regression check)"
             exit 0
           fi
-          benchstat -delta-test=utest bench-baseline.txt bench-current.txt \
-            | tee bench-diff.txt
-          if grep -E '\+[2-9][0-9]\.' bench-diff.txt | grep -v '±'; then
-            echo "Benchmark regression > 20% detected — see bench-diff.txt above"
+          benchstat -delta-test=utest "$BASELINE" bench-current.txt | tee bench-diff.txt
+          # Catch regressions ≥20%: match +20.x through +9999.x (two+ digits, first two ≥ 20)
+          if grep -E '\+([2-9][0-9]|[1-9][0-9]{2,})\.' bench-diff.txt | grep -v '±'; then
+            echo "Benchmark regression ≥20% detected — see bench-diff.txt above"
             exit 1
           fi
 
-      - name: Update baseline on success
+      - name: Save benchmark baseline on success
         run: |
-          cp bench-current.txt bench-baseline.txt
-          git config user.email "ci@stapler-squad"
-          git config user.name "CI"
-          git add bench-baseline.txt
-          git commit -m "chore(bench): update baseline [skip ci]" || true
-          git push origin HEAD:main
+          mkdir -p benchmarks/go
+          cp bench-current.txt benchmarks/go/benchmark-gate-baseline.txt
+
+      - name: Persist baseline to cache on success
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/go/benchmark-gate-baseline.txt
+          key: bench-gate-${{ github.run_id }}

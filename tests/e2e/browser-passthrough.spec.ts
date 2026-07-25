@@ -1,4 +1,8 @@
-// @feature session:browser-passthrough
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: browser-passthrough — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['session-browser-passthrough'], // TODO: add to catalog
+] as const;
 import { test, expect } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 

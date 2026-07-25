@@ -89,6 +89,8 @@ export function ApprovalCard({ approval, onApprove, onDeny, sessionTitle }: Appr
     return countdownNormal;
   };
 
+  const isUrgent = secondsLeft > 0 && secondsLeft <= 10;
+
   const formatCountdown = (seconds: number): string => {
     if (seconds <= 0) return "Expired";
     const mins = Math.floor(seconds / 60);
@@ -111,7 +113,9 @@ export function ApprovalCard({ approval, onApprove, onDeny, sessionTitle }: Appr
         <span
           className={`${countdown} ${getCountdownClass()}`}
           title={`Expires in ${formatCountdown(secondsLeft)}`}
+          aria-label={isUrgent ? `Urgent: ${formatCountdown(secondsLeft)} remaining` : `${formatCountdown(secondsLeft)} remaining`}
         >
+          {isUrgent && <span aria-hidden="true">⚠️ </span>}
           {formatCountdown(secondsLeft)}
         </span>
       </div>

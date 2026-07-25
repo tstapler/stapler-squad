@@ -1,0 +1,22 @@
+{
+  "id": "use-watch-backlog-items",
+  "type": "frontend",
+  "component": "useWatchBacklogItems",
+  "path": "web-app/src/lib/hooks/useWatchBacklogItems.ts",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "useWatchBacklogItems — fires a listBacklogItems REST call on mount alongside opening the stream",
+    "useWatchBacklogItems — retries with exponential backoff capped at 30s on stream error",
+    "useWatchBacklogItems — falls back to REST polling after retries exhaust and attempts one reconnect on next successful poll",
+    "useWatchBacklogItems — passes lastSeq as after_seq on reconnect",
+    "useWatchBacklogItems — triggers full resync when a fresh connection's first seq is behind lastSeqRef (server restart)",
+    "useWatchBacklogItems — triggers full resync and advances lastSeqRef when a forward gap is detected",
+    "useWatchBacklogItems — does not apply an item_archived event to backlogItemsSlice",
+    "useWatchBacklogItems — 30s idle backstop forces a reconnect and a full refetch after simulated silence past the timeout",
+    "useWatchBacklogItems — 15s visibility staleness check forces a reconnect when the tab regains focus after prolonged silence",
+    "useWatchBacklogItems — keeps an unrelated item's mapped object referentially stable across another item's live update, and only bumps the changed item's liveVersion",
+    "useWatchBacklogItems — does not bump liveVersion for an is_snapshot event, only for a genuine live one"
+  ],
+  "lastModified": "2026-07-22T00:00:00Z"
+}

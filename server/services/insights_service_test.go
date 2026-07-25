@@ -24,6 +24,14 @@ type fakeTokenStore struct {
 }
 
 func (f *fakeTokenStore) GetAll() []*tokens.ParseResult { return f.results }
+func (f *fakeTokenStore) GetByUUID(uuid string) *tokens.ParseResult {
+	for _, r := range f.results {
+		if r.SessionUUID == uuid {
+			return r
+		}
+	}
+	return nil
+}
 func (f *fakeTokenStore) IsLoading() bool               { return f.isLoading }
 func (f *fakeTokenStore) Subscribe() <-chan struct{}    { return make(chan struct{}, 1) }
 func (f *fakeTokenStore) Unsubscribe(_ <-chan struct{}) {}

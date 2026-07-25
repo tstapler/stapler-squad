@@ -76,13 +76,10 @@ function makeStreamMock(overrides = {}) {
     connect: jest.fn(),
     disconnect: jest.fn(),
     sendInput: jest.fn(),
-    sendInputWithEcho: jest.fn().mockReturnValue(BigInt(0)),
     resize: jest.fn(),
     scrollbackLoaded: false,
     requestScrollback: jest.fn(),
     sendFlowControl: jest.fn(),
-    getIsApplyingState: jest.fn().mockReturnValue(false),
-    sspNegotiated: false,
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
     ...overrides,
@@ -247,15 +244,6 @@ describe("toolbar analytics", () => {
     fireEvent.click(screen.getByRole("button", { name: /start recording terminal output/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       labels: expect.objectContaining({ button: "record", state: "on" }),
-    }));
-  });
-
-  it("fires track with button:raw-mode state value when streaming mode changed", () => {
-    renderTerminal();
-    const select = screen.getByRole("combobox", { name: /select terminal streaming mode/i });
-    fireEvent.change(select, { target: { value: "state" } });
-    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
-      labels: expect.objectContaining({ button: "raw-mode", state: "state" }),
     }));
   });
 

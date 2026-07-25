@@ -1,0 +1,105 @@
+//go:build linux
+
+package safeexec
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// This test reproduces the exact failure mode that leaked ~460 orphaned tmux
+// control-mode processes in production: a parent process spawns a long-running
+// child via exec.CommandContext and relies on ctx cancellation to clean it up,
+// but the parent is killed with SIGKILL — which Go cannot intercept, so ctx is
+// never cancelled and the child is orphaned instead of dying with its parent.
+//
+// It uses the standard re-exec pattern (mirrors os/exec's own TestHelperProcess):
+// this test binary re-execs itself as a "middle" process (env var gated, via
+// TestMain) that spawns a "grandchild" with EnsurePdeathsig, then the test
+// SIGKILLs the middle process and asserts the grandchild dies with it.
+
+const pdeathsigHelperEnvVar = "SAFEEXEC_PDEATHSIG_HELPER"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(pdeathsigHelperEnvVar) == "1" {
+		runPdeathsigHelperProcess()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// runPdeathsigHelperProcess is the "middle" process: it spawns a grandchild
+// with EnsurePdeathsig set, prints the grandchild's PID, then blocks forever
+// so the test can SIGKILL it and observe whether the grandchild dies too.
+func runPdeathsigHelperProcess() {
+	cmd := exec.Command("sleep", "30")
+	EnsurePdeathsig(cmd)
+	if err := cmd.Start(); err != nil {
+		fmt.Println("ERR", err)
+		os.Exit(1)
+	}
+	fmt.Println(cmd.Process.Pid)
+	os.Stdout.Sync()
+	time.Sleep(time.Hour) // block until SIGKILLed by the test; not a Go-level deadlock
+}
+
+func TestEnsurePdeathsig_GrandchildDiesWhenMiddleIsSigkilled(t *testing.T) {
+	middle := exec.Command(os.Args[0], "-test.run=^$")
+	middle.Env = append(os.Environ(), pdeathsigHelperEnvVar+"=1")
+	stdout, err := middle.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := middle.Start(); err != nil {
+		t.Fatalf("failed to start middle process: %v", err)
+	}
+
+	var grandchildPID int
+	scanErrCh := make(chan error, 1)
+	go func() {
+		_, err := fmt.Fscan(bufio.NewReader(stdout), &grandchildPID)
+		scanErrCh <- err
+	}()
+	select {
+	case err := <-scanErrCh:
+		if err != nil {
+			_ = middle.Process.Kill()
+			t.Fatalf("failed to read grandchild PID from helper: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = middle.Process.Kill()
+		t.Fatal("timed out waiting for helper to report grandchild PID")
+	}
+
+	if !processAlive(grandchildPID) {
+		t.Fatalf("grandchild pid %d not alive right after start (test setup is broken)", grandchildPID)
+	}
+
+	if err := middle.Process.Kill(); err != nil { // SIGKILL — uncatchable, no Go cleanup runs
+		t.Fatalf("failed to kill middle process: %v", err)
+	}
+	_ = middle.Wait()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(grandchildPID) {
+			return // kernel reaped it via Pdeathsig — this is the fix working
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Don't leave a real leak behind just because the assertion failed.
+	_ = syscall.Kill(grandchildPID, syscall.SIGKILL)
+	t.Fatalf("grandchild pid %d still alive 3s after its parent was SIGKILLed — Pdeathsig did not fire", grandchildPID)
+}
+
+// processAlive checks whether pid exists by sending signal 0, which the
+// kernel validates without actually delivering a signal.
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}

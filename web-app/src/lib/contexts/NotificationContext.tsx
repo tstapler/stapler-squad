@@ -10,6 +10,8 @@ import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS, isActionable } from "@/lib/notification-policy";
+import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
+import { markAcknowledged } from "@/lib/utils/notificationStorage";
 
 export type { NotificationData, NotificationHistoryItem };
 
@@ -21,6 +23,12 @@ interface NotificationContextValue {
   /** Add to history panel only — no toast, no sound. For informational events like task_complete. */
   addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
   removeNotification: (id: string) => void;
+  /**
+   * Remove an active toast whose metadata.approval_id matches the given approvalId.
+   * Used to preemptively clear approval toasts when an approval_response event arrives,
+   * before refreshHistory() completes.
+   */
+  removeToastByApprovalId: (approvalId: string) => void;
   /**
    * Acknowledge one or more notifications: removes the active toast(s) and marks
    * them as read in the history panel. Use this for all user-triggered dismissals
@@ -36,6 +44,13 @@ interface NotificationContextValue {
   togglePanel: () => void;
   markAsRead: (id: string | string[]) => void;
   markAsReadBySessionId: (sessionId: string | string[]) => void;
+  /**
+   * Remove active toast(s) for the given session ID(s).
+   * Does NOT mark history as read — use acknowledgeNotification for that.
+   * Used by useReviewQueueNotifications when a stale/queue item resolves,
+   * so the toast disappears even if auto-minimize hasn't fired yet.
+   */
+  removeToastBySessionId: (sessionId: string | string[]) => void;
   markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
@@ -45,6 +60,21 @@ interface NotificationContextValue {
   loadMoreHistory: () => Promise<void>;
   /** Re-fetch the full notification history from the server (e.g. after a stream reconnect). */
   refreshHistory: () => Promise<void>;
+  /**
+   * Show an undo-variant toast. Returns the notification ID so the caller can
+   * dismiss it when the undo window expires (e.g. via removeNotification).
+   * Default duration is 5000ms (passed as durationMs for callers that want to
+   * schedule their own dismissal; the toast itself auto-closes via the normal policy).
+   */
+  showUndoToast: (message: string, onUndo: () => void, durationMs?: number) => string;
+  /**
+   * Show a lightweight success/error toast for a routine action (e.g. a backlog
+   * button click). Bypasses the history panel/audit log — for that, no toast is
+   * the right call. `key` dedupes: a second call with the same key replaces the
+   * existing toast instead of stacking a duplicate; toasts with different keys
+   * (e.g. different items) never collide.
+   */
+  showActionToast: (message: string, type: "success" | "error", key: string) => string;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
@@ -184,6 +214,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  const removeToastByApprovalId = useCallback((approvalId: string) => {
+    setNotifications((prev) =>
+      prev.filter((n) => n.metadata?.approval_id !== approvalId)
+    );
+  }, []);
+
   const clearAll = useCallback(() => {
     setNotifications([]);
   }, []);
@@ -203,6 +239,54 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     [addNotification]
   );
 
+  const showUndoToast = useCallback(
+    (message: string, onUndo: () => void, durationMs: number = 5000): string => {
+      const id = `notification-${Date.now()}-${Math.random()}`;
+      const newNotification: NotificationData = {
+        id,
+        sessionId: "",
+        sessionName: "",
+        message,
+        timestamp: Date.now(),
+        notificationType: "undo",
+        onUndo,
+      };
+      setNotifications((prev) => [...prev, newNotification]);
+      // Auto-dismiss after durationMs
+      setTimeout(() => {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      }, durationMs);
+      return id;
+    },
+    []
+  );
+
+  const showActionToast = useCallback(
+    (message: string, type: "success" | "error", key: string): string => {
+      const id = `notification-${Date.now()}-${Math.random()}`;
+      const newNotification: NotificationData = {
+        id,
+        sessionId: "",
+        sessionName: "",
+        message,
+        timestamp: Date.now(),
+        notificationType: type === "success" ? "task_complete" : "error",
+        metadata: { actionToastKey: key },
+      };
+      const durationMs = type === "success" ? 5000 : 10000;
+      // Replace any existing toast for this key instead of stacking a duplicate.
+      setNotifications((prev) => [
+        ...prev.filter((n) => n.metadata?.actionToastKey !== key),
+        newNotification,
+      ]);
+      setTimeout(() => {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      }, durationMs);
+      return id;
+    },
+    []
+  );
+
   // Remove stale toasts every minute.
   // Non-actionable: removed after TOAST_STALE_MS (5 min).
   // Actionable (approval_needed, question): removed after ACTIONABLE_TOAST_STALE_MS (6 min).
@@ -219,6 +303,24 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       );
     }, 60_000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Cross-tab sync: when another tab dismisses a notification, reflect it locally.
+  useEffect(() => {
+    const syncChannel = createNotificationSyncChannel();
+    const unsubscribe = syncChannel.subscribe((message) => {
+      if (message.type === "NOTIFICATION_DISMISSED") {
+        const { notificationId } = message;
+        setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+        setNotificationHistory((prev) =>
+          prev.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n))
+        );
+      }
+      // NOTIFICATION_ACKNOWLEDGED is intentionally not handled here.
+      // Cross-tab session acknowledgement is driven by the sessionAcknowledged
+      // event from the server stream (useSessionService), not BroadcastChannel.
+    });
+    return unsubscribe;
   }, []);
 
   const togglePanel = useCallback(() => {
@@ -251,7 +353,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const acknowledgeNotification = useCallback((id: string | string[]) => {
     const ids = Array.isArray(id) ? id : [id];
     const idSet = new Set(ids);
-    setNotifications((prev) => prev.filter((n) => !idSet.has(n.id)));
+    const syncChannel = createNotificationSyncChannel();
+    setNotifications((prev) => {
+      prev.forEach((n) => {
+        if (idSet.has(n.id)) {
+          syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
+          if (n.sessionId) markAcknowledged(n.sessionId);
+        }
+      });
+      return prev.filter((n) => !idSet.has(n.id));
+    });
     markAsRead(ids);
   }, [markAsRead]);
 
@@ -270,6 +381,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       return updated;
     });
   }, [history]);
+
+  const removeToastBySessionId = useCallback((sessionId: string | string[]) => {
+    const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
+    sessionIds.delete(""); // never match notifications without a sessionId
+    if (sessionIds.size === 0) return;
+    setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
+  }, []);
 
   const markAllAsRead = useCallback(() => {
     setNotificationHistory((prev) => {
@@ -312,12 +430,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         addNotification,
         addToHistoryOnly,
         removeNotification,
+        removeToastByApprovalId,
         acknowledgeNotification,
         clearAll,
         showSessionNotification,
         togglePanel,
         markAsRead,
         markAsReadBySessionId,
+        removeToastBySessionId,
         markAllAsRead,
         removeFromHistory,
         clearHistory,
@@ -326,6 +446,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         historyHasMore: history.hasMore,
         loadMoreHistory: history.loadMore,
         refreshHistory: history.refresh,
+        showUndoToast,
+        showActionToast,
       }}
     >
       {children}
@@ -354,7 +476,25 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 export function useNotifications() {
   const context = useContext(NotificationContext);
   if (!context) {
-    throw new Error("useNotifications must be used within NotificationProvider");
+    // Return a no-op fallback when used outside a NotificationProvider.
+    // This allows components to be rendered in test environments or
+    // as part of an embedded view without a full provider tree.
+    const noop = () => {};
+    return {
+      notifications: [] as NotificationData[],
+      notificationHistory: [] as NotificationHistoryItem[],
+      isPanelOpen: false,
+      addNotification: noop,
+      addToHistoryOnly: noop,
+      removeNotification: noop,
+      removeToastByApprovalId: noop,
+      acknowledgeNotification: noop,
+      clearAll: noop,
+      showSessionNotification: noop,
+      togglePanel: noop,
+      markAsRead: noop,
+      showActionToast: () => "",
+    } as unknown as NonNullable<typeof context>;
   }
   return context;
 }

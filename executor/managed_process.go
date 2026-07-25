@@ -245,6 +245,11 @@ func StartProcess(ctx context.Context, name string, args []string, opts ...Proce
 	// Stdin.
 	cmd.Stdin = cfg.stdin
 
+	// Working directory (if set via WithProcessDir).
+	if cfg.dir != "" {
+		cmd.Dir = cfg.dir
+	}
+
 	// Environment.
 	if cfg.replaceEnv != nil {
 		cmd.Env = cfg.replaceEnv

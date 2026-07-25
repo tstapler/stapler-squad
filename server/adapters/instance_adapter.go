@@ -11,43 +11,55 @@ import (
 )
 
 // InstanceToProto converts a session.Instance to a proto Session message.
-func InstanceToProto(inst *session.Instance) *sessionv1.Session {
+// workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
+func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *sessionv1.Session {
 	if inst == nil {
 		return nil
 	}
 
+	// Take a single lock-free snapshot so all field reads below are consistent and
+	// race-free. Method calls (GetStableID, GetEffectiveStatus, etc.) have their own
+	// synchronisation and are left as-is. Fields absent from InstanceSnapshot
+	// (LaunchCommand, CreationProgress) remain as direct reads.
+	snap := inst.Snapshot()
+
 	protoSession := &sessionv1.Session{
-		Id:          inst.GetStableID(),
-		Title:       inst.Title,
-		Path:        inst.Workspace().EffectivePath,
-		WorkingDir:  inst.GetWorkingDirectory(),
-		Branch:      inst.Branch,
-		Status:      statusToProto(inst.GetEffectiveStatus()),
-		Program:     inst.Program,
-		Height:      int32(inst.Height),
-		Width:       int32(inst.Width),
-		CreatedAt:   timestamppb.New(inst.CreatedAt),
-		UpdatedAt:   timestamppb.New(inst.UpdatedAt),
-		AutoYes:     inst.AutoYes,
-		Prompt:      inst.Prompt,
-		Category:    inst.Category,
-		IsExpanded:  inst.IsExpanded,
-		SessionType: sessionTypeToProto(inst.SessionType),
-		TmuxPrefix:  inst.TmuxPrefix,
-		Tags:        inst.Tags, // Tag-based organization
+		Id:                 inst.GetStableID(),
+		Title:              snap.Title,
+		Path:               inst.Workspace().EffectivePath,
+		WorkingDir:         inst.GetWorkingDirectory(),
+		Branch:             snap.Branch,
+		Status:             statusToProto(inst.GetEffectiveStatus()),
+		Program:            snap.Program,
+		Height:             int32(snap.Height),
+		Width:              int32(snap.Width),
+		CreatedAt:          timestamppb.New(snap.CreatedAt),
+		UpdatedAt:          timestamppb.New(snap.UpdatedAt),
+		AutoYes:            snap.AutoYes,
+		AutonomousMode:     snap.Autonomous.AutonomousMode,
+		AutonomousTurn:     snap.Autonomous.AutonomousTurn,
+		AutonomousMaxTurns: snap.Autonomous.AutonomousMaxTurns,
+		AutonomousOutcome:  snap.Autonomous.AutonomousOutcome,
+		Prompt:             snap.Prompt,
+		InitialPrompt:      snap.InitialPrompt,
+		Category:           snap.Category,
+		IsExpanded:         snap.IsExpanded,
+		SessionType:        sessionTypeToProto(snap.SessionType),
+		TmuxPrefix:         snap.TmuxPrefix,
+		Tags:               snap.Tags, // Tag-based organization
 		// Terminal activity timestamps for staleness detection
-		LastTerminalUpdate:   timestamppb.New(inst.LastTerminalUpdate),
-		LastMeaningfulOutput: timestamppb.New(inst.LastMeaningfulOutput),
+		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
+		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),
 		// GitHub integration fields
-		GithubPrNumber:  int32(inst.GitHubPRNumber),
-		GithubPrUrl:     inst.GitHubPRURL,
-		GithubOwner:     inst.GitHubOwner,
-		GithubRepo:      inst.GitHubRepo,
-		GithubSourceRef: inst.GitHubSourceRef,
-		ClonedRepoPath:  inst.ClonedRepoPath,
+		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber),
+		GithubPrUrl:     snap.GitHub.GitHubPRURL,
+		GithubOwner:     snap.GitHub.GitHubOwner,
+		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubSourceRef: snap.GitHub.GitHubSourceRef,
+		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata
-		InstanceType:     instanceTypeToProto(inst.InstanceType),
-		ExternalMetadata: externalMetadataToProto(inst.ExternalMetadata),
+		InstanceType:     instanceTypeToProto(snap.InstanceType),
+		ExternalMetadata: externalMetadataToProto(snap.ExternalMetadata),
 		// PR status fields (populated by PRStatusPoller)
 		GithubPrState:         inst.GitHubPRState,
 		GithubPrIsDraft:       inst.GitHubPRIsDraft,
@@ -56,6 +68,19 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
+		WorkspaceKey:          inst.WorkspaceKey(),
+		LaunchCommand:         inst.LaunchCommand,
+	}
+
+	// Convert artifact data if available
+	if snap.Artifacts != nil {
+		a := snap.Artifacts
+		protoSession.Artifacts = &sessionv1.SessionArtifacts{
+			PrUrls:        a.PRURLs,
+			CommitShas:    a.CommitSHAs,
+			ExternalUrls:  a.ExternalURLs,
+			LastScannedAt: timestamppb.New(a.LastScannedAt),
+		}
 	}
 
 	// Convert git worktree data if available
@@ -89,7 +114,7 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	}
 
 	// History file linkage — path to the Claude JSONL conversation file.
-	protoSession.HistoryFilePath = inst.HistoryFilePath
+	protoSession.HistoryFilePath = snap.HistoryFilePath
 
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
@@ -108,7 +133,7 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	protoSession.RateLimitEnabled = inst.IsRateLimitEnabled()
 
 	// Pause reason — empty for sessions that have never been paused.
-	protoSession.PauseReason = inst.PauseReason
+	protoSession.PauseReason = snap.PauseReason
 
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
@@ -129,12 +154,48 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		}
 	}
 
+	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
+	var statusInfo session.InstanceStatusInfo
+	if snap.Status == session.Active {
+		if mgr := inst.GetStatusManager(); mgr != nil {
+			statusInfo = mgr.GetStatus(inst)
+		}
+	}
+
 	// SubStatus: fine-grained activity state derived from terminal detection.
 	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
-	protoSession.SubStatus = toProtoSubStatus(inst)
+	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
+
+	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
+	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
+		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
+		protoSession.DetectedContext = statusInfo.StatusContext
+	}
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
-	protoSession.Hidden = inst.Hidden
+	protoSession.Hidden = snap.Hidden
+
+	// Workflow linkage, name, and archive state.
+	protoSession.WorkflowId = snap.WorkflowID
+	if snap.WorkflowID != "" && workflowNames != nil {
+		protoSession.WorkflowName = workflowNames[snap.WorkflowID]
+	}
+	if snap.ArchivedAt != nil {
+		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
+	if g := inst.GetSessionGoal(); g != nil {
+		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
+		protoSession.Goal = &sessionv1.SessionGoalSummary{
+			GoalText:   g.Goal,
+			Status:     g.Status,
+			TasksTotal: int32(g.TasksTotal()),
+			TasksDone:  int32(g.TasksDone()),
+			TasksJson:  tasksJSON,
+			UpdatedAt:  timestamppb.New(g.UpdatedAt),
+		}
+	}
 
 	return protoSession
 }
@@ -173,32 +234,41 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 	}
 }
 
-// toProtoSubStatus derives the SubStatus proto enum from an Instance's terminal detection state.
+// toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
-	if inst.Status != session.Active {
+func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
+	if basicStatus != session.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
 	// Rate limit state takes precedence.
-	if ratelimit.RateLimitState(inst.GetRateLimitState()) == ratelimit.StateWaiting {
+	if ratelimit.RateLimitState(rateLimitState) == ratelimit.StateWaiting {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
-	switch inst.GetDetectedStatus() {
-	case detection.StatusProcessing, detection.StatusActive:
+	switch info.ClaudeStatus {
+	case detection.StatusWaitingForAgent:
+		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
-	case detection.StatusNeedsApproval, detection.StatusInputRequired:
+	case detection.StatusNeedsApproval:
 		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
+	case detection.StatusInputRequired:
+		return sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED
 	case detection.StatusError:
 		return sessionv1.SubStatus_SUB_STATUS_ERROR
 	case detection.StatusTestsFailing:
 		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
-	case detection.StatusReady, detection.StatusIdle:
+	case detection.StatusReady:
+		return sessionv1.SubStatus_SUB_STATUS_READY
+	case detection.StatusIdle:
 		return sessionv1.SubStatus_SUB_STATUS_IDLE
-	default:
+	case detection.StatusSuccess:
+		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
+	case detection.StatusUnknown:
 		// Unknown / undetected — don't show a chip
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
+	return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 }
 
 // rateLimitStateToProto converts a ratelimit.RateLimitState to proto RateLimitState enum.
@@ -232,6 +302,8 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
 	case session.Hibernated:
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
+	case session.Restoring:
+		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -297,6 +369,8 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Stopped
 	case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
 		return session.Hibernated
+	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
+		return session.Restoring
 	default:
 		return session.Creating // Default to Creating for unknown statuses
 	}
@@ -325,40 +399,6 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
-	}
-}
-
-// MapIdleStateToWorkingState converts a detection.IdleState to the proto WorkingState enum.
-// Prefer MapDetectedStatusToWorkingState when a ClaudeStatus is available, as it can
-// produce WORKING_STATE_PROCESSING which IdleState alone cannot distinguish from ACTIVE.
-func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
-	switch s {
-	case detection.IdleStateActive:
-		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	case detection.IdleStateWaiting:
-		return sessionv1.WorkingState_WORKING_STATE_IDLE
-	case detection.IdleStateTimeout:
-		return sessionv1.WorkingState_WORKING_STATE_WAITING
-	default:
-		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
-	}
-}
-
-// MapDetectedStatusToWorkingState converts a detection.DetectedStatus to the proto
-// WorkingState enum. It is more precise than MapIdleStateToWorkingState because
-// DetectedStatus distinguishes StatusActive from StatusProcessing.
-func MapDetectedStatusToWorkingState(s detection.DetectedStatus) sessionv1.WorkingState {
-	switch s {
-	case detection.StatusActive:
-		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	case detection.StatusProcessing:
-		return sessionv1.WorkingState_WORKING_STATE_PROCESSING
-	case detection.StatusIdle, detection.StatusReady:
-		return sessionv1.WorkingState_WORKING_STATE_IDLE
-	case detection.StatusNeedsApproval, detection.StatusInputRequired:
-		return sessionv1.WorkingState_WORKING_STATE_WAITING
-	default:
-		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
 	}
 }
 

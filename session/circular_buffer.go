@@ -5,21 +5,26 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
+
+	"github.com/spaolacci/murmur3"
 )
 
 // CircularBuffer is a thread-safe circular buffer with automatic disk fallback
 // when the in-memory buffer fills up. This prevents memory overflow while maintaining
 // a history of PTY output for status detection and debugging.
 type CircularBuffer struct {
-	data              []byte
-	size              int
-	head              int // Write position
-	tail              int // Read position
-	count             int // Number of bytes in buffer
-	diskFile          *os.File
-	mu                sync.RWMutex
-	wrapped           bool  // True if head has wrapped around past tail
-	totalBytesWritten int64 // Monotonically increasing total bytes ever written
+	mu       sync.RWMutex
+	size     int      // immutable after construction; no lock needed
+	data     []byte   // +checklocks:mu
+	head     int      // +checklocks:mu
+	tail     int      // +checklocks:mu
+	count    int      // +checklocks:mu
+	diskFile *os.File // +checklocks:mu
+	wrapped  bool     // +checklocks:mu
+
+	// totalBytesWritten is a monotonic counter updated atomically; no mu needed.
+	totalBytesWritten atomic.Int64
 }
 
 const (
@@ -55,7 +60,7 @@ func (cb *CircularBuffer) Write(data []byte) (int, error) {
 	}
 
 	originalLen := len(data)
-	cb.totalBytesWritten += int64(originalLen)
+	cb.totalBytesWritten.Add(int64(originalLen))
 
 	// If data is larger than buffer, only keep the last `size` bytes
 	// and completely replace buffer contents
@@ -69,18 +74,25 @@ func (cb *CircularBuffer) Write(data []byte) (int, error) {
 		return originalLen, nil
 	}
 
-	// Normal incremental write
-	for _, b := range data {
-		cb.data[cb.head] = b
-		cb.head = (cb.head + 1) % cb.size
+	// Bulk copy in at most two segments (before and after the wrap point).
+	n := len(data)
+	spaceToEnd := cb.size - cb.head
+	if n <= spaceToEnd {
+		copy(cb.data[cb.head:], data)
+	} else {
+		copy(cb.data[cb.head:], data[:spaceToEnd])
+		copy(cb.data, data[spaceToEnd:])
+	}
+	cb.head = (cb.head + n) % cb.size
 
-		if cb.count < cb.size {
-			cb.count++
-		} else {
-			// Buffer is full, advance tail (overwrite oldest data)
-			cb.tail = (cb.tail + 1) % cb.size
-			cb.wrapped = true
-		}
+	// Update count and tail.
+	if cb.count+n <= cb.size {
+		cb.count += n
+	} else {
+		overwritten := cb.count + n - cb.size
+		cb.tail = (cb.tail + overwritten) % cb.size
+		cb.count = cb.size
+		cb.wrapped = true
 	}
 
 	// Return original data length to indicate all bytes were "written"
@@ -108,13 +120,72 @@ func (cb *CircularBuffer) GetRecent(n int) []byte {
 	// If we want last n bytes and count >= n, start at (head - n)
 	startPos := (cb.head - n + cb.size) % cb.size
 
-	// Copy data from circular buffer
-	for i := 0; i < n; i++ {
-		pos := (startPos + i) % cb.size
-		result[i] = cb.data[pos]
+	// Bulk copy in at most two segments (before and after the wrap point).
+	firstHalf := cb.size - startPos
+	if firstHalf >= n {
+		copy(result, cb.data[startPos:startPos+n])
+	} else {
+		copy(result, cb.data[startPos:])
+		copy(result[firstHalf:], cb.data[:n-firstHalf])
 	}
 
 	return result
+}
+
+// GetRecentInto copies the last n bytes into dst and returns the number of bytes written.
+// dst must have length >= n. Returns 0 when the buffer is empty.
+// Prefer over GetRecent when the caller can provide a pooled buffer.
+func (cb *CircularBuffer) GetRecentInto(dst []byte, n int) int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if n <= 0 || cb.count == 0 {
+		return 0
+	}
+	if n > cb.count {
+		n = cb.count
+	}
+	if n > len(dst) {
+		n = len(dst)
+	}
+
+	startPos := (cb.head - n + cb.size) % cb.size
+	firstHalf := cb.size - startPos
+	if firstHalf >= n {
+		copy(dst[:n], cb.data[startPos:startPos+n])
+	} else {
+		copy(dst[:firstHalf], cb.data[startPos:])
+		copy(dst[firstHalf:n], cb.data[:n-firstHalf])
+	}
+	return n
+}
+
+// GetRecentHash returns the murmur3-64 hash of the last n bytes without allocating a copy.
+// Returns (0, false) when the buffer has no data.
+// In the common case (contiguous tail segment), this is allocation-free.
+// Only the rare wrapped case allocates via murmur3.New64().
+func (cb *CircularBuffer) GetRecentHash(n int) (uint64, bool) {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if n <= 0 || cb.count == 0 {
+		return 0, false
+	}
+	if n > cb.count {
+		n = cb.count
+	}
+
+	startPos := (cb.head - n + cb.size) % cb.size
+	firstHalf := cb.size - startPos
+	if firstHalf >= n {
+		// ponytail: contiguous path — zero alloc
+		return murmur3.Sum64(cb.data[startPos : startPos+n]), true
+	}
+	// Wrapped: stream over two segments (allocates hasher, ~0.04% of calls for 4KB reads on 10MB buffer).
+	h := murmur3.New64()
+	h.Write(cb.data[startPos:])    //nolint:errcheck
+	h.Write(cb.data[:n-firstHalf]) //nolint:errcheck
+	return h.Sum64(), true
 }
 
 // GetAll returns all data currently in the buffer.
@@ -241,9 +312,7 @@ func (cb *CircularBuffer) Close() error {
 
 // TotalBytesWritten returns the total bytes ever written to this buffer (monotonically increasing).
 func (cb *CircularBuffer) TotalBytesWritten() int64 {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-	return cb.totalBytesWritten
+	return cb.totalBytesWritten.Load()
 }
 
 // WriteTo implements io.WriterTo interface for efficient streaming.

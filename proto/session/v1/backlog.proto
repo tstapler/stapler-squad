@@ -3,6 +3,7 @@ syntax = "proto3";
 package session.v1;
 
 import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
 
 // AcCriterion represents a single acceptance criterion for a backlog item.
 message AcCriterion {
@@ -53,6 +54,12 @@ message TriageResult {
   repeated TriageSuggestion suggestions = 2;
   repeated string clarifying_questions = 3;
   repeated TriageTask tasks = 4;
+  // iteration is 1 for the initial triage run, incrementing by one for each
+  // feedback-driven re-triage of the same item.
+  int32 iteration = 5;
+  // feedback is the free-text feedback that produced this iteration, empty
+  // for the initial (non-refined) triage run.
+  string feedback = 6;
 }
 
 // ItemSession records a session that was spawned or attached to a backlog item.
@@ -69,6 +76,11 @@ message ItemSession {
   google.protobuf.Timestamp created_at = 10;
   ReviewVerdict review_verdict = 11;
   TriageResult triage_result = 12;
+  double estimated_cost_usd = 13;
+  string worktree_branch = 14;
+  string worktree_path = 15;
+  string pipeline_mode_snapshot = 16;
+  string pipeline_mode_snapshot_hash = 17;
 }
 
 // BacklogStatusEvent records a single status transition for a backlog item.
@@ -77,6 +89,23 @@ message BacklogStatusEvent {
   string from_status = 2;
   string to_status = 3;
   string triggered_by = 4; // "user" or "system"
+  google.protobuf.Timestamp created_at = 5;
+  // note is the human-readable reason for this transition, e.g. "auto-reopened
+  // after FAIL verdict" or "PASS verdict — pushed branch and opened PR". Already
+  // captured durably (session.BacklogStatusEventData.Note) but previously never
+  // surfaced over the wire — the "why" behind reviewer/system decisions.
+  optional string note = 6;
+}
+
+// BacklogProgressNote records a single report_progress call against one of a
+// backlog item's acceptance criteria — the implementer's audit trail. Unlike
+// AcCriterion.status (current status per criterion, overwritten on each call),
+// this is an append-only history: every call is preserved.
+message BacklogProgressNote {
+  string id = 1;
+  int32 criterion_index = 2;
+  string note = 3;
+  string status = 4; // "pending", "in_progress", "done", "fail"
   google.protobuf.Timestamp created_at = 5;
 }
 
@@ -102,6 +131,19 @@ message BacklogItem {
   repeated ItemSession item_sessions = 18;
   string source_id = 19;
   repeated BacklogStatusEvent status_events = 20;
+  double total_estimated_cost_usd = 21;
+  string pr_url = 22;
+  int32 pr_number = 23;
+  bool auto_spawn_session = 24;
+  optional string pipeline_mode = 25;
+  bool auto_create_pr = 26;
+  // progress_notes is the implementer's append-only report_progress audit
+  // trail — eagerly loaded alongside status_events (see GetBacklogItem).
+  repeated BacklogProgressNote progress_notes = 27;
+  // rework_cap_override: unset means "use the global default"
+  // (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
+  // >0 = this item's own cap, replacing the global value.
+  optional int32 rework_cap_override = 28;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -115,6 +157,33 @@ message ItemSource {
   bool token_configured = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+}
+
+// PipelineMode is a named, slug-addressed, user-creatable definition of which
+// slash-commands and prompt content a backlog item's pipeline uses.
+message PipelineMode {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  bool enabled = 5;
+  string status_command_template = 6;
+  string done_command_template = 7;
+  string fail_command_template = 8;
+  string review_command_template = 9;
+  string ship_command_template = 10;
+  string help_command_template = 11;
+  string triage_prompt_template = 12;
+  string review_prompt_template = 13;
+  string initial_prompt_template = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp updated_at = 16;
+  // content_hash is DERIVED: computed on read (SHA-256 hex, truncated to 16
+  // chars) from the row's live 9 content-template fields, in fixed field
+  // order — it is not a stored DB column. Used by the "what ran" UI to
+  // detect drift between a session's frozen snapshot hash and this mode's
+  // current content.
+  string content_hash = 17;
 }
 
 // SourceSyncEvent records the result of a single sync run for an ItemSource.
@@ -141,6 +210,9 @@ message CreateBacklogItemRequest {
   string repo_path = 7;
   string notes = 8;
   bool skip_triage = 9;
+  bool auto_spawn_session = 10;
+  optional string pipeline_mode = 11;
+  bool auto_create_pr = 12;
 }
 
 message CreateBacklogItemResponse {
@@ -156,11 +228,107 @@ message GetBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+// BacklogItemShipStatus answers "did this item's code actually ship" from
+// durable evidence (repo_path + the most recent work session's commit),
+// rather than a live per-session worktree — the live VCSStatus widget can't
+// answer this once a session's worktree has been cleaned up (done items).
+message BacklogItemShipStatus {
+  // shipped is true when the last work-session commit is confirmed an
+  // ancestor of main, locally or via origin — see IsCommitOnMain.
+  bool shipped = 1;
+  // shipped_via is "pr", "direct", or "" when not shipped.
+  string shipped_via = 2;
+  string pr_url = 3;
+  string branch_name = 4;
+  // branch_exists is false once the branch has been deleted (e.g. after a
+  // GitHub "delete branch on merge" or manual cleanup) — ahead_of_main /
+  // behind_main are only meaningful when this is true.
+  bool branch_exists = 5;
+  int32 ahead_of_main = 6;
+  int32 behind_main = 7;
+  string last_commit_sha = 8;
+  string last_commit_message = 9;
+  google.protobuf.Timestamp last_commit_at = 10;
+  // error is set (with all other fields at zero value) when repo_path is
+  // inaccessible or no work session ever committed anything.
+  string error = 11;
+  // commits lists every commit in the shipped range (base..last work-session
+  // commit), newest first — like a PR's "Commits" tab, but derived from
+  // durable git history rather than the GitHub API, so it works the same
+  // whether the code shipped via a merged PR or a direct commit to main.
+  repeated ShippedCommit commits = 12;
+  // shipped_check_conclusion holds the durable GitHub CI-conclusion snapshot
+  // captured at ship time — genuine GitHub CI-conclusion values only (or
+  // unset); never a capture-failure sentinel — see snapshot_capture_failed.
+  // Populated only when a durable snapshot exists (nil/zero-value otherwise).
+  string shipped_check_conclusion = 13;
+  // shipped_approved_count is the durable review-approval-count snapshot
+  // captured at ship time. Populated only when a durable snapshot exists
+  // (nil/zero-value otherwise).
+  int32 shipped_approved_count = 14;
+  // shipped_changes_req_count is the durable "changes requested" review
+  // count snapshot captured at ship time. Populated only when a durable
+  // snapshot exists (nil/zero-value otherwise).
+  int32 shipped_changes_req_count = 15;
+  // file_stats is the durable per-file diff-stat snapshot captured at ship
+  // time. Populated only when a durable snapshot exists (nil/zero-value
+  // otherwise).
+  repeated ShippedFileStat file_stats = 16;
+  // snapshot_at is the timestamp the durable snapshot was captured at.
+  // Populated only when a durable snapshot exists (nil/zero-value
+  // otherwise).
+  google.protobuf.Timestamp snapshot_at = 17;
+  // snapshot_capture_failed is true when CaptureShipSnapshot's GitHub-data
+  // group or file-stats group failed to capture at ship time — distinct
+  // from shipped_check_conclusion, which holds only genuine CI-conclusion
+  // values. Populated only when a durable snapshot exists (nil/zero-value
+  // otherwise).
+  bool snapshot_capture_failed = 18;
+}
+
+// ShippedCommit is one commit in a BacklogItemShipStatus's shipped range.
+message ShippedCommit {
+  string sha = 1;
+  string summary = 2; // first line of the commit message
+  string author_name = 3;
+  google.protobuf.Timestamp authored_at = 4;
+}
+
+// ShippedFileStat is one file's durable per-file diff-stat snapshot,
+// captured at ship time via FileStatsBetween. Mirrors FileChange's field
+// shape so the proto<->ent mapping stays mechanical.
+message ShippedFileStat {
+  string path = 1;
+  session.v1.FileStatus status = 2;
+  int32 additions = 3;
+  int32 deletions = 4;
+}
+
+message GetBacklogItemShipStatusRequest {
+  string item_id = 1;
+}
+
+message GetBacklogItemShipStatusResponse {
+  BacklogItemShipStatus status = 1;
+}
+
 message ListBacklogItemsRequest {
   repeated string status = 1;
   repeated int32 priority = 2;
   string sort_by = 3;
+  // include_terminal, when true, includes items with status "done" in the
+  // default (no explicit `status` filter) result set. Independent of
+  // include_archived below — this field no longer also controls "archived"
+  // visibility (see include_archived's doc comment for why that split
+  // exists).
   bool include_terminal = 4;
+  // include_archived, when true, includes items with status "archived" in
+  // the default (no explicit `status` filter) result set. Split out from
+  // include_terminal so a client can show "done" items by default while
+  // still hiding "archived" ones unless the user opts in (mirrors the
+  // session list's "Show Archived" toggle). Ignored when `status` is set
+  // explicitly — an explicit status filter always wins.
+  bool include_archived = 5;
 }
 
 message ListBacklogItemsResponse {
@@ -179,6 +347,13 @@ message UpdateBacklogItemRequest {
   string notes = 9;
   string expected_status = 10;
   google.protobuf.Timestamp expected_updated_at = 11;
+  bool auto_spawn_session = 12;
+  optional string pipeline_mode = 13;
+  bool auto_create_pr = 14;
+  // rework_cap_override is a per-item override for the auto-rework cap.
+  // Unset = leave the item's stored override untouched. 0 = unlimited retries
+  // for this item. >0 = this item's own cap, replacing the global default.
+  optional int32 rework_cap_override = 15;
 }
 
 message UpdateBacklogItemResponse {
@@ -192,6 +367,12 @@ message ArchiveBacklogItemRequest {
 message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
+
+message DeleteBacklogItemRequest {
+  string item_id = 1;
+}
+
+message DeleteBacklogItemResponse {}
 
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
@@ -207,11 +388,23 @@ message TransitionBacklogItemStatusResponse {
 
 message SpawnSessionFromItemRequest {
   string item_id = 1;
+
+  // Optional: If true, start an AutonomousDriver for the spawned session.
+  bool autonomous = 3;
+
+  // Optional: If true, stop any currently active work session for this item and
+  // re-spawn it from scratch (with a new git worktree). Used to restart existing
+  // sessions that were started under the old directory-mode code path.
+  bool force = 4;
 }
 
 message SpawnSessionFromItemResponse {
   string session_uuid = 1;
   ItemSession item_session = 2;
+  // True if the spawn hit the concurrency cap and the item was transitioned to
+  // "queued" instead of spawning a session. session_uuid/item_session are empty
+  // in that case.
+  bool queued = 3;
 }
 
 message AttachSessionToItemRequest {
@@ -225,6 +418,10 @@ message AttachSessionToItemResponse {
 
 message TriggerTriageRequest {
   string item_id = 1;
+  // feedback, if non-empty, requests a refinement of the item's most recent
+  // completed triage result instead of a fresh triage run. Requires a prior
+  // completed triage result to exist.
+  string feedback = 2;
 }
 
 message TriggerTriageResponse {
@@ -263,6 +460,16 @@ message TriggerReReviewRequest {
 
 message TriggerReReviewResponse {
   ItemSession item_session = 1;
+}
+
+message TriggerShipPRRequest {
+  string item_id = 1;
+}
+
+message TriggerShipPRResponse {
+  // pr_url is the GitHub PR URL extracted from the one-shot run's output, or
+  // empty if the run completed without producing a detectable PR URL.
+  string pr_url = 1;
 }
 
 message TriggerSyncRequest {
@@ -311,6 +518,190 @@ message GetSyncHistoryRequest {
 
 message GetSyncHistoryResponse {
   repeated SourceSyncEvent events = 1;
+  // True when the history was capped (see maxSourceSyncEventsHistory server-side) and older
+  // events beyond this response exist but are not returned — no pagination API exists yet.
+  bool truncated = 2;
+}
+
+message CreatePipelineModeRequest {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  bool enabled = 4;
+  string status_command_template = 5;
+  string done_command_template = 6;
+  string fail_command_template = 7;
+  string review_command_template = 8;
+  string ship_command_template = 9;
+  string help_command_template = 10;
+  string triage_prompt_template = 11;
+  string review_prompt_template = 12;
+  string initial_prompt_template = 13;
+}
+
+message CreatePipelineModeResponse {
+  PipelineMode item = 1;
+}
+
+message UpdatePipelineModeRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional bool enabled = 4;
+  optional string status_command_template = 5;
+  optional string done_command_template = 6;
+  optional string fail_command_template = 7;
+  optional string review_command_template = 8;
+  optional string ship_command_template = 9;
+  optional string help_command_template = 10;
+  optional string triage_prompt_template = 11;
+  optional string review_prompt_template = 12;
+  optional string initial_prompt_template = 13;
+}
+
+message UpdatePipelineModeResponse {
+  PipelineMode item = 1;
+}
+
+message DeletePipelineModeRequest {
+  string id = 1;
+}
+
+message DeletePipelineModeResponse {}
+
+message GetPipelineModeRequest {
+  string slug = 1;
+}
+
+message GetPipelineModeResponse {
+  PipelineMode item = 1;
+}
+
+message ListPipelineModesRequest {}
+
+message ListPipelineModesResponse {
+  repeated PipelineMode items = 1;
+}
+
+// ============================================================================
+// Backlog Item Events (for WatchBacklogItems streaming)
+// ============================================================================
+//
+// Defined here (not in events.proto) because the oneof variants reference
+// BacklogItem and ReviewVerdict, which are defined in this file — importing
+// events.proto from here (or this file from events.proto) would create a
+// circular import between the two proto files.
+
+// BacklogItemEvent represents a real-time change to a backlog item.
+// Used for the WatchBacklogItems streaming RPC.
+message BacklogItemEvent {
+  // Timestamp when the event occurred.
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Event type (one of the following).
+  oneof event {
+    BacklogItemStatusChangedEvent status_changed = 2;
+    BacklogItemVerdictRecordedEvent verdict_recorded = 3;
+    BacklogItemSessionAttachedEvent session_attached = 4;
+    BacklogItemUpdatedEvent item_updated = 5;
+    BacklogItemArchivedEvent item_archived = 6;
+    BacklogItemRemovedEvent item_removed = 7;
+    // Synthetic marker (no corresponding bus event) sent exactly once, at the
+    // end of WatchBacklogItems' initial phase (fresh snapshot or after_seq
+    // replay), but ONLY when that phase sent zero other events — e.g. a
+    // genuinely empty backlog, or a status_filter/category_filter matching
+    // nothing. Without it, a zero-item connection produces zero bytes on the
+    // wire, and the client's `for await` loop never resolves past its first
+    // iteration — permanently stuck at connectionState "connecting" even
+    // though the stream is healthy and correctly has nothing to report. See
+    // useWatchBacklogItems.ts's handling (falls through to a no-op case) and
+    // backlog_service_events.go's watchBacklogItems doc comment.
+    BacklogSnapshotCompleteEvent snapshot_complete = 9;
+  }
+
+  // Monotonically-increasing sequence number assigned by pkg/events.EventBus
+  // at Publish time, mirroring SessionEvent.seq. Zero means "no sequence
+  // information" — used for the per-item synthetic snapshot events sent on a
+  // fresh (non-replay) connection, which don't correspond to a single
+  // published bus event and must not participate in the frontend's
+  // afterSeq/gap-detection bookkeeping (see useWatchBacklogItems.ts).
+  uint64 seq = 8;
+}
+
+// BacklogItemStatusChangedEvent is emitted when an item's status transitions
+// (e.g. "in_progress" -> "review").
+message BacklogItemStatusChangedEvent {
+  string item_id = 1;
+  string old_status = 2;
+  string new_status = 3;
+  BacklogItem item = 4;
+
+  // Whether this event is part of an initial snapshot (sent on stream
+  // connect/reconnect) rather than a live change. Frontend should not
+  // flash/notify for snapshot events.
+  bool is_snapshot = 5;
+}
+
+// BacklogItemVerdictRecordedEvent is emitted when a review verdict is
+// recorded for one of an item's sessions.
+message BacklogItemVerdictRecordedEvent {
+  string item_id = 1;
+  ReviewVerdict verdict = 2;
+  BacklogItem item = 3;
+  bool is_snapshot = 4;
+}
+
+// BacklogItemSessionAttachedEvent is emitted when a session is spawned from
+// or attached to a backlog item.
+message BacklogItemSessionAttachedEvent {
+  string item_id = 1;
+  string session_id = 2;
+  BacklogItem item = 3;
+  bool is_snapshot = 4;
+}
+
+// BacklogItemUpdatedEvent is emitted when one or more item fields change
+// (title, description, priority, etc.) outside of a status transition.
+message BacklogItemUpdatedEvent {
+  string item_id = 1;
+  repeated string updated_fields = 2;
+  BacklogItem item = 3;
+  bool is_snapshot = 4;
+}
+
+// BacklogItemArchivedEvent is emitted when an item is soft-deleted via
+// ArchiveBacklogItem.
+message BacklogItemArchivedEvent {
+  string item_id = 1;
+  google.protobuf.Timestamp archived_at = 2;
+  bool is_snapshot = 3;
+}
+
+// BacklogItemRemovedEvent is emitted when an item is permanently deleted via
+// DeleteBacklogItem. Never part of a snapshot by definition — a removed item
+// has nothing left to snapshot.
+message BacklogItemRemovedEvent {
+  string item_id = 1;
+  string reason = 2;
+}
+
+// BacklogSnapshotCompleteEvent carries no data — it exists purely so the
+// stream has sent at least one message by the time the initial phase
+// (fresh snapshot or after_seq replay) finishes with zero real events to
+// report. See BacklogItemEvent.snapshot_complete's doc comment.
+message BacklogSnapshotCompleteEvent {}
+
+// WatchBacklogItemsRequest configures the WatchBacklogItems streaming RPC.
+message WatchBacklogItemsRequest {
+  // Optional: only receive events for items with one of these statuses.
+  repeated string status_filter = 1;
+
+  // Optional: only receive events for items in one of these categories.
+  repeated string category_filter = 2;
+
+  // Optional: resume a stream after this sequence number instead of
+  // receiving a fresh initial snapshot (see pkg/events.EventsSince).
+  uint64 after_seq = 3;
 }
 
 // BacklogService manages backlog items and their lifecycle through AI-assisted
@@ -322,6 +713,12 @@ service BacklogService {
   // GetBacklogItem retrieves a single backlog item by ID.
   rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
 
+  // GetBacklogItemShipStatus answers "did this item's code actually ship" from
+  // repo_path + the most recent work session's commit — works even once the
+  // work session's own worktree has been cleaned up (e.g. a "done" item),
+  // unlike the live per-session VCSStatus widget.
+  rpc GetBacklogItemShipStatus(GetBacklogItemShipStatusRequest) returns (GetBacklogItemShipStatusResponse) {}
+
   // ListBacklogItems returns backlog items with optional filtering and sorting.
   rpc ListBacklogItems(ListBacklogItemsRequest) returns (ListBacklogItemsResponse) {}
 
@@ -330,6 +727,9 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // DeleteBacklogItem permanently removes an item and all its child records.
+  rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
 
   // TransitionBacklogItemStatus moves an item through the status state machine.
   rpc TransitionBacklogItemStatus(TransitionBacklogItemStatusRequest) returns (TransitionBacklogItemStatusResponse) {}
@@ -343,6 +743,9 @@ service BacklogService {
   // TriggerTriage kicks off a triage session for a backlog item.
   rpc TriggerTriage(TriggerTriageRequest) returns (TriggerTriageResponse) {}
 
+  // CancelTriage stops a running triage session for a backlog item.
+  rpc CancelTriage(CancelTriageRequest) returns (CancelTriageResponse) {}
+
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
 
@@ -354,6 +757,12 @@ service BacklogService {
 
   // TriggerReReview re-runs the review gate for a backlog item.
   rpc TriggerReReview(TriggerReReviewRequest) returns (TriggerReReviewResponse) {}
+
+  // TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+  // AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+  // yet) with no PR of its own — the self-service "Ship PR" action on the item
+  // detail page.
+  rpc TriggerShipPR(TriggerShipPRRequest) returns (TriggerShipPRResponse) {}
 
   // TriggerSync initiates a sync run for an external item source.
   rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse) {}
@@ -372,4 +781,328 @@ service BacklogService {
 
   // GetSyncHistory returns the sync event history for an item source.
   rpc GetSyncHistory(GetSyncHistoryRequest) returns (GetSyncHistoryResponse) {}
+
+  // CreatePipelineMode registers a new runtime-definable pipeline mode.
+  rpc CreatePipelineMode(CreatePipelineModeRequest) returns (CreatePipelineModeResponse) {}
+
+  // UpdatePipelineMode modifies an existing pipeline mode's fields.
+  rpc UpdatePipelineMode(UpdatePipelineModeRequest) returns (UpdatePipelineModeResponse) {}
+
+  // DeletePipelineMode removes a pipeline mode definition.
+  rpc DeletePipelineMode(DeletePipelineModeRequest) returns (DeletePipelineModeResponse) {}
+
+  // GetPipelineMode retrieves a single pipeline mode by slug.
+  rpc GetPipelineMode(GetPipelineModeRequest) returns (GetPipelineModeResponse) {}
+
+  // ListPipelineModes returns all pipeline modes, including disabled ones.
+  rpc ListPipelineModes(ListPipelineModesRequest) returns (ListPipelineModesResponse) {}
+
+  // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
+  rpc ImportGitHubIssue(ImportGitHubIssueRequest) returns (ImportGitHubIssueResponse) {}
+
+  // SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
+  rpc SearchGitHubRepos(SearchGitHubReposRequest) returns (SearchGitHubReposResponse) {}
+
+  // ListGitHubIssues returns issues for a specific GitHub repo.
+  rpc ListGitHubIssues(ListGitHubIssuesRequest) returns (ListGitHubIssuesResponse) {}
+
+  // GetBacklogItemDiff returns the committed diff for a backlog item's work sessions
+  // (from the earliest work session base SHA to the current HEAD).
+  rpc GetBacklogItemDiff(GetBacklogItemDiffRequest) returns (GetBacklogItemDiffResponse) {}
+
+  // GetBacklogItemCost returns the estimated token cost for all sessions linked to an item.
+  rpc GetBacklogItemCost(GetBacklogItemCostRequest) returns (GetBacklogItemCostResponse) {}
+
+  // GetSessionBacklogIndex returns all item sessions mapped to their backlog item metadata.
+  // Used by the Insights dashboard to annotate sessions with backlog context.
+  rpc GetSessionBacklogIndex(GetSessionBacklogIndexRequest) returns (GetSessionBacklogIndexResponse) {}
+
+  // SubmitManualReview allows a user to submit a review verdict directly,
+  // without running an AI review session.
+  rpc SubmitManualReview(SubmitManualReviewRequest) returns (SubmitManualReviewResponse) {}
+
+  // ListStuckBacklogItems returns open (unresolved, un-snoozed) stuck backlog
+  // items — items that have stopped progressing toward merge, with a reason,
+  // since-when, and PR context.
+  rpc ListStuckBacklogItems(ListStuckBacklogItemsRequest) returns (ListStuckBacklogItemsResponse) {}
+
+  // SnoozeStuckItem suppresses a stuck row from the active view and from
+  // re-notification until the given time.
+  rpc SnoozeStuckItem(SnoozeStuckItemRequest) returns (SnoozeStuckItemResponse) {}
+
+  // ResetStuckRemediation clears the automated-remediation counters
+  // (remediation_attempts, next_remediation_at, notified_at) on a single open
+  // stuck row, letting a fresh automated attempt/notification cycle fire
+  // immediately instead of waiting on stale backoff/dedup state. Distinct
+  // from TriggerRemediationNow: this never itself invokes a remediation
+  // action, it only un-parks the row.
+  rpc ResetStuckRemediation(ResetStuckRemediationRequest) returns (ResetStuckRemediationResponse) {}
+
+  // BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+  // open stuck row matching the optional reason filter — the "something
+  // upstream broke a batch of these, give them all a fresh shot" admin
+  // action, e.g. after an OOM-restart storm inflated attempt counts across
+  // many items at once.
+  rpc BulkResetStuckRemediation(BulkResetStuckRemediationRequest) returns (BulkResetStuckRemediationResponse) {}
+
+  // TriggerRemediationNow immediately runs the reason-specific remediation
+  // action for a single open stuck row, bypassing only the next_remediation_at
+  // backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+  // action's own circuit breaker) still applies, and this attempt still
+  // counts toward remediation_attempts like any dispatcher-triggered one.
+  // Rejects with an error (rather than silently un-parking) when the row has
+  // already exhausted its attempt budget — use ResetStuckRemediation first.
+  rpc TriggerRemediationNow(TriggerRemediationNowRequest) returns (TriggerRemediationNowResponse) {}
+
+  // WatchBacklogItems streams real-time backlog item events (status changes,
+  // verdicts, session attachments, updates, archival, removal).
+  // Server-streaming RPC for live backlog updates without polling.
+  rpc WatchBacklogItems(WatchBacklogItemsRequest) returns (stream BacklogItemEvent) {}
+}
+
+message ImportGitHubIssueRequest {
+  // GitHub issue URL (https://github.com/owner/repo/issues/N) or shorthand (owner/repo#N).
+  string issue_url = 1;
+  // Optional repo path override; if empty, derived from the issue URL.
+  string repo_path = 2;
+  // If true, skip automated triage after import.
+  bool skip_planning = 3;
+}
+
+message ImportGitHubIssueResponse {
+  BacklogItem item = 1;
+  bool triage_triggered = 2;
+}
+
+message CancelTriageRequest {
+  string item_id = 1;
+}
+
+message CancelTriageResponse {
+  bool cancelled = 1;
+}
+
+message GitHubRepoEntry {
+  string owner = 1;
+  string repo = 2;
+  bool is_local = 3;
+  string local_path = 4;
+  string description = 5;
+}
+
+message GitHubIssueEntry {
+  int32 number = 1;
+  string title = 2;
+  string state = 3;
+  string url = 4;
+  repeated string labels = 5;
+  string body = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool is_pr = 9;
+  // GitHub login of the issue's author.
+  string author = 10;
+}
+
+message SearchGitHubReposRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchGitHubReposResponse {
+  repeated GitHubRepoEntry repos = 1;
+}
+
+message ListGitHubIssuesRequest {
+  string owner = 1;
+  string repo = 2;
+  string state = 3;
+  string search = 4;
+  int32 limit = 5;
+}
+
+message ListGitHubIssuesResponse {
+  repeated GitHubIssueEntry issues = 1;
+}
+
+message GetBacklogItemDiffRequest {
+  string item_id = 1;
+}
+
+message GetBacklogItemDiffResponse {
+  string diff = 1;
+  int32 added = 2;
+  int32 removed = 3;
+}
+
+message SessionCostEntry {
+  string session_id = 1;
+  string session_role = 2; // "work", "triage", "review"
+  double estimated_cost_usd = 3;
+  int64 input_tokens = 4;
+  int64 output_tokens = 5;
+}
+
+message GetBacklogItemCostRequest {
+  string item_id = 1;
+}
+
+message GetBacklogItemCostResponse {
+  double total_cost_usd = 1;
+  repeated SessionCostEntry sessions = 2;
+}
+
+// BacklogSessionEntry maps a tmux session UUID to the backlog item it belongs to.
+message BacklogSessionEntry {
+  string session_uuid = 1;
+  string item_id = 2;
+  string item_title = 3;
+  string item_status = 4;
+  string session_role = 5;
+}
+
+message GetSessionBacklogIndexRequest {}
+
+message GetSessionBacklogIndexResponse {
+  repeated BacklogSessionEntry entries = 1;
+}
+
+message SubmitManualReviewRequest {
+  string item_id = 1;
+  // overall_outcome must be PASS, FAIL, PARTIAL, or UNVERIFIABLE.
+  string overall_outcome = 2;
+  string summary = 3;
+  // per_criterion_verdicts is optional. When empty, a single synthetic verdict
+  // is created using overall_outcome for all AC criteria.
+  repeated CriterionVerdict per_criterion_verdicts = 4;
+}
+
+message SubmitManualReviewResponse {
+  BacklogItem item = 1;
+}
+
+// --- Stuck backlog item visibility ---
+
+// StuckReason mirrors domain.StuckReason (session/domain/backlog.go) — the
+// validated string-backed enum of classes a backlog item can be "stuck" for.
+// STUCK_REASON_UNSPECIFIED is also used as the safe fallback when an unknown
+// string is encountered mapping a DB row to proto (never panics).
+enum StuckReason {
+  STUCK_REASON_UNSPECIFIED = 0;
+  STUCK_REASON_PR_READY_UNMERGED = 1;
+  STUCK_REASON_REWORK_CAP = 2;
+  STUCK_REASON_ABANDONED_REVIEW = 3;
+  STUCK_REASON_STALE_WORK = 4;
+  STUCK_REASON_BOUNCING = 5;
+  STUCK_REASON_PUSH_FAILED = 6;
+  STUCK_REASON_ORPHANED_TRIAGE = 7;
+  STUCK_REASON_AUTONOMOUS_STUCK = 8;
+  STUCK_REASON_SPAWN_FAILED = 9;
+  STUCK_REASON_PLAN_NOT_APPROVED = 10;
+  STUCK_REASON_PR_PENDING_NO_PR = 11;
+  // STUCK_REASON_REWORK_BLOCKED_STALE: see domain.StuckReasonReworkBlockedStale
+  // (session/domain/backlog.go) — a review-status item's rework attempt is
+  // blocked by a still-alive-but-stale prior work session.
+  STUCK_REASON_REWORK_BLOCKED_STALE = 12;
+}
+
+// StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
+// row joined with its parent item's rendering-relevant fields.
+message StuckBacklogItem {
+  string item_id = 1;
+  string title = 2;
+  string status = 3;
+  StuckReason reason = 4;
+  google.protobuf.Timestamp first_detected_at = 5;
+  google.protobuf.Timestamp last_checked_at = 6;
+  int32 pr_number = 7;
+  string pr_url = 8;
+  string context = 9;
+  // snoozed_until is present only when the row was already scheduled to
+  // become un-snoozed at query time (ListStuckBacklogItems only ever returns
+  // rows that are currently un-snoozed, so this is normally unset).
+  google.protobuf.Timestamp snoozed_until = 10;
+  // allow_auto_merge surfaces the repo's GitHub auto-merge setting, read-only
+  // and best-effort (see plan.md Story 4.1.4 / ADR discussion). This field is
+  // declared here so the Phase 4 frontend work doesn't require a second
+  // proto-gen round-trip, but it is intentionally left unset (not populated)
+  // by the ListStuckBacklogItems handler added in this change — Phase 4 owns
+  // fetching and populating it. Unset means "not fetched / unknown", not
+  // "auto-merge disabled".
+  optional bool allow_auto_merge = 11;
+  // remediation_attempts is how many automated (or operator-triggered via
+  // TriggerRemediationNow) remediation attempts have been made for this open
+  // row. remediation_attempts >= 5 means the row is "parked" — automated
+  // remediation has stopped until ResetStuckRemediation is called.
+  int32 remediation_attempts = 12;
+  // next_remediation_at is when this row becomes eligible for the next
+  // automated remediation attempt. Unset means either no attempt has been
+  // made yet (remediation_attempts == 0, eligible immediately) or the row is
+  // parked (remediation_attempts >= 5) — check remediation_attempts to tell
+  // the two apart.
+  optional google.protobuf.Timestamp next_remediation_at = 13;
+}
+
+message ListStuckBacklogItemsRequest {}
+
+message ListStuckBacklogItemsResponse {
+  repeated StuckBacklogItem items = 1;
+}
+
+message SnoozeStuckItemRequest {
+  string item_id = 1;
+  StuckReason reason = 2;
+  google.protobuf.Timestamp until = 3;
+}
+
+message SnoozeStuckItemResponse {
+  // applied is true when an open row matching (item_id, reason) was found
+  // and snoozed; false when no such open row exists (not an error).
+  bool applied = 1;
+}
+
+message ResetStuckRemediationRequest {
+  string item_id = 1;
+  StuckReason reason = 2;
+}
+
+message ResetStuckRemediationResponse {
+  // applied is true when an open row matching (item_id, reason) was found
+  // and reset; false when no such open row exists (not an error).
+  bool applied = 1;
+}
+
+message BulkResetStuckRemediationRequest {
+  // reason filters to a single stuck reason; unset (STUCK_REASON_UNSPECIFIED)
+  // resets matching rows across every reason.
+  StuckReason reason = 1;
+  // only_parked restricts the reset to rows that actually hit the 5-attempt
+  // cap. Defaults to true at the RPC layer when unset — see
+  // only_parked_explicitly_set.
+  bool only_parked = 2;
+  // only_parked_explicitly_set distinguishes "only_parked=false because the
+  // caller wants every open row regardless of attempt count" from "the field
+  // was left at its zero value" — proto3 bool fields cannot otherwise tell
+  // "explicitly false" apart from "unset". Set true whenever the caller
+  // deliberately supplied only_parked (either value).
+  bool only_parked_explicitly_set = 3;
+}
+
+message BulkResetStuckRemediationResponse {
+  // reset_count is how many rows were reset by this call.
+  int32 reset_count = 1;
+}
+
+message TriggerRemediationNowRequest {
+  string item_id = 1;
+  StuckReason reason = 2;
+}
+
+message TriggerRemediationNowResponse {
+  // triggered is true when the remediation action was invoked. False is
+  // never returned on success — a row that cannot be remediated (no open
+  // row, already parked, no action registered for this reason yet) is
+  // reported as an RPC error instead, so the frontend can show a specific
+  // reason rather than a bare "nothing happened".
+  bool triggered = 1;
 }

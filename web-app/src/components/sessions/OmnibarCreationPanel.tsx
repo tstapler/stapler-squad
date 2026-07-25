@@ -17,18 +17,57 @@ import {
 } from "./Omnibar.css";
 import * as styles from "./OmnibarCreationPanel.css";
 import { FileChipList, type AttachedFile } from "./FileChipList";
+import { RadioGroup } from "@/components/ui/RadioGroup";
+import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
+import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
+import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
 export const SESSION_TYPES = [
-  { value: "new_worktree", label: "New Worktree" },
-  { value: "directory", label: "Directory" },
-  { value: "existing_worktree", label: "Use Worktree" },
-  { value: "one_off", label: "One-off" },
-  { value: "new_project", label: "New Project" },
+  {
+    value: "new_worktree",
+    label: "New branch (isolated)",
+    description:
+      "Use this when you want to try something risky without touching your main branch — e.g. a refactor, a new feature, or a change you might abandon. Creates an isolated branch and working directory.",
+  },
+  {
+    value: "directory",
+    label: "Existing folder",
+    description:
+      "Use this when you just want to work in a folder as-is — e.g. quick edits to a repo you already have checked out, or a folder with no git history.",
+  },
+  {
+    value: "existing_worktree",
+    label: "Existing branch",
+    description:
+      "Use this when you want to resume work on a branch that's already checked out — e.g. picking up review feedback or continuing a session from earlier.",
+  },
+  {
+    value: "one_off",
+    label: "Temporary (no git)",
+    description:
+      "Use this when you need scratch space for a quick experiment — e.g. testing a snippet or script. No path needed; a temporary directory is created automatically.",
+  },
+  {
+    value: "new_project",
+    label: "New Project",
+    description:
+      "Use this when starting something brand new — e.g. a side project or prototype. Creates a directory, runs git init, and makes an initial commit.",
+  },
 ] as const;
 
+// Autonomous mode's hint text, shown when the "Autonomous mode" checkbox is checked.
+// Not a session type itself — it's an orthogonal flag that composes with whichever
+// type is selected above (see AUTONOMOUS_MODE_HINT usage below).
+export const AUTONOMOUS_MODE_HINT =
+  "Hand off a well-defined task and walk away — e.g. a small bug fix or chore. An LLM reviewer approves risky tool calls instead of you; you'll be notified when it's done. To stop it, delete or hibernate the session.";
+
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
+
+const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
+const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4]]; // existing_worktree, new_project
+const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
 
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
@@ -42,43 +81,32 @@ interface SessionTypeRadioGroupProps {
 }
 
 function SessionTypeRadioGroup({ value, onChange }: SessionTypeRadioGroupProps) {
-  const currentIndex = SESSION_TYPES.findIndex((t) => t.value === value);
+  // Expand advanced section automatically if the current selection is an advanced type
+  const [advancedOpen, setAdvancedOpen] = useState(() => ADVANCED_VALUES.has(value));
 
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      const next = (currentIndex + 1) % SESSION_TYPES.length;
-      onChange(SESSION_TYPES[next].value);
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const prev = (currentIndex - 1 + SESSION_TYPES.length) % SESSION_TYPES.length;
-      onChange(SESSION_TYPES[prev].value);
-    }
-  }
+  const visibleTypes = advancedOpen ? [...PRIMARY_TYPES, ...ADVANCED_TYPES] : PRIMARY_TYPES;
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Session type"
-      className={styles.radioGroup}
-      onKeyDown={handleKeyDown}
-    >
-      {SESSION_TYPES.map((type) => (
+    <RadioGroup
+      options={visibleTypes}
+      value={value}
+      onChange={onChange}
+      groupLabel="Session Type"
+      groupLabelId="omnibar-session-type-label"
+      hintForValue={(v) => SESSION_TYPES.find((t) => t.value === v)?.description}
+      trailingContent={
         <button
-          key={type.value}
-          role="radio"
-          aria-checked={value === type.value}
-          tabIndex={value === type.value ? 0 : -1}
           type="button"
-          onClick={() => onChange(type.value)}
-          className={[styles.radioBtn, value === type.value ? styles.radioBtnActive : ""]
-            .filter(Boolean)
-            .join(" ")}
+          tabIndex={-1}
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((o) => !o)}
+          className={styles.radioBtn}
+          style={{ opacity: 0.65, fontSize: "0.75em" }}
         >
-          {type.label}
+          {advancedOpen ? "▴ Less" : "▾ More"}
         </button>
-      ))}
-    </div>
+      }
+    />
   );
 }
 
@@ -91,6 +119,8 @@ export interface OmnibarCreationPanelProps {
   onCancel: () => void;
   worktrees: WorktreeEntry[];
   isWorktreesLoading?: boolean;
+  /** Set when the worktree list request failed or timed out — shown as a hint. */
+  worktreesError?: string | null;
   isSubmitting: boolean;
   canSubmit: boolean;
   error: string | null;
@@ -104,6 +134,8 @@ export interface OmnibarCreationPanelProps {
   onAttachedImagesChange?: (paths: string[]) => void;
   /** True when path completion has resolved and the typed path doesn't exist on disk. */
   pathDoesNotExist?: boolean;
+  /** Name prefix from alias detection (e.g. "ssq-"). Used to hint that the user should type a label after it. */
+  namePrefix?: string;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -124,6 +156,7 @@ export function OmnibarCreationPanel({
   onCancel,
   worktrees,
   isWorktreesLoading = false,
+  worktreesError = null,
   isSubmitting,
   canSubmit,
   error,
@@ -133,12 +166,57 @@ export function OmnibarCreationPanel({
   uploadBaseUrl = "/api",
   onAttachedImagesChange,
   pathDoesNotExist,
+  namePrefix = "",
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
     parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
+    autonomousMode,
   } = formState;
+
+  // Slash command autocomplete for the firstPrompt textarea.
+  const firstPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const [firstPromptCursor, setFirstPromptCursor] = useState(0);
+  const [slashSuggestIndex, setSlashSuggestIndex] = useState(-1);
+  const { commands: slashCommands } = useSlashCommands(path ?? "");
+  const slashState = useSlashCommandSuggestions(firstPrompt, firstPromptCursor, slashCommands);
+  const isSlashDropdownVisible = slashState.isActive && slashState.suggestions.length > 0;
+
+  const handleSlashSelect = useCallback((cmd: Parameters<typeof slashState.complete>[1]) => {
+    const { newValue, newCursorPos } = slashState.complete(firstPrompt, cmd);
+    setFormField("firstPrompt", newValue);
+    setSlashSuggestIndex(-1);
+    requestAnimationFrame(() => {
+      if (firstPromptRef.current) {
+        firstPromptRef.current.setSelectionRange(newCursorPos, newCursorPos);
+        firstPromptRef.current.focus();
+        setFirstPromptCursor(newCursorPos);
+      }
+    });
+  }, [slashState, firstPrompt, setFormField]);
+
+  const handleFirstPromptKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!isSlashDropdownVisible) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSlashSuggestIndex((i) => Math.min(i + 1, slashState.suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSlashSuggestIndex((i) => Math.max(i - 1, -1));
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      const idx = slashSuggestIndex >= 0 ? slashSuggestIndex : 0;
+      if (slashState.suggestions[idx]) handleSlashSelect(slashState.suggestions[idx]);
+    } else if (e.key === "Enter" && slashSuggestIndex >= 0) {
+      if (slashState.suggestions[slashSuggestIndex]) {
+        e.preventDefault();
+        handleSlashSelect(slashState.suggestions[slashSuggestIndex]);
+      }
+    } else if (e.key === "Escape") {
+      setSlashSuggestIndex(-1);
+    }
+  }, [isSlashDropdownVisible, slashState, slashSuggestIndex, handleSlashSelect]);
 
   // "Create new repository" affordance is only meaningful for session types
   // that operate on the path itself. existing_worktree expects a real parent
@@ -332,8 +410,8 @@ export function OmnibarCreationPanel({
                 Repository path doesn&rsquo;t exist
               </div>
               <div className={styles.createRepoNoticeDesc}>
-                &ldquo;Use Worktree&rdquo; needs a real parent repository.
-                Switch to &ldquo;Directory&rdquo; or &ldquo;New Worktree&rdquo;
+                &ldquo;Existing branch&rdquo; needs a real parent repository.
+                Switch to &ldquo;Existing folder&rdquo; or &ldquo;New branch (isolated)&rdquo;
                 if you want to create a new repo here.
               </div>
             </div>
@@ -360,30 +438,41 @@ export function OmnibarCreationPanel({
               Session name is empty — type a name above or use &ldquo;name &gt; prompt&rdquo; syntax
             </span>
           )}
+          {namePrefix && sessionName === namePrefix && (
+            <span className={hint} style={{ color: "var(--warning)" }}>
+              Type a label after the prefix to complete the session name (e.g. &ldquo;{namePrefix}my-feature&rdquo;)
+            </span>
+          )}
           {firstPrompt && sessionName && (
             <span className={hint}>
-              Session name: <strong>{sessionName}</strong> · First prompt will be injected automatically
+              Session name: <strong>{sessionName}</strong> · First prompt will be typed into the session terminal automatically
             </span>
           )}
         </div>
 
         {/* Session Type — ARIA radio group (ADR-003: arrow keys cycle) */}
         <div className={field}>
-          <label className={labelClass} id="omnibar-session-type-label">
-            Session Type
-          </label>
           <SessionTypeRadioGroup
             value={sessionType}
             onChange={(v) => setFormField("sessionType", v)}
           />
-          <span className={hint}>
-            {sessionType === "new_worktree" && "Creates an isolated git worktree for this session"}
-            {sessionType === "existing_worktree" && "Uses an existing worktree at a specific path"}
-            {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
-            {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
-            {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
-          </span>
         </div>
+
+        {/* Autonomous mode — an orthogonal flag, not a session type: it composes with
+            whichever type is selected above instead of forcing a scratch directory. */}
+        {sessionType !== "one_off" && (
+          <div className={field}>
+            <label className={checkboxClass}>
+              <input
+                type="checkbox"
+                checked={autonomousMode}
+                onChange={(e) => setFormField("autonomousMode", e.target.checked)}
+              />
+              🤖 Autonomous mode (Beta)
+            </label>
+            <span className={hint}>{AUTONOMOUS_MODE_HINT}</span>
+          </div>
+        )}
 
         {/* One-off informational banner */}
         {sessionType === "one_off" && (
@@ -572,6 +661,8 @@ export function OmnibarCreationPanel({
             <span className={hint}>
               {isWorktreesLoading
                 ? "Scanning for git worktrees…"
+                : worktreesError
+                ? `${worktreesError} — enter the path manually below`
                 : worktrees.length > 0
                 ? "Select an existing git worktree for this repository"
                 : "Absolute path to an existing git worktree"}
@@ -634,16 +725,35 @@ export function OmnibarCreationPanel({
           <label className={labelClass} htmlFor="omnibar-first-prompt">
             First Prompt <span style={{ fontWeight: "normal", opacity: 0.6 }}>(optional)</span>
           </label>
-          <textarea
-            id="omnibar-first-prompt"
-            className={fieldInput}
-            placeholder="What should Claude do first? (injected as CLAUDE.md on session start)"
-            rows={3}
-            maxLength={2000}
-            value={formState.firstPrompt}
-            onChange={(e) => setFormField("firstPrompt", e.target.value)}
-            style={{ resize: "vertical", fontFamily: "inherit", fontSize: "inherit" }}
-          />
+          <div className={styles.textareaWrapper}>
+            <textarea
+              ref={firstPromptRef}
+              id="omnibar-first-prompt"
+              className={fieldInput}
+              placeholder="What should Claude do first? Type / for slash commands."
+              rows={3}
+              maxLength={2000}
+              value={formState.firstPrompt}
+              onChange={(e) => {
+                setFormField("firstPrompt", e.target.value);
+                setFirstPromptCursor(e.target.selectionStart ?? 0);
+                setSlashSuggestIndex(-1);
+              }}
+              onSelect={(e) => setFirstPromptCursor((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+              onKeyDown={handleFirstPromptKeyDown}
+              style={{ resize: "vertical", fontFamily: "inherit", fontSize: "inherit" }}
+            />
+            {isSlashDropdownVisible && (
+              <div className={styles.slashDropdownWrapper}>
+                <SlashCommandDropdown
+                  id="omnibar-first-prompt-slash-listbox"
+                  suggestions={slashState.suggestions}
+                  selectedIndex={slashSuggestIndex}
+                  onSelect={handleSlashSelect}
+                />
+              </div>
+            )}
+          </div>
           {formState.firstPrompt.length > 1800 && (
             <span className={hint} style={{ color: "var(--warning)" }}>
               {2000 - formState.firstPrompt.length} characters remaining

@@ -39,17 +39,18 @@ func featureIDToPath(baseDir, id string) string {
 	return filepath.Join(baseDir, domain, action+".json")
 }
 
-// loadExisting reads a per-feature file if it exists, returning its testIds and tested flag.
-func loadExisting(path string) ([]string, bool) {
+// loadExisting reads a per-feature file if it exists, returning its testIds, tested flag,
+// lastModified timestamp, and the full parsed doc (for substantive-change comparison).
+func loadExisting(path string) ([]string, bool, time.Time, *FeatureDoc) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return []string{}, false
+		return []string{}, false, time.Time{}, nil
 	}
 	var doc FeatureDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return []string{}, false
+		return []string{}, false, time.Time{}, nil
 	}
-	return doc.TestIDs, doc.Tested
+	return doc.TestIDs, doc.Tested, doc.LastModified, &doc
 }
 
 func main() {
@@ -110,11 +111,30 @@ func main() {
 
 		outPath := featureIDToPath(outputDir, f.ID)
 
-		// Preserve human-editable testIds from any existing file.
-		existingIDs, existingTested := loadExisting(outPath)
+		// Preserve human-editable testIds and stable lastModified from any existing file.
+		existingIDs, existingTested, existingLastMod, existingDoc := loadExisting(outPath)
 		if len(existingIDs) > 0 {
 			doc.TestIDs = existingIDs
 			doc.Tested = existingTested
+		}
+
+		// Only update LastModified when substantive content changed.
+		// Git checkout resets file mtimes, so f.LastModified (from os.Stat) drifts on every
+		// CI run even when the proto/handler content is identical. Preserve the committed
+		// lastModified unless an actual field changed.
+		if existingDoc != nil && !existingLastMod.IsZero() {
+			substantivelyChanged := existingDoc.ID != doc.ID ||
+				existingDoc.Type != doc.Type ||
+				existingDoc.Service != doc.Service ||
+				existingDoc.Method != doc.Method ||
+				existingDoc.ProtoFile != doc.ProtoFile ||
+				existingDoc.HTTPMethod != doc.HTTPMethod ||
+				existingDoc.HTTPPath != doc.HTTPPath ||
+				existingDoc.MarkerFound != doc.MarkerFound ||
+				existingDoc.HandlerFile != doc.HandlerFile
+			if !substantivelyChanged {
+				doc.LastModified = existingLastMod
+			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {

@@ -33,6 +33,9 @@ jest.mock("@/components/sessions/ApprovalNavBadge", () => ({
 jest.mock("@/components/unfinished/UnfinishedNavBadge", () => ({
   UnfinishedNavBadge: () => null,
 }));
+jest.mock("@/components/backlog-stuck/StuckNavBadge", () => ({
+  StuckNavBadge: () => null,
+}));
 jest.mock("@/components/ui/DebugMenu", () => ({
   DebugMenu: () => null,
 }));
@@ -69,11 +72,11 @@ describe("Header nav links", () => {
     jest.restoreAllMocks();
   });
 
-  it("Unfinished link points to /unfinished", () => {
+  it("Up Next link points to /unfinished", () => {
     (usePathname as jest.Mock).mockReturnValue("/");
     render(<Header />);
 
-    const link = screen.getByRole("link", { name: /unfinished/i });
+    const link = screen.getByRole("link", { name: /up next/i });
     expect(link).toHaveAttribute("href", "/unfinished");
   });
 
@@ -85,13 +88,13 @@ describe("Header nav links", () => {
     expect(link).toHaveAttribute("href", "/review-queue");
   });
 
-  it("does not call window.history.replaceState when clicking Unfinished", () => {
+  it("does not call window.history.replaceState when clicking Up Next", () => {
     // Regression: replaceState was being called directly from the nav click handler,
     // which Next.js intercepts and turns into a "/" navigation, cancelling Link's target route.
     (usePathname as jest.Mock).mockReturnValue("/");
     render(<Header />);
 
-    const link = screen.getByRole("link", { name: /unfinished/i });
+    const link = screen.getByRole("link", { name: /up next/i });
     fireEvent.click(link);
 
     expect(window.history.replaceState).not.toHaveBeenCalled();
@@ -115,11 +118,11 @@ describe("Header nav links", () => {
     expect(link).toHaveAttribute("aria-current", "page");
   });
 
-  it("marks Unfinished as active on /unfinished route", () => {
+  it("marks Up Next as active on /unfinished route", () => {
     (usePathname as jest.Mock).mockReturnValue("/unfinished");
     render(<Header />);
 
-    const link = screen.getByRole("link", { name: /unfinished/i });
+    const link = screen.getByRole("link", { name: /up next/i });
     expect(link).toHaveAttribute("aria-current", "page");
   });
 

@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/web"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -30,6 +31,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -39,16 +42,21 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr           string
-	httpServer     *http.Server
-	mux            *http.ServeMux
-	tlsConfig      *tls.Config                     // non-nil when TLS is enabled
-	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL       string                          // set when remote access is enabled
-	hostnames      []string                        // detected LAN hostnames
-	origins        []string                        // allowed CORS origins
-	shutdownHooks  []func()                        // called before HTTP server stops
-	connCtxCancel  context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	// addr holds the listen address. It starts as the requested address (e.g.
+	// "localhost:0") and is overwritten with the real OS-assigned address once
+	// Start()'s listener goroutine binds — read via GetAddr() from other
+	// goroutines (lazy hook/MCP URL closures, tests), so it must be atomic.
+	addr              atomic.Pointer[string]
+	httpServer        *http.Server
+	mux               *http.ServeMux
+	tlsConfig         *tls.Config                     // non-nil when TLS is enabled
+	authMiddleware    func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL          string                          // set when remote access is enabled
+	hostnames         []string                        // detected LAN hostnames
+	origins           []string                        // allowed CORS origins
+	shutdownHooks     []func()                        // called before HTTP server stops
+	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
+	availablePrograms []string                        // cached once at startup; programs change only on system changes
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -58,7 +66,6 @@ func newServerBase(addr string) (*Server, context.Context) {
 	mux := http.NewServeMux()
 	connCtx, connCtxCancel := context.WithCancel(context.Background())
 	srv := &Server{
-		addr:          addr,
 		mux:           mux,
 		connCtxCancel: connCtxCancel,
 		httpServer: &http.Server{
@@ -73,6 +80,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 			BaseContext: func(_ net.Listener) context.Context { return connCtx },
 		},
 	}
+	srv.addr.Store(&addr)
 	return srv, connCtx
 }
 
@@ -148,6 +156,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.UnfinishedScanner != nil {
 		deps.UnfinishedScanner.Start(serverCtx)
 		log.Info("UnfinishedWork scanner started")
+	}
+
+	// Start WorktreePRPoller: enriches worktrees-without-sessions with GitHub PR data.
+	if deps.WorktreePRPoller != nil {
+		deps.WorktreePRPoller.Start(serverCtx)
+		log.Info("WorktreePRPoller started")
 	}
 
 	// Register shutdown hook: capture pane working dirs and persist instance
@@ -290,9 +304,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.ExternalApprovalMonitor.Start()
 	deps.ExternalApprovalMonitor.IntegrateWithDiscoveryTmux(deps.ExternalDiscovery, deps.TmuxStreamerManager)
 
+	// Wire the shared streamer manager into SessionService so StopShell can evict a
+	// shell's streamer on close, before it's handed to the WebSocket handler below.
+	deps.SessionService.SetTmuxStreamerManager(deps.TmuxStreamerManager)
+
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
 	wsHandler := services.NewConnectRPCWebSocketHandler(
-		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager, "raw-compressed",
+		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager,
 	)
 	wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
@@ -342,12 +360,57 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered InsightsService handler", "path", insightsAPIPath)
 	}
 
+	// Register GitHubUserService handler (GitHub Work Continuity feature).
+	if deps.GitHubUserService != nil {
+		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)
+		ghAPIPath := "/api" + ghPath
+		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
+		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+	}
+
 	// Register BacklogService handler.
+	// The feature-flag interceptor is added on top of the standard options so that
+	// all BacklogService RPCs return CodeNotFound when the "backlog" flag is off.
+	// isEnabled re-reads config on every request so flag changes take effect immediately.
 	if deps.BacklogService != nil {
-		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, ConnectOptions(deps.ErrorRegistry)...)
+		blOpts := append(
+			ConnectOptions(deps.ErrorRegistry),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", func() bool {
+				return config.LoadConfig().GetFeatureFlag("backlog")
+			})),
+		)
+		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
 		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
+	}
+
+	// Start UserPRCache and register GitHubUserService handler.
+	if deps.UserPRCache != nil {
+		deps.UserPRCache.Start(serverCtx)
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.UserPRCache.Stop)
+		log.Info("UserPRCache started")
+	}
+	// Start WorkflowScheduler (nil guard: disabled when workflow repo is unavailable).
+	if deps.WorkflowScheduler != nil {
+		deps.WorkflowScheduler.Start(serverCtx)
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
+		log.Info("WorkflowScheduler started")
+	}
+
+	// Register BacklogService shutdown so in-flight triage goroutines are signalled
+	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
+	if deps.BacklogService != nil {
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.BacklogService.Shutdown)
+	}
+
+	// Start workflow session retention enforcer (hourly sweep).
+	// Requires both the session ent client and a workflow repository.
+	if deps.WorkflowRepo != nil && deps.Storage != nil {
+		if entClient := deps.Storage.GetEntClient(); entClient != nil {
+			workflows.StartRetentionEnforcer(serverCtx, entClient, deps.WorkflowRepo, time.Hour)
+			log.Info("WorkflowRetentionEnforcer started")
+		}
 	}
 
 	// Register HeadlessService handler (nil guard: pool may be absent if claude not found).
@@ -374,12 +437,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/external/approvals/respond", externalWsHandler.HandleApprovalResponse)
 	log.Info("Registered External Session approval handlers at /api/external/approvals/*")
 
+	// Shared lazy base-URL resolver for Claude Code hook callbacks (Epic 1.3, Story 1.3.1).
+	// Read at the moment a hook URL is actually needed (per-session, at hook-injection time),
+	// never snapshotted before Start() binds the real listen address -- so hook URLs resolve
+	// correctly even when PORT=0 assigns an OS-chosen port. Mirrors the mcpURL lazy-read
+	// pattern below (srv.GetAddr(), Task 1.1.1c).
+	hookBaseURLFn := func() string { return "http://" + srv.GetAddr() }
+
 	// Register Claude Code HTTP hook approval endpoint
 	approvalHandler := services.NewApprovalHandler(
 		deps.SessionService.GetApprovalStore(),
 		deps.Storage,
 		deps.EventBus,
 	)
+	// Wire the lazy base-URL resolver into the hook injector (hook_injector.go); both
+	// InjectHookConfig's PermissionRequest URL and InjectHooksConfig's stop/pre-tool-use/
+	// post-tool-use/prompt-submit endpoints resolve through this single shared mechanism.
+	services.SetHookBaseURLFn(hookBaseURLFn)
 	// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
@@ -392,13 +466,23 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetNotificationStamper(notifStore)
 		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
+	// Wire LLM approval for autonomous sessions (E5)
+	if deps.HeadlessPool != nil {
+		approvalHandler.SetHeadlessPool(deps.HeadlessPool)
+	}
+	approvalHandler.SetAutonomousChecker(func(sessionID string) bool {
+		inst := deps.SessionService.FindLiveInstance(sessionID)
+		return inst != nil && inst.AutonomousMode
+	})
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
-	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit)
+	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
+	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
+	// into autonomous backlog work sessions by spawnSessionAfterGates)
 	hookReceiver := services.NewHookReceiver()
 	hookReceiver.RegisterRoutes(srv.mux)
-	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit}")
+	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
 	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
@@ -408,7 +492,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
@@ -418,9 +502,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	})
 	srv.mux.Handle("/mcp", mcpWithUUID)
 	srv.mux.Handle("/mcp/", mcpWithUUID)
-	mcpURL := "http://" + srv.addr + "/mcp"
-	deps.SessionService.SetMCPServerURL(mcpURL)
-	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)
+	deps.SessionService.SetMCPServerURL(func() string { return "http://" + srv.GetAddr() + "/mcp" })
+	log.Info("Registered MCP HTTP handler at /mcp", "url", "http://"+srv.GetAddr()+"/mcp (resolved lazily at session-creation time)")
+
+	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
+	deps.SessionService.SetLifecycleContext(serverCtx)
 
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
@@ -439,6 +525,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cbHandler := services.NewCircuitBreakerHandler()
 	cbHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
+
+	// Register the backlog debug seed endpoints ONLY for the e2e test server
+	// (STAPLER_SQUAD_INSTANCE=e2e-local) — lets the Playwright suite seed
+	// BacklogStuckState rows and queued backlog items directly, bypassing the
+	// reconciler's real thresholds and the real WIP-cap spawn flow. Never
+	// registered outside that instance.
+	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
+		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
+		backlogSeedHandler.RegisterRoutes(srv.mux)
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+
+		// Registered for project_plans/backlog-event-driven-updates's Playwright
+		// e2e layer — lets tests mutate a backlog item directly through the
+		// storage layer (create/transition/update/archive/delete), simulating a
+		// second actor (reconciler, another tab) without walking a real
+		// TransitionBacklogItemStatus RPC through its engine/gate checks.
+		backlogMutateHandler := services.NewBacklogDebugMutateHandler(deps.Storage)
+		backlogMutateHandler.RegisterRoutes(srv.mux)
+		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
+	}
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
 	var analyticsProvider analytics.AnalyticsProvider
@@ -499,6 +605,25 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/files/raw", fileSvc.ServeFileRaw)
 	log.Info("Registered raw file download handler at /api/files/raw")
 
+	// Local file browser — serves arbitrary local filesystem paths.
+	// Auth is provided by the existing middleware chain:
+	// local HTTP = no auth; remote HTTPS = WebAuthn required.
+	localFileSvc := services.NewLocalFileService()
+	srv.mux.HandleFunc("/api/local/files/list", localFileSvc.ListLocalDirectory)
+	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
+	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
+
+	// Register backlog attachment upload endpoint — durable image attachments
+	// for backlog item descriptions, served back via /api/local/serve/.
+	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve backlog attachment dir", "err", err)
+	} else if backlogAttachmentHandler, err := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir); err != nil {
+		log.Error("[Server] cannot create backlog attachment upload handler", "dir", backlogAttachmentDir, "err", err)
+	} else {
+		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
+		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
+	}
+
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
 		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
@@ -522,6 +647,10 @@ func registerStaticRoutes(srv *Server) {
 	srv.mux.HandleFunc("/api/upload/file", fileHandler.HandleUpload)
 	log.Info("Registered file upload handler at /api/upload/file", "dir", pasteDir)
 
+	// Detect available programs once at startup so /api/server-info never runs
+	// shell subprocesses on a live request (each detection spawns 5 shells).
+	srv.availablePrograms = config.GetAvailablePrograms()
+
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
 	log.Info("Registered server-info handler at /api/server-info")
@@ -542,7 +671,7 @@ func registerStaticRoutes(srv *Server) {
 func (s *Server) SetupTLS(cfg *tls.Config) {
 	s.tlsConfig = cfg
 	s.httpServer.TLSConfig = cfg
-	log.Info("TLS enabled", "addr", s.addr)
+	log.Info("TLS enabled", "addr", s.GetAddr())
 }
 
 // SetupAuth installs authentication middleware.  Must be called before Start().
@@ -565,6 +694,80 @@ func (s *Server) RegisterHTTPHandler(pattern string, handler http.Handler) {
 	log.Info("Registered HTTP handler", "pattern", pattern)
 }
 
+// listenLoopbackAware binds addr for the HTTP server. When addr's host is
+// "localhost", it binds both loopback address families (127.0.0.1 and ::1)
+// explicitly instead of relying on net.Listen("tcp", "localhost:port"), which
+// only ever binds whichever single address the resolver returns first. On
+// dual-stack machines (macOS resolves "localhost" to both 127.0.0.1 and ::1)
+// that gap means a browser WebSocket upgrade that resolves to the address we
+// didn't bind gets ECONNREFUSED, even though plain HTTP requests succeed by
+// falling back across addresses. Any other host is bound as before.
+func listenLoopbackAware(addr string) (net.Listener, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "localhost" {
+		return net.Listen("tcp", addr)
+	}
+
+	ln4, err := net.Listen("tcp4", "127.0.0.1:"+port)
+	if err != nil {
+		return nil, err
+	}
+	ln6, err := net.Listen("tcp6", "[::1]:"+port)
+	if err != nil {
+		log.Warn("IPv6 loopback listener unavailable, continuing on IPv4 only", "error", err)
+		return ln4, nil
+	}
+	return &dualStackListener{ln4: ln4, ln6: ln6, accepted: make(chan acceptResult)}, nil
+}
+
+// acceptResult carries the outcome of one net.Listener.Accept call across a
+// goroutine boundary.
+type acceptResult struct {
+	conn net.Conn
+	err  error
+}
+
+// dualStackListener presents two underlying loopback listeners (IPv4 and
+// IPv6) as a single net.Listener, so the http.Server can Serve() over both
+// with one call.
+type dualStackListener struct {
+	ln4, ln6 net.Listener
+	accepted chan acceptResult
+	once     sync.Once
+}
+
+func (d *dualStackListener) relay(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		d.accepted <- acceptResult{conn: conn, err: err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (d *dualStackListener) Accept() (net.Conn, error) {
+	d.once.Do(func() {
+		go d.relay(d.ln4)
+		go d.relay(d.ln6)
+	})
+	res := <-d.accepted
+	return res.conn, res.err
+}
+
+func (d *dualStackListener) Close() error {
+	err4 := d.ln4.Close()
+	err6 := d.ln6.Close()
+	if err4 != nil {
+		return err4
+	}
+	return err6
+}
+
+func (d *dualStackListener) Addr() net.Addr {
+	return d.ln4.Addr()
+}
+
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
@@ -574,6 +777,7 @@ func (s *Server) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
 	})
+	s.registerActuatorRoutes()
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
@@ -592,18 +796,31 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.tlsConfig != nil {
 		scheme = "https"
 	}
-	log.Info("Starting server", "scheme", scheme, "addr", s.addr)
-	log.Info("Web UI", "url", scheme+"://"+s.addr)
-	log.Info("Health check", "url", scheme+"://"+s.addr+"/health")
 
 	errCh := make(chan error, 1)
 	go func() {
 		var err error
 		if s.tlsConfig != nil {
-			// TLS mode: cert/key are already in TLSConfig.Certificates
+			// TLS mode: cert/key are already in TLSConfig.Certificates; the
+			// configured address is never rewritten, so it's safe to log now.
+			log.Info("Starting server", "scheme", scheme, "addr", s.GetAddr())
+			log.Info("Web UI", "url", scheme+"://"+s.GetAddr())
+			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
 			err = s.httpServer.ListenAndServeTLS("", "")
 		} else {
-			err = s.httpServer.ListenAndServe()
+			ln, lerr := listenLoopbackAware(s.GetAddr())
+			if lerr != nil {
+				errCh <- lerr
+				return
+			}
+			resolvedAddr := ln.Addr().String()
+			s.addr.Store(&resolvedAddr)
+			// Log the real, OS-assigned address (never the pre-bind ":0"
+			// request) now that the listener has actually bound.
+			log.Info("Starting server", "scheme", scheme, "addr", resolvedAddr)
+			log.Info("Web UI", "url", scheme+"://"+resolvedAddr)
+			log.Info("Health check", "url", scheme+"://"+resolvedAddr+"/health")
+			err = s.httpServer.Serve(ln)
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -619,6 +836,11 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
+// shutdownHooksTimeout bounds how long shutdown hooks (state persistence,
+// pollers, etc.) may run before Shutdown proceeds to stop the HTTP server
+// regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
+const shutdownHooksTimeout = 30 * time.Second
+
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
 	// Cancel the server's BaseContext first so active streaming connections
@@ -629,9 +851,23 @@ func (s *Server) Shutdown() error {
 	}
 
 	// Run registered hooks (e.g. capture pane paths, persist instance state) before
-	// stopping the HTTP server so in-flight requests complete first.
-	for _, hook := range s.shutdownHooks {
-		hook()
+	// stopping the HTTP server so in-flight requests complete first. Bounded by an
+	// overall deadline: a single slow/stuck hook must not be able to block process
+	// exit past systemd's stop timeout, which would trigger a SIGKILL that skips
+	// this cleanup entirely instead of just skipping whatever the slow hook was
+	// doing (systemd's default TimeoutStopSec is ~90s but this app has many
+	// sessions to persist under load, so give hooks a bounded but generous window).
+	hooksDone := make(chan struct{})
+	go func() {
+		defer close(hooksDone)
+		for _, hook := range s.shutdownHooks {
+			hook()
+		}
+	}()
+	select {
+	case <-hooksDone:
+	case <-time.After(shutdownHooksTimeout):
+		log.Warn("[shutdown] shutdown hooks did not complete within deadline, proceeding anyway", "timeout", shutdownHooksTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -648,7 +884,10 @@ func (s *Server) Shutdown() error {
 
 // GetAddr returns the server address.
 func (s *Server) GetAddr() string {
-	return s.addr
+	if p := s.addr.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // Mux returns the HTTP request multiplexer so callers can register additional
@@ -710,7 +949,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
-			Programs:   config.GetAvailablePrograms(),
+			Programs:   s.availablePrograms,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

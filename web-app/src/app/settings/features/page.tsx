@@ -23,6 +23,7 @@ import {
 
 const FEATURE_META: Record<string, { label: string }> = {
   backlog: { label: "Backlog" },
+  "backlog:sdd-default-pipeline": { label: "Backlog: default new items to SDD pipeline" },
 };
 
 export default function FeaturesPage() {

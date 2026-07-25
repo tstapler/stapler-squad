@@ -116,19 +116,29 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       event.notificationType === NotificationType.INPUT_REQUIRED;
     const isDuplicate = !isApproval && !!lastShown && now - lastShown < TOAST_DEDUP_WINDOW_MS;
 
+    // Backlog-item notifications carry metadata.item_id and, as of the coalescing-key fix,
+    // also carry the backlog item's ID as event.sessionId (not a real live session). "View
+    // Session" must not navigate using that ID — it isn't a session and /?session=<itemId>
+    // would 404. Route these through the item_id Link in NotificationPanel/NotificationsPage
+    // instead by leaving onView unset here.
+    const isBacklogItemNotification = !!event.metadata?.["item_id"];
+
     // History-only types: no toast, no sound — just record in the history panel.
     // Duplicates are fully suppressed (no visible toast to refresh).
     if (HISTORY_ONLY_TYPES.has(event.notificationType)) {
       if (isDuplicate) return;
       addToHistoryOnly({
         sessionId: event.sessionId,
-        sessionName: event.sessionName || "Unknown Session",
+        // Empty, not "Unknown Session": a placeholder here would win the
+        // NotificationPanel fallback chain over the event's real title for
+        // sessionless events (e.g. notifyReworkCapHit).
+        sessionName: event.sessionName || "",
         title: event.title,
         message: event.message,
         priority: mapPriority(event.priority),
         notificationType: mapNotificationType(event.notificationType),
         metadata: event.metadata,
-        onView: onViewSessionRef.current
+        onView: (onViewSessionRef.current && !isBacklogItemNotification)
           ? () => onViewSessionRef.current?.(event.sessionId)
           : undefined,
       });
@@ -145,7 +155,8 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     // Build the notification data with all available fields
     const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
       sessionId: event.sessionId,
-      sessionName: event.sessionName || "Unknown Session",
+      // See the comment on the history-only branch above.
+      sessionName: event.sessionName || "",
       title: event.title,
       message: event.message,
       priority: mapPriority(event.priority),
@@ -155,7 +166,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       sourceWorkingDir: sourceWorkingDir,
       sourceProject: sourceProject,
       metadata: event.metadata,
-      onView: onViewSessionRef.current
+      onView: (onViewSessionRef.current && !isBacklogItemNotification)
         ? () => onViewSessionRef.current?.(event.sessionId)
         : undefined,
       // Add focus window handler if we have source app info

@@ -171,6 +171,11 @@ export const helpButton = style({
       opacity: 1,
     },
   },
+  "@media": {
+    "screen and (max-width: 768px)": {
+      display: "none",
+    },
+  },
 });
 
 export const helpOverlay = style({

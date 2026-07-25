@@ -2,9 +2,11 @@
 .aider*
 .claude/settings.local.json
 stapler-squad
+stapler-squad.prev
 claude-squad
 claude-mux
 ssq-hooks
+_CodeSignature/
 **.DS_Store
 cs
 stapler-squad-test
@@ -19,16 +21,18 @@ web/src/gen/
 web-app/src/gen/
 .proto-gen.stamp
 
-# ent ORM generated code — regenerate with: go generate ./session/ent/
+# ent ORM generated code — regenerate with: make ent-gen (or go generate ./session/ent/)
 # schema/ and generate.go are hand-written and must remain tracked.
 session/ent/*.go
 !session/ent/generate.go
 session/ent/*/
 !session/ent/schema/
+.ent-gen.stamp
 /web-app/.next
 /web-app/node_modules/
 /web-app/out/
 /web-app/storybook-static/
+/web-app/.env.local
 /server/web/dist/
 /.playwright-mcp
 
@@ -53,15 +57,24 @@ assets/demo-recording/demo-Demo-Flow-chromium/
 tests/e2e/allure-results/
 tests/e2e/allure-report/
 tests/e2e/playwright-report/
+tests/e2e/playwright-report-dev-mode/
 tests/e2e/test-results/
+tests/e2e/node_modules/
+tests/e2e/test-results-dev-mode/
 
-bench-*.txt
+# Scratch benchmark output files (not the committed baselines in benchmarks/go/)
+bench-current.txt
+bench-diff.txt
 benchmark_results.txt
 /web-app/out/
 /server/web/dist/
 
 # Build artifacts
 build/
+
+# Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
+# so its contents don't need ignore rules).
+.tmux-build.stamp
 
 # Scanner build artifacts
 tools/scanner/cmd
@@ -80,3 +93,13 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+
+# Benchmark baselines — persisted via GitHub Actions cache (see
+# .github/workflows/benchmark.yml / build.yml's benchmark-gate job), not
+# committed. A prior version committed these on every push to main, which
+# flooded the commit history for very little value.
+benchmarks/
+
+# Backlog context files injected into worktrees — never source files
+.backlog-context.md
+.claude/commands/backlog/

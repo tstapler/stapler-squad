@@ -58,6 +58,7 @@ const (
 	ErrPermissionDenied = "PERMISSION_DENIED"
 	ErrItemNotFound     = "ITEM_NOT_FOUND"
 	ErrConflict         = "CONFLICT"
+	ErrFeatureDisabled  = "FEATURE_DISABLED"
 )
 
 // appendNote merges a new note into an existing notes string, tagging it with
@@ -71,17 +72,62 @@ func appendNote(existing, note, sessionUUID string) string {
 	return existing + "\n\n---\n" + entry
 }
 
+// featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
+// is set and currently reports false. A nil enabledCheck means always-enabled
+// (used by tests that construct handlers directly without wiring the flag).
+func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
+	if enabledCheck != nil && !enabledCheck() {
+		return errResult(ErrFeatureDisabled, "the backlog feature is disabled", "Enable it via Settings → Features.")
+	}
+	return nil
+}
+
+// ReviewCompletionSignaler allows the MCP handler to stop an AutonomousDriver
+// after submit_review_verdict completes. The stop call is belt-and-suspenders;
+// the LLM orchestrator will also detect completion from the terminal tail.
+// Note: Stop() fires fireCompletion(Stuck=true), but the role-aware callback
+// skips all status transitions for SessionRoleReview, so this is safe.
+type ReviewCompletionSignaler interface {
+	StopDriverForSession(sessionTitle string)
+}
+
+// ReviewTrigger allows the MCP handler to spawn a review gate immediately when
+// request_review is called, instead of waiting for the next ReconcileStuck tick
+// (up to 60s later). Implemented by SessionService, which delegates to the
+// BacklogLifecycleListener wired via SetReviewGateTrigger.
+type ReviewTrigger interface {
+	TriggerReviewForSession(sessionUUID string)
+}
+
 // --- Handler struct ---
 
 type backlogHandlers struct {
-	storage  *session.Storage
-	store    session.InstanceStore
-	eventBus *events.EventBus // optional; nil means notifications are disabled
+	storage       *session.Storage
+	store         session.InstanceStore
+	eventBus      *events.EventBus         // optional; nil means notifications are disabled
+	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
+	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
+	reviewTrigger ReviewTrigger            // optional; nil means review gate waits for the next reconcile tick
+
+	// verifyPRMatchesBranch backs report_pr_created's GitHub cross-check.
+	// Defaults to VerifyPRMatchesBranch (tools_github.go) when nil;
+	// overridable in tests to avoid making real GitHub API calls.
+	verifyPRMatchesBranch func(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error)
+	// resolveSessionBranch resolves the git branch a session UUID is working
+	// on, used by report_pr_created to determine "this item's own branch"
+	// before trusting a self-reported PR against it. Defaults to
+	// h.storage.GetWorktreeDataBySessionUUID when nil; overridable in tests —
+	// session.Storage has no public seam for constructing worktree data
+	// without spawning and starting a real Instance (real git/tmux calls).
+	resolveSessionBranch func(ctx context.Context, sessionUUID string) (string, error)
 }
 
 // --- get_backlog_item ---
 
 func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	args := req.GetArguments()
 	itemID, ok := args["item_id"].(string)
 	if !ok || itemID == "" {
@@ -130,11 +176,35 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("\n\n")
 	}
 
+	// Latest review verdict, if one has been submitted. This is the primary way a
+	// still-running work session discovers review feedback without being killed and
+	// respawned — see request_review's guidance below.
+	if verdict := latestReviewVerdict(ctx, h.storage, itemID); verdict != nil {
+		sb.WriteString("## Latest Review Verdict\n")
+		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
+		if verdict.Summary != "" {
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", session.SanitizeForAgentContext(verdict.Summary, 500))
+		}
+		var perCriterion []session.CriterionVerdict
+		if verdict.PerCriterion != "" {
+			if jsonErr := json.Unmarshal([]byte(verdict.PerCriterion), &perCriterion); jsonErr != nil {
+				log.WarningLog.Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
+			}
+		}
+		for _, v := range perCriterion {
+			if v.Outcome == session.ReviewOutcomePass {
+				continue
+			}
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, session.SanitizeForAgentContext(v.Evidence, 300))
+		}
+		sb.WriteString("\n")
+	}
+
 	// Role-aware workflow guidance: look up the caller's role if a session UUID is present.
 	role := ""
 	if callerUUID, ok := sessionUUIDFromContext(ctx); ok {
 		if is, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID); linkErr == nil {
-			role = is.SessionRole
+			role = is.Role
 		}
 	}
 	switch role {
@@ -144,7 +214,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("Workflow:\n")
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
-		sb.WriteString("3. Call submit_triage_result with: item_id, summary, suggestions (AC gaps/questions), tasks (implementation checklist, max 12), plan_artifact_path\n")
+		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path\n")
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")
@@ -152,6 +222,8 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
+		fmt.Fprintf(&sb, "4. Do NOT end your session after request_review. Wait a bit, then call get_backlog_item again — once a verdict lands it appears under \"Latest Review Verdict\" above. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again. Track how many times you've called request_review in this session (count your own calls in this conversation) — after %d cycles without a PASS, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
 		sb.WriteString("Verify each acceptance criterion is met. Do NOT modify source code or call report_progress.\n\n")
@@ -163,6 +235,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("## Available MCP Tools\n")
 		sb.WriteString("- report_progress — mark an AC criterion pass/fail/in_progress (role: work)\n")
 		sb.WriteString("- request_review — signal implementation complete, notify reviewer (role: work)\n")
+		sb.WriteString("- report_pr_created — report a PR you created yourself back onto the item (role: work)\n")
 		sb.WriteString("- submit_review_verdict — submit per-criterion verdicts, PASS transitions to done (role: review)\n")
 		sb.WriteString("- submit_triage_result — record triage analysis and notify operator (role: triage)\n")
 	}
@@ -176,9 +249,30 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 	return mcpgo.NewToolResultText(envelope), nil
 }
 
+// latestReviewVerdict returns the most recently submitted ReviewVerdict for the item,
+// or nil if none exists yet. ListItemSessions orders ascending by created_at, so the
+// last session carrying a verdict is the most recent one.
+func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *session.ReviewVerdictSummary {
+	sessions, err := storage.ListItemSessions(ctx, itemID)
+	if err != nil {
+		log.WarningLog.Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
+		return nil
+	}
+	var latest *session.ReviewVerdictSummary
+	for _, s := range sessions {
+		if s.ReviewVerdict != nil {
+			latest = s.ReviewVerdict
+		}
+	}
+	return latest
+}
+
 // --- report_progress ---
 
 func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
@@ -238,6 +332,14 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
 	}
 
+	// Append to the full-history log in addition to the current-note-per-criterion
+	// update above. This is an enrichment for reviewers (full timeline of notes across
+	// a work session), not part of report_progress's primary contract — a failure here
+	// must not fail the call that already succeeded above.
+	if appendErr := h.storage.AppendProgressNote(ctx, itemID, criteriaIndex, note, acStatus); appendErr != nil {
+		log.WarningLog.Printf("[mcp:report_progress] failed to append progress note history item=%s criterion=%d: %v", itemID, criteriaIndex, appendErr)
+	}
+
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Criterion %d updated to %q on item %s.", criteriaIndex, status, itemID,
 	)), nil
@@ -246,6 +348,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 // --- request_review ---
 
 func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -269,8 +374,16 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInvalidArgument, "message must be <= 2000 characters", ""), nil
 	}
 
+	// verification_notes is optional but strongly encouraged: it is the reviewer's
+	// only window into evidence that isn't visible in the diff (test runs, manual
+	// UI checks). See tool description for what makes a claim credible.
+	verificationNotes, _ := args["verification_notes"].(string)
+	if len(verificationNotes) > 4000 {
+		return errResult(ErrInvalidArgument, "verification_notes must be <= 4000 characters", ""), nil
+	}
+
 	// Verify session is linked to item.
-	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr != nil {
 		if errors.Is(linkErr, session.ErrNotFound) {
 			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
@@ -278,11 +391,46 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
 	}
 
-	// Log the review request (notification infrastructure is handled externally).
-	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s message=%q", callerUUID, itemID, message)
+	// Belt-and-suspenders layer 1: reject if the worktree has uncommitted changes.
+	// The reviewer reads the committed diff; uncommitted work would be invisible and
+	// the review verdict would be inaccurate. Agent must commit before requesting review.
+	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
+		if dirty, dirtyErr := session.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
+			log.InfoLog.Printf("[mcp:request_review] rejected: uncommitted changes in worktree for session=%s item=%s", callerUUID, itemID)
+			return errResult(ErrInvalidArgument,
+				"request_review rejected: the worktree has uncommitted changes. "+
+					"Run `git add -A && git commit -m 'description of changes'` to commit your work, then call request_review again.",
+				""), nil
+		}
+	}
+
+	// Transition item to review status (from in_progress only).
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredBySystem); transErr != nil {
+		log.InfoLog.Printf("[mcp:request_review] transition to review failed: %v", transErr)
+		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
+	}
+
+	// Persist verification evidence on the work ItemSession so the review gate can
+	// surface it in the reviewer's prompt (see BuildReviewPrompt). Best-effort: a
+	// failure here should not block the status transition that already succeeded.
+	if verificationNotes != "" {
+		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, verificationNotes); updateErr != nil {
+			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+		}
+	}
+
+	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q verification_notes_len=%d", callerUUID, itemID, message, len(verificationNotes))
+
+	// Spawn the review gate immediately rather than waiting for the next 60s
+	// ReconcileStuck tick — that tick is meant as a fallback for the rare case this
+	// call is unavailable, not the primary trigger.
+	if h.reviewTrigger != nil {
+		h.reviewTrigger.TriggerReviewForSession(callerUUID)
+	}
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Review requested for item %s. The reviewer has been notified.", itemID,
+		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
 }
 
@@ -296,6 +444,9 @@ type verdictInput struct {
 }
 
 func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -343,14 +494,14 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
 	}
-	if itemSession.SessionRole != "review" {
-		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'review' role may submit verdicts", itemSession.SessionRole), ""), nil
+	if itemSession.Role != "review" {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'review' role may submit verdicts", itemSession.Role), ""), nil
 	}
 
 	// Build CriterionVerdicts, auto-downgrading to PARTIAL if evidence is empty.
 	cvs := make([]session.CriterionVerdict, len(inputs))
 	for i, vi := range inputs {
-		outcome := strings.ToUpper(vi.Outcome)
+		outcome := session.ReviewOutcome(strings.ToUpper(vi.Outcome))
 		evidence := vi.Evidence
 		if evidence == "" {
 			outcome = session.ReviewVerdictPartial
@@ -372,22 +523,31 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	}
 
 	verdictData := session.ReviewVerdictData{
-		ItemSessionID:  itemSession.ID.String(),
+		ItemSessionID:  itemSession.ID,
 		OverallOutcome: overallOutcome,
 		PerCriterion:   string(perCriterionJSON),
 		Summary:        summary,
 	}
 
-	if _, saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID.String(), verdictData); saveErr != nil {
+	if saveErr := h.storage.SaveReviewVerdict(ctx, itemSession.ID, verdictData); saveErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// If PASS, transition item to done (only from review status).
-	if overallOutcome == session.ReviewVerdictPass {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition); transErr != nil {
-			log.InfoLog.Printf("[mcp:submit_review_verdict] PASS but transition to done failed: %v", transErr)
-			// Non-fatal — verdict is saved, status transition is best-effort.
+	// Deliberately no status transition here: BacklogLifecycleListener.
+	// handleReviewSessionExited (session/backlog_lifecycle.go) is the sole place
+	// that decides what happens next once this review session exits — on PASS it
+	// pushes the branch, creates a PR, and transitions to pr_pending
+	// (pushAndCreatePR); on FAIL/PARTIAL/UNVERIFIABLE it triggers auto-reopen.
+	// Transitioning straight to done here would race that handler: its own
+	// precondition (ExpectedStatus: review) would then fail once the session
+	// actually exits, silently skipping PR creation.
+
+	// Stop the AutonomousDriver for this review session (belt-and-suspenders).
+	// The verdict is already persisted; a subsequent Stuck fireCompletion is harmless
+	// because the role-aware callback skips transitions for SessionRoleReview.
+	if h.reviewStopper != nil {
+		if title, findErr := findSessionTitleByUUID(h.store, callerUUID); findErr == nil {
+			h.reviewStopper.StopDriverForSession(title)
 		}
 	}
 
@@ -397,22 +557,168 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	)), nil
 }
 
+// findSessionTitleByUUID returns the session Title for the given UUID using ListInstanceData.
+// Returns "" and an error if not found.
+func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, error) {
+	instances, err := store.ListInstanceData()
+	if err != nil {
+		return "", err
+	}
+	for _, d := range instances {
+		if d.UUID == uuid {
+			return d.Title, nil
+		}
+	}
+	return "", fmt.Errorf("no session found with UUID %s", uuid)
+}
+
+// --- report_pr_created ---
+
+// sessionBranch resolves the branch sessionUUID is working on, via the
+// overridable resolveSessionBranch seam when set, otherwise the real
+// worktree lookup. See backlogHandlers.resolveSessionBranch's doc comment.
+func (h *backlogHandlers) sessionBranch(ctx context.Context, sessionUUID string) (string, error) {
+	if h.resolveSessionBranch != nil {
+		return h.resolveSessionBranch(ctx, sessionUUID)
+	}
+	wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
+	if err != nil {
+		return "", err
+	}
+	return wt.BranchName, nil
+}
+
+// verifyPR runs the GitHub cross-check via the overridable verifyPRMatchesBranch
+// seam when set, otherwise the real VerifyPRMatchesBranch (tools_github.go).
+func (h *backlogHandlers) verifyPR(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error) {
+	if h.verifyPRMatchesBranch != nil {
+		return h.verifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+	}
+	return VerifyPRMatchesBranch(ctx, owner, repo, prNumber, expectedBranch)
+}
+
+// reportPRCreated records a PR the calling work session created itself
+// (typically via /backlog:ship -> gh pr create, outside the mechanical
+// pushAndCreatePR path — see session/backlog_lifecycle.go) back onto the
+// backlog item. Role: work only. This closes the gap named in "PR Metadata
+// Capture Fix" (project_plans/backlog-agent-communication, Epic 3.1): only
+// the system-driven mechanical push path used to write pr_url/pr_number, so
+// an agent-driven PR could exist on GitHub with the item never reflecting
+// it. See SetBacklogItemPRAndTransition for the shared primary-write path
+// (also used by the reconciliation backstop, Epic 3.2) and
+// VerifyPRMatchesBranch for the GitHub cross-check this handler performs
+// before trusting the self-reported pr_url/pr_number.
+func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	prURL, ok := args["pr_url"].(string)
+	if !ok || prURL == "" {
+		return errResult(ErrInvalidArgument, "pr_url is required", ""), nil
+	}
+
+	prNumberF, ok := args["pr_number"].(float64)
+	if !ok || prNumberF <= 0 {
+		return errResult(ErrInvalidArgument, "pr_number is required and must be > 0", ""), nil
+	}
+	prNumber := int(prNumberF)
+
+	summary, ok := args["summary"].(string)
+	if !ok || summary == "" {
+		return errResult(ErrInvalidArgument, "summary is required", ""), nil
+	}
+	if len(summary) > 1000 {
+		return errResult(ErrInvalidArgument, "summary must be <= 1000 characters", ""), nil
+	}
+
+	// Verify session is linked to item with role=work.
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+	if itemSession.Role != session.SessionRoleWork {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
+	}
+
+	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		if errors.Is(getErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// Idempotency: already pr_pending with this exact PR number is a no-op success.
+	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
+		return mcpgo.NewToolResultText(fmt.Sprintf(
+			"PR #%d already recorded for item %s (status already pr_pending) — no changes made.", prNumber, itemID,
+		)), nil
+	}
+
+	// Parse the reported URL to extract owner/repo, and cross-check it
+	// against the reported pr_number — a typo'd URL/number pair fails fast
+	// here, before any network call.
+	ref, parseErr := session.ParseGitHubURL(prURL)
+	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
+	}
+	if ref.PRNumber != 0 && ref.PRNumber != prNumber {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber), ""), nil
+	}
+
+	// Resolve this session's own branch to verify the reported PR against —
+	// the whole point of this check is to refuse a self-reported PR number
+	// for a branch that isn't even this item's own.
+	branch, branchErr := h.sessionBranch(ctx, callerUUID)
+	if branchErr != nil || branch == "" {
+		return errResult(ErrInternalError, "could not resolve this session's git branch to verify the reported PR", ""), nil
+	}
+
+	matched, verifyErr := h.verifyPR(ctx, ref.Owner, ref.Repo, prNumber, branch)
+	if verifyErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("could not verify PR #%d against GitHub — retry: %v", prNumber, verifyErr), ""), nil
+	}
+	if !matched {
+		return errResult(ErrInvalidArgument, fmt.Sprintf(
+			"PR #%d does not match this item's branch %q on GitHub — refusing to record it. Double-check the PR number/URL.",
+			prNumber, branch), ""), nil
+	}
+
+	if setErr := h.storage.SetBacklogItemPRAndTransition(ctx, itemID, prURL, prNumber, summary); setErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("record PR: %v", setErr), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
+	)), nil
+}
+
 // --- submit_triage_result ---
 
-// triageSuggestion is a single suggestion entry for submit_triage_result.
-type triageSuggestion struct {
-	Text      string `json:"text"`
-	Rationale string `json:"rationale"`
-}
-
-// triageTask is a single implementation task entry for submit_triage_result.
-type triageTask struct {
-	Text     string `json:"text"`
-	Estimate string `json:"estimate"`
-	Category string `json:"category"`
-}
-
 func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
@@ -441,12 +747,12 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
 	}
-	if itemSession.SessionRole != "triage" {
-		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'triage' role may submit triage results", itemSession.SessionRole), ""), nil
+	if itemSession.Role != "triage" {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'triage' role may submit triage results", itemSession.Role), ""), nil
 	}
 
 	// Parse suggestions.
-	var suggestions []triageSuggestion
+	var suggestions []session.TriageSuggestion
 	if rawSuggestions, exists := args["suggestions"]; exists {
 		if arr, ok := rawSuggestions.([]interface{}); ok {
 			for i, rs := range arr {
@@ -454,7 +760,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var ts triageSuggestion
+				var ts session.TriageSuggestion
 				if err := json.Unmarshal(b, &ts); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -464,7 +770,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse tasks (optional).
-	var tasks []triageTask
+	var tasks []session.TriageTask
 	if rawTasks, exists := args["tasks"]; exists {
 		if arr, ok := rawTasks.([]interface{}); ok {
 			for i, rt := range arr {
@@ -472,7 +778,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var tt triageTask
+				var tt session.TriageTask
 				if err := json.Unmarshal(b, &tt); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -487,9 +793,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
-		Summary     string             `json:"summary"`
-		Suggestions []triageSuggestion `json:"suggestions"`
-		Tasks       []triageTask       `json:"tasks,omitempty"`
+		Summary     string                     `json:"summary"`
+		Suggestions []session.TriageSuggestion `json:"suggestions"`
+		Tasks       []session.TriageTask       `json:"tasks,omitempty"`
 	}
 	triagePayload := triageResultPayload{
 		Summary:     summary,
@@ -502,23 +808,71 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Persist triage result on ItemSession via an update.
-	// We use UpdateBacklogItem for plan_artifacts_path if provided; ItemSession
-	// triage_result is updated via a direct ent update through the Storage type assertion.
+	// We use UpdateBacklogItem for plan_artifacts_path and acceptance_criteria if provided.
 	planArtifactsPath, _ := args["plan_artifact_path"].(string)
 
+	itemUpdate := session.BacklogItemUpdate{}
 	if planArtifactsPath != "" {
 		pap := planArtifactsPath
-		update := session.BacklogItemUpdate{
-			PlanArtifactsPath: &pap,
+		itemUpdate.PlanArtifactsPath = &pap
+	}
+
+	// Parse and merge acceptance_criteria if provided.
+	// Merges into existing criteria: adds new ones, updates matching indices, never
+	// silently deletes criteria that aren't mentioned — deletions must be intentional.
+	if rawAC, exists := args["acceptance_criteria"]; exists {
+		if arr, ok := rawAC.([]interface{}); ok && len(arr) > 0 {
+			// Load existing criteria so we can merge.
+			existingItem, loadErr := h.storage.GetBacklogItem(ctx, itemID)
+			if loadErr != nil {
+				return errResult(ErrInternalError, fmt.Sprintf("load item for AC merge: %v", loadErr), ""), nil
+			}
+			existing, _ := session.ParseAcCriteria(existingItem.AcceptanceCriteria)
+
+			// Parse incoming criteria from the raw MCP payload.
+			incomingCriteria := make([]session.AcCriterion, 0, len(arr))
+			for i, raw := range arr {
+				b, marshalErr := json.Marshal(raw)
+				if marshalErr != nil {
+					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: cannot marshal: %v", i, marshalErr), ""), nil
+				}
+				var ac struct {
+					Index  int    `json:"index"`
+					Text   string `json:"text"`
+					Status string `json:"status"`
+				}
+				if err := json.Unmarshal(b, &ac); err != nil {
+					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: invalid shape: %v", i, err), ""), nil
+				}
+				idx := ac.Index
+				if idx == 0 && i > 0 {
+					idx = i // fall back to position if index not set
+				}
+				status := ac.Status
+				if status == "" {
+					status = "pending"
+				}
+				incomingCriteria = append(incomingCriteria, session.AcCriterion{Index: idx, Text: ac.Text, Status: session.AcStatus(status)})
+			}
+
+			acJSON, mergeErr := session.MergeAcCriteria(existing, incomingCriteria)
+			if mergeErr != nil {
+				return errResult(ErrInvalidArgument, fmt.Sprintf("merge acceptance_criteria: %v", mergeErr), ""), nil
+			}
+			itemUpdate.AcceptanceCriteria = &acJSON
 		}
-		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, update, nil); updateErr != nil {
-			return errResult(ErrInternalError, fmt.Sprintf("update plan_artifacts_path: %v", updateErr), ""), nil
+	}
+
+	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil {
+		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, itemUpdate, nil); updateErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("update backlog item: %v", updateErr), ""), nil
 		}
 	}
 
 	// Persist triage result JSON on the ItemSession.
-	if updateErr := h.storage.UpdateItemSessionTriageResult(ctx, itemSession.ID.String(), string(payloadJSON)); updateErr != nil {
+	if updateErr := h.storage.UpdateItemSessionTriageResult(ctx, itemSession.ID, string(payloadJSON)); updateErr != nil {
 		log.ErrorLog.Printf("[mcp:submit_triage_result] failed to save triage result: %v", updateErr)
+		return errResult(ErrInternalError, fmt.Sprintf("save triage result: %v", updateErr), ""), nil
 	}
 	log.InfoLog.Printf("[mcp:submit_triage_result] session=%s item=%s triage_result=%s", callerUUID, itemID, string(payloadJSON))
 
@@ -551,6 +905,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 // --- archive_backlog_item ---
 
 func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
@@ -609,6 +966,9 @@ func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.Call
 // --- append_backlog_notes ---
 
 func (h *backlogHandlers) appendBacklogNotes(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment before calling this tool."), nil
@@ -699,7 +1059,10 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("request_review",
-			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done."),
+			mcpgo.WithDescription("Signal that implementation is complete and the item is ready for review. Role: work only. Call after all acceptance criteria are marked pass. Transitions the item to 'review' status and notifies the reviewer. Do not call until all AC criteria are done. "+
+				"The reviewer only sees the committed diff plus what you report here — it CANNOT see command output or UI behavior you observed. "+
+				"If any acceptance criterion describes something that isn't visible in a diff (a test suite passing, `make quick-check` succeeding, a manually-verified UI behavior), you MUST report it in verification_notes or the reviewer will mark that criterion UNVERIFIABLE even if you genuinely did the work. "+
+				"If you concluded an acceptance criterion is already satisfied by existing code and made no change for it, say so explicitly and cite the exact file path and function/symbol that already satisfies it — an unsupported claim like \"already implemented\" or \"already done\" with no citation is weak evidence and is likely to be marked UNVERIFIABLE."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
@@ -707,6 +1070,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			mcpgo.WithString("message",
 				mcpgo.Description("Summary for the reviewer: what was built, how to verify it, any known limitations (max 2000 chars)"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithString("verification_notes",
+				mcpgo.Description("Evidence for any acceptance criteria not verifiable from the diff alone (max 4000 chars). "+
+					"For each command you ran to verify behavior, state the exact command and its outcome, e.g. "+
+					"\"ran `go test ./session/...` -> ok (41 tests)\" or \"ran `make quick-check` -> build/test/lint all passed\". "+
+					"For manually-verified UI behavior, describe exactly what you did and observed, e.g. "+
+					"\"ran make install-service, opened the session list, confirmed the new session appeared under Category=Backlog\". "+
+					"Vague claims like \"I tested it\" or \"verified manually\" with no specifics are not useful evidence — be concrete or omit the claim. "+
+					"If a criterion required no change because it's already implemented, state that explicitly and cite the exact file path and function/symbol that satisfies it, e.g. "+
+					"\"AC 2 already satisfied by ValidateSessionOwnership() in session/backlog_review.go — no change needed\". "+
+					"A citation-free claim of \"already implemented\" is weak evidence for the reviewer."),
 			),
 		),
 		h.requestReview,
@@ -741,6 +1115,32 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 	)
 
 	s.AddTool(
+		mcpgo.NewTool("report_pr_created",
+			mcpgo.WithDescription("Report a pull request YOU created (e.g. via /backlog:ship or a manual `gh pr create`) back onto this backlog item. Role: work only. Call this as the final step any time you create a PR yourself instead of letting the system create one for you — otherwise the item never shows the PR and stays invisible to the reviewer and the operator. "+
+				"The reported PR is verified against GitHub (it must exist and its head branch must match this session's own branch) before being trusted — a mismatched or invalid PR is rejected, not silently recorded. "+
+				"On success, the item transitions from review to pr_pending. Calling this again with the same PR after it already succeeded is safe (no-op)."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("pr_url",
+				mcpgo.Description("Full GitHub URL of the pull request you created, e.g. https://github.com/owner/repo/pull/123"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithNumber("pr_number",
+				mcpgo.Description("The pull request number (must match the number in pr_url)"),
+				mcpgo.Required(),
+				mcpgo.Min(1),
+			),
+			mcpgo.WithString("summary",
+				mcpgo.Description("What changed and why (max 1000 chars) — shown to the reviewer/operator alongside the PR link so they see why the PR exists, not just a bare link"),
+				mcpgo.Required(),
+			),
+		),
+		h.reportPRCreated,
+	)
+
+	s.AddTool(
 		mcpgo.NewTool("submit_triage_result",
 			mcpgo.WithDescription("Record completed triage analysis for a backlog item. Role: triage only. Call this LAST — after all research/*.md, plan.md, and validation.md files are written. 'suggestions' = proposed additions or improvements to acceptance criteria/spec (include clarifying questions here with rationale='question'). 'tasks' = implementation task breakdown shown as an interactive checklist to the operator (max 12, each needs text + estimate + category). 'plan_artifact_path' = absolute path to the docs/tasks/[slug] directory. Calling this notifies the operator that triage is complete and ready for review."),
 			mcpgo.WithString("item_id",
@@ -768,6 +1168,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 						"category": map[string]any{"type": "string", "enum": []string{"backend", "frontend", "test", "infra", "docs"}},
 					},
 					"required": []string{"text", "estimate", "category"},
+				}),
+			),
+			mcpgo.WithArray("acceptance_criteria",
+				mcpgo.Description("Acceptance criteria to set on the item. Each entry has 'text' (the criterion) and optional 'status' (pending|in_progress|done, default pending). Replaces existing ACs. Include ALL criteria — this is the authoritative list the work session will implement and the review session will verify."),
+				mcpgo.Items(map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"text":   map[string]any{"type": "string"},
+						"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "done"}},
+					},
+					"required": []string{"text"},
 				}),
 			),
 			mcpgo.WithString("plan_artifact_path",

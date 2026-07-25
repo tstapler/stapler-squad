@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -139,6 +140,7 @@ func ParseAllWorktrees(output string) []WorktreeInfo {
 // scanTask is an item to process in the worker pool.
 type scanTask struct {
 	repoPath string
+	force    bool
 }
 
 // Scanner is the central coordinator for the unfinished-work background scan.
@@ -150,6 +152,12 @@ type Scanner struct {
 	cacheStore   sync.Map // map[string]*worktreeCache (key = worktreePath)
 	breakerStore sync.Map // map[string]*circuitBreaker (key = repoPath)
 
+	// inFlight tracks repos currently queued or being scanned (key = repoPath)
+	// so a burst of triggers (fsnotify + manual Refresh + periodic tick landing
+	// close together) coalesces into one scan per repo instead of queuing a
+	// redundant concurrent scanRepo call for each trigger.
+	inFlight sync.Map // map[string]struct{}
+
 	eventBus   *pkgevents.EventBus
 	stateStore *StateStore
 
@@ -158,11 +166,27 @@ type Scanner struct {
 
 	tickInterval time.Duration // default 30s, overridable in tests
 
-	// sessionRepos tracks repos discovered via auto-spider (session paths).
-	sessionRepos sync.Map // map[string]string  sessionID -> repoPath
+	// sessionRepos tracks repos discovered via auto-spider (session paths),
+	// keyed by session UUID — not Title — so a later EventSessionDeleted
+	// (which only carries SessionID, the UUID; Session is nil for delete
+	// events) can look up which repo the deleted session owned (BUG-034).
+	sessionRepos sync.Map // map[string]string  sessionUUID -> repoPath
 
 	// autoSpiderEnabled controls whether SessionCreated/Updated events trigger scans.
 	autoSpiderEnabled atomic.Bool
+
+	// fsWatcher watches every tracked repo's .git dir so a real change
+	// triggers an immediate targeted rescan instead of waiting for the
+	// coordinator's backstop tick. nil when fsnotify is unavailable on this
+	// platform — AddRepo/RemoveRepo/watchRepo are all nil-safe no-ops in that
+	// case, degrading to relying solely on the (still-present) ticker.
+	fsWatcher *fsnotify.Watcher
+
+	// severePressureWarned rate-limits the "skipping scan under memory
+	// pressure" log line to once per pressure episode rather than once per
+	// skipped repo, so the warning itself can't contribute to log-driven
+	// allocation pressure during a real incident.
+	severePressureWarned atomic.Bool
 
 	mu deadlock.RWMutex
 }
@@ -175,14 +199,23 @@ func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
 // NewScannerWithReader constructs a Scanner with an explicit VCSReader.
 // Used in tests to inject a fake or alternative implementation.
 func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
+	// Register the real reader for debug introspection (see currentReader's
+	// doc comment) — a no-op for fake/test readers that don't match the type.
+	if gg, ok := reader.(*GoGitVCSReader); ok {
+		currentReader.Store(gg)
+	}
 	s := &Scanner{
-		reader:       reader,
-		scanQueue:    make(chan scanTask, 50),
-		eventBus:     eventBus,
-		stateStore:   stateStore,
-		triggerCh:    make(chan struct{}, 1),
-		scanDoneCh:   make(chan time.Time, 4),
-		tickInterval: 30 * time.Second,
+		reader:     reader,
+		scanQueue:  make(chan scanTask, 50),
+		eventBus:   eventBus,
+		stateStore: stateStore,
+		triggerCh:  make(chan struct{}, 1),
+		scanDoneCh: make(chan time.Time, 4),
+		// fsnotify (wired in Start/AddRepo) is now the primary scan trigger —
+		// this ticker is a backstop for anything fsnotify misses (e.g. a
+		// worktree mtime change with no .git write), so it no longer needs
+		// to run every 30s. Tests override via SetTickInterval.
+		tickInterval: 5 * time.Minute,
 	}
 	s.autoSpiderEnabled.Store(true)
 	return s
@@ -200,8 +233,9 @@ func (s *Scanner) ScanDone() <-chan time.Time {
 	return s.scanDoneCh
 }
 
-// Start launches the coordinator goroutine and 4 worker goroutines.
-// All goroutines exit cleanly when ctx is cancelled.
+// Start launches the coordinator goroutine, 4 worker goroutines, and (when
+// available) the fsnotify watch loop that makes scanning event-driven rather
+// than purely tick-driven. All goroutines exit cleanly when ctx is cancelled.
 func (s *Scanner) Start(ctx context.Context) {
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
@@ -209,6 +243,52 @@ func (s *Scanner) Start(ctx context.Context) {
 	}
 	go s.coordinator(ctx)
 	go s.subscribeToSessionEvents(ctx)
+	go s.pruneMissingRepos(ctx)
+
+	if w, err := fsnotify.NewWatcher(); err != nil {
+		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
+	} else {
+		s.mu.Lock()
+		s.fsWatcher = w
+		s.mu.Unlock()
+		go s.fsnotifyLoop(ctx)
+	}
+
+	if r, ok := s.reader.(*GoGitVCSReader); ok {
+		// Proactive, budget-respecting prune: runs far more often than the
+		// old 5-minute full ClearCache (every 1 minute, since a budget-based
+		// prune is cheap — no full teardown, just eviction of cold/over-budget
+		// entries) so cache pressure never has a chance to build up between
+		// polls. Under SEVERE pressure this escalates to the old full
+		// ClearCache as an emergency valve — evicting hot repos too, but only
+		// when the gentler path alone isn't enough; this should be rare, and
+		// firing often is itself a signal something else is wrong.
+		go func() {
+			tick := time.NewTicker(1 * time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					if r.UnderSeverePressure() {
+						log.Warn("severe memory pressure — clearing entire repo cache as an emergency valve")
+						r.ClearCache()
+					} else {
+						r.PruneToMemoryBudget()
+					}
+					// gogitstoreRegistry's SharedObjectStores are reference-counted
+					// separately from repoCache (see gogit_vcs_reader.go's
+					// releaseGogitstoreRef) — a store only becomes evictable once
+					// every cachedRepo that referenced it has itself been evicted
+					// above, so this Prune runs every tick regardless of which
+					// branch fired, mirroring the two-cache relationship rather
+					// than duplicating pressure-tier logic here.
+					r.gogitstoreRegistry().Prune()
+				}
+			}
+		}()
+	}
 }
 
 // coordinator goroutine: ticks every 30s and handles trigger signals.
@@ -223,9 +303,9 @@ func (s *Scanner) coordinator(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			s.enqueueAll()
+			s.enqueueAll(false)
 		case <-s.triggerCh:
-			s.enqueueAll()
+			s.enqueueAll(true)
 		}
 	}
 }
@@ -238,21 +318,128 @@ func (s *Scanner) TriggerScan() {
 	}
 }
 
-// enqueueAll sends all known repos to the scan queue.
-func (s *Scanner) enqueueAll() {
+// watchRepo best-effort registers repoPath's .git dir with the fsnotify
+// watcher so a real change triggers an immediate targeted rescan. No-op if
+// fsnotify is unavailable on this platform (s.fsWatcher == nil) — that's the
+// graceful-degradation path back to relying solely on the ticker. Errors are
+// logged at Debug, not Warn: many repo paths won't have a .git dir yet at
+// the moment they're first tracked (e.g. auto-spidered from a session whose
+// worktree is still being created), which is a normal transient condition,
+// not a fault.
+func (s *Scanner) watchRepo(repoPath string) {
+	s.mu.RLock()
+	w := s.fsWatcher
+	s.mu.RUnlock()
+	if w == nil {
+		return
+	}
+	gitDir := filepath.Join(repoPath, ".git")
+	if err := w.Add(gitDir); err != nil {
+		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
+	}
+}
+
+// unwatchRepo best-effort removes repoPath's .git dir from the fsnotify
+// watcher, avoiding a slow leak of watch descriptors as repos come and go.
+// No-op if fsnotify is unavailable.
+func (s *Scanner) unwatchRepo(repoPath string) {
+	s.mu.RLock()
+	w := s.fsWatcher
+	s.mu.RUnlock()
+	if w == nil {
+		return
+	}
+	_ = w.Remove(filepath.Join(repoPath, ".git"))
+}
+
+// fsnotifyLoop handles fsnotify events on every watched repo's .git dir and
+// enqueues a targeted rescan of just that repo — this is the "only run when
+// things change" trigger; the coordinator's tick is now a pure backstop.
+// Exits cleanly when ctx is cancelled, per this package's goroutine convention.
+func (s *Scanner) fsnotifyLoop(ctx context.Context) {
+	s.mu.RLock()
+	w := s.fsWatcher
+	s.mu.RUnlock()
+	if w == nil {
+		return
+	}
+	defer w.Close()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-w.Events:
+			if !ok {
+				return
+			}
+			if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
+				continue
+			}
+			// Derive the repo root by walking up from the event path to the
+			// nearest ".git" component (mirrors WatchDirWatcher.fsnotifyLoop's
+			// event-handling shape in watcher.go).
+			dir := event.Name
+			for {
+				if filepath.Base(dir) == ".git" {
+					repoRoot := filepath.Dir(dir)
+					s.InvalidateCache(repoRoot)
+					s.EnqueueRepo(repoRoot)
+					break
+				}
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
+		case err, ok := <-w.Errors:
+			if !ok {
+				return
+			}
+			log.Warn("scanner fsnotify error", "err", err)
+		}
+	}
+}
+
+// enqueueAll sends all known repos to the scan queue. force=true bypasses the
+// per-worktree TTL cache — used for a user-initiated scan (button click or RPC
+// call), where "nothing changed in the last 30s" is not a reason to no-op a
+// request the user just explicitly made.
+func (s *Scanner) enqueueAll(force bool) {
 	s.repoSet.Range(func(key, _ any) bool {
 		repoPath, _ := key.(string)
-		s.EnqueueRepo(repoPath)
+		s.enqueueRepo(repoPath, force)
 		return true
 	})
 }
 
 // EnqueueRepo queues a repo for scanning if it's not cached recently.
 func (s *Scanner) EnqueueRepo(repoPath string) {
+	s.enqueueRepo(repoPath, false)
+}
+
+func (s *Scanner) enqueueRepo(repoPath string, force bool) {
 	// Check circuit breaker first.
 	if !s.shouldScan(repoPath) {
 		return
 	}
+
+	// Graceful degradation under memory pressure: skip this cycle rather than
+	// pile on more allocation while the process is already under severe
+	// pressure. The repo's last-known-good cached result stays in place —
+	// this is a deliberate stale-over-failed trade-off, matching this
+	// codebase's existing "degrade gracefully" conventions elsewhere. Rate-
+	// limited to one WARN per pressure episode (not per skipped repo) so the
+	// warning itself can't contribute to log-driven allocation during a real
+	// incident.
+	if r, ok := s.reader.(*GoGitVCSReader); ok && r.UnderSeverePressure() {
+		if s.severePressureWarned.CompareAndSwap(false, true) {
+			log.Warn("skipping scans under severe memory pressure — results may go stale until pressure subsides")
+		}
+		return
+	}
+	s.severePressureWarned.Store(false)
 
 	// Check worktree-level TTL cache: if all worktrees for this repo are fresh, skip.
 	// We do a lightweight check by looking for any result stored recently.
@@ -271,13 +458,21 @@ func (s *Scanner) EnqueueRepo(repoPath string) {
 		}
 		return true
 	})
-	if recent {
+	if recent && !force {
+		return
+	}
+
+	// Coalesce: if this repo is already queued or being scanned, don't stack
+	// another task behind it — the in-flight scan will already pick up
+	// current state by the time it runs.
+	if _, alreadyQueued := s.inFlight.LoadOrStore(repoPath, struct{}{}); alreadyQueued {
 		return
 	}
 
 	select {
-	case s.scanQueue <- scanTask{repoPath: repoPath}:
+	case s.scanQueue <- scanTask{repoPath: repoPath, force: force}:
 	default:
+		s.inFlight.Delete(repoPath)
 		log.Warn("scan queue full, dropping repo", "repo", repoPath)
 	}
 }
@@ -292,14 +487,15 @@ func (s *Scanner) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			results := s.scanRepo(task.repoPath)
+			results := s.scanRepo(task.repoPath, task.force)
 			s.publishResults(results)
+			s.inFlight.Delete(task.repoPath)
 		}
 	}
 }
 
 // scanRepo enumerates all worktrees in the given repo root and scans each one.
-func (s *Scanner) scanRepo(repoPath string) []ScanResult {
+func (s *Scanner) scanRepo(repoPath string, force bool) []ScanResult {
 	worktrees, err := s.reader.ListWorktrees(repoPath)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -325,8 +521,14 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 		if wt.Branch == "" {
 			continue
 		}
-		result := s.scanWorktree(wt, defaultBranch, repoPath)
+		result := s.scanWorktree(wt, defaultBranch, repoPath, force)
 		if result.Status == ScanResultStatusOK && !result.IsUnfinished() {
+			// Worktree went clean (e.g. the only uncommitted file was deleted) —
+			// remove any stale entry left in resultStore. Mirrors the CleanWorktree
+			// removal pattern in review_queue_poller.go, which drops a stale
+			// UncommittedChanges queue entry once the determiner reports the
+			// worktree clean.
+			s.removeStaleResult(repoPath, wt.Branch)
 			continue // clean worktree — skip
 		}
 		results = append(results, result)
@@ -337,7 +539,7 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 }
 
 // scanWorktree produces a ScanResult for a single git worktree.
-func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) ScanResult {
+func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string, force bool) ScanResult {
 	result := ScanResult{
 		RepoPath:      repoPath,
 		Branch:        wt.Branch,
@@ -363,10 +565,14 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 		result.LastModified = fi.ModTime()
 	}
 
-	// Check cache.
+	// Check cache — skipped when force is set, so a user-initiated scan (Refresh
+	// button, ScanUnfinishedWork RPC) always re-reads live git state instead of
+	// returning up-to-30s-stale data.
 	cache := s.getOrCreateCache(wt.Path)
-	if cached, ok := cache.Get(); ok {
-		return cached
+	if !force {
+		if cached, ok := cache.Get(); ok {
+			return cached
+		}
 	}
 
 	uncommitted, err := s.reader.HasUncommitted(wt.Path)
@@ -526,15 +732,37 @@ func (s *Scanner) RemoveResult(repoPath, branch string) {
 	s.resultStore.Delete(key)
 }
 
-// AddRepo adds a repo path to the scan set and immediately enqueues it.
+// removeStaleResult removes a previously stored result for a worktree that is
+// now clean and publishes EventUnfinishedWorkRemoved so subscribers drop it
+// immediately, rather than waiting for it to silently age out. No-op (and no
+// event) if nothing was stored for this key.
+func (s *Scanner) removeStaleResult(repoPath, branch string) {
+	key := repoPath + "|" + branch
+	if _, loaded := s.resultStore.LoadAndDelete(key); loaded && s.eventBus != nil {
+		s.eventBus.Publish(&pkgevents.Event{
+			Type:      EventUnfinishedWorkRemoved,
+			Timestamp: time.Now(),
+			Context:   key,
+		})
+	}
+}
+
+// AddRepo adds a repo path to the scan set, registers it with the fsnotify
+// watcher (the sole choke point every repo-discovery path — pinned, watch-dir
+// walk, or session auto-spider — funnels through, so every tracked repo gets
+// event-driven scanning regardless of how it was discovered), and immediately
+// enqueues it for an initial scan.
 func (s *Scanner) AddRepo(repoPath string) {
 	s.repoSet.Store(repoPath, true)
+	s.watchRepo(repoPath)
 	s.EnqueueRepo(repoPath)
 }
 
-// RemoveRepo removes a repo from the scan set and purges its results.
+// RemoveRepo removes a repo from the scan set, purges its results, and
+// unregisters its fsnotify watch.
 func (s *Scanner) RemoveRepo(repoPath string) {
 	s.repoSet.Delete(repoPath)
+	s.unwatchRepo(repoPath)
 	// Purge cached results for this repo.
 	s.resultStore.Range(func(k, _ any) bool {
 		key, _ := k.(string)
@@ -543,6 +771,47 @@ func (s *Scanner) RemoveRepo(repoPath string) {
 		}
 		return true
 	})
+}
+
+// pruneRepoInterval is a var (not a const) so tests can shrink it instead of
+// waiting out the real 5-minute cadence.
+var pruneRepoInterval = 5 * time.Minute
+
+// pruneMissingRepos is a backstop, independent of the explicit RemoveRepo
+// call sites (BacklogService.cleanupItemWorktreesExcept,
+// subscribeToSessionEvents's EventSessionDeleted handling): periodically
+// checks every currently-registered repo path still exists on disk and
+// removes any that don't. Catches any worktree/repo removal path — present
+// or future — that doesn't explicitly call RemoveRepo, so this class of bug
+// (BUG-034: a repo watched forever after the session/worktree that owned it
+// is long gone) can't silently reappear the next time a new cleanup path is
+// added without remembering to wire this in. Cheap: one os.Stat per
+// registered repo, once per tick, no scan/allocation work.
+func (s *Scanner) pruneMissingRepos(ctx context.Context) {
+	tick := time.NewTicker(pruneRepoInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			var stale []string
+			s.repoSet.Range(func(key, _ any) bool {
+				repoPath, _ := key.(string)
+				if repoPath == "" {
+					return true
+				}
+				if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+					stale = append(stale, repoPath)
+				}
+				return true
+			})
+			for _, repoPath := range stale {
+				log.Info("pruning repo removed from disk", "path", repoPath)
+				s.RemoveRepo(repoPath)
+			}
+		}
+	}
 }
 
 // AddPinnedRepo validates that path is a git repo, then adds it.
@@ -568,7 +837,15 @@ func (s *Scanner) SetAutoSpider(enabled bool) {
 	s.autoSpiderEnabled.Store(enabled)
 }
 
-// subscribeToSessionEvents listens for SessionCreated/Updated events and enqueues repos.
+// subscribeToSessionEvents listens for SessionCreated/Updated events and
+// auto-spiders their repo into the scan set, and for SessionDeleted events to
+// remove it again (BUG-034) — without this half of the symmetry, every
+// auto-spidered repo stayed watched forever, even long after its session
+// (and the worktree it pointed at) was gone. A repo is only actually removed
+// once no other tracked session still references it (sessionRepos is checked
+// for any other entry pointing at the same repoRoot first), so two sessions
+// sharing one repo root (e.g. two non-worktree sessions in the same project)
+// don't have their scanning cut out from under the surviving one.
 func (s *Scanner) subscribeToSessionEvents(ctx context.Context) {
 	if s.eventBus == nil {
 		return
@@ -584,23 +861,53 @@ func (s *Scanner) subscribeToSessionEvents(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if !s.autoSpiderEnabled.Load() {
-				continue
+			switch evt.Type {
+			case pkgevents.EventSessionCreated, pkgevents.EventSessionUpdated:
+				if !s.autoSpiderEnabled.Load() {
+					continue
+				}
+				if evt.Session == nil || evt.Session.Path == "" {
+					continue
+				}
+				repoRoot := findGitRepoRootSimple(evt.Session.Path)
+				if repoRoot == "" {
+					continue
+				}
+				s.sessionRepos.Store(evt.Session.UUID, repoRoot)
+				s.AddRepo(repoRoot)
+			case pkgevents.EventSessionDeleted:
+				s.forgetSessionRepo(evt.SessionID)
 			}
-			if evt.Type != pkgevents.EventSessionCreated && evt.Type != pkgevents.EventSessionUpdated {
-				continue
-			}
-			if evt.Session == nil || evt.Session.Path == "" {
-				continue
-			}
-			repoRoot := findGitRepoRootSimple(evt.Session.Path)
-			if repoRoot == "" {
-				continue
-			}
-			sessionID := evt.Session.Title
-			s.sessionRepos.Store(sessionID, repoRoot)
-			s.AddRepo(repoRoot)
 		}
+	}
+}
+
+// forgetSessionRepo drops sessionUUID's entry from sessionRepos and, if no
+// other tracked session still references the same repo root, tells the
+// scanner to stop watching it (BUG-034). No-op if sessionUUID was never
+// auto-spidered (e.g. a pinned repo, or auto-spider was disabled).
+func (s *Scanner) forgetSessionRepo(sessionUUID string) {
+	if sessionUUID == "" {
+		return
+	}
+	v, loaded := s.sessionRepos.LoadAndDelete(sessionUUID)
+	if !loaded {
+		return
+	}
+	repoRoot, _ := v.(string)
+	if repoRoot == "" {
+		return
+	}
+	stillReferenced := false
+	s.sessionRepos.Range(func(_, other any) bool {
+		if otherRepo, _ := other.(string); otherRepo == repoRoot {
+			stillReferenced = true
+			return false
+		}
+		return true
+	})
+	if !stillReferenced {
+		s.RemoveRepo(repoRoot)
 	}
 }
 

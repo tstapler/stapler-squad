@@ -16,9 +16,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -59,14 +62,15 @@ func printUsage() {
 
 func handleCheck() {
 	checkCmd := flag.NewFlagSet("check", flag.ExitOnError)
-	dbPath := checkCmd.String("db", getDefaultDBPath(), "Path to SQLite database")
-	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini/agy TOOL_INPUT payload (exit-code output)")
+	dbPath := checkCmd.String("db", "", "Path to SQLite database (defaults to workspace-specific database)")
+	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini TOOL_INPUT payload (exit-code output)")
+	agyMode := checkCmd.Bool("antigravity", false, "Translate Antigravity TOOL_INPUT payload (hooks.json format)")
 	checkCmd.Parse(os.Args[2:]) //nolint:errcheck
 
 	var payload classifier.PermissionRequestPayload
-	if *geminiMode {
+	if *geminiMode || *agyMode {
 		payload = parseGeminiPayload()
-		// Gemini payload typically lacks cwd; fall back to process working directory.
+		// Gemini/agy payload typically lacks cwd; fall back to process working directory.
 		if payload.Cwd == "" {
 			payload.Cwd, _ = os.Getwd()
 		}
@@ -83,7 +87,12 @@ func handleCheck() {
 		}
 	}
 
-	storage := loadStorage(*dbPath)
+	storagePath := *dbPath
+	if storagePath == "" {
+		storagePath = getDBPathForCwd(payload.Cwd)
+	}
+
+	storage := loadStorage(storagePath)
 	defer storage.Close()
 
 	c := loadClassifier(storage)
@@ -95,6 +104,8 @@ func handleCheck() {
 
 	if *geminiMode {
 		writeGeminiHookDecision(result)
+	} else if *agyMode {
+		writeAntigravityHookDecision(result)
 	} else {
 		writeHookDecision(result)
 	}
@@ -172,13 +183,44 @@ func writeGeminiHookDecision(result classifier.ClassificationResult) {
 	}
 }
 
+// writeAntigravityHookDecision communicates the classification result to Antigravity CLI via stdout JSON.
+func writeAntigravityHookDecision(result classifier.ClassificationResult) {
+	type agyOutput struct {
+		Decision   string `json:"decision"`
+		DenyReason string `json:"deny_reason,omitempty"`
+		AllowTool  *bool  `json:"allow_tool,omitempty"`
+	}
+	var output agyOutput
+	switch result.Decision {
+	case classifier.AutoAllow:
+		output.Decision = "allow"
+		t := true
+		output.AllowTool = &t
+	case classifier.AutoDeny:
+		output.Decision = "deny"
+		f := false
+		output.AllowTool = &f
+		reason := result.Reason
+		if result.Alternative != "" {
+			reason += " " + result.Alternative
+		}
+		output.DenyReason = reason
+	default:
+		output.Decision = "ask"
+	}
+	json.NewEncoder(os.Stdout).Encode(output)
+	// Antigravity hook scripts must always exit with 0 (even on deny).
+	os.Exit(0)
+}
+
 // parseGeminiPayload reads the Gemini/agy $TOOL_INPUT JSON from stdin
 // and translates it to a PermissionRequestPayload.
 //
 // Supported schemas:
 //
 //	Variant A (Gemini CLI open-source): {"name": "run_shell_command", "args": {"command": "..."}}
-//	Variant B (Claude-compatible):      {"tool_name": "Bash", "tool_input": {"command": "..."}}
+//	Variant B (Claude-compatible):      {"tool_name": "...", "tool_input": {...}}
+//	Variant C (Antigravity toolCall):   {"toolCall": {"name": "...", "args": {...}}, "cwd": "..."}
 //
 // Falls back gracefully to PermissionRequestPayload{ToolName: "Unknown"} on any
 // parse error or unrecognized schema — results in Escalate (not crash, not false-allow).
@@ -192,7 +234,11 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 	if os.Getenv("STAPLER_DEBUG") == "1" {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks [debug] raw $TOOL_INPUT: %s\n", string(raw))
 	}
-	// GeminiToolPayload covers both known schema variants.
+	type ToolCall struct {
+		Name string                 `json:"name"`
+		Args map[string]interface{} `json:"args"`
+	}
+	// GeminiToolPayload covers both known schema variants and Antigravity toolCall.
 	// Zero values for absent fields allow detecting which variant is present.
 	type GeminiToolPayload struct {
 		// Variant A: {"name": "run_shell_command", "args": {"command": "..."}}
@@ -201,46 +247,78 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 		// Variant B: {"tool_name": "...", "tool_input": {...}}
 		ToolName  string                 `json:"tool_name"`
 		ToolInput map[string]interface{} `json:"tool_input"`
+		// Variant C (Antigravity toolCall): {"toolCall": {"name": "...", "args": {...}}, "workspacePaths": [...]}
+		ToolCall       *ToolCall `json:"toolCall,omitempty"`
+		WorkspacePaths []string  `json:"workspacePaths,omitempty"`
+		// Context fields
+		Cwd string `json:"cwd"`
 	}
 	var p GeminiToolPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse Gemini payload: %v\n", err)
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse Gemini/Antigravity payload: %v\n", err)
 		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
 	}
-	// Prefer Variant B (Claude-compatible) if present.
-	if p.ToolName != "" {
-		payload := classifier.PermissionRequestPayload{
-			ToolName:  p.ToolName,
-			ToolInput: p.ToolInput,
-		}
-		// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
-		if strings.EqualFold(payload.ToolName, "ask_for_user_input") {
-			os.Exit(0)
-		}
-		return payload
+
+	var toolName string
+	var toolInput map[string]interface{}
+
+	if p.ToolCall != nil {
+		toolName = p.ToolCall.Name
+		toolInput = p.ToolCall.Args
+	} else if p.ToolName != "" {
+		toolName = p.ToolName
+		toolInput = p.ToolInput
+	} else if p.Name != "" {
+		toolName = p.Name
+		toolInput = p.Args
 	}
-	// Fall back to Variant A: name + args.
-	if p.Name == "" {
-		// Neither variant matched: unknown schema.
-		fmt.Fprintf(os.Stderr, "SSQ-Hooks: unrecognized Gemini payload schema (no 'name' or 'tool_name' field)\n")
+
+	if toolName == "" {
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: unrecognized Gemini/Antigravity payload schema (no tool name field)\n")
 		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
 	}
-	toolName := p.Name
-	// Normalize Gemini tool names to classifier-expected names.
-	switch strings.ToLower(toolName) {
-	case "run_shell_command", "execute_bash", "run_bash_command":
-		toolName = "Bash"
-	case "read_file", "read_many_files":
-		toolName = "Read"
-	case "write_file":
-		toolName = "Write"
-	case "ask_for_user_input":
-		// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
+
+	// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
+	if strings.EqualFold(toolName, "ask_for_user_input") || strings.EqualFold(toolName, "ask_user_question") {
 		os.Exit(0)
 	}
+
+	// Normalize tool names to classifier-expected names.
+	switch strings.ToLower(toolName) {
+	case "run_shell_command", "execute_bash", "run_bash_command", "run_command", "bash":
+		toolName = "Bash"
+		// Antigravity sends args with "CommandLine" (capital C) instead of "command" — normalize.
+		if toolInput != nil {
+			if v, ok := toolInput["CommandLine"]; ok {
+				if _, hasCmd := toolInput["command"]; !hasCmd {
+					toolInput["command"] = v
+				}
+			}
+			// Pull Cwd from args if not already set at the top level.
+			if p.Cwd == "" {
+				if v, ok := toolInput["Cwd"]; ok {
+					if s, ok := v.(string); ok {
+						p.Cwd = s
+					}
+				}
+			}
+		}
+	case "read_file", "read_many_files", "read":
+		toolName = "Read"
+	case "write_file", "write":
+		toolName = "Write"
+	}
+
+	// Prefer explicit cwd; fall back to first workspacePath.
+	cwd := p.Cwd
+	if cwd == "" && len(p.WorkspacePaths) > 0 {
+		cwd = p.WorkspacePaths[0]
+	}
+
 	return classifier.PermissionRequestPayload{
 		ToolName:  toolName,
-		ToolInput: p.Args,
+		ToolInput: toolInput,
+		Cwd:       cwd,
 	}
 }
 
@@ -410,9 +488,103 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 			}
 			cr.FilePattern = compiled
 		}
+		// Populate Criteria from structured fields (mirrors specsToRules in rules_store.go).
+		if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubcommands) > 0 ||
+			len(r.RequiredFlags) > 0 || len(r.ForbiddenFlags) > 0 || len(r.RequiredFlagPrefixes) > 0 ||
+			len(r.PythonModes) > 0 || r.SafePythonImportsOnly {
+			cr.Criteria = &classifier.CommandCriteria{
+				Programs:              r.Programs,
+				Subcommands:           r.Subcommands,
+				BlockedSubcommands:    r.BlockedSubcommands,
+				RequiredFlags:         r.RequiredFlags,
+				ForbiddenFlags:        r.ForbiddenFlags,
+				RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
+				PythonModes:           r.PythonModes,
+				SafePythonImportsOnly: r.SafePythonImportsOnly,
+			}
+		}
 		classifierRules = append(classifierRules, cr)
 	}
 	c.AddRules(classifierRules)
+
+	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		var configFile struct {
+			Rules []struct {
+				Name           string   `yaml:"name"`
+				Tool           string   `yaml:"tool"`
+				ToolPattern    string   `yaml:"tool_pattern"`
+				Programs       []string `yaml:"programs"`
+				Subcommands    []string `yaml:"subcommands"`
+				BlockedSubs    []string `yaml:"blocked_subcommands"`
+				CommandPattern string   `yaml:"command_pattern"`
+				FilePattern    string   `yaml:"file_pattern"`
+				Decision       string   `yaml:"decision"`
+				Priority       int      `yaml:"priority"`
+				Enabled        *bool    `yaml:"enabled"`
+			} `yaml:"rules"`
+		}
+		if yamlErr := yaml.Unmarshal(data, &configFile); yamlErr == nil {
+			var configRules []classifier.Rule
+			for _, r := range configFile.Rules {
+				if r.Name == "" {
+					continue
+				}
+				enabled := true
+				if r.Enabled != nil {
+					enabled = *r.Enabled
+				}
+				priority := r.Priority
+				if priority == 0 {
+					priority = 10
+				}
+				decision := classifier.Escalate
+				switch r.Decision {
+				case "allow":
+					decision = classifier.AutoAllow
+				case "deny":
+					decision = classifier.AutoDeny
+				}
+				cr := classifier.Rule{
+					ID:       "config-" + strings.ReplaceAll(r.Name, " ", "-"),
+					Name:     r.Name,
+					ToolName: r.Tool,
+					Decision: decision,
+					Priority: priority,
+					Enabled:  enabled,
+					Source:   "config",
+				}
+				if r.ToolPattern != "" {
+					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
+						cr.ToolPattern = compiled
+					}
+				}
+				if r.CommandPattern != "" {
+					if compiled, err := regexp.Compile(r.CommandPattern); err == nil {
+						cr.CommandPattern = compiled
+					}
+				}
+				if r.FilePattern != "" {
+					if compiled, err := regexp.Compile(r.FilePattern); err == nil {
+						cr.FilePattern = compiled
+					}
+				}
+				if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubs) > 0 {
+					cr.Criteria = &classifier.CommandCriteria{
+						Programs:           r.Programs,
+						Subcommands:        r.Subcommands,
+						BlockedSubcommands: r.BlockedSubs,
+					}
+				}
+				configRules = append(configRules, cr)
+			}
+			if len(configRules) > 0 {
+				c.AddRules(configRules)
+			}
+		}
+	}
+
 	return c
 }
 
@@ -556,7 +728,7 @@ func installClaude() {
 
 	// 2. Patch ~/.claude/settings.json.
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	if err := patchClaudeSettings(settingsPath, destBin); err != nil {
+	if err := claudehooks.InstallRules(settingsPath, destBin); err != nil {
 		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", settingsPath, err)
 		os.Exit(1)
 	}
@@ -588,86 +760,6 @@ func copyBinary(src, dst string) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
-}
-
-// patchClaudeSettings adds the ssq-hooks PreToolUse entry to settingsPath.
-// The hook entry is prepended to the PreToolUse array so it runs before other
-// hooks (e.g. rtk-rewrite). Idempotent: no-ops if the entry already exists.
-func patchClaudeSettings(settingsPath, binPath string) error {
-	hookCmd := binPath + " check"
-
-	// Read existing settings (create minimal file if absent).
-	raw, err := os.ReadFile(settingsPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		raw = []byte("{}")
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(raw, &settings); err != nil {
-		return fmt.Errorf("parsing %s: %w", settingsPath, err)
-	}
-
-	// Navigate to hooks.PreToolUse, creating intermediate maps as needed.
-	if existing, ok := settings["hooks"]; ok {
-		if _, ok := existing.(map[string]interface{}); !ok {
-			return fmt.Errorf("parsing %s: \"hooks\" field is not an object", settingsPath)
-		}
-	}
-	hooks, _ := settings["hooks"].(map[string]interface{})
-	if hooks == nil {
-		hooks = map[string]interface{}{}
-		settings["hooks"] = hooks
-	}
-	if existing, ok := hooks["PreToolUse"]; ok {
-		if _, ok := existing.([]interface{}); !ok {
-			return fmt.Errorf("parsing %s: hooks.\"PreToolUse\" field is not an array", settingsPath)
-		}
-	}
-	preToolUse, _ := hooks["PreToolUse"].([]interface{})
-
-	// Check if the hook is already present (idempotency).
-	for _, entry := range preToolUse {
-		m, ok := entry.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		hookList, _ := m["hooks"].([]interface{})
-		for _, h := range hookList {
-			hm, ok := h.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if cmd, _ := hm["command"].(string); cmd == hookCmd {
-				fmt.Println("Hook already present, nothing to do.")
-				return nil
-			}
-		}
-	}
-
-	// Prepend the ssq-hooks entry so it gets first say.
-	newEntry := map[string]interface{}{
-		"matcher": ".*",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": hookCmd,
-			},
-		},
-	}
-	hooks["PreToolUse"] = append([]interface{}{newEntry}, preToolUse...)
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Ensure parent directory exists (e.g. ~/.claude/ may not exist yet).
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(settingsPath, append(out, '\n'), 0644)
 }
 
 // patchBeforeToolHook patches any Gemini-family settings file (flat JSON) to set
@@ -796,15 +888,165 @@ func installAgy() {
 		os.Exit(1)
 	}
 	fmt.Printf("Installed binary: %s\n", destBin)
-	// 2. Patch ~/.gemini/antigravity-cli/settings.json.
-	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
-	hookCmd := destBin + " check --gemini"
-	if err := patchBeforeToolHook(settingsPath, hookCmd); err != nil {
-		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", settingsPath, err)
+	// 2. Discover agy hooks file — patch only the first found (mirrors installGemini).
+	// ~/.gemini/antigravity-cli/ is agy's primary runtime state dir.
+	// ~/.gemini/config/hooks.json is the fallback global config location.
+	candidates := []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"),
+		filepath.Join(home, ".gemini", "config", "hooks.json"),
+	}
+	hooksPath := ""
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			hooksPath = c
+			break
+		}
+	}
+	if hooksPath == "" {
+		// Neither found: create the primary (antigravity-cli is where agy reads hooks).
+		hooksPath = candidates[0]
+	}
+	// 3. Patch the selected file.
+	if err := patchAntigravityHooks(hooksPath, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", hooksPath, err)
 		os.Exit(1)
 	}
-	fmt.Printf("Updated hook:     %s\n", settingsPath)
+	fmt.Printf("Updated hook:     %s\n", hooksPath)
+	// 4. Cleanup: remove any stale ssq-hooks entry from the other candidate.
+	// This handles users who ran an old version that patched both paths.
+	for _, c := range candidates {
+		if c != hooksPath {
+			_ = removeAntigravityHookEntry(c)
+		}
+	}
 	fmt.Println("Done. Restart agy for the hook to take effect.")
+}
+
+// removeAntigravityHookEntry removes the "stapler-squad" key from hooksPath if it
+// contains any ssq-hooks check --antigravity command. No-ops if the file doesn't
+// exist, the key is absent, or no matching command is found.
+func removeAntigravityHookEntry(hooksPath string) error {
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		return nil // file absent — nothing to clean up
+	}
+	var hooksData map[string]interface{}
+	if err := json.Unmarshal(raw, &hooksData); err != nil {
+		return nil // not valid JSON — leave it alone
+	}
+	existing, ok := hooksData["stapler-squad"]
+	if !ok {
+		return nil // no entry — nothing to clean up
+	}
+	existingMap, ok := existing.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	preToolUse, _ := existingMap["PreToolUse"].([]interface{})
+	found := false
+	for _, entry := range preToolUse {
+		m, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		innerHooks, _ := m["hooks"].([]interface{})
+		for _, h := range innerHooks {
+			hm, ok := h.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); strings.HasSuffix(cmd, " check --antigravity") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return nil // our command not present — leave it alone
+	}
+	delete(hooksData, "stapler-squad")
+	out, err := json.MarshalIndent(hooksData, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := hooksPath + ".tmp"
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, hooksPath)
+}
+
+// patchAntigravityHooks patches the agy hooks.json file to register the ssq-hooks check command.
+func patchAntigravityHooks(hooksPath, binPath string) error {
+	hookCmd := binPath + " check --antigravity"
+
+	// Read existing settings (create minimal file if absent).
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		raw = []byte("{}")
+	}
+
+	var hooksData map[string]interface{}
+	if err := json.Unmarshal(raw, &hooksData); err != nil {
+		return fmt.Errorf("parsing %s: %w", hooksPath, err)
+	}
+
+	// Build the new/updated hook structure.
+	newHookConfig := map[string]interface{}{
+		"enabled": true,
+		"PreToolUse": []interface{}{
+			map[string]interface{}{
+				"matcher": "*",
+				"hooks": []interface{}{
+					map[string]interface{}{
+						"type":    "command",
+						"command": hookCmd,
+						"timeout": 10,
+					},
+				},
+			},
+		},
+	}
+
+	// Check if the hook is already present and matches.
+	if existing, ok := hooksData["stapler-squad"]; ok {
+		if existingMap, ok := existing.(map[string]interface{}); ok {
+			if preToolUse, ok := existingMap["PreToolUse"].([]interface{}); ok && len(preToolUse) > 0 {
+				if firstEntry, ok := preToolUse[0].(map[string]interface{}); ok {
+					if innerHooks, ok := firstEntry["hooks"].([]interface{}); ok && len(innerHooks) > 0 {
+						if hookObj, ok := innerHooks[0].(map[string]interface{}); ok {
+							if cmd, _ := hookObj["command"].(string); cmd == hookCmd {
+								fmt.Println("Antigravity hook already present, nothing to do.")
+								return nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Update or insert the hook.
+	hooksData["stapler-squad"] = newHookConfig
+
+	out, err := json.MarshalIndent(hooksData, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0700); err != nil {
+		return err
+	}
+
+	// Atomic write
+	tmpPath := hooksPath + ".tmp"
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, hooksPath)
 }
 
 func installOpenCode() {
@@ -1050,6 +1292,19 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 }
 
 func getDefaultDBPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".stapler-squad", "sessions.db")
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".stapler-squad", "sessions.db")
+	}
+	return filepath.Join(configDir, "sessions.db")
+}
+
+func getDBPathForCwd(cwd string) string {
+	configDir, err := config.GetConfigDirForDir(cwd)
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".stapler-squad", "sessions.db")
+	}
+	return filepath.Join(configDir, "sessions.db")
 }

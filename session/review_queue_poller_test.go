@@ -16,9 +16,14 @@ func makeAcknowledgedInstance(title string) *Instance {
 		Title:  title,
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 	inst.LastAcknowledged = time.Now().Add(-5 * time.Minute) // acked AFTER output
+	// Keep the lock-free atomic shadows in sync with the plain fields set directly above —
+	// IsAcknowledgedAfterOutput() reads only the atomic shadows (lastMeaningfulOutputNs,
+	// lastAcknowledgedNs), not the plain time.Time fields, so tests that bypass the normal
+	// write paths (UpdateTimestamps/MarkAcknowledged) must sync explicitly.
+	inst.SyncAtomicTimestamps()
 	return inst
 }
 
@@ -307,7 +312,7 @@ func newTestPollerInstance(title, uuid string) *Instance {
 		Status:  Paused,
 		Program: "claude",
 	}
-	inst.started = true
+	inst.started.Store(true)
 	return inst
 }
 
@@ -471,6 +476,20 @@ func TestReviewQueuePoller_IsRunning_InitiallyFalse(t *testing.T) {
 	}
 }
 
+// TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When_Called
+// is a regression guard for ADR-001-staleness-threshold-recalibration.md: the
+// StalenessThreshold default was silently reduced from 5min to 2min with no
+// documented rationale (see the ADR's git-archaeology section), causing a
+// 37/41 false-positive "Stale" badge rate live. This pins the recalibrated
+// value so a future edit can't silently drift it again without updating the
+// ADR.
+func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When_Called(t *testing.T) {
+	cfg := DefaultReviewQueuePollerConfig()
+	if cfg.StalenessThreshold != 5*time.Minute {
+		t.Errorf("DefaultReviewQueuePollerConfig().StalenessThreshold = %s, want 5m", cfg.StalenessThreshold)
+	}
+}
+
 // TestReviewQueuePoller_StartStop verifies that Start() transitions the poller to
 // running and Stop() cleanly shuts it down.
 func TestReviewQueuePoller_StartStop(t *testing.T) {
@@ -569,6 +588,7 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 
 	// Simulate new output arriving AFTER the acknowledgment.
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second) // newer than LastAcknowledged
+	inst.SyncAtomicTimestamps()                                  // re-sync atomic shadow after direct field write
 
 	// IsAcknowledgedAfterOutput should now return false — new output supersedes ack.
 	if inst.IsAcknowledgedAfterOutput() {
@@ -591,7 +611,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 		UUID:   "uuid-ctrl",
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 
 	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
 	// GetController() returns non-nil, but IsControllerActive will be false so the
@@ -635,11 +655,11 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 		UUID:   "uuid-active",
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	ctrl.sessionName = inst.Title
 
 	// Mark the controller as started by setting a non-nil context.
-	ctrl.ctx = t.Context()
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
 
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
@@ -722,17 +742,13 @@ func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 		Title:  title,
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	// CreatedAt well in the past → GetTimeSinceLastMeaningfulOutput() > StalenessThreshold
 	inst.CreatedAt = time.Now().Add(-10 * time.Minute)
 	inst.UpdatedAt = inst.CreatedAt
 
 	// Pre-warm content cache so getContent returns without calling inst.Preview() (tmux).
-	cp := rqp.contentProvider.(*pollerContentProvider)
-	cp.cacheMu.Lock()
-	cp.cachedContent[title] = ""
-	cp.lastPreviewTime[title] = time.Now() // within previewCacheTTL
-	cp.cacheMu.Unlock()
+	rqp.injectCachedContent(title, "")
 
 	return inst
 }
@@ -764,5 +780,102 @@ func BenchmarkCheckSessionsConcurrent(b *testing.B) {
 				rqp.checkSessions()
 			}
 		})
+	}
+}
+
+// --- reconcileSessions multi-socket regression tests ---
+//
+// Instances can be spread across multiple tmux server sockets. reconcileSessions
+// previously derived a single socket from the first managed instance that had one
+// set and queried tmux.ListAllSessions with only that socket, applying its result to
+// every instance regardless of the instance's own socket. An instance on a different
+// socket than the one picked would be checked against the wrong socket's live-session
+// set -- falsely "not found" (if actually alive on its own socket) or falsely "alive"
+// (if a same-named session happened to exist on the picked socket) -- causing sessions
+// to flap between Active and Stopped depending on iteration order. These tests pin the
+// fixed behavior: each instance's liveness is resolved against its own socket only.
+
+// TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_StayIndependent
+// is the direct regression test for the bug: two Active instances on different sockets,
+// both genuinely alive on their own socket. Under the old single-socket assumption,
+// whichever socket was NOT picked would see its instance falsely marked Stopped.
+func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_StayIndependent(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Active)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Active)
+	poller.SetInstances([]*Instance{instDefault, instCustom})
+
+	// Each session is alive, but only on its own socket.
+	querier.setLiveSessions("", "session-default")
+	querier.setLiveSessions("custom", "session-custom")
+
+	poller.reconcileSessions()
+
+	if instDefault.Status != Active {
+		t.Errorf("default-socket instance: got status %v, want Active (it IS alive on its own socket \"\")", instDefault.Status)
+	}
+	if instCustom.Status != Active {
+		t.Errorf("custom-socket instance: got status %v, want Active (it IS alive on its own socket \"custom\")", instCustom.Status)
+	}
+
+	sockets := querier.socketsQueried()
+	if len(sockets) != 2 {
+		t.Fatalf("expected both sockets to be queried independently, got %v", sockets)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently
+// covers the Stopped→Active direction: only the instance actually alive on its own
+// socket should revive; the other must stay Stopped.
+func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_ReviveIndependently(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Stopped)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Stopped)
+	poller.SetInstances([]*Instance{instDefault, instCustom})
+
+	// Default-socket session came back; custom-socket session is still gone.
+	querier.setLiveSessions("", "session-default")
+	querier.setLiveSessions("custom") // empty: nothing alive there
+
+	poller.reconcileSessions()
+
+	if instDefault.Status != Active {
+		t.Errorf("default-socket instance: got status %v, want Active (revived)", instDefault.Status)
+	}
+	if instCustom.Status != Stopped {
+		t.Errorf("custom-socket instance: got status %v, want Stopped (still not found on its own socket)", instCustom.Status)
+	}
+}
+
+// TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffectOthers
+// verifies that a down tmux server on one socket only skips reconciliation for
+// instances on that socket, not for instances on other, healthy sockets.
+func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffectOthers(t *testing.T) {
+	poller := newSimpleTestPoller()
+	querier := newFakeTmuxSocketQuerier()
+	poller.tmuxSocket = querier
+
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Active)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Active)
+	poller.SetInstances([]*Instance{instDefault, instCustom})
+
+	querier.setLiveSessions("", "session-default")
+	querier.setDown("custom", true)
+
+	poller.reconcileSessions()
+
+	if instDefault.Status != Active {
+		t.Errorf("default-socket instance: got status %v, want Active (its own socket is healthy)", instDefault.Status)
+	}
+	// custom's server is down, so reconciliation for it is skipped this pass -- it
+	// must NOT be marked Stopped just because its socket happened to be unreachable.
+	if instCustom.Status != Active {
+		t.Errorf("custom-socket instance: got status %v, want Active (server-down must skip, not falsely mark Stopped)", instCustom.Status)
 	}
 }

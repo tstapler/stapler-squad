@@ -104,3 +104,18 @@ The shared token contract lives at `web-app/src/styles/theme.css.ts` (create it 
 - **Hardcoded `zIndex` numbers** — add a named slot to `zIndex` in `theme-contract.css.ts` and reference `zIndex.mySlot`. Magic numbers cause invisible ordering collisions.
 - **`style={{ flexDirection: ... }}` or other layout inline styles** — inline style beats the CSS cascade; use a `data-*` attribute + `selectors` in the `.css.ts` file instead so theme overrides can win.
 - **`position: fixed` or `position: absolute` modals/sheets without `createPortal`** — `fixed` positioning silently breaks when any ancestor has a CSS `transform`, `filter`, or `will-change`. Always use `createPortal(..., document.body)` for overlays that must escape the component tree.
+
+## Page Scroll Convention
+
+The root layout (`web-app/src/app/layout.css.ts`) sets `overflow: "hidden"` on `mainContent`. Any page that should scroll must opt in by setting **both** `height: "100%"` and `overflowY: "auto"` on its root style:
+
+```ts
+// MyPage.css.ts
+export const page = style({
+  height: "100%",      // fill the parent flex slot
+  overflowY: "auto",   // enable vertical scroll within that slot
+  padding: vars.space[6],
+});
+```
+
+Omitting either property causes content to be clipped without a scrollbar.

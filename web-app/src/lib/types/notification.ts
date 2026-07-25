@@ -13,7 +13,7 @@ export interface NotificationData {
   message: string;
   timestamp: number;
   priority?: "urgent" | "high" | "medium" | "low";
-  notificationType?: "info" | "approval_needed" | "auto_approved" | "error" | "warning" | "task_complete" | "task_failed" | "progress" | "question" | "reminder" | "system" | "custom";
+  notificationType?: "info" | "approval_needed" | "auto_approved" | "error" | "warning" | "task_complete" | "task_failed" | "progress" | "question" | "reminder" | "system" | "custom" | "undo";
   /** Source app name (e.g., "IntelliJ IDEA", "Visual Studio Code") */
   sourceApp?: string;
   /** macOS bundle ID for window activation */
@@ -36,6 +36,8 @@ export interface NotificationData {
   onApprove?: () => void;
   /** Called when user denies a pending tool-use request (approval_needed notifications only). */
   onDeny?: () => void;
+  /** Called when user clicks "Undo" on an undo-variant toast. */
+  onUndo?: () => void;
 }
 
 export interface NotificationHistoryItem extends NotificationData {

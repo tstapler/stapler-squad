@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -18,7 +20,7 @@ import (
 // RepoName returns the name of the git repository.
 // Returns an error if the instance has not been started or has no worktree.
 func (i *Instance) RepoName() (string, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
 	if i.Status == Paused {
@@ -67,16 +69,50 @@ func (i *Instance) setupFirstTimeWorktree() error {
 	default: // SessionTypeDirectory and unknown types → no worktree
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		if i.CreateIfMissing {
-			if _, err := os.Stat(i.Path); os.IsNotExist(err) {
-				if err := git.InitializeProjectDirectory(i.Path); err != nil {
-					return fmt.Errorf("failed to create directory for session: %w", err)
-				}
+			if err := EnsureDirectorySessionPath(i.Path); err != nil {
+				return fmt.Errorf("failed to create directory for session: %w", err)
 			}
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 	}
 	return nil
+}
+
+// EnsureDirectorySessionPath creates and git-inits path if it does not already exist —
+// the same directory-creation step SessionTypeDirectory takes when CreateIfMissing is set.
+// Callers that need path to exist before spawning a directory session (e.g. to write files
+// into the worktree ahead of the claude process starting) should call this first so the
+// spawn's own CreateIfMissing check finds the directory already present and correctly
+// git-initialized, rather than skipping git-init because the path merely exists.
+func EnsureDirectorySessionPath(path string) error {
+	_, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return git.InitializeProjectDirectory(path)
+	case err != nil:
+		return fmt.Errorf("failed to stat session path %q: %w", path, err)
+	default:
+		return nil
+	}
+}
+
+// CreateBacklogWorktree creates a git worktree for a backlog work session.
+// It creates a branch named "backlog/<branchSuffix>" and returns the on-disk worktree path.
+// The caller is responsible for writing files to the path before spawning the session.
+func CreateBacklogWorktree(repoPath, branchSuffix string) (string, error) {
+	resolvedRepo, err := ResolveSessionPath(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
+	}
+	wt, _, err := git.NewGitWorktreeWithBranch(resolvedRepo, branchSuffix, "backlog/"+branchSuffix)
+	if err != nil {
+		return "", fmt.Errorf("CreateBacklogWorktree: %w", err)
+	}
+	if err := wt.Setup(); err != nil {
+		return "", fmt.Errorf("CreateBacklogWorktree setup: %w", err)
+	}
+	return wt.GetWorktreePath(), nil
 }
 
 // resolveStartPath returns the effective start directory, applying WorkingDir on top of basePath.
@@ -90,21 +126,38 @@ func (i *Instance) resolveStartPath(basePath string) string {
 	startPath := i.WorkingDir
 	if !filepath.IsAbs(i.WorkingDir) {
 		startPath = filepath.Join(basePath, i.WorkingDir)
-	} else if i.gitManager.HasWorktree() {
+	} else if i.gitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
 		// For worktree sessions, an absolute WorkingDir must be within the worktree.
 		// CaptureCurrentState() can persist the process CWD (e.g. the main repo path
-		// when Claude cd's there), which would otherwise bypass worktree isolation.
-		rel, err := filepath.Rel(basePath, startPath)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			log.Warn("working dir is outside worktree, using worktree path", "path", startPath, "worktree", basePath)
-			return basePath
-		}
+		// when Claude cd's there) — this is a read-side backstop for that; see
+		// pathEscapesRoot's doc comment for the write-side gate that now also exists
+		// (BUG-033) and for why this check alone isn't sufficient on its own: it only
+		// fires when i.gitManager.HasWorktree() is already true at the moment a
+		// session (re)starts, which is not guaranteed on every restart ordering.
+		log.Warn("working dir is outside worktree, using worktree path", "path", startPath, "worktree", basePath)
+		return basePath
 	}
 	if _, err := os.Stat(startPath); os.IsNotExist(err) {
 		log.Warn("working directory doesn't exist, using fallback", "path", startPath, "fallback", basePath)
 		return basePath
 	}
 	return startPath
+}
+
+// pathEscapesRoot reports whether candidate is outside root (or root/candidate
+// can't be compared at all, treated as escaped — fail closed). Shared by
+// resolveStartPath (read-side backstop) and CaptureCurrentState (write-side
+// gate, BUG-033) so a worktree session's persisted WorkingDir can never
+// silently point outside its own isolated worktree in the first place —
+// see CaptureCurrentState's doc comment for the live incident this closes:
+// an agent that `cd`s into the parent repo (e.g. to "mirror" a branch) had
+// that path captured and persisted with no validation, and depending on
+// gitManager's re-initialization ordering on the next restart, resolveStartPath's
+// own guard could be bypassed, starting the session's next run directly in the
+// shared parent checkout instead of its worktree.
+func pathEscapesRoot(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err != nil || strings.HasPrefix(rel, "..")
 }
 
 // GetEffectiveRootDir returns the root directory where this session operates.
@@ -141,7 +194,7 @@ func (i *Instance) CleanupWorktree() error {
 
 // GetGitWorktree returns the git worktree for the instance.
 func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
 	return i.gitManager.GetWorktree(), nil
@@ -155,35 +208,47 @@ func (i *Instance) HasGitWorktree() bool {
 // SetGitWorktree sets the git worktree for testing purposes.
 func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 	i.gitManager.SetWorktree(worktree)
-	i.started = worktree != nil
+	i.started.Store(worktree != nil)
 }
 
 // UpdateDiffStats updates the git diff statistics for this instance.
 // Performs I/O (git diff) outside the lock, then updates state under the write lock.
 func (i *Instance) UpdateDiffStats() error {
 	// Read lock for initial state checks
-	i.stateMutex.RLock()
-	if !i.started {
+	i.mu.RLock()
+	if !i.started.Load() {
 		i.gitManager.ClearDiffStats()
-		i.stateMutex.RUnlock()
+		i.mu.RUnlock()
 		return nil
 	}
 	if i.Status == Paused {
-		i.stateMutex.RUnlock()
+		i.mu.RUnlock()
 		return nil
 	}
 	if !i.gitManager.HasWorktree() {
-		i.gitManager.ClearDiffStats()
-		i.stateMutex.RUnlock()
+		dirBase := i.gitManager.GetDirBaseSHA()
+		workingDir := i.WorkingDir
+		if workingDir == "" {
+			workingDir = i.Path
+		}
+		i.mu.RUnlock()
+		if dirBase == "" {
+			return nil
+		}
+		// Directory session with a known base SHA — compute diff outside the lock.
+		stats := computeDirDiffStats(workingDir, dirBase)
+		i.mu.Lock()
+		i.gitManager.SetDiffStats(stats)
+		i.mu.Unlock()
 		return nil
 	}
-	i.stateMutex.RUnlock()
+	i.mu.RUnlock()
 
 	// I/O outside lock: check worktree existence and compute diff
 	stats, needsPause := i.gitManager.ComputeDiffIfReady()
 
 	// Write lock to update state — keep non-logging work only to minimise hold time.
-	i.stateMutex.Lock()
+	i.mu.Lock()
 	var transitionErr error
 	var didTransitionToPaused bool
 	if needsPause {
@@ -192,7 +257,7 @@ func (i *Instance) UpdateDiffStats() error {
 			transitionErr = i.transitionTo(context.Background(), Paused)
 		}
 		i.gitManager.ClearDiffStats()
-		i.stateMutex.Unlock()
+		i.mu.Unlock()
 		if didTransitionToPaused {
 			log.Warn("worktree directory doesn't exist, marking as paused", "session", i.Title)
 		}
@@ -204,22 +269,52 @@ func (i *Instance) UpdateDiffStats() error {
 	if stats != nil && stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			i.gitManager.ClearDiffStats()
-			i.stateMutex.Unlock()
+			i.mu.Unlock()
 			return nil
 		}
-		i.stateMutex.Unlock()
+		i.mu.Unlock()
 		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
 	}
 	i.gitManager.SetDiffStats(stats)
-	i.stateMutex.Unlock()
+	i.mu.Unlock()
 	return nil
 }
 
 // GetDiffStats returns the current git diff statistics.
 func (i *Instance) GetDiffStats() *git.DiffStats {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.gitManager.GetDiffStats()
+}
+
+// SetDirBaseSHA sets the base commit SHA used to compute diff stats for
+// directory-mode sessions (sessions without an isolated git worktree).
+func (i *Instance) SetDirBaseSHA(sha string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.gitManager.SetDirBaseSHA(sha)
+}
+
+// computeDirDiffStats computes diff stats for a directory session by running
+// git diff against baseSHA. Returns nil on any error (diff is optional/cosmetic).
+func computeDirDiffStats(repoPath, baseSHA string) *git.DiffStats {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "diff", baseSHA+"..HEAD")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	stats := &git.DiffStats{Content: string(out)}
+	for _, line := range strings.Split(stats.Content, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			stats.Added++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			stats.Removed++
+		}
+	}
+	return stats
 }
 
 // GetWorkingDirectory returns the working directory for this instance.

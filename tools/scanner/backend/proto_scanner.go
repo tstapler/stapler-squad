@@ -101,9 +101,18 @@ var methodToID = map[string]string{
 	"GetSessionDefaults":   "defaults:get",
 	"UpdateGlobalDefaults": "defaults:update-global",
 	"ResolveDefaults":      "defaults:resolve",
+	// Alias RPCs
+	"UpsertAlias": "alias:upsert",
+	"DeleteAlias": "alias:delete",
+	"ListAliases": "alias:list",
 	// Directory rules RPCs
 	"UpsertDirectoryRule": "directory-rule:upsert",
 	"DeleteDirectoryRule": "directory-rule:delete",
+	// Detection RPCs
+	"GetDetectionEvents": "session:get-detection-events",
+	// Workflow session management RPCs
+	"ArchiveWorkflowSessions":      "session:archive-workflow",
+	"DeleteWorkflowFailedSessions": "session:delete-workflow-failed",
 	// Unfinished work RPCs (UnfinishedWorkService in unfinished.proto)
 	"ListUnfinishedWork":         "unfinished:list",
 	"WatchUnfinishedWork":        "unfinished:watch",
@@ -132,16 +141,96 @@ var methodToID = map[string]string{
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
 	"TriggerTriage":               "backlog:trigger-triage",
+	"CancelTriage":                "backlog:cancel-triage",
 	"ApprovePlan":                 "backlog:approve-plan",
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerShipPR":               "backlog:trigger-ship-pr",
 	"TriggerSync":                 "backlog:trigger-sync",
 	"CreateItemSource":            "backlog:create-source",
 	"ListItemSources":             "backlog:list-sources",
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"GetBacklogItemDiff":          "backlog:get-item-diff",
+	"GetBacklogItemCost":          "backlog:get-item-cost",
+	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",
+	"GetSessionBacklogIndex":      "backlog:get-session-index",
+	"SubmitManualReview":          "backlog:submit-manual-review",
+	"ListStuckBacklogItems":       "backlog:list-stuck",
+	"SnoozeStuckItem":             "backlog:snooze-stuck",
+	"ResetStuckRemediation":       "backlog:reset-stuck-remediation",
+	"BulkResetStuckRemediation":   "backlog:bulk-reset-stuck-remediation",
+	"TriggerRemediationNow":       "backlog:trigger-remediation-now",
+	"CreatePipelineMode":          "backlog:create-pipeline-mode",
+	"UpdatePipelineMode":          "backlog:update-pipeline-mode",
+	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
+	"GetPipelineMode":             "backlog:get-pipeline-mode",
+	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	// GitHub issue import RPCs (BacklogService) - mapped to the method name
+	// itself, not a kebab-case backlog:* id: origin/main already has
+	// committed registry files under docs/registry/features/backend/{method
+	// name}.json (id: "SearchGitHubRepos" etc.), produced by ScanProto's own
+	// fallback (id = method) from before these existed in methodToID at all.
+	// A kebab-case id here would relocate those files to a new path/id on
+	// every PR that touches methodToID, which register-generate's own git
+	// diff (and the "Check new RPCs have tests" CI gate, which diffs
+	// registry files against origin/main) would then flag as a brand new,
+	// untested RPC - even though SearchGitHubRepos/ListGitHubIssues already
+	// have real tests committed upstream (server/services/backlog_github_rpc_test.go).
+	// Matching the existing fallback id keeps the generated file identical.
+	"SearchGitHubRepos": "SearchGitHubRepos",
+	"ListGitHubIssues":  "ListGitHubIssues",
+	"ImportGitHubIssue": "ImportGitHubIssue",
+	// Session lifecycle RPCs
+	"ArchiveSession":          "session:archive",
+	"UnarchiveSession":        "session:unarchive",
+	"HibernateSession":        "session:hibernate",
+	"ResumeHibernatedSession": "session:resume-hibernated",
+	"WriteToSession":          "session:write",
+	// Shell RPCs
+	"SpawnShell":   "shell:spawn",
+	"DeleteShell":  "shell:delete",
+	"ListShells":   "shell:list",
+	"RestartShell": "shell:restart",
+	"StopShell":    "shell:stop",
+	// Slash commands RPCs
+	"ListSlashCommands": "slash-command:list",
+	// Workflow RPCs
+	"CreateWorkflow": "workflow:create",
+	"DeleteWorkflow": "workflow:delete",
+	"ListWorkflows":  "workflow:list",
+	"UpdateWorkflow": "workflow:update",
+	"RunWorkflow":    "workflow:run",
+	// Approval rules RPCs
+	"BulkUpsertRules":       "approval:bulk-upsert-rules",
+	"ExportRules":           "approval:export-rules",
+	"GenerateSuggestedRule": "approval:generate-suggested-rule",
+	"ValidateRules":         "approval:validate-rules",
+	// Analytics RPCs
+	"GetEscapeAnalyticsSummary": "analytics:get-escape-summary",
+	"GetProgramAnalytics":       "analytics:get-program",
+	"QueryEscapeAnalytics":      "analytics:query-escape",
+	// Feature flags RPCs
+	"GetFeatureFlags":   "feature-flag:get",
+	"UpdateFeatureFlag": "feature-flag:update",
+	// Hooks RPCs
+	"GetHookStatus": "hooks:status",
+	"InstallHooks":  "hooks:install",
+	// GitHub user RPCs
+	"ListUserPRs":        "github-user:list-prs",
+	"WatchUserPRs":       "github-user:watch-prs",
+	"GetGitHubAuthState": "github-user:get-auth-state",
+	// Provider limits RPCs
+	"GetProviderLimits": "session:get-provider-limits",
+	// Config file rules RPCs (stub implementations in RulesService)
+	"GetConfigFileRules":    "rules:get-config-file",
+	"SaveRulesToConfigFile": "rules:save-to-config-file",
+	// Backlog item lifecycle RPCs
+	"DeleteBacklogItem": "backlog:delete-item",
+	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
+	"WatchBacklogItems": "backlog:watch",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

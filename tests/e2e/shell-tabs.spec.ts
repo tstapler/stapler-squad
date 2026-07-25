@@ -1,4 +1,8 @@
-// @feature session:shell-tabs
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: shell-tabs — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['session-shell-tabs'], // TODO: add to catalog
+] as const;
 import { test, expect } from '@playwright/test';
 import { ShellTabsPage } from './pages/ShellTabsPage';
 import { SessionClient } from './helpers/session-client';

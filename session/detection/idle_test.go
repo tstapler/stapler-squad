@@ -110,6 +110,66 @@ func TestIdleDetector_PatternMatching(t *testing.T) {
 	}
 }
 
+// TestIdleDetector_PatternMatching_FromContent verifies pattern matching via the production
+// path (DetectStateFromContent / DetectFromLines), which is what the review-queue poller calls.
+func TestIdleDetector_PatternMatching_FromContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected IdleState
+	}{
+		{
+			name:     "INSERT mode indicates idle",
+			content:  "— INSERT —\n",
+			expected: IdleStateWaiting,
+		},
+		{
+			name:     "esc to interrupt indicates active",
+			content:  "Verifying S3 transfers… (esc to interrupt)",
+			expected: IdleStateActive,
+		},
+		{
+			name:     "Command prompt indicates idle",
+			content:  "$ ",
+			expected: IdleStateWaiting,
+		},
+		// Reverse-scan: active indicator on the LAST line beats idle on an earlier line.
+		{
+			name:     "Active below idle — active wins",
+			content:  "— INSERT —\nRunning tests... (esc to interrupt)",
+			expected: IdleStateActive,
+		},
+		// Reverse-scan: idle on the LAST line beats old active on an earlier line.
+		{
+			name:     "Idle below active — idle wins",
+			content:  "Running tests... (esc to interrupt)\n— INSERT —",
+			expected: IdleStateWaiting,
+		},
+		// CR-segment: last segment wins.
+		{
+			name:     "CR: idle last segment beats active earlier segment",
+			content:  "esc to interrupt · main\r? for shortcuts",
+			expected: IdleStateWaiting,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buffer := &mockPTYReader{}
+			cfg := IdleDetectorConfig{
+				IdleThreshold: 1 * time.Second,
+				DebounceDelay: 0, // no debounce in these unit tests
+				BufferSize:    4096,
+			}
+			detector := NewIdleDetectorWithConfig("test", buffer, cfg)
+			got := detector.DetectStateFromContent(tt.content)
+			if got != tt.expected {
+				t.Errorf("%s: DetectStateFromContent(%q) = %v, want %v", tt.name, tt.content, got, tt.expected)
+			}
+		})
+	}
+}
+
 // TestIdleDetector_StateTransitions tests state transitions with debouncing.
 func TestIdleDetector_StateTransitions(t *testing.T) {
 	buffer := &mockPTYReader{}
@@ -255,7 +315,7 @@ func TestIdleDetector_IsIdle(t *testing.T) {
 	buffer.Write([]byte("Running... (esc to interrupt)"))
 	detector.DetectState()
 
-	if detector.IsIdle() {
+	if state := detector.DetectState(); state == IdleStateWaiting || state == IdleStateTimeout {
 		t.Error("expected not idle when actively running")
 	}
 
@@ -265,7 +325,7 @@ func TestIdleDetector_IsIdle(t *testing.T) {
 	advance(20 * time.Millisecond)
 	detector.DetectState()
 
-	if !detector.IsIdle() {
+	if state := detector.DetectState(); state != IdleStateWaiting && state != IdleStateTimeout {
 		t.Error("expected idle when in INSERT mode")
 	}
 }
@@ -285,7 +345,7 @@ func TestIdleDetector_IsActive(t *testing.T) {
 	buffer.Write([]byte("Running... (esc to interrupt)"))
 	detector.DetectState()
 
-	if !detector.IsActive() {
+	if state := detector.DetectState(); state != IdleStateActive {
 		t.Error("expected active when running")
 	}
 
@@ -295,7 +355,7 @@ func TestIdleDetector_IsActive(t *testing.T) {
 	advance(20 * time.Millisecond)
 	detector.DetectState()
 
-	if detector.IsActive() {
+	if state := detector.DetectState(); state == IdleStateActive {
 		t.Error("expected not active when idle")
 	}
 }
@@ -394,8 +454,24 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 	}
 }
 
-// TestIdleDetector_InitializeFromTimestamp tests timestamp restoration functionality.
+// TestIdleDetector_InitializeFromTimestamp tests timestamp restoration with a frozen clock.
 func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
+	// Use a fake clock frozen at a specific point so boundary tests are deterministic.
+	buffer := &mockPTYReader{}
+	cfg := IdleDetectorConfig{IdleThreshold: time.Second, DebounceDelay: 0, BufferSize: 4096}
+
+	// freezeAt returns a new detector whose clock is frozen at the given absolute time.
+	freezeAt := func(frozenNow time.Time) *IdleDetector {
+		d := NewIdleDetectorWithConfig("test", buffer, cfg)
+		d.now = func() time.Time { return frozenNow }
+		d.lastActivity = frozenNow
+		d.lastStateChange = frozenNow
+		return d
+	}
+
+	// Freeze "now" at a fixed point so all relative offsets are stable.
+	now := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+
 	tests := []struct {
 		name                string
 		timestamp           time.Time
@@ -404,7 +480,7 @@ func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
 	}{
 		{
 			name:                "Valid recent timestamp",
-			timestamp:           time.Now().Add(-10 * time.Minute),
+			timestamp:           now.Add(-10 * time.Minute),
 			expectedRestoration: true,
 			description:         "Should restore 10-minute-old timestamp",
 		},
@@ -416,25 +492,25 @@ func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
 		},
 		{
 			name:                "Future timestamp",
-			timestamp:           time.Now().Add(1 * time.Hour),
+			timestamp:           now.Add(1 * time.Hour),
 			expectedRestoration: false,
 			description:         "Should reject future timestamp (clock skew)",
 		},
 		{
 			name:                "Very old timestamp",
-			timestamp:           time.Now().Add(-48 * time.Hour),
+			timestamp:           now.Add(-48 * time.Hour),
 			expectedRestoration: false,
 			description:         "Should reject timestamp older than 24h threshold",
 		},
 		{
 			name:                "Boundary case - exactly 24h old",
-			timestamp:           time.Now().Add(-24 * time.Hour),
+			timestamp:           now.Add(-24 * time.Hour),
 			expectedRestoration: false,
 			description:         "Should reject timestamp exactly at 24h boundary",
 		},
 		{
 			name:                "Near boundary - 23h old",
-			timestamp:           time.Now().Add(-23 * time.Hour),
+			timestamp:           now.Add(-23 * time.Hour),
 			expectedRestoration: true,
 			description:         "Should accept timestamp just under 24h threshold",
 		},
@@ -442,29 +518,18 @@ func TestIdleDetector_InitializeFromTimestamp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			buffer := &mockPTYReader{}
-			detector := NewIdleDetector("test-session", buffer)
-
-			// Initialize from timestamp
+			detector := freezeAt(now)
 			detector.InitializeFromTimestamp(tt.timestamp)
-
-			// Check result
 			afterInit := detector.GetLastActivity()
 
 			if tt.expectedRestoration {
-				// Should match provided timestamp (within reasonable tolerance for test execution)
-				diff := afterInit.Sub(tt.timestamp)
-				if diff < 0 {
-					diff = -diff
-				}
-				if diff > 2*time.Second {
-					t.Errorf("%s: Timestamp should be restored, got diff %v", tt.description, diff)
+				if !afterInit.Equal(tt.timestamp) {
+					t.Errorf("%s: expected lastActivity=%v, got %v", tt.description, tt.timestamp, afterInit)
 				}
 			} else {
-				// Should keep default (close to time.Now(), or same as before if rejected)
-				timeSinceInit := time.Since(afterInit)
-				if timeSinceInit > 3*time.Second {
-					t.Errorf("%s: Should use default/original timestamp, got age %v", tt.description, timeSinceInit)
+				// Should keep the default (frozen "now"), not the provided timestamp.
+				if !afterInit.Equal(now) {
+					t.Errorf("%s: expected lastActivity unchanged (%v), got %v", tt.description, now, afterInit)
 				}
 			}
 		})
@@ -607,4 +672,34 @@ func TestIdleDetector_InitializeFromTimestamp_ThreadSafety(t *testing.T) {
 		t.Errorf("Expected lastActivity to be set by one of the goroutines, got %v (age: %v)",
 			lastActivity, time.Since(lastActivity))
 	}
+}
+
+func TestNewIdleDetectorWithDetector_should_acceptInjectedDetector(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("test-session")
+	pa := &mockPTYReader{data: []byte("? for shortcuts")}
+	id := NewIdleDetectorWithDetector("test", pa, DefaultIdleDetectorConfig(), sd)
+	state := id.DetectState()
+	// Just verifying it doesn't panic and returns a valid state
+	_ = state
+}
+
+func TestNewIdleDetectorWithDetector_should_useInjected_When_nonNil(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("test-session")
+	pa := &mockPTYReader{data: []byte("? for shortcuts")}
+	id := NewIdleDetectorWithDetector("test", pa, DefaultIdleDetectorConfig(), sd)
+	_ = id.DetectState()
+	// Verify events were recorded on the shared detector
+	events := sd.RecentEvents(10)
+	if len(events) == 0 {
+		t.Error("expected detection events on shared StatusDetector, got none")
+	}
+}
+
+func TestNewIdleDetectorWithDetector_should_createOwn_When_nilInjected(t *testing.T) {
+	pa := &mockPTYReader{data: []byte("? for shortcuts")}
+	id := NewIdleDetectorWithDetector("test", pa, DefaultIdleDetectorConfig(), nil)
+	state := id.DetectState()
+	_ = state // Should not panic, returns valid state
 }

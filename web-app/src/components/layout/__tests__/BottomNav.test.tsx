@@ -52,6 +52,11 @@ jest.mock("@/lib/hooks/useHandedness", () => ({
   HANDEDNESS_KEY: "stapler-squad:left-handed",
 }));
 
+// Mock FeatureFlagsContext
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlags: () => ({ flags: {} }),
+}));
+
 // Mock the CSS module
 jest.mock("../BottomNav.css", () => ({
   nav: "nav",
@@ -70,15 +75,16 @@ jest.mock("../BottomNav.css", () => ({
   moreSheetItem: "moreSheetItem",
   moreSheetItemActive: "moreSheetItemActive",
   moreSheetItemIcon: "moreSheetItemIcon",
+  moreSheetScrollable: "moreSheetScrollable",
+  moreSheetSection: "moreSheetSection",
+  moreSheetSectionHeader: "moreSheetSectionHeader",
+  moreSheetUtilitySection: "moreSheetUtilitySection",
 }));
 
 import { usePathname } from "next/navigation";
+import { BOTTOM_NAV_PRIMARY } from "@/lib/nav-pages";
 
-const PRIMARY_ITEMS = [
-  { href: "/", label: "Sessions" },
-  { href: "/unfinished", label: "Unfinished" },
-  { href: "/review-queue", label: "Review" },
-] as const;
+const expectedPrimaryItems = BOTTOM_NAV_PRIMARY.filter((p) => !p.featureFlag);
 
 describe("BottomNav", () => {
   beforeEach(() => {
@@ -96,12 +102,9 @@ describe("BottomNav", () => {
     (usePathname as jest.Mock).mockReturnValue("/");
     render(<BottomNav />);
 
-    const remaining = new Set(PRIMARY_ITEMS.map((p) => p.href));
-    for (const item of PRIMARY_ITEMS) {
-      expect(screen.getByText(item.label)).toBeInTheDocument();
-      remaining.delete(item.href);
+    for (const item of expectedPrimaryItems) {
+      expect(screen.getByText(item.shortLabel ?? item.label)).toBeInTheDocument();
     }
-    expect(remaining.size).toBe(0);
     expect(screen.getByRole("button", { name: "Create new session" })).toBeInTheDocument();
   });
 

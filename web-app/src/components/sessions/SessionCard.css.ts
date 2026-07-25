@@ -275,9 +275,13 @@ export const editTagsButton = style({
   cursor: "pointer",
   opacity: 0,
   transition: "all 0.2s ease, opacity 0.15s ease",
+  "@media": {
+    "(hover: none)": { opacity: 1 },
+  },
   selectors: {
     [`${card}:hover &`]: { opacity: 1 },
     [`${card}:focus-within &`]: { opacity: 1 },
+    "&:focus-visible": { opacity: 1 },
     "&:hover": { background: vars.color.primary, color: vars.color.primaryText },
   },
 });
@@ -723,7 +727,7 @@ export const snapshotToggleIcon = style({
 /** Fixed-height preview pane */
 export const snapshotPane = style({
   height: 120,
-  overflowY: "hidden",
+  overflowY: "auto",
   padding: "6px 10px",
   fontFamily: '"Menlo", "Monaco", "Courier New", monospace',
   fontSize: "0.72rem",
@@ -780,6 +784,78 @@ export const memoryBadge = style({
   fontVariantNumeric: "tabular-nums",
 });
 
+// Applied over memoryBadge when RSS is 300–500 MB.
+export const memoryBadgeWarning = style({
+  color: vars.color.warning,
+  fontWeight: 600,
+});
+
+// Applied over memoryBadge when RSS > 500 MB.
+export const memoryBadgeHigh = style({
+  color: vars.color.error,
+  fontWeight: 700,
+});
+
+// Only applied when RSS > 500 MB — not for every active session.
 export const cardMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
+});
+
+export const autonomousBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 8px`,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
+export const workflowBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "120px",
+});
+
+/** Goal row compact display — session list card */
+export const taskFraction = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  marginLeft: vars.space["1"],
+});
+
+const spinKeyframes = keyframes({
+  from: { transform: "rotate(0deg)" },
+  to: { transform: "rotate(360deg)" },
+});
+
+export const creationSpinner = style({
+  display: "inline-block",
+  width: "14px",
+  height: "14px",
+  border: `2px solid ${vars.color.primary}`,
+  borderTopColor: "transparent",
+  borderRadius: "50%",
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: spinKeyframes,
+      animationDuration: "0.8s",
+      animationTimingFunction: "linear",
+      animationIterationCount: "infinite",
+    },
+  },
 });

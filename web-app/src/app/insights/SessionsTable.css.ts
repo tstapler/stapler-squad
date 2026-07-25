@@ -167,3 +167,23 @@ export const clickableRow = style({
     outlineOffset: "-2px",
   },
 });
+
+export const backlogBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space[1],
+  padding: `1px ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: "10px",
+  fontWeight: vars.fontWeight.medium,
+  textDecoration: "none",
+  marginLeft: vars.space[1],
+  verticalAlign: "middle",
+  border: `1px solid ${vars.color.borderSubtle}`,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  ":hover": {
+    color: vars.color.textPrimary,
+    background: vars.color.hoverBackground,
+  },
+});

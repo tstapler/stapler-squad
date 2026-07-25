@@ -7,10 +7,23 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const githubIssuesPerPage = 50
+
+// githubAPIBaseURL is overridden in tests (session/backlog_plugin_github_test.go)
+// to point at an httptest server; shared by both the Issues and PRs plugins.
+// Tests that mutate it must not run with t.Parallel() — it's package-level
+// mutable state with no synchronization.
+var githubAPIBaseURL = "https://api.github.com"
+
+// githubAPIURL joins githubAPIBaseURL with a path, tolerating a trailing
+// slash on the base URL so "//repos/..." can't slip in.
+func githubAPIURL(pathAndQuery string) string {
+	return strings.TrimSuffix(githubAPIBaseURL, "/") + "/" + strings.TrimPrefix(pathAndQuery, "/")
+}
 
 // githubPluginConfig holds the decoded config for the GitHub Issues plugin.
 type githubPluginConfig struct {
@@ -65,7 +78,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage)
+	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
 	if cursor != "" {
 		url += "&since=" + cursor
 	}

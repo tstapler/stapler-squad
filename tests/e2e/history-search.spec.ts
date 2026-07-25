@@ -1,4 +1,8 @@
-// @feature history:search
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: history-search — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['history-search'],
+] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 

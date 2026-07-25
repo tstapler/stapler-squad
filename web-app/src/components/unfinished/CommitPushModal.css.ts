@@ -1,5 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { breakpoints, zIndex } from "@/styles/theme-contract.css";
 
 export const overlay = style({
   position: "fixed",
@@ -8,7 +9,14 @@ export const overlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 1000,
+  zIndex: zIndex.modal,
+  overflowY: "auto",
+  padding: "1rem",
+  "@media": {
+    [`(max-width: ${breakpoints.md})`]: {
+      padding: 0,
+    },
+  },
 });
 
 export const modal = style({
@@ -17,9 +25,21 @@ export const modal = style({
   borderRadius: vars.radii.lg,
   padding: vars.space["6"],
   width: "min(480px, 90vw)",
+  maxHeight: "calc(var(--viewport-height, 100dvh) - 2rem)",
+  overflowY: "auto",
+  boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   gap: vars.space["4"],
+  "@media": {
+    [`(max-width: ${breakpoints.md})`]: {
+      width: "100%",
+      minHeight: "100%",
+      maxHeight: "none",
+      borderRadius: 0,
+      border: "none",
+    },
+  },
 });
 
 export const title = style({

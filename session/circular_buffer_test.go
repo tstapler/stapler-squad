@@ -368,3 +368,48 @@ func TestCircularBuffer_DefaultSize(t *testing.T) {
 		t.Errorf("Negative size should use default %d, got %d", DefaultBufferSize, cb.Cap())
 	}
 }
+
+var chunk4KB = make([]byte, 4096)
+
+func BenchmarkCircularBufferWrite_4KB(b *testing.B) {
+	cb := NewCircularBuffer(DefaultBufferSize)
+	b.SetBytes(int64(len(chunk4KB)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cb.Write(chunk4KB)
+	}
+}
+
+func BenchmarkCircularBufferWrite_4KB_Allocs(b *testing.B) {
+	cb := NewCircularBuffer(DefaultBufferSize)
+	b.ResetTimer()
+	allocs := testing.AllocsPerRun(b.N, func() {
+		cb.Write(chunk4KB)
+	})
+	if allocs > 0 {
+		b.Errorf("Write allocated %.0f objects per call, want 0", allocs)
+	}
+}
+
+func BenchmarkCircularBufferGetRecent_4KB(b *testing.B) {
+	cb := NewCircularBuffer(DefaultBufferSize)
+	for i := 0; i < 10; i++ {
+		cb.Write(chunk4KB)
+	}
+	b.SetBytes(4096)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = cb.GetRecent(4096)
+	}
+}
+
+func BenchmarkCircularBufferGetAll(b *testing.B) {
+	cb := NewCircularBuffer(DefaultBufferSize)
+	for i := 0; i < 10; i++ {
+		cb.Write(chunk4KB)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = cb.GetAll()
+	}
+}

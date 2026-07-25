@@ -5,11 +5,16 @@ package session
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -18,15 +23,62 @@ import (
 // CreateCheckpoint captures a named state bookmark for this session.
 // scrollbackSeq should be the current scrollback high-water mark (from ScrollbackManager);
 // pass 0 if the caller does not have access to scrollback state.
-// Thread-safe: acquires stateMutex write lock.
+// Thread-safe: routed through the actor mailbox.
 // Returns an error if the instance is not started.
 func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkpoint, error) {
-	if !i.started {
+	var result *Checkpoint
+	err := i.sendSyncErr(func(s *instanceState) error {
+		var e error
+		result, e = createCheckpointLocked(s, label, scrollbackSeq)
+		return e
+	})
+	return result, err
+}
+
+// createCheckpointLocked is the actor-safe body of CreateCheckpoint.
+// I/O-heavy adapter work is done before any field mutation (same discipline as the
+// old "before stateMutex" comment in the public method).
+func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*Checkpoint, error) {
+	i := s.inst
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
 	}
 
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	// Perform I/O-heavy adapter import BEFORE mutating any fields.
+	cpID := newCheckpointID()
+	var canonicalTurnIndex int
+	var canonicalPath string
+
+	var adapter HistoryAdapter
+	claude := NewClaudeAdapter()
+	agy := NewAgyAdapter()
+	if claude.CanHandle(i.Program) {
+		adapter = claude
+	} else if agy.CanHandle(i.Program) {
+		adapter = agy
+	}
+
+	if adapter != nil {
+		if turns, err := adapter.Import(context.Background(), i); err == nil {
+			canonicalTurnIndex = len(turns)
+			if configDir, err := config.GetConfigDir(); err == nil {
+				cpDir := filepath.Join(configDir, i.Title, "checkpoints")
+				if err := os.MkdirAll(cpDir, 0700); err == nil {
+					cpPath := filepath.Join(cpDir, cpID+".jsonl")
+					if f, err := os.Create(cpPath); err == nil {
+						for _, turn := range turns {
+							if b, err := json.Marshal(turn); err == nil {
+								f.Write(b)
+								f.Write([]byte("\n"))
+							}
+						}
+						f.Close()
+						canonicalPath = cpPath
+					}
+				}
+			}
+		}
+	}
 
 	// Collect git SHA — gracefully empty if no worktree.
 	gitSHA, _ := i.gitManager.GetCurrentCommitSHA()
@@ -37,36 +89,51 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 		convUUID = i.claudeSession.ConversationUUID
 	}
 
-	// Count lines in history file for accurate fork truncation later.
+	// Count non-empty lines in history file for accurate fork truncation later.
+	// Uses bufio.NewReader instead of bufio.Scanner to avoid the 64 KB
+	// MaxScanTokenSize limit — Claude tool results and image blocks can exceed it.
 	var convLineCount uint64
 	if i.HistoryFilePath != "" {
 		if f, err := os.Open(i.HistoryFilePath); err == nil {
 			defer f.Close()
-			sc := bufio.NewScanner(f)
-			for sc.Scan() {
-				if len(sc.Bytes()) > 0 {
+			reader := bufio.NewReader(f)
+			for {
+				line, readErr := reader.ReadBytes('\n')
+				if len(bytes.TrimSpace(line)) > 0 {
 					convLineCount++
 				}
-			}
-			if scanErr := sc.Err(); scanErr != nil {
-				log.Warn("createcheckpoint: error scanning history file", "err", scanErr)
+				if readErr != nil {
+					if readErr != io.EOF {
+						log.Warn("createcheckpoint: error reading history file", "err", readErr)
+					}
+					break
+				}
 			}
 		}
 	}
 
 	cp := Checkpoint{
-		ID:             newCheckpointID(),
-		SessionID:      i.Title,
-		Label:          label,
-		ScrollbackSeq:  scrollbackSeq,
-		ClaudeConvUUID: convUUID,
-		ConvLineCount:  convLineCount,
-		GitCommitSHA:   gitSHA,
-		Timestamp:      time.Now().UTC(),
+		ID:                 cpID,
+		SessionID:          i.Title,
+		Label:              label,
+		ScrollbackSeq:      scrollbackSeq,
+		ClaudeConvUUID:     convUUID,
+		ConvLineCount:      convLineCount,
+		GitCommitSHA:       gitSHA,
+		Timestamp:          time.Now().UTC(),
+		CanonicalTurnIndex: canonicalTurnIndex,
+		CanonicalPath:      canonicalPath,
 	}
 
+	// i.mu guards the write + buildSnapshot together: legacy setters (MarkViewed
+	// & co.) mutate other fields directly under i.mu.Lock() from outside the
+	// actor — see runActor's doc comment in actor.go for the full explanation.
+	i.mu.Lock()
 	i.Checkpoints = append(i.Checkpoints, cp)
 	i.ActiveCheckpoint = cp.ID
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 
 	return &cp, nil
 }
@@ -82,15 +149,39 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		return nil, fmt.Errorf("newTitle must not be empty")
 	}
 
-	// Fork Claude conversation if we have the data.
 	newConvUUID := ""
-	if cp.ConvLineCount > 0 && cp.ClaudeConvUUID != "" && i.HistoryFilePath != "" {
+	var turns []CanonicalTurn
+	hasCanonicalForked := false
+
+	if cp.CanonicalPath != "" && cp.CanonicalTurnIndex > 0 {
+		if f, err := os.Open(cp.CanonicalPath); err == nil {
+			defer f.Close()
+			dec := json.NewDecoder(f)
+			for {
+				var turn CanonicalTurn
+				if err := dec.Decode(&turn); err == io.EOF {
+					break
+				} else if err != nil {
+					log.Warn("forkfromcheckpoint: failed to decode canonical turn", "err", err)
+					break
+				}
+				turns = append(turns, turn)
+			}
+			if len(turns) >= cp.CanonicalTurnIndex {
+				hasCanonicalForked = true
+				newConvUUID = newCheckpointID()
+			}
+		}
+	}
+
+	// If we couldn't load canonical turns, fall back to legacy ForkClaudeConversation if applicable
+	if !hasCanonicalForked && cp.ConvLineCount > 0 && cp.ClaudeConvUUID != "" && i.HistoryFilePath != "" {
 		historyDir := filepath.Dir(i.HistoryFilePath)
-		uuid, err := ForkClaudeConversation(i.HistoryFilePath, cp.ConvLineCount, historyDir)
+		uuidStr, err := ForkClaudeConversation(i.HistoryFilePath, cp.ConvLineCount, historyDir)
 		if err != nil {
 			log.Warn("forkfromcheckpoint: skipping conversation fork", "err", err)
 		} else {
-			newConvUUID = uuid
+			newConvUUID = uuidStr
 		}
 	}
 
@@ -118,6 +209,33 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		return nil, fmt.Errorf("fork from checkpoint: create instance: %w", err)
 	}
 
+	// Export canonical turns if successfully parsed
+	if hasCanonicalForked {
+		newInst.mu.Lock()
+		if newInst.claudeSession == nil {
+			newInst.claudeSession = &ClaudeSessionData{}
+		}
+		newInst.claudeSession.ConversationUUID = newConvUUID
+		newInst.claudeSession.ProjectName = newInst.Title
+		newInst.mu.Unlock()
+
+		var adapter HistoryAdapter
+		claude := NewClaudeAdapter()
+		agy := NewAgyAdapter()
+		if claude.CanHandle(newInst.Program) {
+			adapter = claude
+		} else if agy.CanHandle(newInst.Program) {
+			adapter = agy
+		}
+
+		if adapter != nil {
+			turnsToExport := turns[:cp.CanonicalTurnIndex]
+			if err := adapter.Export(context.Background(), turnsToExport, newInst); err != nil {
+				log.Warn("forkfromcheckpoint: failed to export canonical turns", "err", err)
+			}
+		}
+	}
+
 	// Attach a git worktree branched from the checkpoint SHA.
 	if i.gitManager.HasWorktree() && cp.GitCommitSHA != "" {
 		branchName := "fork/" + newTitle
@@ -137,8 +255,8 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 // GetCheckpoints returns a snapshot copy of the checkpoint list, safe for
 // concurrent reads from outside the instance's lock domain.
 func (i *Instance) GetCheckpoints() CheckpointList {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	cp := make(CheckpointList, len(i.Checkpoints))
 	copy(cp, i.Checkpoints)
 	return cp

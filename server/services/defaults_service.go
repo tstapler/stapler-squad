@@ -2,7 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -13,12 +17,65 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// aliasNameRE validates alias names: letters, digits, hyphens, underscores only.
+var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
+
 // DefaultsService handles session defaults RPC methods.
-type DefaultsService struct{}
+type DefaultsService struct {
+	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
+	// successful UpdateGlobalDefaults save. Wired in server/dependencies.go to
+	// trigger an immediate backlog-queue dequeue sweep when the concurrency
+	// limit is raised, rather than waiting up to 60s for the next
+	// ReconcileStuck tick (AC: raising the limit dequeues eligible items
+	// without a manual retry). Fires unconditionally rather than only when the
+	// limit increased — DequeueNextQueuedItems is a cheap no-op when there's
+	// nothing to dequeue.
+	onGlobalDefaultsUpdated func()
+
+	// sharedBacklogCfg and sharedBacklogCfgMu, when wired via
+	// SetSharedBacklogConfig, are the SAME *config.Config instance (and
+	// guarding mutex) BacklogService reads MaxConcurrentBacklogWorkItems /
+	// MaxAutoReworkIterations from at request time. UpdateGlobalDefaults
+	// otherwise follows the same lock-free load-modify-save pattern as every
+	// other handler in this file (a fresh config.LoadConfig() per call,
+	// last-write-wins across handlers — the accepted project tradeoff
+	// documented on UpsertAlias). That pattern alone is why BacklogService's
+	// long-lived cfg pointer (loaded once at process start, see
+	// server/dependencies.go) never observed a raised WIP cap until a
+	// restart: nothing ever wrote back into BacklogService's instance
+	// (PR #199 review F1). Rather than switching this whole handler onto the
+	// shared instance (which would make it lose track of concurrent writes
+	// from OTHER handlers — aliases, profiles, directory rules — between
+	// calls), UpdateGlobalDefaults keeps its existing fresh-load flow and
+	// additionally copies just the two backlog-relevant fields onto the
+	// shared instance, under the mutex, right after a successful save. Both
+	// fields are nil-safe to leave unwired: every test that doesn't call
+	// SetSharedBacklogConfig keeps this handler's pre-existing behavior.
+	sharedBacklogCfg   *config.Config
+	sharedBacklogCfgMu *sync.RWMutex
+}
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
 	return &DefaultsService{}
+}
+
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save.
+func (d *DefaultsService) SetOnGlobalDefaultsUpdated(fn func()) {
+	d.onGlobalDefaultsUpdated = fn
+}
+
+// SetSharedBacklogConfig wires the live *config.Config instance (and its
+// guarding mutex) that BacklogService reads MaxConcurrentBacklogWorkItems /
+// MaxAutoReworkIterations from — see sharedBacklogCfg's doc comment for why
+// this is needed and what it does and does not change about
+// UpdateGlobalDefaults's existing behavior. Called once from
+// server/dependencies.go with the exact same *config.Config pointer and
+// *sync.RWMutex passed to services.NewBacklogService / BacklogService.ConfigMu.
+func (d *DefaultsService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	d.sharedBacklogCfg = cfg
+	d.sharedBacklogCfgMu = mu
 }
 
 // GetSessionDefaults returns the full session defaults configuration.
@@ -70,6 +127,8 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.SessionDefaults.CLIFlags = req.Msg.CliFlags
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
+	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
+	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -80,7 +139,23 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
+	// Propagate the two backlog-concurrency fields onto BacklogService's live
+	// config instance so a raised cap takes effect on the very next
+	// SpawnSessionFromItem/DequeueNextQueuedItems call instead of requiring a
+	// process restart — see sharedBacklogCfg's doc comment (PR #199 review F1).
+	if d.sharedBacklogCfg != nil {
+		d.sharedBacklogCfgMu.Lock()
+		d.sharedBacklogCfg.MaxAutoReworkIterations = cfg.MaxAutoReworkIterations
+		d.sharedBacklogCfg.MaxConcurrentBacklogWorkItems = cfg.MaxConcurrentBacklogWorkItems
+		d.sharedBacklogCfgMu.Unlock()
+	}
+
 	log.Info("updated global session defaults", "program", cfg.SessionDefaults.Program, "tags", cfg.SessionDefaults.Tags)
+
+	if d.onGlobalDefaultsUpdated != nil {
+		go d.onGlobalDefaultsUpdated()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateGlobalDefaultsResponse{
 		Defaults: sessionDefaultsToProto(cfg),
 	}), nil
@@ -125,6 +200,9 @@ func (d *DefaultsService) UpsertProfile(
 		p.CreatedAt = now
 	}
 
+	if cfg.SessionDefaults.Profiles == nil {
+		cfg.SessionDefaults.Profiles = make(map[string]config.ProfileDefaults)
+	}
 	cfg.SessionDefaults.Profiles[p.Name] = p
 
 	if err := config.SaveConfig(cfg); err != nil {
@@ -206,6 +284,179 @@ func (d *DefaultsService) UpsertDirectoryRule(
 	}), nil
 }
 
+// UpsertAlias creates or updates a named alias preset (matched by name).
+// NOTE: like all other config-write handlers, this follows the lock-free
+// load-modify-save pattern. Concurrent writes are last-write-wins — the accepted
+// project tradeoff; see DefaultsService for context.
+func (d *DefaultsService) UpsertAlias(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertAliasRequest],
+) (*connect.Response[sessionv1.UpsertAliasResponse], error) {
+	if req.Msg.Alias == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias is required"))
+	}
+	name := strings.TrimSpace(req.Msg.Alias.Name)
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias name is required"))
+	}
+	if !aliasNameRE.MatchString(name) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("alias name %q must match ^[\\w-]+$ (letters, digits, hyphens, underscores only)", name))
+	}
+
+	cfg := config.LoadConfig()
+
+	alias := config.AliasConfig{
+		Name:        name,
+		Group:       req.Msg.Alias.Group,
+		Path:        req.Msg.Alias.Path,
+		Description: req.Msg.Alias.Description,
+		Profile:     req.Msg.Alias.Profile,
+		Program:     req.Msg.Alias.Program,
+		AutoYes:     req.Msg.Alias.AutoYes,
+		Tags:        req.Msg.Alias.Tags,
+		EnvVars:     req.Msg.Alias.EnvVars,
+		CLIFlags:    req.Msg.Alias.CliFlags,
+		SessionType: protoToAliasSessionType(req.Msg.Alias.SessionType),
+		NamePrefix:  req.Msg.Alias.NamePrefix,
+	}
+	if alias.EnvVars == nil {
+		alias.EnvVars = make(map[string]string)
+	}
+	if alias.Tags == nil {
+		alias.Tags = []string{}
+	}
+
+	// Slice-scan upsert: replace existing entry or append.
+	// Comparison is case-insensitive to enforce uniqueness across "MyProj" and "myproj".
+	// New names that differ only by case from an existing alias are treated as updates
+	// (overwrite-in-place), consistent with the client-side uniqueness check in AliasesManager.tsx.
+	found := false
+	for i, existing := range cfg.SessionDefaults.Aliases {
+		if strings.EqualFold(existing.Name, alias.Name) {
+			cfg.SessionDefaults.Aliases[i] = alias
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.SessionDefaults.Aliases = append(cfg.SessionDefaults.Aliases, alias)
+	}
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("upserted alias", "name", alias.Name)
+	return connect.NewResponse(&sessionv1.UpsertAliasResponse{
+		Alias: aliasConfigToProto(alias),
+	}), nil
+}
+
+// DeleteAlias removes an alias preset by name.
+func (d *DefaultsService) DeleteAlias(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteAliasRequest],
+) (*connect.Response[sessionv1.DeleteAliasResponse], error) {
+	if req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias name is required"))
+	}
+
+	cfg := config.LoadConfig()
+
+	found := false
+	// make a fresh slice so we don't mutate the original backing array (consistent with DeleteDirectoryRule).
+	filtered := make([]config.AliasConfig, 0, len(cfg.SessionDefaults.Aliases))
+	for _, a := range cfg.SessionDefaults.Aliases {
+		// Case-insensitive match: consistent with UpsertAlias which normalises names case-insensitively.
+		if strings.EqualFold(a.Name, req.Msg.Name) {
+			found = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	if !found {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("alias %q not found", req.Msg.Name))
+	}
+	cfg.SessionDefaults.Aliases = filtered
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("deleted alias", "name", req.Msg.Name)
+	return connect.NewResponse(&sessionv1.DeleteAliasResponse{}), nil
+}
+
+// ListAliases returns all configured aliases.
+func (d *DefaultsService) ListAliases(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListAliasesRequest],
+) (*connect.Response[sessionv1.ListAliasesResponse], error) {
+	cfg := config.LoadConfig()
+	aliases := make([]*sessionv1.AliasProto, 0, len(cfg.SessionDefaults.Aliases))
+	for _, a := range cfg.SessionDefaults.Aliases {
+		aliases = append(aliases, aliasConfigToProto(a))
+	}
+	return connect.NewResponse(&sessionv1.ListAliasesResponse{
+		Aliases: aliases,
+	}), nil
+}
+
+func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
+	return &sessionv1.AliasProto{
+		Name:        a.Name,
+		Group:       a.Group,
+		Path:        a.Path,
+		Description: a.Description,
+		Profile:     a.Profile,
+		Program:     a.Program,
+		AutoYes:     a.AutoYes,
+		Tags:        a.Tags,
+		EnvVars:     a.EnvVars,
+		CliFlags:    a.CLIFlags,
+		SessionType: aliasSessionTypeToProto(a.SessionType),
+		NamePrefix:  a.NamePrefix,
+	}
+}
+
+// aliasSessionTypeToProto converts a config.SessionType to the proto enum.
+func aliasSessionTypeToProto(st config.SessionType) sessionv1.SessionType {
+	switch st {
+	case config.SessionTypeDirectory:
+		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
+	case config.SessionTypeNewWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
+	case config.SessionTypeExistingWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
+	case config.SessionTypeNewProject:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
+	case config.SessionTypeOneOff:
+		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
+	default:
+		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
+}
+
+// protoToAliasSessionType converts a proto SessionType enum to config.SessionType.
+// UNSPECIFIED maps to SessionTypeDefault (empty, uses default behavior).
+func protoToAliasSessionType(st sessionv1.SessionType) config.SessionType {
+	switch st {
+	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
+		return config.SessionTypeDirectory
+	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
+		return config.SessionTypeNewWorktree
+	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
+		return config.SessionTypeExistingWorktree
+	case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
+		return config.SessionTypeNewProject
+	case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
+		return config.SessionTypeOneOff
+	default:
+		return config.SessionTypeDefault
+	}
+}
+
 // DeleteDirectoryRule removes a directory rule by path.
 func (d *DefaultsService) DeleteDirectoryRule(
 	ctx context.Context,
@@ -245,14 +496,16 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:        sd.Program,
-		AutoYes:        sd.AutoYes,
-		Tags:           sd.Tags,
-		EnvVars:        sd.EnvVars,
-		CliFlags:       sd.CLIFlags,
-		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:  cfg.OneOffBaseDir,
+		Program:                       sd.Program,
+		AutoYes:                       sd.AutoYes,
+		Tags:                          sd.Tags,
+		EnvVars:                       sd.EnvVars,
+		CliFlags:                      sd.CLIFlags,
+		Profiles:                      make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules:                make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:                 cfg.OneOffBaseDir,
+		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

@@ -271,6 +271,119 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 		"must use the worktree-path UUID, not the base-repo UUID")
 }
 
+// TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID is a regression
+// test for the bug where a Paused session's stored conversation UUID was overwritten
+// by DetectByPath when other sessions ran in the same directory after the pause.
+//
+// Scenario: Session A is paused (UUID = originalUUID). Sessions B and C run in the
+// same directory, creating newer JSONL files. The HistoryLinker must NOT replace
+// originalUUID with a newer session's UUID when correlating the paused session.
+func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}} // no open files — session is dead
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	sessionPath := "/home/user/mywiki"
+	originalUUID := "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"
+	newerUUID := "bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb"
+
+	// Create the project directory with two files: the original (older) and a newer
+	// one written by a different session that ran after session A was paused.
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(sessionPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
+	newerPath := filepath.Join(projectDir, newerUUID+".jsonl")
+	require.NoError(t, os.WriteFile(originalPath, []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(newerPath, []byte("{}"), 0644))
+
+	// Pin originalPath 1 s in the past so DetectByPath would return newerUUID if allowed.
+	past := time.Now().Add(-1 * time.Second)
+	require.NoError(t, os.Chtimes(originalPath, past, past))
+
+	// The paused session already has the correct UUID stored.
+	inst := &Instance{Title: "wiki-session", Path: sessionPath, Status: Paused}
+	inst.SetHistoryInfo(originalUUID, originalPath)
+	require.True(t, inst.HasClaudeSession())
+
+	linker := NewHistoryLinker(detector, nil)
+
+	// force=true simulates an fsnotify callback (triggered by the newer session's file).
+	linker.correlateSession(inst, true)
+
+	// The paused session's UUID must be unchanged.
+	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+		"paused session UUID must not be overwritten by a newer session's JSONL file")
+}
+
+// TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID is the same
+// regression test for Hibernated sessions (checkpoint written, tmux killed).
+func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}}
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	sessionPath := "/home/user/myproject"
+	originalUUID := "cccccccc-3333-3333-3333-cccccccccccc"
+	newerUUID := "dddddddd-4444-4444-4444-dddddddddddd"
+
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(sessionPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
+	newerPath := filepath.Join(projectDir, newerUUID+".jsonl")
+	require.NoError(t, os.WriteFile(originalPath, []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(newerPath, []byte("{}"), 0644))
+
+	past := time.Now().Add(-1 * time.Second)
+	require.NoError(t, os.Chtimes(originalPath, past, past))
+
+	inst := &Instance{Title: "hibernated-session", Path: sessionPath, Status: Hibernated}
+	inst.SetHistoryInfo(originalUUID, originalPath)
+	require.True(t, inst.HasClaudeSession())
+
+	linker := NewHistoryLinker(detector, nil)
+	linker.correlateSession(inst, true)
+
+	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+		"hibernated session UUID must not be overwritten by a newer session's JSONL file")
+}
+
+// TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID verifies that a
+// Stopped session (terminal state, no live process) is also protected from UUID
+// overwrite by the path-based fallback. Stopped sessions cannot be resumed, but
+// the guard should be semantically complete.
+func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}}
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	sessionPath := "/home/user/myproject"
+	originalUUID := "eeeeeeee-5555-5555-5555-eeeeeeeeeeee"
+	newerUUID := "ffffffff-6666-6666-6666-ffffffffffff"
+
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(sessionPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
+	newerPath := filepath.Join(projectDir, newerUUID+".jsonl")
+	require.NoError(t, os.WriteFile(originalPath, []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(newerPath, []byte("{}"), 0644))
+
+	past := time.Now().Add(-1 * time.Second)
+	require.NoError(t, os.Chtimes(originalPath, past, past))
+
+	inst := &Instance{Title: "stopped-session", Path: sessionPath, Status: Stopped}
+	inst.SetHistoryInfo(originalUUID, originalPath)
+	require.True(t, inst.HasClaudeSession())
+
+	linker := NewHistoryLinker(detector, nil)
+	linker.correlateSession(inst, true)
+
+	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+		"stopped session UUID must not be overwritten by a newer session's JSONL file")
+}
+
 // TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree verifies
 // that DetectByPath uses inst.Path when there is no worktree (the non-worktree case).
 func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *testing.T) {

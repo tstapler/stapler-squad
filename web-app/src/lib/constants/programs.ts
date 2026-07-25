@@ -18,6 +18,24 @@ export const PROGRAMS: ProgramOption[] = [
 
 export const DEFAULT_PROGRAM = "claude";
 
+export interface ModelOption {
+  value: string;
+  label: string;
+}
+
+/** Known Claude model IDs, newest first. */
+export const CLAUDE_MODELS: ModelOption[] = [
+  { value: "claude-opus-4-8",            label: "Claude Opus 4.8 (latest)" },
+  { value: "claude-sonnet-4-6",          label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001",  label: "Claude Haiku 4.5" },
+  { value: "claude-opus-4-5",            label: "Claude Opus 4.5" },
+  { value: "claude-sonnet-4-5",          label: "Claude Sonnet 4.5" },
+  { value: "claude-haiku-4-5",           label: "Claude Haiku 4.5 (base)" },
+  { value: "claude-opus-4",              label: "Claude Opus 4" },
+  { value: "claude-sonnet-4",            label: "Claude Sonnet 4" },
+  { value: "claude-haiku-4",             label: "Claude Haiku 4" },
+];
+
 export function getProgramDisplay(program?: string): string {
   if (!program) return "Claude Code (default)";
   const option = PROGRAMS.find((p) => p.value === program);

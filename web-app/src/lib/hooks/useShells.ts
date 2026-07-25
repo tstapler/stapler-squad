@@ -52,12 +52,15 @@ export function useShells(sessionId: string): UseShellsReturn {
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
+    // Guard: createAuthInterceptor may be undefined in test environments where @/lib/config
+    // is partially mocked (e.g. only getApiBaseUrl is exported).
+    const authInterceptor = typeof createAuthInterceptor === "function" ? createAuthInterceptor() : null;
     const interceptors = analyticsCtx
-      ? [createAuthInterceptor(), createRpcTimingInterceptor(analyticsCtx)]
-      : [createAuthInterceptor()];
+      ? [authInterceptor, createRpcTimingInterceptor(analyticsCtx)].filter(Boolean)
+      : [authInterceptor].filter(Boolean);
     const transport = createWatchTransport({
       baseUrl: getApiBaseUrl(),
-      interceptors,
+      interceptors: interceptors as Parameters<typeof createWatchTransport>[0]["interceptors"],
     });
     clientRef.current = createClient(SessionService, transport);
   // eslint-disable-next-line react-hooks/exhaustive-deps

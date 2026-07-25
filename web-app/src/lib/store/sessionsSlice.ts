@@ -1,5 +1,5 @@
 import { createSlice, createEntityAdapter, createSelector, PayloadAction } from "@reduxjs/toolkit";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, DetectedStatus } from "@/gen/session/v1/types_pb";
 import type { RootState } from "./store";
 
 const sessionsAdapter = createEntityAdapter<Session, string>({
@@ -11,8 +11,8 @@ export type ConnectionState = "connected" | "stale" | "disconnected";
 interface SessionsExtraState {
   loading: boolean;
   error: string | null;
-  /** Per-session terminal-detected status from SessionStatusChangedEvent fields 4/5. */
-  detectedStatusMap: Record<string, { detectedStatus: string; detectedContext: string }>;
+  /** Per-session terminal-detected status synced from Session.detectedStatus proto field. */
+  detectedStatusMap: Record<string, { detectedStatus: DetectedStatus; detectedContext: string }>;
   /** WatchSessions stream connection state for UI staleness indicator. */
   connectionState: ConnectionState;
   /**
@@ -42,7 +42,37 @@ const sessionsSlice = createSlice({
     upsertSession(state, action: PayloadAction<Session>) {
       // Don't resurrect a deleted session via an in-flight update event
       if (!state.deletedIds[action.payload.id]) {
+        // Skip no-op upserts: if updatedAt matches the existing record the data
+        // hasn't changed and we'd just cause a spurious re-render. This prevents
+        // the N-render storm from WatchSessions initial-snapshot events that
+        // duplicate sessions already loaded by the preceding listSessions() call.
+        const existing = state.entities[action.payload.id];
+        const incoming = action.payload;
+        if (
+          existing &&
+          existing.updatedAt !== undefined &&
+          incoming.updatedAt !== undefined &&
+          existing.updatedAt.seconds === incoming.updatedAt.seconds &&
+          existing.updatedAt.nanos === incoming.updatedAt.nanos
+        ) {
+          return;
+        }
         sessionsAdapter.upsertOne(state, action.payload);
+        // Sync detectedStatusMap from the session's proto fields
+        const session = action.payload;
+        if (session.status !== SessionStatus.ACTIVE) {
+          // Non-active: clear badge unconditionally
+          delete state.detectedStatusMap[session.id];
+        } else if (session.detectedStatus !== undefined && session.detectedStatus !== DetectedStatus.UNSPECIFIED) {
+          // Active with typed detection: update map from proto field
+          state.detectedStatusMap[session.id] = {
+            detectedStatus: session.detectedStatus,
+            detectedContext: session.detectedContext ?? "",
+          };
+        } else {
+          // Active + UNSPECIFIED: clear
+          delete state.detectedStatusMap[session.id];
+        }
       }
     },
     removeSession(state, action: PayloadAction<string>) {
@@ -58,26 +88,8 @@ const sessionsSlice = createSlice({
     setConnectionState(state, action: PayloadAction<ConnectionState>) {
       state.connectionState = action.payload;
     },
-    // Handles statusChanged stream events without requiring a sessions closure.
-    // Runs inside the reducer where state is always current — no stale-closure risk.
-    updateSessionStatus(
-      state,
-      action: PayloadAction<{ sessionId: string; newStatus: SessionStatus; detectedStatus?: string; detectedContext?: string }>
-    ) {
-      const { sessionId, newStatus, detectedStatus, detectedContext } = action.payload;
-      if (state.entities[sessionId]) {
-        sessionsAdapter.updateOne(state, {
-          id: sessionId,
-          changes: { status: newStatus },
-        });
-      }
-      // Update detected status map when the event carries detection info
-      if (detectedStatus) {
-        state.detectedStatusMap[sessionId] = {
-          detectedStatus,
-          detectedContext: detectedContext ?? "",
-        };
-      }
+    removeDetectedStatus(state, action: PayloadAction<string>) {
+      delete state.detectedStatusMap[action.payload];
     },
   },
 });
@@ -89,7 +101,7 @@ export const {
   setLoading,
   setError,
   setConnectionState,
-  updateSessionStatus,
+  removeDetectedStatus,
 } = sessionsSlice.actions;
 
 // Use the adapter's built-in selectors scoped to the sessions slice

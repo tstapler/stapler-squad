@@ -215,7 +215,10 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 	for pair := range validTransitionSet {
 		from, to := pair[0], pair[1]
 		t.Run(from.String()+"->"+to.String(), func(t *testing.T) {
-			inst := &Instance{Title: "test", Status: from}
+			// Path must be a real directory: Hibernated->Active performs a genuine
+			// cold-restore Start() that now hard-fails on a missing workdir instead
+			// of silently falling back to the process cwd (see ErrWorkDirMissing).
+			inst := &Instance{Title: "test", Status: from, Path: t.TempDir()}
 			err := inst.transitionTo(ctx, to)
 			if err != nil {
 				t.Errorf("transitionTo(%s) from %s: unexpected error %v", to, from, err)
@@ -286,7 +289,10 @@ func TestTransitionTo_ChainedTransitions(t *testing.T) {
 
 	for _, chain := range chains {
 		t.Run(chain.name, func(t *testing.T) {
-			inst := &Instance{Title: "test-chain", Status: chain.start}
+			// Path must be a real directory: Hibernated->Active performs a genuine
+			// cold-restore Start() that now hard-fails on a missing workdir instead
+			// of silently falling back to the process cwd (see ErrWorkDirMissing).
+			inst := &Instance{Title: "test-chain", Status: chain.start, Path: t.TempDir()}
 			for i, step := range chain.steps {
 				if err := inst.transitionTo(ctx, step.to); err != nil {
 					t.Fatalf("step %d: transitionTo(%s) from %s: %v", i, step.to, inst.Status, err)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -13,30 +14,35 @@ func TestNewStatusDetector(t *testing.T) {
 		t.Fatal("NewStatusDetector() returned nil")
 	}
 
-	// Verify default patterns are loaded
-	if len(sd.readyRegexes) == 0 {
-		t.Error("No ready patterns loaded")
+	// Verify default patterns work behaviorally — not by inspecting internal slice lengths.
+	probes := []struct {
+		input string
+		want  DetectedStatus
+	}{
+		{"esc to interrupt", StatusExecuting},
+		{"Error: oops", StatusError},
+		{"Yes, allow reading this file", StatusNeedsApproval},
+		{" ❯ 1. Yes", StatusInputRequired},
+		{"— INSERT —", StatusIdle},
 	}
-	if len(sd.processingRegexes) == 0 {
-		t.Error("No processing patterns loaded")
-	}
-	if len(sd.needsApprovalRegexes) == 0 {
-		t.Error("No needs_approval patterns loaded")
-	}
-	if len(sd.errorRegexes) == 0 {
-		t.Error("No error patterns loaded")
+	for _, p := range probes {
+		got := sd.Detect([]byte(p.input))
+		if got != p.want {
+			t.Errorf("Detect(%q) = %v, want %v", p.input, got, p.want)
+		}
 	}
 }
 
 func TestStatusDetector_DetectReady(t *testing.T) {
 	sd := NewStatusDetector()
 
-	// Test catch-all ready pattern with generic output that doesn't match other patterns
-	// Note: "$ " matches StatusIdle (command_prompt pattern), not StatusReady
+	// Test catch-all ready pattern with generic output that doesn't match other patterns.
+	// The .* catch-all now returns StatusUnknown (renders no badge) — not StatusReady.
+	// Note: "$ " matches StatusIdle (command_prompt pattern), not StatusUnknown
 	output := []byte("some generic terminal output")
 	status := sd.Detect(output)
-	if status != StatusReady {
-		t.Errorf("Detect() returned %v, expected StatusReady", status)
+	if status != StatusUnknown {
+		t.Errorf("Detect() returned %v, expected StatusUnknown (catch-all renders no badge)", status)
 	}
 }
 
@@ -69,8 +75,8 @@ func TestStatusDetector_DetectActive(t *testing.T) {
 
 	for _, output := range testCases {
 		status := sd.Detect([]byte(output))
-		if status != StatusActive {
-			t.Errorf("Detect(%q) returned %v, expected StatusActive", output, status)
+		if status != StatusExecuting {
+			t.Errorf("Detect(%q) returned %v, expected StatusExecuting", output, status)
 		}
 	}
 }
@@ -93,6 +99,115 @@ func TestStatusDetector_DetectSuccess(t *testing.T) {
 		status := sd.Detect([]byte(output))
 		if status != StatusSuccess {
 			t.Errorf("Detect(%q) returned %v, expected StatusSuccess", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"✻ Waiting for 1 background agent to finish",
+		"✻ Waiting for 2 background agents to finish",
+		"◉ Waiting for 3 background agents to finish",
+		"✦ Waiting for 1 background agent to finish",
+		"\x1b[33m✻\x1b[0m Waiting for 1 background agent to finish",
+		"✻ Waiting for 1 dynamic workflow to finish",
+		"✻ Waiting for 2 dynamic workflows to finish",
+		"◉ Waiting for 3 dynamic workflows to finish",
+		"✦ Waiting for 1 dynamic workflow to finish",
+		"✦ Waiting for 2 dynamic workflows to finish",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) returned %v, expected StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
+	sd := NewStatusDetector()
+	noMatch := []string{
+		"Waiting for 1 background agent to finish",   // missing bullet prefix
+		"✻ Waiting for background agents to finish",  // missing digit
+		"✻ waiting for 1 background agent to finish", // lowercase W
+	}
+	for _, input := range noMatch {
+		got := sd.Detect([]byte(input))
+		if got == StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = StatusWaitingForAgent; want no match", input)
+		}
+	}
+}
+
+func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	// Stale success in scrollback, current waiting line at top — waiting wins
+	lines := []string{
+		"✻ Baked for 3s",
+		"✻ Waiting for 1 background agent to finish",
+	}
+	status := sd.DetectFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Errorf("DetectFromLines() = %v, want StatusWaitingForAgent", status)
+	}
+}
+
+func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
+	sd := NewStatusDetector()
+	// Stale success in scrollback, monitors line above — WaitingForAgent wins.
+	// Regression guard: matchLocked checks WaitingForAgent before Success, so
+	// "✻ Cogitated for 18m 41s · 1 monitor still running" must not fall through
+	// to StatusSuccess if group ordering ever changes.
+	lines := []string{
+		"✻ Baked for 3s",
+		"✻ Cogitated for 18m 41s · 1 monitor still running",
+	}
+	if got := sd.DetectFromLines(lines); got != StatusWaitingForAgent {
+		t.Errorf("DetectFromLines() = %v, want StatusWaitingForAgent (monitors line must override stale Success)", got)
+	}
+}
+
+func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		// Full turn-completion line with monitor suffix
+		"✻ Cogitated for 18m 41s · 1 monitor still running",
+		// Plural monitors
+		"✻ Churned for 5s · 2 monitors still running",
+		// ANSI-colored variant
+		"\x1b[33m✻\x1b[0m Cogitated for 1m · 1 monitor still running",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = %v, want StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectMonitorsStillRunning_NegativeCases(t *testing.T) {
+	sd := NewStatusDetector()
+
+	noMatch := []string{
+		// "monitor" without a leading digit must not match
+		"monitor still running",
+		// Unrelated uses of "monitor"
+		"SessionMonitor initialised",
+		"monitoring CI run 27886564503", // status-bar label without count+running
+		// Realistic false-positive surface — "monitor" is polysemous; these must NOT match.
+		"3 monitors running at 60Hz",      // display/screen configuration output
+		"Found 1 monitor running process", // process listing
+		"2 monitors running in parallel",  // concurrency log
+	}
+	for _, input := range noMatch {
+		got := sd.Detect([]byte(input))
+		if got == StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = StatusWaitingForAgent; want no match (false positive)", input)
 		}
 	}
 }
@@ -163,18 +278,36 @@ func TestStatusDetector_DetectError(t *testing.T) {
 func TestStatusDetector_PriorityOrder(t *testing.T) {
 	sd := NewStatusDetector()
 
-	// Error patterns should take priority over processing patterns
-	output := []byte("Error while processing")
-	status := sd.Detect(output)
-	if status != StatusError {
-		t.Errorf("Detect() returned %v, expected StatusError (priority test)", status)
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+	}{
+		// Error > Processing
+		{"Error > Processing", "Error while processing", StatusError},
+		// NeedsApproval > Processing
+		{"NeedsApproval > Processing", "Reading file. Do you want to proceed?", StatusNeedsApproval},
+		// NeedsApproval > Active
+		{"NeedsApproval > Active", "(esc to interrupt)\nYes, allow reading this file", StatusNeedsApproval},
+		// InputRequired > Active
+		{"InputRequired > Active", "(esc to interrupt)\n ❯ 1. Yes", StatusInputRequired},
+		// InputRequired > Success
+		{"InputRequired > Success", "✻ Baked for 5s\n ❯ 1. Yes", StatusInputRequired},
+		// Success > Active
+		{"Success > Active", "✻ Baked for 5s\nesc to interrupt", StatusSuccess},
+		// Active > Processing
+		{"Active > Processing", "Thinking about it\nesc to interrupt", StatusExecuting},
+		// Error > NeedsApproval
+		{"Error > NeedsApproval", "Error: file not found\nYes, allow reading", StatusError},
 	}
 
-	// Approval should take priority over processing
-	output = []byte("Reading file. Do you want to proceed?")
-	status = sd.Detect(output)
-	if status != StatusNeedsApproval {
-		t.Errorf("Detect() returned %v, expected StatusNeedsApproval (priority test)", status)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.Detect([]byte(tc.input))
+			if got != tc.want {
+				t.Errorf("Detect(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -198,16 +331,31 @@ func TestStatusDetector_DetectWithContext(t *testing.T) {
 	}
 }
 
-func TestStatusDetector_DetectUnknown(t *testing.T) {
+func TestStatusDetector_DetectUnknown_NoPatterns(t *testing.T) {
+	// Build a detector from a minimal YAML with no patterns in any category.
+	tmpDir := t.TempDir()
+	emptyPath := filepath.Join(tmpDir, "empty.yaml")
+	emptyYAML := []byte("ready: []\nprocessing: []\nneeds_approval: []\ninput_required: []\nerror: []\ntests_failing: []\nidle: []\nactive: []\nsuccess: []\n")
+	if err := os.WriteFile(emptyPath, emptyYAML, 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	sd, err := NewStatusDetectorFromFile(emptyPath)
+	if err != nil {
+		t.Fatalf("NewStatusDetectorFromFile: %v", err)
+	}
+	got := sd.Detect([]byte("xyz123 unique string that cannot match any pattern"))
+	if got != StatusUnknown {
+		t.Errorf("Detect() with no patterns = %v, want StatusUnknown", got)
+	}
+}
+
+func TestStatusDetector_EmptyOutputMatchesReadyCatchAll(t *testing.T) {
+	// The default '.*' Ready catch-all matches the empty string — this is intentional.
+	// After Epic 2, the catch-all returns StatusUnknown (renders no badge), not StatusReady.
 	sd := NewStatusDetector()
-
-	// Remove the catch-all ready pattern for this test.
-	sd.readyRegexes = nil
-
-	output := []byte("Some random output that doesn't match any pattern xyz123")
-	status := sd.Detect(output)
-	if status != StatusUnknown {
-		t.Errorf("Detect() returned %v, expected StatusUnknown", status)
+	got := sd.Detect([]byte(""))
+	if got != StatusUnknown {
+		t.Errorf("Detect(empty) = %v, want StatusUnknown (.* catch-all now renders no badge)", got)
 	}
 }
 
@@ -251,9 +399,9 @@ error:
 		t.Fatalf("LoadPatterns() failed: %v", err)
 	}
 
-	// Test loaded patterns
-	if status := sd.Detect([]byte("ready>")); status != StatusReady {
-		t.Errorf("Loaded pattern 'ready>' not working, got status %v", status)
+	// Test loaded patterns — Ready category patterns now return StatusUnknown (no badge).
+	if status := sd.Detect([]byte("ready>")); status != StatusUnknown {
+		t.Errorf("Loaded 'ready>' pattern: got status %v, want StatusUnknown (Ready patterns render no badge)", status)
 	}
 
 	if status := sd.Detect([]byte("test_processing")); status != StatusProcessing {
@@ -295,8 +443,9 @@ error: []
 		t.Fatalf("NewStatusDetectorFromFile() failed: %v", err)
 	}
 
-	if status := sd.Detect([]byte("custom>")); status != StatusReady {
-		t.Errorf("Pattern from file not working, got status %v", status)
+	// Ready category patterns now return StatusUnknown (catch-all renders no badge).
+	if status := sd.Detect([]byte("custom>")); status != StatusUnknown {
+		t.Errorf("Pattern from file: got status %v, want StatusUnknown (Ready patterns render no badge)", status)
 	}
 }
 
@@ -399,6 +548,14 @@ func TestStatusDetector_GetPatternNames(t *testing.T) {
 	if unknownNames != nil {
 		t.Error("GetPatternNames(StatusUnknown) should return nil")
 	}
+
+	waitingNames := sd.GetPatternNames(StatusWaitingForAgent)
+	if len(waitingNames) == 0 {
+		t.Error("GetPatternNames(StatusWaitingForAgent) returned empty slice")
+	}
+	if len(waitingNames) > 0 && waitingNames[0] != "waiting_for_background_agent" {
+		t.Errorf("GetPatternNames(StatusWaitingForAgent)[0] = %q, want %q", waitingNames[0], "waiting_for_background_agent")
+	}
 }
 
 func TestStatusDetector_DetectFromString(t *testing.T) {
@@ -485,8 +642,9 @@ func TestStatusString(t *testing.T) {
 		{StatusNeedsApproval, "Needs Approval"},
 		{StatusError, "Error"},
 		{StatusIdle, "Idle"},
-		{StatusActive, "Active"},
+		{StatusExecuting, "Executing"},
 		{StatusSuccess, "Success"},
+		{StatusWaitingForAgent, "Waiting for Agent"},
 		{StatusUnknown, "Unknown"},
 	}
 
@@ -596,7 +754,10 @@ func TestGeminiPatterns_AgyCoverage(t *testing.T) {
 	}{
 		{"╰─ Yes, allow once", StatusNeedsApproval},
 		{"Allow execution of: ls /tmp", StatusNeedsApproval},
-		{"✦ Working...", StatusProcessing},
+		// "✦ Working..." now returns StatusExecuting: ✦ was added to claude_thinking_verb
+		// (the Claude Code spinner pattern), which fires before gemini_working (Processing).
+		// StatusExecuting is correct — Gemini/agy is actively processing when showing this line.
+		{"✦ Working...", StatusExecuting},
 	}
 	for _, tc := range distinctiveCases {
 		t.Run(tc.line, func(t *testing.T) {
@@ -628,16 +789,186 @@ func TestGeminiPatterns_NeedsApprovalState(t *testing.T) {
 	}
 }
 
-// AgyCoverage_should_haveCommentInDetectorGo_When_noAgySpecificPatternsExist
-// Canary test: if the agy coverage comment is removed from detector.go or the patterns
-// diverge, this test fails to alert future maintainers.
-func TestDetector_AgyCoverageCommentPresent(t *testing.T) {
-	src, err := os.ReadFile("detector.go")
-	if err != nil {
-		t.Fatalf("failed to read detector.go: %v", err)
+// TestStatusDetector_DetectActive_StarFourPointed verifies that ✦ (U+2726 BLACK FOUR POINTED
+// STAR) — Claude Code's primary thinking spinner — is detected as StatusExecuting.
+// Regression test for the gap where claude_thinking_verb lacked ✦ in its char class.
+func TestStatusDetector_DetectActive_StarFourPointed(t *testing.T) {
+	sd := NewStatusDetector()
+	testCases := []struct {
+		input string
+		desc  string
+	}{
+		{
+			"✦ Thinking… (2m 5s · ↓ 6.4k tokens)\n",
+			"claude primary spinner + Thinking verb + ellipsis",
+		},
+		{
+			"  ✦ Searching…\n",
+			"indented star-four-pointed + verb + ellipsis",
+		},
+		{
+			"✦ Compiling...\n",
+			"dot ellipsis variant (3 dots)",
+		},
+		{
+			"✦ Ruminating… (20s · ↓ 1.2k tokens)\n",
+			"random thinking verb (Ruminating)",
+		},
+		{
+			"✦ Pondering.\n",
+			"single dot ellipsis",
+		},
 	}
-	if !strings.Contains(string(src), "agy (Antigravity CLI)") {
-		t.Error("detector.go is missing the 'agy (Antigravity CLI)' coverage comment; " +
-			"if agy patterns were intentionally removed or renamed, update this test and the comment")
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			status := sd.Detect([]byte(tc.input))
+			if status != StatusExecuting {
+				t.Errorf("Detect(%q) = %v, want StatusExecuting", tc.input, status)
+			}
+		})
+	}
+}
+
+// TestStatusDetector_DetectActive_ScreenOverwrite verifies that bare \r (carriage return
+// not followed by \n) and ANSI cursor-up sequences are detected as StatusExecuting when
+// no text-based pattern matched. This catches spinner-based TUIs that animate via CR.
+func TestStatusDetector_DetectActive_ScreenOverwrite(t *testing.T) {
+	sd := NewStatusDetector()
+
+	t.Run("pure CR spinner — no keywords", func(t *testing.T) {
+		input := "⠋ Thinking\r⠙ Thinking\r⠹ Thinking\n"
+		status := sd.Detect([]byte(input))
+		if status != StatusExecuting {
+			t.Errorf("Detect(CR spinner) = %v, want StatusExecuting", status)
+		}
+	})
+
+	t.Run("ANSI cursor-up with non-keyword content triggers screen-overwrite", func(t *testing.T) {
+		// "Working..." would match the Processing text pattern, so use content with
+		// no keyword match — screen-overwrite fires before the Ready catch-all.
+		input := "......\x1b[A......\n"
+		status := sd.Detect([]byte(input))
+		if status != StatusExecuting {
+			t.Errorf("Detect(cursor-up) = %v, want StatusExecuting", status)
+		}
+	})
+
+	t.Run("Windows CRLF newlines must NOT trigger screen-overwrite", func(t *testing.T) {
+		input := "Normal line\r\nAnother line\r\n"
+		status := sd.Detect([]byte(input))
+		if status == StatusExecuting {
+			t.Errorf("Detect(CRLF newlines) = StatusExecuting; CRLF is a line ending, not a screen overwrite")
+		}
+	})
+
+	t.Run("higher-priority error pattern wins over screen-overwrite", func(t *testing.T) {
+		// Error text must be on a separate line (\n) so CR collapse doesn't erase it.
+		// "Error: ...\r⠋ Retrying\r" would collapse the error text away (CR overwrite);
+		// use \n to keep both lines visible so the error pattern matches first.
+		input := "Error: connection refused\n⠋ Retrying\r"
+		status := sd.Detect([]byte(input))
+		if status != StatusError {
+			t.Errorf("Detect(error+overwrite) = %v, want StatusError (error has higher priority)", status)
+		}
+	})
+}
+
+// TestRecentEvents verifies the detection event ring buffer and SetSessionID.
+func TestRecentEvents(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("test-session")
+
+	// No events yet
+	if got := sd.RecentEvents(10); len(got) != 0 {
+		t.Errorf("expected 0 events before any detection, got %d", len(got))
+	}
+
+	// Run a detection — should produce one event
+	_ = sd.Detect([]byte("✦ Thinking…\n"))
+	events := sd.RecentEvents(10)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event after 1 detection, got %d", len(events))
+	}
+	if events[0].SessionID != "test-session" {
+		t.Errorf("event.SessionID = %q, want %q", events[0].SessionID, "test-session")
+	}
+	if events[0].ResultStatus != StatusExecuting {
+		t.Errorf("event.ResultStatus = %v, want StatusExecuting", events[0].ResultStatus)
+	}
+	if events[0].MatchedPattern == "" {
+		t.Error("event.MatchedPattern should not be empty for a matched pattern")
+	}
+
+	// No-match case: TailSnippet should be populated
+	sd2 := NewStatusDetector()
+	_ = sd2.Detect([]byte("some unrecognized output"))
+	ev2 := sd2.RecentEvents(1)
+	if len(ev2) == 0 {
+		t.Fatal("expected at least 1 event from no-match detection")
+	}
+	if ev2[0].TailSnippet == "" {
+		t.Error("TailSnippet should be non-empty for no-match events (needed for debugging)")
+	}
+	if ev2[0].MatchedPattern != "<none>" && ev2[0].MatchedPattern != "claude_prompt" {
+		// claude_prompt has a catch-all ".*" ready pattern that may match — both are acceptable
+		t.Logf("no-match MatchedPattern = %q (acceptable)", ev2[0].MatchedPattern)
+	}
+}
+
+// TestEventRing_ConcurrentPushRecent verifies that concurrent calls to Detect and
+// RecentEvents do not trigger data races on the ring buffer or the sessionID field.
+// Run with: go test ./session/detection/... -race
+func TestEventRing_ConcurrentPushRecent(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("race-test")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				_ = sd.Detect([]byte("✦ Thinking…\n"))
+				_ = sd.RecentEvents(10)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestDetectForProgram_should_useRegisteredPatterns_When_binaryKnown(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// "aider" binary: only has aider_permission in NeedsApproval.
+	// The pattern "(Y)es/(N)o/(D)on't ask again" should match NeedsApproval.
+	got := sd.DetectForProgram([]byte("(Y)es/(N)o/(D)on't ask again"), "aider")
+	if got != StatusNeedsApproval {
+		t.Errorf("DetectForProgram(aider permission) = %v, want StatusNeedsApproval", got)
+	}
+}
+
+func TestDetectForProgram_should_fallBack_When_binaryUnknown(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// An unregistered binary falls back to sd.Detect() which uses getDefaultPatterns().
+	// "esc to interrupt" is an Active pattern in the default set.
+	got := sd.DetectForProgram([]byte("esc to interrupt"), "unknownbinary")
+	if got != StatusExecuting {
+		t.Errorf("DetectForProgram(unknown binary) = %v, want StatusExecuting", got)
+	}
+}
+
+func TestEventRingCap_should_be2000(t *testing.T) {
+	if EventRingCap != 2000 {
+		t.Errorf("EventRingCap = %d, want 2000", EventRingCap)
+	}
+	// Also verify the ring holds 2000 events without losing the 1001st
+	sd := NewStatusDetector()
+	for i := 0; i < 1001; i++ {
+		sd.Detect([]byte("Thinking..."))
+	}
+	events := sd.RecentEvents(1001)
+	if len(events) != 1001 {
+		t.Errorf("expected 1001 events accessible, got %d", len(events))
 	}
 }

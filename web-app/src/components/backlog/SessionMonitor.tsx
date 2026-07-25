@@ -3,7 +3,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import * as styles from "./SessionMonitor.css";
 
 interface SessionMonitorProps {
@@ -25,8 +24,8 @@ const TERMINAL_LINES = 60;
 
 export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMonitorProps) {
   const { getTerminalSnapshot, writeToSession, getConversationMessages } = useSessionService();
-  const conversationViewEnabled = useFeatureFlag("backlog:conversation-view");
 
+  const [view, setView] = useState<"terminal" | "history">("terminal");
   const [terminalOutput, setTerminalOutput] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -42,16 +41,19 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
 
   const fetchConversation = useCallback(async () => {
     const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
-    if (msgs.length > 0) setMessages(msgs);
+    setMessages(msgs);
   }, [sessionId, getConversationMessages]);
 
   const refresh = useCallback(() => {
-    if (conversationViewEnabled) {
-      void fetchConversation();
-    } else {
-      void fetchTerminal();
-    }
-  }, [conversationViewEnabled, fetchConversation, fetchTerminal]);
+    void fetchTerminal();
+    void fetchConversation();
+  }, [fetchTerminal, fetchConversation]);
+
+  // Reset stale state when sessionId changes
+  useEffect(() => {
+    setTerminalOutput("");
+    setMessages([]);
+  }, [sessionId]);
 
   // Initial load + polling while running
   useEffect(() => {
@@ -101,6 +103,20 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
         <span className={styles.toolbarTitle}>
           {sessionRole ? `${sessionRole} session` : "session"} · {isRunning ? "running" : "ended"}
         </span>
+        <button
+          className={`${styles.viewToggle} ${view === "terminal" ? styles.viewToggleActive : ""}`}
+          onClick={() => setView("terminal")}
+          title="Show terminal output"
+        >
+          Terminal
+        </button>
+        <button
+          className={`${styles.viewToggle} ${view === "history" ? styles.viewToggleActive : ""}`}
+          onClick={() => setView("history")}
+          title="Show conversation history"
+        >
+          History
+        </button>
         <a
           className={styles.openLink}
           href={`/?session=${sessionId}`}
@@ -112,9 +128,9 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       </div>
 
       <div className={styles.outputArea} ref={outputRef} aria-label="Session output" aria-live="polite">
-        {conversationViewEnabled ? (
+        {view === "history" ? (
           messages.length === 0 ? (
-            <div className={styles.emptyState}>No conversation messages yet…</div>
+            <div className={styles.emptyState}>No conversation history yet…</div>
           ) : (
             <div className={styles.messageList}>
               {messages.map((msg, i) => (
@@ -147,7 +163,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
               key={action}
               className={styles.quickActionButton}
               onClick={() => void handleSend(action)}
-              disabled={sending}
+              disabled={sending || !isRunning}
               aria-label={`Send "${action}"`}
               title={`Send "${action}"`}
             >
@@ -162,14 +178,14 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Send input to session…"
-          disabled={sending}
+          disabled={sending || !isRunning}
           aria-label="Session input"
           data-testid="session-monitor-input"
         />
         <button
           className={styles.sendButton}
           onClick={() => void handleSend(inputValue)}
-          disabled={sending || !inputValue.trim()}
+          disabled={sending || !inputValue.trim() || !isRunning}
           data-testid="session-monitor-send"
         >
           Send

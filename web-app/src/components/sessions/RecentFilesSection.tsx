@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { getFileIcon } from "@/lib/utils/fileIcons";
 import * as styles from "./RecentFilesSection.css";
 
@@ -13,14 +13,39 @@ export function RecentFilesSection({
   selectedPath,
   onSelect,
 }: RecentFilesSectionProps): React.ReactElement | null {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("filesTab.recentCollapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggle = () => {
+    setCollapsed((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("filesTab.recentCollapsed", String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   if (paths.length === 0) {
     return null;
   }
 
   return (
     <div className={styles.container}>
-      <div className={styles.heading}>Recent</div>
-      {paths.map((path) => {
+      <button
+        className={styles.heading}
+        onClick={toggle}
+        aria-expanded={!collapsed}
+      >
+        <span className={styles.chevron}>{collapsed ? "▸" : "▾"}</span>
+        Recent
+      </button>
+      {!collapsed && paths.map((path) => {
         const basename = path.split("/").pop() ?? path;
         const parentDir = path.includes("/")
           ? path.split("/").slice(-2, -1)[0] ?? ""

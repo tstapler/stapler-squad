@@ -114,6 +114,38 @@ export const fileShortcut = style({
   fontFamily: "monospace",
 });
 
+export const fileListErrorState = style({
+  padding: "16px 12px",
+  textAlign: "center",
+  color: vars.color.error,
+  fontSize: "13px",
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "4px",
+  backgroundColor: vars.color.errorBg,
+});
+
+export const fileListErrorMessage = style({
+  marginBottom: "10px",
+  wordBreak: "break-word",
+});
+
+export const retryButton = style({
+  padding: "6px 14px",
+  fontSize: "13px",
+  fontWeight: 500,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "4px",
+  background: vars.color.cardBackground,
+  color: vars.color.error,
+  cursor: "pointer",
+  transition: "background-color 0.15s",
+  selectors: {
+    "&:hover": {
+      backgroundColor: vars.color.hoverBackground,
+    },
+  },
+});
+
 export const unsavedCount = style({
   marginLeft: "8px",
   fontSize: "12px",

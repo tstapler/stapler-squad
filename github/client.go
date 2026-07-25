@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -130,9 +131,10 @@ type ghCommentResponse struct {
 	Line int    `json:"line,omitempty"`
 }
 
-// CheckGHAuth checks if GitHub CLI is installed and authenticated.
-// Results are cached for 5 minutes. Concurrent callers that trigger a refresh
-// share a single subprocess invocation via singleflight.
+// CheckGHAuth verifies GitHub authentication via GET /user using the native HTTP
+// client. No subprocess is invoked — avoids forkExec lock contention.
+// Results are cached for 5 minutes. Concurrent callers share a single inflight
+// call via singleflight.
 func CheckGHAuth() error {
 	// Fast path: return cached result if still fresh.
 	if v := ghAuthState.Load(); v != nil {
@@ -141,22 +143,35 @@ func CheckGHAuth() error {
 		}
 	}
 
-	// Slow path: at most one goroutine runs the subprocess; others wait and
-	// reuse the result.
+	// Slow path: at most one goroutine calls the API; others wait and reuse the result.
 	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
-		var authErr error
+		authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer authCheckCancel()
 
-		// Check if gh is installed.
-		if _, lookErr := exec.LookPath("gh"); lookErr != nil {
-			authErr = fmt.Errorf("GitHub CLI (gh) is not installed. Please install it: https://cli.github.com/")
-		} else {
-			// Check if gh is authenticated.
-			authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer authCheckCancel()
-			cmd := safeexec.CommandContext(authCheckCtx, "gh", "auth", "status")
-			if runErr := cmd.Run(); runErr != nil {
-				authErr = fmt.Errorf("GitHub CLI is not authenticated. Please run 'gh auth login' first")
-			}
+		req, buildErr := newGHRequest(authCheckCtx, "user")
+		if buildErr != nil {
+			authErr := fmt.Errorf("GitHub auth check: failed to build request: %w", buildErr)
+			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			return authErr, nil
+		}
+
+		resp, doErr := ghHTTPClient.Do(req)
+		if doErr != nil {
+			authErr := fmt.Errorf("GitHub auth check: request failed: %w", doErr)
+			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			return authErr, nil
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+
+		var authErr error
+		switch resp.StatusCode {
+		case http.StatusOK:
+			// authenticated — no error
+		case http.StatusUnauthorized, http.StatusForbidden:
+			authErr = fmt.Errorf("GitHub is not authenticated (HTTP %d). Set GITHUB_TOKEN or run 'gh auth login'", resp.StatusCode)
+		default:
+			authErr = fmt.Errorf("GitHub auth check: unexpected status %d", resp.StatusCode)
 		}
 
 		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
@@ -173,6 +188,52 @@ func CheckGHAuth() error {
 		return res.(error)
 	}
 	return nil
+}
+
+// GetCurrentUserLogin returns the GitHub login of the authenticated user via
+// GET /user. Returns an empty string (not an error) when unauthenticated so
+// callers can degrade gracefully.
+func GetCurrentUserLogin(ctx context.Context) (string, error) {
+	req, err := newGHRequest(ctx, "user")
+	if err != nil {
+		return "", fmt.Errorf("build /user request: %w", err)
+	}
+	return fetchLoginFromRequest(req)
+}
+
+// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token.
+// Returns ("", nil) when the token is invalid or unauthenticated.
+func GetCurrentUserLoginWithToken(ctx context.Context, token string) (string, error) {
+	req, err := newGHRequestWithToken(ctx, "user", token)
+	if err != nil {
+		return "", fmt.Errorf("build /user request: %w", err)
+	}
+	return fetchLoginFromRequest(req)
+}
+
+func fetchLoginFromRequest(req *http.Request) (string, error) {
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("/user request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("/user: unexpected status %d", resp.StatusCode)
+	}
+
+	var u struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return "", fmt.Errorf("decode /user response: %w", err)
+	}
+	return u.Login, nil
 }
 
 // GetPRInfo fetches metadata for a pull request including review and CI status.
@@ -582,8 +643,15 @@ func CheckoutBranch(repoPath, branchName string) error {
 	return nil
 }
 
+// remoteURLCache memoises GetRemoteURL results per repo path.
+// Remote URLs are stable for a repo's lifetime; no TTL needed.
+var remoteURLCache sync.Map // map[string]string
+
 // GetRemoteURL returns the remote URL of a repository (used to determine owner/repo)
 func GetRemoteURL(repoPath string) (string, error) {
+	if v, ok := remoteURLCache.Load(repoPath); ok {
+		return v.(string), nil
+	}
 	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer remoteCancel()
 	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", repoPath, "remote", "get-url", "origin")
@@ -594,8 +662,25 @@ func GetRemoteURL(repoPath string) (string, error) {
 		}
 		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
+	url := strings.TrimSpace(string(output))
+	remoteURLCache.Store(repoPath, url)
+	return url, nil
+}
 
-	return strings.TrimSpace(string(output)), nil
+// GetOwnerRepoFromRemote returns a RepoRef for a local git repository by
+// reading the origin remote URL and parsing it. Returns an invalid zero-value
+// RepoRef (not an error) when the remote is not a GitHub URL.
+func GetOwnerRepoFromRemote(repoPath string) (RepoRef, error) {
+	remoteURL, err := GetRemoteURL(repoPath)
+	if err != nil {
+		return RepoRef{}, err
+	}
+	ref, parseErr := ParseGitHubRef(remoteURL)
+	if parseErr != nil {
+		return RepoRef{}, nil // not a GitHub URL — callers check IsValid()
+	}
+	r, _ := NewRepoRef(ref.Owner, ref.Repo)
+	return r, nil
 }
 
 // GeneratePRPrompt generates a context prompt from PR information
@@ -622,4 +707,85 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 	}
 
 	return sb.String()
+}
+
+// GetPRForBranchConditional is GetPRForBranch with ETag conditional request support.
+// Pass the previously returned newEtag (empty string for first call).
+// Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
+func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
+		url.PathEscape(owner), url.PathEscape(repo),
+		url.QueryEscape(owner+":"+branch))
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("build PR list request: %w", err)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("PR list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, etag, false, nil
+	}
+
+	respEtag := resp.Header.Get("ETag")
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, etag, false, fmt.Errorf("GitHub API: unauthorized (401)")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, etag, false, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, etag, false, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API: forbidden (403)")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API: rate limited (429)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("read PR list response: %w", err)
+	}
+
+	var prs []struct {
+		Number    int    `json:"number"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.Unmarshal(body, &prs); err != nil {
+		return nil, etag, false, fmt.Errorf("parse PR list: %w", err)
+	}
+	if len(prs) == 0 {
+		return nil, respEtag, true, ErrNoPR
+	}
+
+	sort.Slice(prs, func(i, j int) bool {
+		ti, _ := time.Parse(time.RFC3339, prs[i].UpdatedAt)
+		tj, _ := time.Parse(time.RFC3339, prs[j].UpdatedAt)
+		return ti.After(tj)
+	})
+
+	prInfo, err := GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+	if err != nil {
+		return nil, respEtag, false, err
+	}
+	return prInfo, respEtag, true, nil
 }

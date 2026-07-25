@@ -6,6 +6,9 @@ export const pageRoot = style({
   maxWidth: "960px",
   margin: "0 auto",
   padding: "2rem 1.5rem",
+  height: "100%",
+  overflowY: "auto",
+  overflowX: "hidden",
 });
 
 export const pageTitle = style({
@@ -61,6 +64,7 @@ export const tab = recipe({
 export const tabPanel = style({
   padding: "0",
   overflowY: "auto",
+  overflowX: "hidden",
 });
 
 export const sectionGroup = style({

@@ -268,52 +268,72 @@ describe('EscapeSequenceParser', () => {
     });
   });
 
-  describe('ED3 (Erase Scrollback) Filter', () => {
-    test('strips ED3 when immediately preceded by ED2 in same chunk', () => {
-      // [2J[3J is the paired clear-screen+scrollback sequence that
-      // causes xterm.js flicker; the filter collapses it to just ED2.
+  describe('ED2+ED3 Passthrough (xterm.js v6)', () => {
+    test('EscapeSequenceParser_should_passThrough_ED3_When_pairedWithED2', () => {
+      // xterm.js v6 handles ED2+ED3 correctly; the combined sequence must not be stripped.
       const result = parser.processChunk('[2J[3J');
-      expect(result).toBe('[2J');
+      expect(result).toBe('[2J[3J');
     });
 
-    test('preserves standalone ED3 with no preceding ED2', () => {
-      // A lone ED3 should not be removed.
+    test('EscapeSequenceParser_should_passThrough_ED3_When_standalone', () => {
+      // A standalone ED3 should pass through unchanged.
       const result = parser.processChunk('[3J');
       expect(result).toBe('[3J');
     });
 
     test('preserves standalone ED2 with no following ED3', () => {
-      // A lone ED2 should pass through unmodified.
       const result = parser.processChunk('[2J');
       expect(result).toBe('[2J');
     });
 
-    test('filters multiple ED2+ED3 pairs in one chunk', () => {
+    test('multiple ED2+ED3 pairs in one chunk pass through unchanged', () => {
       const input = 'a[2J[3Jb[2J[3Jc';
       const result = parser.processChunk(input);
-      expect(result).toBe('a[2Jb[2Jc');
-    });
-
-    test('ED2+ED3 split across chunk boundary: ED3 preserved (regex does not span calls)', () => {
-      // The ED3 filter operates only within a single processChunk call (after
-      // prepending buffered data). When ED2 ends one chunk and ED3 starts the
-      // next, the regex has no opportunity to match across the boundary, so the
-      // standalone ED3 that arrives in the second chunk is NOT stripped.
-      // This is the documented expected behavior for cross-boundary pairs.
-      const result1 = parser.processChunk('text[2J');
-      // [2J is a complete CSI sequence; nothing buffered
-      expect(result1).toBe('text[2J');
-      expect(parser.getBuffered()).toBe('');
-
-      const result2 = parser.processChunk('[3J');
-      // Arrives as a standalone ED3 in its own chunk - filter does not fire
-      expect(result2).toBe('[3J');
+      expect(result).toBe('a[2J[3Jb[2J[3Jc');
     });
 
     test('normal text passes through unmodified', () => {
       const input = 'Hello, World!';
       const result = parser.processChunk(input);
       expect(result).toBe('Hello, World!');
+    });
+  });
+
+  describe('Long OSC and DCS sequence buffering (256-byte lookback)', () => {
+    test('EscapeSequenceParser_should_bufferPartial_When_OSCTitleExceeds20Chars', () => {
+      // OSC title with a 30-char payload, split at char 22 of the sequence.
+      // Sequence: ESC]0;<30 chars>BEL
+      // Split point: first chunk has ESC]0; + 18 chars (22 chars total of the seq)
+      const titlePart1 = 'ABCDEFGHIJKLMNOPQR'; // 18 chars
+      const titlePart2 = 'STUVWXYZ0123456789'; // 18 chars remainder
+      const chunk1 = 'prefix]0;' + titlePart1;
+      const result1 = parser.processChunk(chunk1);
+
+      // prefix should be emitted; OSC sequence should be buffered
+      expect(result1).toBe('prefix');
+      expect(parser.getBuffered()).toBe(']0;' + titlePart1);
+
+      // Deliver rest of title + BEL terminator
+      const chunk2 = titlePart2 + 'suffix';
+      const result2 = parser.processChunk(chunk2);
+      expect(result2).toBe(']0;' + titlePart1 + titlePart2 + 'suffix');
+      expect(parser.getBuffered()).toBe('');
+    });
+
+    test('EscapeSequenceParser_should_recognizeDCS_When_splitBeforeST', () => {
+      // DCS sequence split right after the introducer ESC P
+      const chunk1 = 'beforeP';
+      const result1 = parser.processChunk(chunk1);
+
+      // 'before' should be emitted; partial DCS buffered
+      expect(result1).toBe('before');
+      expect(parser.getBuffered()).toBe('P');
+
+      // Complete DCS with ST terminator (ESC \)
+      const chunk2 = 'payload\after';
+      const result2 = parser.processChunk(chunk2);
+      expect(result2).toBe('Ppayload\after');
+      expect(parser.getBuffered()).toBe('');
     });
   });
 

@@ -20,9 +20,30 @@ const (
 	writeRateLimitPerSec = 1.0
 )
 
+// liveInstanceFinder resolves a session ID to its live, already-started
+// in-memory Instance — the one with real PTY handles and controller state,
+// as opposed to a freshly-reconstructed Instance from Storage.LoadInstances(),
+// which always defers Start() (see LoadInstances' doc comment: "so a bulk
+// load (server startup) doesn't block") and is therefore never actually
+// started when called ad hoc, outside that one-time startup path. See
+// BUG-035: every MCP tool that mutates a session's terminal (write_to_session,
+// send_control, run_command, steer_session) went through findInstance, which
+// called LoadInstances() on every single invocation — meaning any Active
+// session's SendKeys call deterministically failed with "instance has not
+// been started" regardless of how long the server had been running, because
+// the Instance object handed back was never the live one at all.
+// services.SessionService.FindLiveInstance already exists and is already the
+// documented "use this instead of LoadInstances()" answer; nil-safe (the mcp
+// package degrades to LoadInstances() if not wired, matching the pre-fix
+// behavior rather than breaking outright).
+type liveInstanceFinder interface {
+	FindLiveInstance(id string) *session.Instance
+}
+
 // terminalHandlers implements terminal I/O and VCS MCP tools.
 type terminalHandlers struct {
 	store      session.InstanceStore
+	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
 }
@@ -111,6 +132,21 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 			),
 		),
 		th.waitForOutput,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("steer_session",
+			mcpgo.WithDescription("Send a semantic steering message to a running Stapler Squad agent session. Unlike write_to_session, steer_session always appends a newline so the agent receives the message as a complete input. Use this to redirect an agent mid-task (e.g. 'Focus on the authentication module first'). Not rate-limited — this is a high-level semantic operation."),
+			mcpgo.WithString("session_id",
+				mcpgo.Description("Session ID (title) of the session"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("message",
+				mcpgo.Description("Steering message to send to the agent (max 4096 bytes)"),
+				mcpgo.Required(),
+			),
+		),
+		th.steerSession,
 	)
 
 	s.AddTool(
@@ -247,10 +283,10 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		return errResult_, nil
 	}
 
-	text := input
-	if pressEnter {
-		text += "\n"
-	}
+	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
+	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
+	text := session.BuildSubmittableInput(input, pressEnter)
 
 	// Wrap SendKeys in a goroutine with a 5-second timeout to prevent PTY write deadlock.
 	// Use the request context so caller cancellation propagates; add a hard 5s cap.
@@ -506,9 +542,12 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return errResult_, nil
 	}
 
-	// Send the command.
+	// Send the command. BUG-047: must use session.EnterKeySequence ('\r'),
+	// not a bare '\n' — a raw-mode TUI target (e.g. the Claude Code CLI
+	// itself) only recognizes '\r' as submit, so a trailing '\n' leaves the
+	// command sitting unsubmitted in the input buffer.
 	sendErrCh := make(chan error, 1)
-	go func() { sendErrCh <- inst.SendKeys(command + "\n") }()
+	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInput(command, true)) }()
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer sendCancel()
@@ -585,11 +624,104 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	}), nil
 }
 
+// ---- steer_session ----
+
+// SteerSessionResult is the response for steer_session.
+type SteerSessionResult struct {
+	MCPResult
+	SessionID string `json:"session_id"`
+	CharsSent int    `json:"chars_sent"`
+	Result    string `json:"result,omitempty"` // set when using --resume subprocess
+	Method    string `json:"method"`           // "send_keys" or "resume_subprocess"
+}
+
+func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := req.GetArguments()
+	sessionID, ok := args["session_id"].(string)
+	if !ok || sessionID == "" {
+		return errResult(ErrInvalidArgument, "session_id is required", ""), nil
+	}
+
+	message, ok := args["message"].(string)
+	if !ok || message == "" {
+		return errResult(ErrInvalidArgument, "message is required", ""), nil
+	}
+	if len(message) > maxInputBytes {
+		return errResult("MESSAGE_TOO_LONG", fmt.Sprintf("message exceeds %d bytes", maxInputBytes), "Reduce message length"), nil
+	}
+
+	// Strip null bytes to avoid silent corruption via the tmux send-keys path.
+	message = strings.ReplaceAll(message, "\x00", "")
+	if message == "" {
+		return errResult(ErrInvalidArgument, "message must be non-empty after sanitization", ""), nil
+	}
+
+	inst, errResult_ := th.findInstance(sessionID)
+	if errResult_ != nil {
+		return errResult_, nil
+	}
+
+	// For OneShot sessions that have completed (Stopped) and have a conversation UUID,
+	// use claude --resume subprocess instead of PTY send-keys.
+	uuid := inst.GetClaudeConversationUUID()
+	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
+		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		result, err := inst.RunWithResume(resumeCtx, message)
+		if err != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("resume subprocess failed: %v", err), "Ensure claude CLI is available and session_id is valid"), nil
+		}
+		return okResult(SteerSessionResult{
+			MCPResult: MCPResult{Success: true},
+			SessionID: sessionID,
+			CharsSent: len(message),
+			Result:    result,
+			Method:    "resume_subprocess",
+		}), nil
+	}
+
+	// Fallback: send via PTY send-keys (interactive sessions or sessions without UUID).
+	text := message + "\r"
+
+	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- inst.SendKeys(text) }()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
+		}
+	case <-sendCtx.Done():
+		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
+	}
+
+	return okResult(SteerSessionResult{
+		MCPResult: MCPResult{Success: true},
+		SessionID: sessionID,
+		CharsSent: len(message),
+		Method:    "send_keys",
+	}), nil
+}
+
 // ---- helpers ----
 
-// findInstance loads all sessions and returns the one matching sessionID.
-// Returns an error result if not found or load fails.
+// findInstance returns the live, already-started Instance for sessionID
+// (BUG-035) — trying th.live first (the real in-memory Instance with PTY/
+// controller state), falling back to a LoadInstances() scan only if th.live
+// is unwired or doesn't have it tracked (e.g. a session outside the review
+// queue poller's scope). The fallback preserves pre-fix behavior for any
+// caller relying on LoadInstances()'s broader "every session in storage"
+// coverage; it just stops being the *first* and only path for a session that
+// IS live.
 func (th *terminalHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+	if th.live != nil {
+		if inst := th.live.FindLiveInstance(sessionID); inst != nil {
+			return inst, nil
+		}
+	}
 	instances, err := th.store.LoadInstances()
 	if err != nil {
 		return nil, errResult(ErrInternalError, "failed to load sessions", "")

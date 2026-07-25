@@ -409,11 +409,11 @@ export const visuallyHidden = style({
 export const oldestCallout = style({
   marginTop: vars.space["2"],
   padding: `${vars.space["1"]} ${vars.space["3"]}`,
-  background: vars.color.warningBg,
-  border: `1px solid ${vars.color.warning}`,
+  background: vars.color.surfaceSubtle,
+  border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,
   fontSize: vars.fontSize.sm,
-  color: vars.color.textPrimary,
+  color: vars.color.textSecondary,
   fontWeight: 500,
 });
 
@@ -439,6 +439,23 @@ export const newItemsBanner = style({
   },
 });
 
+export const autoAdvanceToggle = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.375rem",
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  userSelect: "none",
+  whiteSpace: "nowrap",
+});
+
+export const savedIndicator = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.success,
+  fontWeight: 500,
+});
+
 export const filterToggleRow = style({
   display: "flex",
   alignItems: "center",
@@ -462,6 +479,12 @@ export const filterToggle = style({
       borderColor: vars.color.borderHover,
     },
   },
+  "@media": {
+    "(max-width: 768px)": {
+      minHeight: "44px",
+      padding: "10px 14px",
+    },
+  },
 });
 
 export const filterToggleActive = style({
@@ -483,6 +506,12 @@ export const filterClear = style({
     "&:hover": {
       background: vars.color.hoverBackground,
       color: vars.color.textPrimary,
+    },
+  },
+  "@media": {
+    "(max-width: 768px)": {
+      minHeight: "44px",
+      padding: "10px 12px",
     },
   },
 });
@@ -521,6 +550,69 @@ export const ruleModalContent = style({
   display: "flex",
   flexDirection: "column",
   gap: "1rem",
+});
+
+export const searchInput = style({
+  padding: `${vars.space["2"]} 10px`,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: vars.color.inputBackground,
+  color: vars.color.textPrimary,
+  fontSize: vars.fontSize.base,
+  width: "100%",
+  maxWidth: "360px",
+  selectors: {
+    "&:focus": {
+      outline: "none",
+      borderColor: vars.color.inputFocusBorder,
+    },
+  },
+  "@media": {
+    "(max-width: 768px)": {
+      maxWidth: "none",
+      minHeight: "44px",
+    },
+  },
+});
+
+export const sortRow = style({
+  display: "flex",
+  gap: vars.space["2"],
+  alignItems: "center",
+});
+
+export const sortSelect = style({
+  padding: `6px 10px`,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  background: vars.color.cardBackground,
+  color: vars.color.textPrimary,
+  fontSize: "13px",
+  cursor: "pointer",
+  "@media": {
+    "(max-width: 768px)": {
+      minHeight: "44px",
+      padding: "10px 12px",
+    },
+  },
+});
+
+export const groupSection = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
+  marginBottom: vars.space["4"],
+});
+
+export const groupHeading = style({
+  margin: 0,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.textSecondary,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  paddingBottom: vars.space["1"],
+  borderBottom: `1px solid ${vars.color.borderColor}`,
 });
 
 export const divergedBadge = style({

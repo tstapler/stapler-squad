@@ -254,7 +254,16 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	// Fallback: scan the project directory by path (works after reboot / tmux kill).
 	// Use the effective root dir (worktree path for worktree sessions) so we look in
 	// the right ~/.claude/projects/ subdirectory, not the base repository path.
-	if info == nil {
+	//
+	// Skip this fallback for already-linked Paused or Hibernated sessions: the
+	// "most recently modified" heuristic is wrong when other sessions have run in
+	// the same directory after the pause, because their newer JSONL files would
+	// replace the correct stored UUID with a different session's conversation UUID.
+	// Active sessions still use the fallback so that /clear-triggered UUID changes
+	// (new conversation file created while the session is live) are detected promptly.
+	pathFallbackAllowed := !alreadyLinked ||
+		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
+	if info == nil && pathFallbackAllowed {
 		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
 			info, err = hl.detector.DetectByPath(effectivePath)
 			if err != nil {

@@ -70,6 +70,11 @@ jobs:
           go-version: '1.25.0'
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,7 +89,7 @@ jobs:
       - name: Install Playwright dependencies
         run: |
           cd tests/e2e
-          npm install
+          pnpm install --frozen-lockfile
           npx playwright install chromium --with-deps
 
       - name: Run feature E2E specs (shard ${{ matrix.shard }}/2)

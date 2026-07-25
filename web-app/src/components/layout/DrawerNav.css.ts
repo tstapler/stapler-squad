@@ -184,3 +184,33 @@ export const navBadgeWrapper = recipe({
   },
   defaultVariants: { collapsed: false },
 });
+
+export const sectionHeader = recipe({
+  base: {
+    padding: `${vars.space[3]} ${vars.space[3]} ${vars.space[1]}`,
+    fontSize: vars.fontSize.xs,
+    fontWeight: vars.fontWeight.bold,
+    color: vars.color.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    overflow: "hidden",
+    transition: "opacity 150ms ease, max-width 200ms ease",
+    whiteSpace: "nowrap",
+    "@media": {
+      "(prefers-reduced-motion: reduce)": {
+        transition: "none",
+      },
+    },
+  },
+  variants: {
+    visible: {
+      true: { opacity: 1, maxWidth: "200px" },
+      false: { opacity: 0, maxWidth: "0px" },
+    },
+  },
+  defaultVariants: { visible: true },
+});
+
+export const sectionSpacer = style({
+  height: vars.space[2],
+});

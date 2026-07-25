@@ -31,10 +31,6 @@ func (ApprovalRule) Fields() []ent.Field {
 			Optional(),
 		field.String("file_pattern").
 			Optional(),
-		field.JSON("criteria_programs", []string{}).
-			Optional(),
-		field.JSON("criteria_subcommands", []string{}).
-			Optional(),
 		field.Int("decision"),
 		field.Int("risk_level"),
 		field.String("reason").
@@ -53,6 +49,34 @@ func (ApprovalRule) Fields() []ent.Field {
 		field.Time("updated_at").
 			Default(time.Now).
 			UpdateDefault(time.Now),
+
+		// Structured CommandCriteria fields — stored as JSON arrays.
+		// Optional() makes the DB column nullable so SQLite migrations can copy old rows
+		// (which lack these columns) without hitting a NOT NULL constraint. New rows still
+		// get []string{} via Default(). Application code treats nil slice as empty.
+		field.JSON("programs", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("subcommands", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("blocked_subcommands", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("required_flags", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("forbidden_flags", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("required_flag_prefixes", []string{}).
+			Optional().
+			Default([]string{}),
+		field.JSON("python_modes", []string{}).
+			Optional().
+			Default([]string{}),
+		field.Bool("safe_python_imports_only").
+			Default(false),
 	}
 }
 

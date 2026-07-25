@@ -3,9 +3,11 @@ package session
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -270,6 +272,83 @@ func TestResponseStream_Streaming(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("Timeout waiting for data chunk")
+	}
+}
+
+// escapeEventSpy is a test EscapeEventWriter that records events, for verifying
+// the production wiring path (newEscapeParserForSession -> SetStableSessionID).
+type escapeEventSpy struct {
+	mu     sync.Mutex
+	events []analytics.EscapeEventRecord
+}
+
+func (s *escapeEventSpy) WriteEscapeEvent(_ context.Context, event analytics.EscapeEventRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+}
+
+func (s *escapeEventSpy) snapshot() []analytics.EscapeEventRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]analytics.EscapeEventRecord, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+// TestResponseStream_SetStableSessionID is a regression test for BUG-025: escape
+// analytics rows were stored under the tmux session name instead of the stable
+// session UUID, so the web UI (which queries by stable UUID) never found them.
+// Verifies that SetStableSessionID changes the session_id on events emitted by
+// the real production construction path (NewResponseStream ->
+// newEscapeParserForSession), not just on a hand-built parser.
+func TestResponseStream_SetStableSessionID(t *testing.T) {
+	// Isolate config so the test doesn't depend on (or clobber) the developer's
+	// real ~/.stapler-squad config — and so capture_level is deterministically
+	// "summary" (DefaultConfig's default) regardless of ambient environment.
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	spy := &escapeEventSpy{}
+	prev := analytics.GetGlobalEscapeWriter()
+	analytics.SetGlobalEscapeWriter(spy)
+	defer analytics.SetGlobalEscapeWriter(prev)
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("Failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	buffer := NewCircularBuffer(1024)
+	ptyAccess := NewPTYAccess("my-tmux-session-name", reader, buffer)
+
+	rs := NewResponseStream("my-tmux-session-name", ptyAccess)
+	rs.SetStableSessionID("stable-uuid-5678")
+
+	ctx := context.Background()
+	if err := rs.Start(ctx); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer rs.Stop()
+
+	if _, err := writer.Write([]byte("\x1b[31m")); err != nil {
+		t.Fatalf("failed to write test data: %v", err)
+	}
+
+	cfg := wait.FastWaitConfig()
+	cfg.Description = "escape event captured"
+	if err := wait.WaitForCondition(func() bool {
+		return len(spy.snapshot()) > 0
+	}, cfg); err != nil {
+		t.Fatalf("no escape event captured: %v", err)
+	}
+
+	events := spy.snapshot()
+	for _, ev := range events {
+		if ev.SessionID != "stable-uuid-5678" {
+			t.Errorf("event SessionID = %q, want %q (the stable UUID, not the tmux name)", ev.SessionID, "stable-uuid-5678")
+		}
 	}
 }
 
@@ -597,14 +676,11 @@ func Benchmark_ResponseStream_Broadcast(b *testing.B) {
 		rs.Subscribe(string(rune('a' + i)))
 	}
 
-	chunk := ResponseChunk{
-		Data:      []byte("benchmark data"),
-		Timestamp: time.Now(),
-	}
+	data := []byte("benchmark data")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rs.broadcast(chunk)
+		rs.broadcast(data)
 	}
 }
 

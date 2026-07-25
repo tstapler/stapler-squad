@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -36,6 +37,10 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 		pt.files = append(pt.files, f)
 	}
 	return f, cmd, err
+}
+
+func (pt *MockPtyFactory) StartWithSize(cmd *exec.Cmd, _ *pty.Winsize) (*os.File, *exec.Cmd, error) {
+	return pt.Start(cmd)
 }
 
 func (pt *MockPtyFactory) Close() {}
@@ -105,6 +110,36 @@ func TestStartTmuxSession(t *testing.T) {
 	// so we focus on testing the behavioral contract rather than implementation details
 }
 
+func TestStartTmuxSession_IncludesTmuxStderrOnFailure(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+
+	const wantStderr = "tmux: unrecognized option '-e'"
+	cmdExec := MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "new-session") {
+				if cmd.Stderr != nil {
+					_, _ = cmd.Stderr.Write([]byte(wantStderr))
+				}
+				return fmt.Errorf("exit status 1")
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				return nil, fmt.Errorf("no server running")
+			}
+			return []byte("output"), nil
+		},
+	}
+
+	workdir := t.TempDir()
+	session := newTmuxSessionWithSocket("test-session-fail", "echo", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
+
+	err := session.Start(workdir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), wantStderr)
+}
+
 // --- serverNotRunning detection tests ---
 
 func TestServerNotRunning(t *testing.T) {
@@ -137,6 +172,16 @@ func TestServerNotRunning(t *testing.T) {
 			name:     "empty output",
 			output:   []byte(""),
 			expected: false,
+		},
+		{
+			name:     "stale socket: server exited unexpectedly",
+			output:   []byte("server exited unexpectedly"),
+			expected: true,
+		},
+		{
+			name:     "stale socket: uppercase variant",
+			output:   []byte("Server Exited Unexpectedly"),
+			expected: true,
 		},
 		{
 			name:     "unrelated error message",
@@ -258,6 +303,27 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	createCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
 	require.NoError(t, createCmd.Run(),
 		"should be able to create a session on the newly started server — server must be running")
+}
+
+// TestStartServerSucceededDespiteError covers the flaky-under-load scenario behind
+// TestEnsureServerRunning_NoOp's original failure mode: under heavy concurrent tmux
+// usage, checkServerNotRunning's list-sessions call can itself transiently report
+// "server exited unexpectedly" against a socket that actually has a live server,
+// which sends EnsureServerRunning down the start-server path even though a server
+// is already running -- and that start-server call then hits the same transient
+// failure. Rather than reproduce that real timing race (system-load dependent,
+// not deterministic), this tests the recovery decision in isolation via an
+// injected checker.
+func TestStartServerSucceededDespiteError(t *testing.T) {
+	t.Run("recovers when a recheck shows the server is actually running", func(t *testing.T) {
+		got := startServerSucceededDespiteError(func() bool { return false }) // false = is running
+		require.True(t, got, "a start-server error should be swallowed when the server is actually up")
+	})
+
+	t.Run("does not recover when the server genuinely is not running", func(t *testing.T) {
+		got := startServerSucceededDespiteError(func() bool { return true }) // true = not running
+		require.False(t, got, "a start-server error must still surface when the server really isn't running")
+	})
 }
 
 // TestCreateKeepaliveSession verifies that a keepalive session is created and
@@ -434,8 +500,13 @@ func TestDoesSessionExist_LockReleasedBeforeRecovery(t *testing.T) {
 	}
 }
 
-// TestPrependSocket verifies that prependSocket returns args unmodified when the socket
-// is empty and prepends "-L <socket>" when the socket is non-empty.
+// TestPrependSocket verifies that prependSocket prepends "-L <socket>" for an
+// explicit socket, and — since this runs inside a `go test` binary — also
+// prepends the per-process isolated socket even when called with an empty
+// socket, via ResolveSocket. This is the regression guard for the incident
+// where an unguarded raw tmux call with no socket argument enumerated and
+// killed sessions on another, currently-running stapler-squad process's
+// shared default socket. See ResolveSocket's doc comment for the incident.
 func TestPrependSocket(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -444,10 +515,10 @@ func TestPrependSocket(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "empty socket returns args unchanged",
+			name:     "empty socket resolves to the isolated test socket, not the shared default",
 			socket:   "",
 			args:     []string{"list-sessions"},
-			expected: []string{"list-sessions"},
+			expected: []string{"-L", testSocketOnce(), "list-sessions"},
 		},
 		{
 			name:     "non-empty socket prepends -L flag",
@@ -463,6 +534,50 @@ func TestPrependSocket(t *testing.T) {
 			require.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestResolveSocket verifies the canonical socket-resolution choke point:
+// an explicit socket always passes through unchanged (production callers
+// that already isolate explicitly must not be double-prefixed), while an
+// empty socket resolves to a stable, non-empty per-process value whenever
+// running inside a `go test` binary — it must never resolve to "" and fall
+// through to the real shared default socket.
+func TestResolveSocket(t *testing.T) {
+	t.Run("explicit socket passes through unchanged", func(t *testing.T) {
+		require.Equal(t, Socket("explicit-socket"), ResolveSocket("explicit-socket"))
+	})
+
+	t.Run("empty socket resolves to a non-empty isolated value in test mode", func(t *testing.T) {
+		resolved := ResolveSocket("")
+		require.NotEmpty(t, resolved.String(), "empty socket must never resolve to the shared default inside a test binary")
+		require.Contains(t, resolved.String(), "test-isolated-")
+	})
+
+	t.Run("repeated empty-socket calls return the same isolated value", func(t *testing.T) {
+		first := ResolveSocket("")
+		second := ResolveSocket("")
+		require.Equal(t, first, second, "ResolveSocket must be stable across calls within the same process")
+	})
+}
+
+// TestSocket_Args verifies the smart constructor's sole args-building method:
+// the default (zero-value) Socket leaves args untouched, and a non-default
+// Socket prepends "-L <socket>".
+func TestSocket_Args(t *testing.T) {
+	t.Run("default socket returns args unchanged", func(t *testing.T) {
+		var s Socket
+		require.Equal(t, []string{"list-sessions"}, s.Args("list-sessions"))
+	})
+
+	t.Run("non-default socket prepends -L flag", func(t *testing.T) {
+		s := Socket("my-socket")
+		require.Equal(t, []string{"-L", "my-socket", "list-sessions"}, s.Args("list-sessions"))
+	})
+
+	t.Run("String returns the underlying socket name", func(t *testing.T) {
+		require.Equal(t, "my-socket", Socket("my-socket").String())
+		require.Equal(t, "", Socket("").String())
+	})
 }
 
 // TestSetServerRecoveryCallback verifies that the callback registered via
@@ -678,4 +793,51 @@ func TestDoesSessionExist_NilRegistry(t *testing.T) {
 
 	require.True(t, result)
 	require.True(t, execCalled, "exec list-sessions should be called when registry is nil")
+}
+
+// TestCapturePaneSemaphore verifies that the capturePaneSem semaphore caps
+// concurrent CapturePaneContent subprocess executions to at most 8.
+func TestCapturePaneSemaphore(t *testing.T) {
+	const goroutines = 20
+	const maxConcurrent = 8
+
+	var mu sync.Mutex
+	inflight := 0
+	maxSeen := 0
+
+	cmdExec := MockCmdExec{
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			mu.Lock()
+			inflight++
+			if inflight > maxSeen {
+				maxSeen = inflight
+			}
+			mu.Unlock()
+
+			// Hold the "subprocess" briefly so concurrency builds up.
+			time.Sleep(10 * time.Millisecond)
+
+			mu.Lock()
+			inflight--
+			mu.Unlock()
+			return []byte("pane content"), nil
+		},
+		RunFunc:            func(cmd *exec.Cmd) error { return nil },
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			_, _ = session.CapturePaneContent()
+		}(i)
+	}
+	wg.Wait()
+
+	require.LessOrEqual(t, maxSeen, maxConcurrent,
+		"concurrent capture-pane subprocesses (%d) exceeded semaphore limit (%d)", maxSeen, maxConcurrent)
+	require.Greater(t, maxSeen, 0, "at least one subprocess should have executed")
 }

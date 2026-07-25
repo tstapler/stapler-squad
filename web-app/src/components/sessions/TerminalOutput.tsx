@@ -28,9 +28,23 @@ const ALT_KEY_MAP: Record<string, string> = {
   '\x1b[5~': '\x1b[5;3~', // Alt+PgUp
   '\x1b[6~': '\x1b[6;3~', // Alt+PgDn
 };
+
+// CSI modifier parameter 2 = Shift.
+const SHIFT_KEY_MAP: Record<string, string> = {
+  '\t':      '\x1b[Z',      // Shift+Tab (backtab / dedent)
+  '\x1b[A':  '\x1b[1;2A',  // Shift+Up
+  '\x1b[B':  '\x1b[1;2B',  // Shift+Down
+  '\x1b[C':  '\x1b[1;2C',  // Shift+Right
+  '\x1b[D':  '\x1b[1;2D',  // Shift+Left
+  '\x1b[H':  '\x1b[1;2H',  // Shift+Home
+  '\x1b[F':  '\x1b[1;2F',  // Shift+End
+  '\x1b[5~': '\x1b[5;2~',  // Shift+PgUp
+  '\x1b[6~': '\x1b[6;2~',  // Shift+PgDn
+};
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
+import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
@@ -38,6 +52,7 @@ import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import * as styles from "./TerminalOutput.css";
 
@@ -68,9 +83,14 @@ const XTERM_DEFAULT_ROWS = 24;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
+  const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
   const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  // Track actual rendered pane dimensions via ResizeObserver. Fires after CSS layout
+  // has constrained the container to its real pane width (not the full browser window).
+  // Used to guard connect() and pre-sizing so we never send wrong dimensions in the handshake.
+  const containerSize = useSplitContainerSize(terminalContainerRef);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [showReconnectButton, setShowReconnectButton] = useState(false);
   const [isWaitingForStableSize, setIsWaitingForStableSize] = useState(true);
@@ -86,6 +106,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const hasCachedDimensionsRef = useRef(false);
   // Set to true when we switch sessions while connected; triggers connect() once disconnect completes
   const pendingConnectAfterDisconnectRef = useRef(false);
+
+  // Story 3.2.1 — reconnecting banner state
+  const hasEverConnectedRef = useRef(false);
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showReconnectBanner, setShowReconnectBanner] = useState(false);
+
+  // Debounce timer for the approval re-fetch triggered by any keystroke (ADR-4)
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // TerminalStreamManager ref -- lazily initialized when terminal is available
   const streamManagerRef = useRef<TerminalStreamManager | null>(null);
@@ -174,10 +202,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     return false;
   });
 
-  // Sticky modifier keys — CTRL and ALT arm on first tap, fire+clear on the next key.
-  // Mutually exclusive: arming one disarms the other.
+  // Sticky modifier keys — CTRL, ALT, SHIFT arm on first tap, fire+clear on the next key.
+  // Mutually exclusive: arming one disarms the others.
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
+  const [shiftActive, setShiftActive] = useState(false);
 
   // Transient paste error shown briefly when clipboard access is denied.
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -278,27 +307,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setMouseMode(prev => prev === 'none' ? 'any' : 'none');
   }, []);
 
-  // Streaming mode selection
-  const [streamingMode, setStreamingMode] = useState<"raw" | "raw-compressed" | "state" | "hybrid">("raw");
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
 
-  // Theme detection
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleThemeChange = (e: MediaQueryListEvent) => setTheme(e.matches ? "dark" : "light");
-    mediaQuery.addEventListener("change", handleThemeChange);
-    return () => mediaQuery.removeEventListener("change", handleThemeChange);
-  }, []);
+  // The terminal chrome (tabs, header) always uses the dark VS Code-style
+  // palette defined in terminalTokens (styles/theme.css.ts), independent of
+  // the app's selectable UI theme. xterm.js must match that fixed palette —
+  // deriving it from prefers-color-scheme instead caused the terminal canvas
+  // to render solid white whenever the OS/browser preference was light while
+  // the surrounding chrome stayed dark.
+  const theme = "dark" as const;
 
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
@@ -416,13 +435,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
-  const handleEchoAck = useCallback((_echoNum: bigint, latencyMs: number) => {
-    if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-      console.log('[PredictiveEcho] Echo acknowledged:', { latencyMs });
-    }
-  }, []);
-
-  const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording, terminalState } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -435,10 +448,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onOutput: handleOutput,
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
-    streamingMode: streamingMode,
     isExternal: isExternal,
-    enablePredictiveEcho: true,
-    onEchoAck: handleEchoAck,
   });
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
@@ -497,6 +507,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         sizeStabilityTimeoutRef.current = null;
       }
 
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current);
+        bannerTimerRef.current = null;
+      }
+
       // Cleanup TerminalStreamManager
       if (streamManagerRef.current) {
         streamManagerRef.current.cleanup();
@@ -507,17 +522,31 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [disconnect]);
 
+  // Cancel the debounced approval refresh timer on unmount to prevent post-unmount calls
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, []);
+
   // Handle terminal data input
   const handleTerminalData = useCallback((data: string) => {
-    if (sspNegotiated && sendInputWithEcho) {
-      const echoNum = sendInputWithEcho(data);
-      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-        console.log('[PredictiveEcho] Sent input with echo:', { data, echoNum: echoNum.toString() });
-      }
+    sendInput(data);
+
+    // Optimistic clear on Enter only — reduces false-positive flicker
+    if (data === "\r") {
+      clearForSession(sessionId);
+      // clearForSession fires an eager refetch — skip the debounce timer for Enter
+      // to avoid a second refetch 300ms later that would cause a flicker window
     } else {
-      sendInput(data);
+      // Only debounce-refetch when there are pending approvals to update —
+      // prevents RPC storm when holding keys across N open terminals
+      if (pendingCount > 0) {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
+      }
     }
-  }, [sendInput, sendInputWithEcho, sspNegotiated]);
+  }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
@@ -532,10 +561,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     } else if (altActive) {
       data = ALT_KEY_MAP[keyData] ?? '\x1b' + keyData;
       setAltActive(false);
+    } else if (shiftActive) {
+      data = SHIFT_KEY_MAP[keyData] ?? keyData;
+      setShiftActive(false);
     }
 
     handleTerminalData(data);
-  }, [ctrlActive, altActive, handleTerminalData]);
+  }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
@@ -645,6 +677,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     const wasConnected = previousConnectionStateRef.current;
     previousConnectionStateRef.current = isConnected;
 
+    let postConnectionResizeTimer: ReturnType<typeof setTimeout> | null = null;
+
     if (!wasConnected && isConnected) {
       if (metricsRef.current.connectedTime === null) {
         metricsRef.current.connectedTime = performance.now();
@@ -653,34 +687,87 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       setShowReconnectButton(false);
       setConnectionAttempts(0);
 
+      // On reconnect (not first connect), append a separator so the user can see where
+      // the reconnection happened. showReconnectBanner being true means we disconnected.
+      if (hasEverConnectedRef.current && showReconnectBanner) {
+        const terminal = xtermRef.current?.terminal;
+        if (terminal && terminal.buffer.active.length > 0) {
+          const manager = streamManagerRef.current;
+          if (manager) {
+            manager.write("\r\n\x1b[2m--- reconnected ---\x1b[0m\r\n");
+          }
+        }
+      }
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
 
-      const currentSize = lastResizeRef.current;
-      if (currentSize) {
-        console.log(`[TerminalOutput] Post-connection resize sync: ${currentSize.cols}x${currentSize.rows}`);
-        resize(currentSize.cols, currentSize.rows);
-      }
+      // Delay the post-connection resize sync until after layout settles.
+      // Firing immediately would start the 200ms throttle clock at T+0, causing
+      // the ResizeObserver's settled-layout resize (arriving at T+150ms via its
+      // own debounce) to be dropped. Waiting 250ms lets the container stabilise
+      // first; by then the ResizeObserver has already sent the correct dims (or
+      // nothing changed and we send here as a safety net).
+      postConnectionResizeTimer = setTimeout(() => {
+        const settledSize = lastResizeRef.current;
+        if (settledSize) {
+          console.log(`[TerminalOutput] Post-connection resize sync (delayed): ${settledSize.cols}x${settledSize.rows}`);
+          resize(settledSize.cols, settledSize.rows);
+        }
+      }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
       // If connection drops while still loading, content won't arrive — clear the overlay
       // so the user sees the terminal pane and "Disconnected" status instead of a stuck spinner.
       setIsLoadingInitialContent(false);
-      reconnectTimeoutRef.current = setTimeout(() => {
-        if (!isConnected) {
-          setShowReconnectButton(true);
-        }
-      }, 5000);
+      if (process.env.NEXT_PUBLIC_RECONNECT_V2 !== "true") {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (!isConnected) {
+            setShowReconnectButton(true);
+          }
+        }, 5000);
+      }
     }
 
     return () => {
+      if (postConnectionResizeTimer) {
+        clearTimeout(postConnectionResizeTimer);
+      }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
   }, [isConnected, resize]);
+
+  // Story 3.2.1 — reconnecting banner: show after 2s of disconnection (if was ever connected)
+  useEffect(() => {
+    if (isConnected) {
+      hasEverConnectedRef.current = true;
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current);
+        bannerTimerRef.current = null;
+      }
+      setShowReconnectBanner(false);
+      return;
+    }
+
+    if (!hasEverConnectedRef.current) return; // never connected — don't show banner
+
+    bannerTimerRef.current = setTimeout(() => {
+      if (!isConnected) {
+        setShowReconnectBanner(true);
+      }
+    }, 2000);
+
+    return () => {
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current);
+        bannerTimerRef.current = null;
+      }
+    };
+  }, [isConnected]);
 
   // Clear loading overlay when max reconnect attempts reached
   useEffect(() => {
@@ -733,6 +820,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   // Auto-reconnect with exponential backoff
   useEffect(() => {
+    if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true") return; // hook-level reconnect handles it
     if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
       const backoffDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 10000);
       console.log(`[TerminalOutput] Auto-reconnecting in ${backoffDelay}ms (attempt ${connectionAttempts})`);
@@ -772,27 +860,51 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       console.log(`[TerminalOutput] Initialized with cached dimensions: ${cached.cols}x${cached.rows}`);
 
       if (cached.cellWidth && cached.cellHeight && terminalContainerRef.current) {
-        const rect = terminalContainerRef.current.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          const preCols = Math.floor(rect.width / cached.cellWidth);
-          const preRows = Math.floor(rect.height / cached.cellHeight);
-          if (preCols >= MIN_COLS && preRows >= MIN_ROWS) {
-            console.log(
-              `[TerminalOutput] Pre-sizing: ${rect.width}×${rect.height}px / ` +
-              `${cached.cellWidth.toFixed(2)}×${cached.cellHeight.toFixed(2)}px/cell → ${preCols}×${preRows}`
-            );
-            lastResizeRef.current = { cols: preCols, rows: preRows };
+        // Guard: only use getBoundingClientRect after the ResizeObserver has confirmed
+        // the container has a real constrained width (not the full pre-layout browser width).
+        // containerSize.width > 0 means layout is complete and the pane has its actual dimensions.
+        if (containerSize.width > 0) {
+          const rect = terminalContainerRef.current.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const preCols = Math.floor(rect.width / cached.cellWidth);
+            const preRows = Math.floor(rect.height / cached.cellHeight);
+            if (preCols >= MIN_COLS && preRows >= MIN_ROWS) {
+              console.log(
+                `[TerminalOutput] Pre-sizing: ${rect.width}×${rect.height}px / ` +
+                `${cached.cellWidth.toFixed(2)}×${cached.cellHeight.toFixed(2)}px/cell → ${preCols}×${preRows}`
+              );
+              lastResizeRef.current = { cols: preCols, rows: preRows };
+              // If this effect fired because containerSize became non-zero (i.e. ResizeObserver
+              // fired after the initial render), the session-switch effect won't re-run because
+              // sessionId didn't change. We must initiate the connection here in that case.
+              // On a sessionId-triggered render, session-switch runs after this and connects,
+              // so we only act when no connection has been initiated yet.
+              const isXtermDefault = preCols === XTERM_DEFAULT_COLS && preRows === XTERM_DEFAULT_ROWS;
+              if (!hasInitiatedConnectionRef.current && !isConnected && isMountedRef.current && !isXtermDefault) {
+                hasInitiatedConnectionRef.current = true;
+                setIsWaitingForStableSize(false);
+                // Grow the xterm buffer to preCols/preRows BEFORE connecting — otherwise the
+                // terminal is still at its 80x24 constructor default and the capture-pane
+                // snapshot's cursor-positioning sequences for rows beyond 24 are silently
+                // dropped, leaving them unpainted until a later resize forces a full repaint.
+                xtermRef.current?.resize(preCols, preRows);
+                connect(preCols, preRows);
+              }
+            } else {
+              console.log(`[TerminalOutput] Pre-sizing skipped: calculated ${preCols}x${preRows} below minimum`);
+            }
           } else {
-            console.log(`[TerminalOutput] Pre-sizing skipped: calculated ${preCols}x${preRows} below minimum`);
+            console.log(`[TerminalOutput] Pre-sizing skipped: container has zero size`);
           }
         } else {
-          console.log(`[TerminalOutput] Pre-sizing skipped: container has zero size`);
+          console.log(`[TerminalOutput] Pre-sizing deferred: container layout not yet resolved (containerSize.width=0)`);
         }
       }
     } else if (cached) {
       console.log(`[TerminalOutput] Ignoring stale cached dimensions ${cached.cols}x${cached.rows} (below ${MIN_COLS}x${MIN_ROWS})`);
     }
-  }, [sessionId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, containerSize.width]);
 
   // When terminal becomes visible (e.g. session switch in pool), trigger fit+focus
   useEffect(() => {
@@ -1251,6 +1363,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           {!isConnected && connectionAttempts >= 5 && (
             <span className={styles.errorText}> • Terminal unavailable</span>
           )}
+          {isHardFailed && (
+            <span className={styles.errorText}> • Terminal unavailable</span>
+          )}
         </div>
         <div className={styles.actions}>
           {/* Toolbar toggle — always visible on mobile; hidden on desktop via CSS */}
@@ -1449,23 +1564,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                     >
                       {isRecording ? '⏹️ Stop Rec' : '⏺️ Record'}
                     </button>
-                    <select
-                      value={streamingMode}
-                      onChange={(e) => {
-                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "raw-mode", state: e.target.value } });
-                        setStreamingMode(e.target.value as "raw" | "raw-compressed" | "state" | "hybrid");
-                      }}
-                      className={`${styles.toolbarButton} ${styles.devOnly}`}
-                      title="Terminal streaming mode - choose how terminal output is delivered"
-                      aria-label="Select terminal streaming mode"
-                      disabled={!isConnected}
-                      style={{ minWidth: '140px' }}
-                    >
-                      <option value="raw">🚀 Raw</option>
-                      <option value="raw-compressed">📦 Raw+LZMA</option>
-                      <option value="state">🔄 State Sync</option>
-                      <option value="hybrid">🔬 Hybrid</option>
-                    </select>
                     {/* Handedness shortcut — toggles left/right-handed mobile layout */}
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
@@ -1513,6 +1611,16 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         </div>
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
+        {showReconnectBanner && !isHardFailed && (
+          <div className={styles.reconnectingBanner}>
+            Reconnecting terminal…
+          </div>
+        )}
+        {showReconnectBanner && isHardFailed && (
+          <div className={styles.hardFailedBanner}>
+            Connection lost — <button onClick={handleHookReconnect}>Retry</button>
+          </div>
+        )}
         {isVisible !== false && isLoadingInitialContent && (
           <div className={styles.loadingOverlay}>
             <div className={styles.loadingSpinner} />
@@ -1572,8 +1680,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\t'); }} aria-label="Tab" data-testid="mobile-key">Tab</button>
             <button
+              className={`${styles.mobileKey} ${shiftActive ? styles.mobileKeyActive : ''}`}
+              onPointerDown={(e) => { e.preventDefault(); setShiftActive(p => !p); setCtrlActive(false); setAltActive(false); }}
+              aria-label={shiftActive ? 'Shift active — press next key' : 'Shift modifier'}
+              aria-pressed={shiftActive}
+              data-testid="mobile-key"
+            >
+              Shift
+            </button>
+            <button
               className={`${styles.mobileKey} ${ctrlActive ? styles.mobileKeyActive : ''}`}
-              onPointerDown={(e) => { e.preventDefault(); setCtrlActive(p => !p); setAltActive(false); }}
+              onPointerDown={(e) => { e.preventDefault(); setCtrlActive(p => !p); setAltActive(false); setShiftActive(false); }}
               aria-label={ctrlActive ? 'Ctrl active — press next key' : 'Control modifier'}
               aria-pressed={ctrlActive}
               data-testid="mobile-key"
@@ -1582,7 +1699,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
             <button
               className={`${styles.mobileKey} ${altActive ? styles.mobileKeyActive : ''}`}
-              onPointerDown={(e) => { e.preventDefault(); setAltActive(p => !p); setCtrlActive(false); }}
+              onPointerDown={(e) => { e.preventDefault(); setAltActive(p => !p); setCtrlActive(false); setShiftActive(false); }}
               aria-label={altActive ? 'Alt active — press next key' : 'Alt modifier'}
               aria-pressed={altActive}
               data-testid="mobile-key"

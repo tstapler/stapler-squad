@@ -38,7 +38,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "claude_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "claude",
 		description: "Claude actively processing — visible 'esc to interrupt' or spinner",
 	},
@@ -58,7 +58,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "gemini_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "gemini",
 		description: "Gemini actively generating or running a tool",
 	},
@@ -88,7 +88,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "opencode_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "opencode",
 		description: "OpenCode actively processing a request",
 	},
@@ -102,9 +102,29 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "aider_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "aider",
 		description: "Aider actively editing or applying changes",
+	},
+
+	// ── Claude Code dialogs ──────────────────────────────────────────────────
+	{
+		fixture:     "claude_workflow_approval.txt",
+		expected:    StatusInputRequired,
+		program:     "claude",
+		description: "Claude Code workflow confirmation dialog (❯ 1. Yes, run it / 2. View raw script / 3. No) — must trigger InputRequired",
+	},
+	{
+		fixture:     "claude_workflow_with_readline_cursor.txt",
+		expected:    StatusInputRequired,
+		program:     "claude",
+		description: "Workflow dialog plus readline cursor (❯ ▌ at col 0) — readline cursor must NOT override the InputRequired dialog",
+	},
+	{
+		fixture:     "claude_idle_typing.txt",
+		expected:    StatusIdle,
+		program:     "claude",
+		description: "Claude idle with user actively typing at readline (❯ push it) — ✻ completion marker in scrollback must NOT override to Success",
 	},
 
 	// ── False-positive guards ─────────────────────────────────────────────────
@@ -112,7 +132,7 @@ var snapshotTests = []snapshotTest{
 	// They guard against regressions in the numbered_option_selector pattern.
 	{
 		fixture:     "gradle_numbered_output.txt",
-		expected:    StatusUnknown, // or StatusActive/StatusProcessing — anything but StatusInputRequired
+		expected:    StatusUnknown, // or StatusExecuting/StatusProcessing — anything but StatusInputRequired
 		program:     "any",
 		description: "Gradle build output containing '> Run gradlew tasks...' — must NOT trigger InputRequired",
 	},
@@ -124,7 +144,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "claude_asterism_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "claude",
 		description: "Claude Code active with ✻ asterism spinner (✻ Perambulating... format)",
 	},
@@ -133,6 +153,19 @@ var snapshotTests = []snapshotTest{
 		expected:    StatusSuccess,
 		program:     "claude",
 		description: "Claude Code after ✻ completion line followed by ? for shortcuts (success state in full-text scan)",
+	},
+
+	// ── Regression: bug fixes ────────────────────────────────────────────────────
+	// Bug 1: Active session with task manager overlay was detected as idle because the
+	// indented spinner (  ✽ Roosting…) didn't match the old ^[spinner] pattern which
+	// required the spinner at column 0.  Full-text Detect() + DetectFromLines both
+	// need to return Active.  The deeper CR-collapse regression (esc to interrupt
+	// being overwritten via \r) is tested in bug_regression_test.go.
+	{
+		fixture:     "claude_active_task_manager.txt",
+		expected:    StatusExecuting,
+		program:     "claude",
+		description: "Claude active with background task manager overlay — indented ✽ spinner (2 leading spaces) + esc to interrupt",
 	},
 }
 

@@ -55,10 +55,9 @@ if [[ ! -f "$SUBMODULE_DIR/configure.ac" ]]; then
     (cd "$ROOT" && git submodule update --init third_party/tmux)
   else
     log "Cloning tmux 3.4 into third_party/tmux (gitlink not registered; run 'git submodule add' to fix)..."
-    # Clone into a temp dir then merge so we preserve any existing files (e.g. BUILD.bazel).
     TMUX_TMP="$(mktemp -d)"
     git clone --depth 1 --branch 3.4 https://github.com/tmux/tmux.git "$TMUX_TMP"
-    cp -rn "$TMUX_TMP"/. "$SUBMODULE_DIR/"   # -n = no-clobber, keeps our BUILD.bazel
+    cp -rn "$TMUX_TMP"/. "$SUBMODULE_DIR/"
     rm -rf "$TMUX_TMP"
   fi
 fi
@@ -85,8 +84,29 @@ log "Building tmux from $SUBMODULE_DIR..."
 cd "$SUBMODULE_DIR"
 
 if [[ ! -f "./configure" ]]; then
-  log "Running autogen.sh..."
-  ./autogen.sh
+  # Prefer downloading the release tarball — faster and avoids the macOS
+  # autotools hang (autogen.sh → 'automake --add-missing' triggers network
+  # fetches; libtoolize can block scanning the locate database for minutes).
+  # The tarball ships more than just `configure` — aclocal.m4, Makefile.in,
+  # and etc/{install-sh,config.guess,...} are also autotools-generated and
+  # absent from a plain git checkout, so extract the whole tarball and layer
+  # it over the submodule source with no-clobber (keeps our git-tracked files).
+  TMUX_VERSION="3.4"
+  TARBALL_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
+  TMPTAR="$(mktemp /tmp/tmux-XXXXXX.tar.gz)"
+  log "Downloading generated build files from release tarball (${TARBALL_URL})..."
+  if curl -fsSL -o "$TMPTAR" "$TARBALL_URL" 2>/dev/null && \
+     tar xzf "$TMPTAR" -C /tmp "tmux-${TMUX_VERSION}" 2>/dev/null; then
+    cp -rn "/tmp/tmux-${TMUX_VERSION}/." .
+    chmod +x ./configure
+    rm -rf "$TMPTAR" "/tmp/tmux-${TMUX_VERSION}"
+    log "Generated build files extracted from release tarball"
+  else
+    rm -f "$TMPTAR"
+    log "Tarball download failed; falling back to autoreconf -fi..."
+    # autoreconf -fi uses local system copies of missing files (avoids network hang).
+    ACLOCAL_PATH="/opt/homebrew/share/aclocal:/usr/share/aclocal" autoreconf -fi
+  fi
 fi
 
 if [[ ! -f "./Makefile" ]]; then

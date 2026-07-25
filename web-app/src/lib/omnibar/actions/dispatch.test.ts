@@ -10,7 +10,6 @@ function makeDeps(): jest.Mocked<ActionDeps> {
     deleteSession: jest.fn().mockResolvedValue(undefined),
     close: jest.fn(),
     setTheme: jest.fn(),
-    spawnShell: jest.fn(),
   };
 }
 
@@ -65,7 +64,7 @@ describe("dispatchOmnibarAction", () => {
   });
 
   describe("create_session (one-off)", () => {
-    it("dispatchOmnibarAction_should_setOneOffTrue_When_sessionTypeIsOneOff", () => {
+    it("dispatchOmnibarAction_should_passOneOffSessionType_When_sessionTypeIsOneOff", () => {
       const deps = makeDeps();
       const action: OmnibarAction = {
         type: "create_session",
@@ -76,7 +75,25 @@ describe("dispatchOmnibarAction", () => {
       };
       dispatchOmnibarAction(action, deps);
       expect(deps.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ oneOff: true, sessionType: undefined })
+        expect.objectContaining({ sessionType: "one_off" })
+      );
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("create_session (autonomous)", () => {
+    it("dispatchOmnibarAction_should_setAutonomousModeTrue_When_sessionTypeIsAutonomous", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "create_session",
+        path: "",
+        sessionType: "autonomous",
+        title: "auto session",
+        program: "claude",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ autonomousMode: true, permissionMode: "auto", sessionType: undefined })
       );
       expect(deps.close).toHaveBeenCalled();
     });
@@ -144,23 +161,117 @@ describe("dispatchOmnibarAction", () => {
     });
   });
 
-  describe("spawn_shell", () => {
-    it("dispatchOmnibarAction_should_callSpawnShell_When_spawnShellAction", () => {
+  describe("auto_fix", () => {
+    it("dispatchOmnibarAction_should_createAutonomousSession_When_autoFixAction", () => {
       const deps = makeDeps();
       const action: OmnibarAction = {
-        type: "spawn_shell",
-        sessionId: "s1",
-        workingDir: "/home/user/repo",
-        shellCommand: "bash",
+        type: "auto_fix",
+        title: "Fix the bug",
+        program: "claude",
       };
       dispatchOmnibarAction(action, deps);
-      expect(deps.spawnShell).toHaveBeenCalledWith("s1", "/home/user/repo", "bash");
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Fix the bug",
+          autonomousMode: true,
+          permissionMode: "auto",
+          sessionType: undefined,
+        })
+      );
+      expect(deps.close).toHaveBeenCalled();
     });
 
-    it("dispatchOmnibarAction_should_callClose_When_spawnShellAction", () => {
+    it("dispatchOmnibarAction_should_useEmptyProgram_When_programOmitted", () => {
       const deps = makeDeps();
-      const action: OmnibarAction = { type: "spawn_shell", sessionId: "s1" };
+      const action: OmnibarAction = { type: "auto_fix", title: "Fix it" };
       dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ program: "" })
+      );
+    });
+  });
+
+  describe("run_workflow", () => {
+    it("dispatchOmnibarAction_should_callRunWorkflow_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "some arg",
+        label: "My Workflow",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.runWorkflow).toHaveBeenCalledWith("my-workflow", "some arg");
+    });
+
+    it("dispatchOmnibarAction_should_callAnalyticsTrack_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      deps.analytics = { track: jest.fn() };
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "daily-standup",
+        workflowArg: "",
+        label: "Daily Standup",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.analytics.track).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "omnibar.run_workflow", labels: expect.objectContaining({ slug: "daily-standup" }) })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_callClose_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "",
+        label: "My Workflow",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.close).toHaveBeenCalled();
+    });
+
+    it("dispatchOmnibarAction_should_noOpRunWorkflow_When_runWorkflowDepAbsent", () => {
+      const deps = makeDeps();
+      // runWorkflow dep intentionally absent (not set in makeDeps)
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "",
+        label: "My Workflow",
+      };
+      // Should not throw even with missing runWorkflow dep
+      expect(() => dispatchOmnibarAction(action, deps)).not.toThrow();
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("create_alias_session", () => {
+    it("dispatchOmnibarAction_should_callCreateSession_When_createAliasSessionAction", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj", branch: "feat", label: "work" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ aliasName: "myproj", branch: "feat" })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_passLabelAsTitle_When_createAliasSessionHasLabel", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj", label: "working on auth" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "working on auth" })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_callCreateSession_When_minimalAliasAction", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ aliasName: "myproj" })
+      );
       expect(deps.close).toHaveBeenCalled();
     });
   });

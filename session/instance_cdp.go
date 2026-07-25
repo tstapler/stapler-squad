@@ -150,9 +150,10 @@ func (i *Instance) stopCDP() {
 // It re-uses the onStatusChange callback machinery to trigger a reactive queue
 // refresh and a WatchSessions SessionUpdated event.
 func (i *Instance) onCDPStateChange() {
-	i.onStatusChangeMu.RLock()
-	fn := i.onStatusChange
-	i.onStatusChangeMu.RUnlock()
+	var fn func(detection.DetectedStatus, string)
+	i.onStatusChange.Read(func(f func(detection.DetectedStatus, string)) {
+		fn = f
+	})
 	if fn != nil {
 		fn(detection.StatusIdle, "cdp_state_changed")
 	}

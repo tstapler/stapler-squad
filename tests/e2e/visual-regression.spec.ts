@@ -1,4 +1,9 @@
-// @feature session:list, review-queue:list
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: visual-regression — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['session-list'],
+  FEATURE_CATALOG['review-queue-list'],
+] as const;
 //
 // Visual regression tests — one spec, 4 theme projects (visual-matrix,
 // visual-cyberpunk77, visual-wh40k, visual-clean).

@@ -14,6 +14,8 @@ export const page = style({
   display: "flex",
   flexDirection: "column",
   gap: vars.space[6],
+  height: "100%",
+  overflowY: "auto",
 });
 
 export const pageHeader = style({

@@ -156,7 +156,8 @@ export function createWebsocketBasedTransport(
       async function* parseResponseBody(
         body: AsyncGenerator<Uint8Array>,
         trailerTarget: Headers,
-        headerRef: Headers
+        headerRef: Headers,
+        getCloseCode: () => number | null
       ) {
         const reader = createEnvelopeReadableStreamForWS(body).getReader();
         let endStreamReceived = false;
@@ -198,7 +199,15 @@ export function createWebsocketBasedTransport(
         }
 
         if (!endStreamReceived) {
-          throw new Error("missing EndStreamResponse");
+          const code = getCloseCode();
+          if (code !== null && code !== 1000 && !(signal?.aborted)) {
+            throw new ConnectError(
+              "WebSocket closed",
+              Code.Unavailable,
+              new Headers({ "ws-close-code": String(code) })
+            );
+          }
+          throw new ConnectError("stream ended without end-stream message", Code.Internal);
         }
       }
 
@@ -250,9 +259,18 @@ export function createWebsocketBasedTransport(
           // Connect to WebSocket using it-ws
           const stream = connect(wsUrl);
 
+          // Capture the WebSocket close code so we can propagate it to the hook
+          // via a ConnectError metadata field. The it-ws source generator calls
+          // EventIterator `stop` on close (which ends the async generator without
+          // an error), so we capture it externally here.
+          let wsCloseCode: number | null = null;
+          (stream.socket as unknown as WebSocket).addEventListener("close", (ev: CloseEvent) => {
+            wsCloseCode = ev.code;
+          });
+
           if (signal !== undefined) {
             if (signal.aborted) stream.destroy();
-            else signal.onabort = () => stream.destroy();
+            else signal.addEventListener("abort", () => stream.destroy(), { once: true });
           }
 
           // Wait for connection
@@ -323,7 +341,7 @@ export function createWebsocketBasedTransport(
             ...req,
             header: connectHeaders,
             trailer,
-            message: parseResponseBody(stream.source, trailer, connectHeaders),
+            message: parseResponseBody(stream.source, trailer, connectHeaders, () => wsCloseCode),
           };
 
           return res;

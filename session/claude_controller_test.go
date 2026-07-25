@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -591,12 +592,30 @@ func TestHashString_EmptyString(t *testing.T) {
 // mockInstance is a minimal InstanceContext that returns a controllable Preview.
 type mockInstance struct {
 	title      string
+	stableID   string
+	ptyReader  *os.File // nil = GetPTYReader() errors, matching the old always-error behavior
 	preview    string
 	previewErr error
 }
 
-func (m *mockInstance) GetTitle() string                    { return m.title }
-func (m *mockInstance) GetPTYReader() (*os.File, error)     { return nil, fmt.Errorf("no PTY in mock") }
+func (m *mockInstance) GetTitle() string { return m.title }
+
+// GetStableID deliberately does NOT fall back to title when stableID is unset — a fallback
+// to title would make GetStableID() == title == sessionName by coincidence for any test that
+// forgets to set stableID, which would let a future regression to BUG-025 (using the tmux
+// name instead of the stable UUID) silently pass any test asserting on this value.
+func (m *mockInstance) GetStableID() string {
+	if m.stableID != "" {
+		return m.stableID
+	}
+	return "UNSET-STABLE-ID"
+}
+func (m *mockInstance) GetPTYReader() (*os.File, error) {
+	if m.ptyReader != nil {
+		return m.ptyReader, nil
+	}
+	return nil, fmt.Errorf("no PTY in mock")
+}
 func (m *mockInstance) Preview() (string, error)            { return m.preview, m.previewErr }
 func (m *mockInstance) LastMeaningfulOutputTime() time.Time { return time.Time{} }
 func (m *mockInstance) GetCreatedAt() time.Time             { return time.Time{} }
@@ -604,15 +623,82 @@ func (m *mockInstance) SetLastMeaningfulOutput(_ time.Time) {}
 func (m *mockInstance) GetStatus() int                      { return 0 }
 func (m *mockInstance) WriteToPTY(_ []byte) (int, error)    { return 0, nil }
 
-func newControllerWithMock(preview string) (*ClaudeController, *mockInstance) {
-	inst := &mockInstance{title: "test", preview: preview}
+func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
+	inst := &mockInstance{title: "test", preview: content}
 	cc := &ClaudeController{
-		sessionName:    "test",
-		instance:       inst,
-		statusDetector: detection.NewStatusDetector(),
-		idleDetector:   detection.NewIdleDetector("test", nil),
+		sessionName: "test",
+		instance:    inst,
 	}
+	cc.statusDetector.Store(detection.NewStatusDetector())
+	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
+	buf := NewCircularBuffer(256 * 1024)
+	if content != "" {
+		_, _ = buf.Write([]byte(content))
+	}
+	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
 	return cc, inst
+}
+
+// TestClaudeController_Start_TagsEscapeAnalyticsWithStableID is a regression test for
+// BUG-025 at its actual assembly point. TestResponseStream_SetStableSessionID (in
+// response_stream_test.go) proves ResponseStream.SetStableSessionID wiring works, but it
+// calls that method directly — it never goes through ClaudeController.Start(), which is
+// where cc.instance.GetStableID() is actually supplied in production
+// (claude_controller.go: `rs.SetStableSessionID(cc.instance.GetStableID())`). Every other
+// test in this file uses mockInstance.GetPTYReader()'s default always-error behavior, so
+// Start() returns before reaching that line — this test is the only one that gives
+// mockInstance a real (pipe-backed) PTY so Start() can proceed past it. Without this test,
+// a future regression at that exact line (e.g. reverting to `rs.SetStableSessionID(cc.sessionName)`)
+// would pass the entire existing suite.
+func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	spy := &escapeEventSpy{}
+	prev := analytics.GetGlobalEscapeWriter()
+	analytics.SetGlobalEscapeWriter(spy)
+	defer analytics.SetGlobalEscapeWriter(prev)
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{
+		title:     "claude-controller-wiring-test-tmux-name",
+		stableID:  "claude-controller-wiring-test-stable-uuid",
+		ptyReader: reader,
+	}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer cc.Stop()
+
+	if _, err := writer.Write([]byte("\x1b[31m")); err != nil {
+		t.Fatalf("failed to write test data: %v", err)
+	}
+
+	cfg := wait.FastWaitConfig()
+	cfg.Description = "escape event captured via ClaudeController.Start()"
+	if err := wait.WaitForCondition(func() bool {
+		return len(spy.snapshot()) > 0
+	}, cfg); err != nil {
+		t.Fatalf("no escape event captured: %v", err)
+	}
+
+	for _, ev := range spy.snapshot() {
+		if ev.SessionID == inst.title {
+			t.Fatalf("escape event used the tmux name (%q) instead of the stable ID — BUG-025 regressed", ev.SessionID)
+		}
+		if ev.SessionID != inst.stableID {
+			t.Errorf("event SessionID = %q, want %q", ev.SessionID, inst.stableID)
+		}
+	}
 }
 
 func TestGetCurrentStatus_CacheHit(t *testing.T) {
@@ -628,20 +714,29 @@ func TestGetCurrentStatus_CacheHit(t *testing.T) {
 		t.Errorf("cache hit should return same result: (%v,%q) vs (%v,%q)", status1, desc1, status2, desc2)
 	}
 	// Verify the cache entry was actually populated.
-	if cc.statusCache.tailHash == 0 {
+	if sc := cc.statusCache.Load(); sc == nil || sc.tailHash == 0 {
 		t.Error("statusCache.tailHash should be non-zero after first call")
 	}
 }
 
 func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
-	cc, inst := newControllerWithMock(tmuxOutputSmall)
+	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetCurrentStatus()
-	firstHash := cc.statusCache.tailHash
+	var firstHash uint64
+	if sc := cc.statusCache.Load(); sc != nil {
+		firstHash = sc.tailHash
+	}
 
-	// Change content — cache must be invalidated.
-	inst.preview = tmuxOutputSmall + "\n  New line that changes the tail\n"
+	// Update the PTY buffer directly — inst.preview is no longer read by GetCurrentStatus.
+	if pa := cc.ptyAccess.Load(); pa != nil {
+		pa.buffer.Clear()
+		_, _ = pa.buffer.Write([]byte(tmuxOutputSmall + "\n  New line that changes the tail\n"))
+	}
 	_, _ = cc.GetCurrentStatus()
-	secondHash := cc.statusCache.tailHash
+	var secondHash uint64
+	if sc := cc.statusCache.Load(); sc != nil {
+		secondHash = sc.tailHash
+	}
 
 	if firstHash == secondHash {
 		t.Error("hash should change when content changes")
@@ -657,10 +752,8 @@ func TestGetCurrentStatus_EmptyContent(t *testing.T) {
 }
 
 func TestGetCurrentStatus_NilInstance(t *testing.T) {
-	cc := &ClaudeController{
-		sessionName:    "test",
-		statusDetector: detection.NewStatusDetector(),
-	}
+	cc := &ClaudeController{sessionName: "test"}
+	cc.statusDetector.Store(detection.NewStatusDetector())
 	status, msg := cc.GetCurrentStatus()
 	if status != detection.StatusUnknown {
 		t.Errorf("nil instance should yield StatusUnknown, got %v", status)
@@ -679,8 +772,8 @@ func TestGetCurrentStatus_TailOnlyProcessed(t *testing.T) {
 	cc, _ := newControllerWithMock(body + tail)
 
 	status, _ := cc.GetCurrentStatus()
-	if status != detection.StatusActive {
-		t.Errorf("expected StatusActive from tail, got %v", status)
+	if status != detection.StatusExecuting {
+		t.Errorf("expected StatusExecuting from tail, got %v", status)
 	}
 }
 
@@ -689,29 +782,39 @@ func TestGetCurrentStatus_TailOnlyProcessed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetIdleState_CacheHit(t *testing.T) {
-	cc, inst := newControllerWithMock(tmuxOutputSmall)
+	cc, _ := newControllerWithMock(tmuxOutputSmall)
 
 	state1, _ := cc.GetIdleState()
-	inst.preview = tmuxOutputSmall
 	state2, _ := cc.GetIdleState()
 
 	if state1 != state2 {
 		t.Errorf("idle cache hit should return same state: %v vs %v", state1, state2)
 	}
-	if cc.idleCache.tailHash == 0 {
+	if ic := cc.idleCache.Load(); ic == nil || ic.tailHash == 0 {
 		t.Error("idleCache.tailHash should be non-zero after first call")
 	}
 }
 
 func TestGetIdleState_CacheMissOnChange(t *testing.T) {
-	cc, inst := newControllerWithMock(tmuxOutputSmall)
+	cc, _ := newControllerWithMock(tmuxOutputSmall)
 	_, _ = cc.GetIdleState()
-	firstHash := cc.idleCache.tailHash
+	var firstHash uint64
+	if ic := cc.idleCache.Load(); ic != nil {
+		firstHash = ic.tailHash
+	}
 
-	inst.preview = tmuxOutputSmall + "\n  changed\n"
+	// Update the PTY buffer directly — inst.preview is no longer read by GetIdleState.
+	if pa := cc.ptyAccess.Load(); pa != nil {
+		pa.buffer.Clear()
+		_, _ = pa.buffer.Write([]byte(tmuxOutputSmall + "\n  changed\n"))
+	}
 	_, _ = cc.GetIdleState()
+	var secondHash uint64
+	if ic := cc.idleCache.Load(); ic != nil {
+		secondHash = ic.tailHash
+	}
 
-	if firstHash == cc.idleCache.tailHash {
+	if firstHash == secondHash {
 		t.Error("hash should change when content changes")
 	}
 }
@@ -793,35 +896,43 @@ func newControllerWithMockAndChannel(preview string) (*ClaudeController, *mockIn
 	inst := &mockInstance{title: "test", preview: preview}
 	ctx, cancel := context.WithCancel(context.Background())
 	cc := &ClaudeController{
-		sessionName:    "test",
-		instance:       inst,
-		statusDetector: detection.NewStatusDetector(),
-		idleDetector:   detection.NewIdleDetector("test", nil),
-		statusCheckCh:  make(chan struct{}, 1),
-		ctx:            ctx,
-		cancel:         cancel,
+		sessionName:   "test",
+		instance:      inst,
+		statusCheckCh: make(chan struct{}, 1),
 	}
+	cc.statusDetector.Store(detection.NewStatusDetector())
+	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
+	buf := NewCircularBuffer(256 * 1024)
+	if preview != "" {
+		_, _ = buf.Write([]byte(preview))
+	}
+	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	// Wire the lifecycle so runStatusChangeLoop receives the correct ctx.
+	cc.lifecycle.Write(func(l *controllerLifecycle) {
+		l.ctx = ctx
+		l.cancel = cancel
+	})
 	return cc, inst, ctx, cancel
 }
 
 // TestClaudeController_StatusChangeListener_FiresOnStatusChange verifies that
 // the listener is invoked when a status transition is detected after an output signal.
 func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T) {
-	// Use content that produces a known status (StatusActive via "esc to interrupt").
-	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusActive
-	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+	// Use content that produces a known status (StatusExecuting via "esc to interrupt").
+	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusExecuting
+	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 	defer cancel()
 
 	fired := make(chan detection.DetectedStatus, 1)
-	cc.statusChangeListener = func(newStatus detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(newStatus detection.DetectedStatus, _ string) {
 		select {
 		case fired <- newStatus:
 		default:
 		}
-	}
+	})
 
 	// Start the background goroutine.
-	go cc.runStatusChangeLoop(cc.ctx)
+	go cc.runStatusChangeLoop(ctx)
 
 	// Signal an output event.
 	cc.statusCheckCh <- struct{}{}
@@ -840,15 +951,15 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 // the listener fires only once when the status doesn't change across two signals.
 func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T) {
 	preview := tmuxOutputSmall
-	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 	defer cancel()
 
 	callCount := make(chan struct{}, 10)
-	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(_ detection.DetectedStatus, _ string) {
 		callCount <- struct{}{}
-	}
+	})
 
-	go cc.runStatusChangeLoop(cc.ctx)
+	go cc.runStatusChangeLoop(ctx)
 
 	// Send two signals with the same preview content (same status both times).
 	cc.statusCheckCh <- struct{}{}
@@ -892,17 +1003,17 @@ checkResult:
 // the listener is not called after the context is cancelled (Stop).
 func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) {
 	preview := tmuxOutputSmall
-	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 
 	called := make(chan struct{}, 1)
-	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(_ detection.DetectedStatus, _ string) {
 		select {
 		case called <- struct{}{}:
 		default:
 		}
-	}
+	})
 
-	go cc.runStatusChangeLoop(cc.ctx)
+	go cc.runStatusChangeLoop(ctx)
 
 	// Cancel the context (simulating Stop()).
 	cancel()

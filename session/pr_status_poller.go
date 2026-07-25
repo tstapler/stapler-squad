@@ -1,17 +1,24 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// pollerAuthResult is an immutable snapshot of the auth check state.
+// Stored in PRStatusPoller.authState (atomic.Value) so readers are lock-free.
+type pollerAuthResult struct {
+	ok        bool
+	checkedAt time.Time
+}
 
 // PRStatusPollerConfig contains configuration for the PR status poller.
 type PRStatusPollerConfig struct {
@@ -52,17 +59,17 @@ type PRStatusPoller struct {
 	// Intended for EventBus notification; injected from the server layer.
 	onUpdated func(*Instance)
 
-	// Cached auth check state.
-	authOK        bool
-	authCheckedAt time.Time
-
-	// Pause polling when rate limited.
-	rateLimitedUntil time.Time
+	// authState stores pollerAuthResult atomically; readers are lock-free.
+	authState atomic.Value //nolint:exhaustruct
 
 	// noPRPollAfter tracks the earliest time at which we should re-check a
 	// session that had no PR on the previous poll. Keyed by session title.
 	// Guarded by mu.
 	noPRPollAfter map[string]time.Time
+
+	// listEtags stores ETags for the branch→PR list endpoint, keyed by
+	// "owner/repo/branch". Allows 304 responses during PR discovery.
+	listEtags sync.Map
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -91,6 +98,16 @@ func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.instances = instances
+}
+
+// GetInstances returns a defensive copy of the currently monitored instances.
+// Callers must not modify the returned slice elements.
+func (p *PRStatusPoller) GetInstances() []*Instance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]*Instance, len(p.instances))
+	copy(out, p.instances)
+	return out
 }
 
 // AddInstance adds a single instance to monitor.
@@ -170,16 +187,15 @@ func (p *PRStatusPoller) pollLoop() {
 
 // checkAllSessions iterates all monitored instances and updates PR status concurrently.
 func (p *PRStatusPoller) checkAllSessions() {
+	if limited, until := github.DefaultRateLimiter.IsLimited(); limited {
+		log.Info("PR status poller: rate limited, skipping tick", "until", until)
+		return
+	}
+
 	p.mu.RLock()
 	instances := make([]*Instance, len(p.instances))
 	copy(instances, p.instances)
-	rateLimitedUntil := p.rateLimitedUntil
 	p.mu.RUnlock()
-
-	if time.Now().Before(rateLimitedUntil) {
-		log.Info("PR status poller: rate limited, skipping tick", "until", rateLimitedUntil)
-		return
-	}
 
 	if !p.isAuthOK() {
 		return
@@ -197,24 +213,23 @@ func (p *PRStatusPoller) checkAllSessions() {
 	p.mu.RUnlock()
 
 	for _, inst := range instances {
-		if inst.GitHubOwner == "" || inst.GitHubRepo == "" {
+		// Lock-free snapshot replaces both the unguarded GitHubOwner/GitHubRepo reads and
+		// the explicit stateMutex.RLock() for GitHubPRStatusTerminal / GitHubIsFork.
+		instSnap := inst.Snapshot()
+
+		if instSnap.GitHub.GitHubOwner == "" || instSnap.GitHub.GitHubRepo == "" {
 			continue // no GitHub info for this session
 		}
 
-		inst.stateMutex.RLock()
-		isTerminal := inst.GitHubPRStatusTerminal
-		isFork := inst.GitHubIsFork
-		inst.stateMutex.RUnlock()
-
-		if isTerminal {
+		if instSnap.GitHub.GitHubPRStatusTerminal {
 			continue // merged/closed; poller already marked it terminal
 		}
-		if isFork {
-			log.Info("PR status poller: skipping fork session (upstream PR lookup Phase 2)", "session", inst.Title)
+		if instSnap.GitHub.GitHubIsFork {
+			log.Info("PR status poller: skipping fork session (upstream PR lookup Phase 2)", "session", instSnap.Title)
 			continue
 		}
 
-		if pollAfter, ok := noPRPollAfter[inst.Title]; ok && now.Before(pollAfter) {
+		if pollAfter, ok := noPRPollAfter[instSnap.Title]; ok && now.Before(pollAfter) {
 			continue // no-PR backoff still in effect
 		}
 
@@ -232,27 +247,22 @@ func (p *PRStatusPoller) checkAllSessions() {
 }
 
 // isAuthOK returns true if gh auth check passes, using a time-based cache.
+// Auth state is stored in an atomic.Value so this read path is lock-free.
 func (p *PRStatusPoller) isAuthOK() bool {
-	p.mu.RLock()
-	cached := p.authOK && time.Since(p.authCheckedAt) < p.config.AuthCacheDuration
-	p.mu.RUnlock()
-	if cached {
-		return true
+	// Fast path: cached result still fresh (lock-free read).
+	if v := p.authState.Load(); v != nil {
+		if r := v.(pollerAuthResult); time.Since(r.checkedAt) < p.config.AuthCacheDuration {
+			return r.ok
+		}
 	}
 
 	if err := github.CheckGHAuth(); err != nil {
 		log.Warn("PR status poller: github auth unavailable", "err", err)
-		p.mu.Lock()
-		p.authOK = false
-		p.authCheckedAt = time.Now()
-		p.mu.Unlock()
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
 	}
 
-	p.mu.Lock()
-	p.authOK = true
-	p.authCheckedAt = time.Now()
-	p.mu.Unlock()
+	p.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
 	return true
 }
 
@@ -261,35 +271,51 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 	defer cancel()
 
-	inst.stateMutex.RLock()
-	prNumber := inst.GitHubPRNumber
-	branch := inst.Branch
-	owner := inst.GitHubOwner
-	repo := inst.GitHubRepo
-	inst.stateMutex.RUnlock()
+	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
+	// so mu.RLock would not synchronize with them.
+	snap := inst.Snapshot()
+	prNumber := snap.GitHub.GitHubPRNumber
+	owner := snap.GitHub.GitHubOwner
+	repo := snap.GitHub.GitHubRepo
 
-	// Auto-discovery: find PR for branch when PR number not yet known
+	// Auto-discovery: find PR for branch when PR number not yet known.
+	// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
 	if prNumber == 0 {
+		branch := inst.CurrentBranch()
 		if branch == "" {
 			return
 		}
-		prInfo, err := github.GetPRForBranch(ctx, owner, repo, branch)
+		listKey := owner + "/" + repo + "/" + branch
+		var listEtag string
+		if v, ok := p.listEtags.Load(listKey); ok {
+			listEtag = v.(string)
+		}
+		prInfo, newEtag, changed, err := github.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
+		if newEtag != "" {
+			p.listEtags.Store(listKey, newEtag)
+		}
+		if !changed {
+			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+			if p.config.NoPRBackoff > 0 {
+				p.mu.Lock()
+				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+				p.mu.Unlock()
+			}
+			return
+		}
 		if err != nil {
 			if errors.Is(err, github.ErrNoPR) {
-				// No PR exists yet for this branch
 				p.applyNoPR(inst)
 				return
 			}
 			if p.handleFetchError(err) {
-				return // rate limit or auth error handled
+				return
 			}
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
 			return
 		}
 		// Persist discovered PR number and clear no-PR backoff.
-		inst.stateMutex.Lock()
-		inst.GitHubPRNumber = prInfo.Number
-		inst.stateMutex.Unlock()
+		inst.SetGitHubPRNumber(prInfo.Number)
 		p.mu.Lock()
 		delete(p.noPRPollAfter, inst.Title)
 		p.mu.Unlock()
@@ -314,32 +340,27 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 
 	if !changed {
 		// 304 Not Modified — PR unchanged; just bump the check timestamp
-		inst.stateMutex.Lock()
-		inst.LastPRStatusCheck = time.Now()
-		inst.stateMutex.Unlock()
+		inst.SetLastPRStatusCheck(time.Now())
 		return
 	}
 
 	p.applyPRUpdate(inst, prInfo)
 }
 
-// handleFetchError inspects an error and updates poller state for rate limits / auth failures.
-// Returns true if the error requires aborting the current session fetch.
+// handleFetchError inspects an error for rate limits and auth failures.
+// Returns true if the error was handled (caller should not log separately).
+// Rate-limit state is managed by github.DefaultRateLimiter (updated by the
+// transport); this method only needs to detect the error type and signal auth
+// cache invalidation.
 func (p *PRStatusPoller) handleFetchError(err error) bool {
 	msg := err.Error()
 	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "429") {
-		log.Warn("PR status poller: github rate limit hit, pausing for 60s")
-		p.mu.Lock()
-		p.rateLimitedUntil = time.Now().Add(60 * time.Second)
-		p.mu.Unlock()
+		log.Warn("PR status poller: github rate limit hit")
 		return true
 	}
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
 		log.Warn("PR status poller: github auth error, invalidating auth cache")
-		p.mu.Lock()
-		p.authOK = false
-		p.authCheckedAt = time.Now()
-		p.mu.Unlock()
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return true
 	}
 	return false
@@ -372,12 +393,7 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 		isDraft = prInfo.IsDraft
 	}
 
-	// Check whether priority actually changed before notifying
-	inst.stateMutex.RLock()
-	oldPriority := inst.GitHubPRPriority
-	inst.stateMutex.RUnlock()
-
-	inst.UpdatePRStatus(state, priority, checkConclusion, approvedCount, changesReqCount, isDraft, terminal)
+	result := inst.UpdatePRStatus(state, priority, checkConclusion, approvedCount, changesReqCount, isDraft, terminal)
 
 	if p.storage != nil {
 		if err := p.storage.UpdateInstancePRStatus(inst.Title, state, priority, checkConclusion,
@@ -386,13 +402,13 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 		}
 	}
 
-	if priority != oldPriority {
+	if result.PriorityChanged {
 		p.mu.RLock()
 		onUpdated := p.onUpdated
 		p.mu.RUnlock()
 		if onUpdated != nil {
 			onUpdated(inst)
 		}
-		log.Info("PR status poller: PR priority changed", "session", inst.Title, "old", oldPriority, "new", priority)
+		log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
 	}
 }

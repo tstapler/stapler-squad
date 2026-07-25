@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -46,7 +47,7 @@ type PTYReader interface {
 // It uses pattern matching on recent output and tracks state transitions with debouncing.
 type IdleDetector struct {
 	sessionName    string
-	statusDetector *StatusDetector
+	statusDetector TerminalDetector
 	ptyAccess      PTYReader
 	config         IdleDetectorConfig
 	now            func() time.Time // injectable for testing; defaults to time.Now
@@ -55,6 +56,9 @@ type IdleDetector struct {
 	currentState    IdleState
 	lastStateChange time.Time
 	lastActivity    time.Time
+	// lastActivityNs is a unix-nano shadow of lastActivity for lock-free debounce in RecordActivity.
+	// All writers hold mu; this atomic allows RecordActivity to skip the lock on fast-path no-ops.
+	lastActivityNs atomic.Int64
 
 	mu sync.RWMutex
 }
@@ -75,7 +79,7 @@ func NewIdleDetector(sessionName string, ptyAccess PTYReader) *IdleDetector {
 // NewIdleDetectorWithConfig creates a new idle detector with custom configuration.
 func NewIdleDetectorWithConfig(sessionName string, ptyAccess PTYReader, config IdleDetectorConfig) *IdleDetector {
 	now := time.Now()
-	return &IdleDetector{
+	id := &IdleDetector{
 		sessionName:     sessionName,
 		statusDetector:  NewStatusDetector(),
 		ptyAccess:       ptyAccess,
@@ -84,6 +88,30 @@ func NewIdleDetectorWithConfig(sessionName string, ptyAccess PTYReader, config I
 		lastStateChange: now,
 		lastActivity:    now,
 	}
+	id.lastActivityNs.Store(now.UnixNano())
+	return id
+}
+
+// NewIdleDetectorWithDetector creates a new idle detector that uses the provided
+// TerminalDetector instead of creating its own. When detector is nil, falls back
+// to creating a new StatusDetector (same as NewIdleDetectorWithConfig).
+func NewIdleDetectorWithDetector(sessionName string, ptyAccess PTYReader, config IdleDetectorConfig, detector TerminalDetector) *IdleDetector {
+	now := time.Now()
+	sd := detector
+	if sd == nil {
+		sd = NewStatusDetector()
+	}
+	det := &IdleDetector{
+		sessionName:     sessionName,
+		statusDetector:  sd,
+		ptyAccess:       ptyAccess,
+		config:          config,
+		currentState:    IdleStateUnknown,
+		lastStateChange: now,
+		lastActivity:    now,
+	}
+	det.lastActivityNs.Store(now.UnixNano())
+	return det
 }
 
 // DetectState analyzes recent PTY output and returns the current idle state.
@@ -91,32 +119,32 @@ func NewIdleDetectorWithConfig(sessionName string, ptyAccess PTYReader, config I
 // DEPRECATED: Use DetectStateFromContent for more reliable detection.
 // This method uses the PTY circular buffer which may contain incomplete data.
 func (id *IdleDetector) DetectState() IdleState {
-	id.mu.Lock()
-	defer id.mu.Unlock()
+	// Phase 1: read config + PTY outside the write lock.
+	id.mu.RLock()
+	bufSize := id.config.BufferSize
+	id.mu.RUnlock()
 
-	// Get recent output for pattern matching
-	recentOutput := id.ptyAccess.GetRecentOutput(id.config.BufferSize)
+	recentOutput := id.ptyAccess.GetRecentOutput(bufSize)
 	if len(recentOutput) == 0 {
-		// No output yet, keep current state
-		return id.currentState
+		id.mu.RLock()
+		s := id.currentState
+		id.mu.RUnlock()
+		return s
 	}
 
-	// Detect status from patterns
+	// statusDetector.Detect is lock-free (atomic.Pointer inside).
 	status := id.statusDetector.Detect(recentOutput)
 
-	// Map detected status to idle state
+	// Phase 2: state update under write lock (mapStatusToIdleState writes lastActivity).
+	id.mu.Lock()
+	defer id.mu.Unlock()
 	newState := id.mapStatusToIdleState(status)
-
-	// Apply debouncing to prevent rapid state changes
-	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
 		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
 			id.lastStateChange = id.timeNow()
 		}
-		// If debouncing, keep current state
 	}
-
 	return id.currentState
 }
 
@@ -124,48 +152,54 @@ func (id *IdleDetector) DetectState() IdleState {
 // This method should be preferred over DetectState() as it allows the caller to provide
 // reliable terminal content (e.g., from tmux capture-pane) instead of using the PTY circular buffer.
 func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
-	id.mu.Lock()
-	defer id.mu.Unlock()
-
 	if content == "" {
-		// No content, keep current state
-		return id.currentState
+		id.mu.RLock()
+		s := id.currentState
+		id.mu.RUnlock()
+		return s
 	}
 
+	// Phase 1: expensive detection outside the lock.
+	// statusDetector is lock-free (atomic.Pointer); strings.Split is pure.
 	// Detect via line-based reverse scan: process from the most recent line
 	// backwards so a fresh idle prompt on the last line (e.g. "? for shortcuts")
 	// takes priority over a stale "esc to interrupt" from an earlier turn.
-	// collapseCarriageReturns + ANSI stripping are applied per-line inside DetectFromLines.
 	lines := strings.Split(content, "\n")
 	status := id.statusDetector.DetectFromLines(lines)
 
-	// Map detected status to idle state
+	// Phase 2: state update under write lock (mapStatusToIdleState writes lastActivity).
+	id.mu.Lock()
+	defer id.mu.Unlock()
 	newState := id.mapStatusToIdleState(status)
-
-	// Apply debouncing to prevent rapid state changes
-	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
 		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
 			id.lastStateChange = id.timeNow()
 		}
-		// If debouncing, keep current state
 	}
-
 	return id.currentState
 }
 
 // mapStatusToIdleState converts a DetectedStatus to an IdleState.
+// Callers MUST hold id.mu for write — this method mutates id.lastActivity.
 func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
-	case StatusActive:
+	case StatusExecuting:
 		// Actively executing commands - update activity timestamp
 		id.lastActivity = id.timeNow()
+		id.lastActivityNs.Store(id.lastActivity.UnixNano())
 		return IdleStateActive
 
 	case StatusProcessing:
 		// Processing but not showing active indicators - still consider active
 		id.lastActivity = id.timeNow()
+		id.lastActivityNs.Store(id.lastActivity.UnixNano())
+		return IdleStateActive
+
+	case StatusWaitingForAgent:
+		// Waiting for a background agent — still actively working, update activity timestamp
+		id.lastActivity = id.timeNow()
+		id.lastActivityNs.Store(id.lastActivity.UnixNano())
 		return IdleStateActive
 
 	case StatusIdle, StatusReady:
@@ -180,26 +214,28 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 		// Waiting for approval - consider this as waiting
 		return IdleStateWaiting
 
+	case StatusInputRequired:
+		// Explicit user prompt (numbered selection, question) - waiting for input
+		return IdleStateWaiting
+
+	case StatusSuccess:
+		// Task completed — session is waiting for next instruction
+		return IdleStateWaiting
+
 	case StatusError:
 		// Error state - consider as waiting (needs user attention)
 		return IdleStateWaiting
 
-	default:
+	case StatusTestsFailing:
+		// Tests failing — waiting for user to act
+		return IdleStateWaiting
+
+	case StatusUnknown:
 		// Unknown status - don't maintain Unknown, default to Waiting
 		// This handles fresh starts where we haven't detected anything yet
 		return IdleStateWaiting
 	}
-}
-
-// IsIdle returns true if the session is currently idle (waiting or timed out).
-func (id *IdleDetector) IsIdle() bool {
-	state := id.DetectState()
-	return state == IdleStateWaiting || state == IdleStateTimeout
-}
-
-// IsActive returns true if the session is actively processing commands.
-func (id *IdleDetector) IsActive() bool {
-	return id.DetectState() == IdleStateActive
+	return IdleStateWaiting
 }
 
 // GetState returns the current idle state without triggering detection.
@@ -215,6 +251,13 @@ func (id *IdleDetector) GetLastActivity() time.Time {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
 	return id.lastActivity
+}
+
+// GetLastActivityNs returns the last activity time as Unix nanoseconds.
+// Lock-free — reads the atomic shadow of lastActivity.
+// Returns 0 when no activity has been recorded.
+func (id *IdleDetector) GetLastActivityNs() int64 {
+	return id.lastActivityNs.Load()
 }
 
 // GetIdleDuration returns how long the session has been idle.
@@ -249,12 +292,20 @@ const minActivityInterval = 500 * time.Millisecond
 // this is a no-op. This keeps the idle timer accurate while avoiding excessive
 // cache invalidation in the review queue poller.
 func (id *IdleDetector) RecordActivity() {
+	// Fast path: atomic check avoids lock acquisition for the common no-op case
+	// (active sessions producing output at >2Hz hit this path on ~99% of calls).
+	nowNs := id.timeNow().UnixNano()
+	if nowNs-id.lastActivityNs.Load() < int64(minActivityInterval) {
+		return
+	}
 	id.mu.Lock()
 	defer id.mu.Unlock()
+	// Double-check under lock in case another goroutine just updated.
 	if id.timeNow().Sub(id.lastActivity) < minActivityInterval {
 		return
 	}
-	id.lastActivity = id.timeNow()
+	id.lastActivity = time.Unix(0, nowNs)
+	id.lastActivityNs.Store(nowNs)
 }
 
 // Reset resets the idle detector's state tracking.
@@ -267,6 +318,7 @@ func (id *IdleDetector) Reset() {
 	id.currentState = IdleStateUnknown
 	id.lastStateChange = now
 	id.lastActivity = now
+	id.lastActivityNs.Store(now.UnixNano())
 }
 
 // InitializeFromTimestamp restores the idle detector state from a persisted timestamp.
@@ -308,13 +360,14 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 	// If a session was idle for >24h, it's reasonable to show timeout immediately
 	const maxRestorationAge = 24 * time.Hour
 	age := now.Sub(timestamp)
-	if age > maxRestorationAge {
+	if age >= maxRestorationAge {
 		log.Info("timestamp too old for idle detector, using default", "session", id.sessionName, "age", FormatDuration(age))
 		return
 	}
 
 	// Restore the historical timestamp
 	id.lastActivity = timestamp
+	id.lastActivityNs.Store(timestamp.UnixNano())
 	log.Debug("restored lastActivity for idle detector", "session", id.sessionName, "timestamp", timestamp.Format(time.RFC3339), "age", FormatDuration(age))
 }
 
@@ -343,9 +396,10 @@ func (s IdleState) String() string {
 		return "Waiting"
 	case IdleStateTimeout:
 		return "Timeout"
-	default:
+	case IdleStateUnknown:
 		return "Unknown"
 	}
+	return "Unknown"
 }
 
 // Description returns a detailed description of the idle state info.

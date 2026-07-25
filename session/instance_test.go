@@ -45,8 +45,8 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 				"abcdef1234567890",
 			),
 		},
-		started: true,
 	}
+	instance.started.Store(true)
 
 	// Test 1: Worktree exists - instance should not be paused
 	checkInstanceStatus(t, instance, worktreePath, false)
@@ -79,15 +79,19 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 				"abcdef1234567890",
 			),
 		},
-		started: true,
 	}
+	instance.started.Store(true)
 
-	// Test 2: Apply our fix - check if worktree exists and update status
+	// Test 2: Apply our fix - check if worktree exists and update status.
+	// Use ForceStatus, not a bare `instance.Status = Paused` field write: the
+	// earlier instance.Paused() call above already cached a snapshot, and a
+	// raw field write wouldn't republish it — Paused() below would then keep
+	// reading the stale pre-mutation snapshot. ForceStatus republishes.
 	if !instance.Paused() && instance.gitManager.worktree != nil {
 		worktreePath := instance.gitManager.worktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
-			instance.Status = Paused
+			instance.ForceStatus(Paused)
 		}
 	}
 
@@ -273,5 +277,37 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+		EnvVars:     map[string]string{"X": "1", "Y": "2"},
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.EnvVars["X"] != "1" {
+		t.Errorf("expected EnvVars[X]=1, got %q", inst.EnvVars["X"])
+	}
+}
+
+func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+		CLIFlags:    "--foo --bar",
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.CLIFlags != "--foo --bar" {
+		t.Errorf("expected CLIFlags '--foo --bar', got %q", inst.CLIFlags)
 	}
 }

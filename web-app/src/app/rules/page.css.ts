@@ -15,6 +15,7 @@ export const main = style({
   margin: "0 auto",
   padding: "2rem",
   overflowY: "auto",
+  overflowX: "hidden",
   display: "flex",
   flexDirection: "column",
   gap: "2rem",

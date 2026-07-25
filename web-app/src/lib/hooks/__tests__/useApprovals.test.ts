@@ -50,6 +50,8 @@ const baseContextValue = {
   approve: mockApprove,
   deny: mockDeny,
   refresh: mockRefresh,
+  clearForSession: jest.fn(),
+  clearedSessions: new Set<string>(),
 };
 
 // ---------------------------------------------------------------------------

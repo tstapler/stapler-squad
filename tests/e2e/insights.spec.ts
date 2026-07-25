@@ -1,4 +1,8 @@
-// @feature insights-dashboard
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: insights — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['insights-dashboard'], // TODO: add to catalog
+] as const;
 // Tests for the /insights page (token usage analytics dashboard).
 // Validates: page renders, nav link exists, summary cards shown, no crash.
 

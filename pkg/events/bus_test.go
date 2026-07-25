@@ -54,6 +54,46 @@ func TestEventBusBasicSubscribePublish(t *testing.T) {
 	}
 }
 
+// TestEventBus_should_deliverBacklogItemPayload_When_PublishedAndSubscribed verifies that
+// a real EventBus instance delivers EventBacklogItemChanged events with their
+// BacklogItemPayload intact, and assigns a non-zero Seq (Story 1.2.1 AC).
+func TestEventBus_should_deliverBacklogItemPayload_When_PublishedAndSubscribed(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventCh, _ := bus.Subscribe(ctx)
+
+	bus.Publish(&Event{
+		Type: EventBacklogItemChanged,
+		BacklogItemPayload: &BacklogItemEventPayload{
+			Kind:      BacklogChangeStatusTransition,
+			OldStatus: "in_progress",
+			NewStatus: "review",
+		},
+	})
+
+	select {
+	case received := <-eventCh:
+		if received.Type != EventBacklogItemChanged {
+			t.Errorf("Expected event type %s, got %s", EventBacklogItemChanged, received.Type)
+		}
+		if received.BacklogItemPayload == nil {
+			t.Fatal("Expected BacklogItemPayload to be non-nil")
+		}
+		if received.BacklogItemPayload.Kind != BacklogChangeStatusTransition {
+			t.Errorf("Expected Kind %s, got %s", BacklogChangeStatusTransition, received.BacklogItemPayload.Kind)
+		}
+		if received.Seq == 0 {
+			t.Error("Expected Seq to be assigned (non-zero) by Publish")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
+	}
+}
+
 // TestEventBusMultipleSubscribers tests broadcasting to multiple subscribers.
 func TestEventBusMultipleSubscribers(t *testing.T) {
 	bus := NewEventBus(10)
@@ -303,11 +343,6 @@ func TestEventBusEventTypes(t *testing.T) {
 			name:      "SessionDeleted",
 			event:     NewSessionDeletedEvent("test-id"),
 			eventType: EventSessionDeleted,
-		},
-		{
-			name:      "SessionStatusChanged",
-			event:     NewSessionStatusChangedEvent(testSession, session.Active, session.Paused),
-			eventType: EventSessionStatusChanged,
 		},
 	}
 

@@ -9,6 +9,10 @@ import (
 )
 
 // ApprovalAutomation orchestrates automatic approval handling.
+//
+// Lock ordering (must always be acquired in this order):
+//
+//	mu > queueMu > subMu
 type ApprovalAutomation struct {
 	sessionName   string
 	detector      *detection.ApprovalDetector
@@ -18,6 +22,7 @@ type ApprovalAutomation struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	running       bool
+	wg            sync.WaitGroup
 	approvalQueue []*PendingApproval
 	queueMu       sync.Mutex
 	subscribers   map[string]chan<- ApprovalEvent
@@ -119,8 +124,15 @@ func (aa *ApprovalAutomation) Start(ctx context.Context, options ApprovalAutomat
 	}
 
 	// Start processing goroutines
-	go aa.processResponseStream(responseCh, options)
-	go aa.processApprovalQueue(options)
+	aa.wg.Add(2)
+	go func() {
+		defer aa.wg.Done()
+		aa.processResponseStream(responseCh, options)
+	}()
+	go func() {
+		defer aa.wg.Done()
+		aa.processApprovalQueue(options)
+	}()
 
 	return nil
 }
@@ -137,7 +149,7 @@ func (aa *ApprovalAutomation) Stop() error {
 	if aa.cancel != nil {
 		aa.cancel()
 	}
-
+	aa.wg.Wait() // join goroutines before closing their channel
 	aa.controller.Unsubscribe("approval-automation")
 	aa.running = false
 

@@ -490,6 +490,15 @@ func ExtractInnerCommand(prog string, args []string) string {
 		break
 	}
 
+	// For rtk and agy, if the first non-flag argument is a meta subcommand,
+	// do not treat it as a wrapper (it is a standalone command like "rtk gain").
+	if i < len(args) && (strings.ToLower(prog) == "rtk" || strings.ToLower(prog) == "agy") {
+		firstArg := strings.ToLower(args[i])
+		if firstArg == "gain" || firstArg == "discover" || firstArg == "version" {
+			return ""
+		}
+	}
+
 	// Phase 2: skip positional arguments that belong to the wrapper itself
 	// (e.g. the DURATION in "timeout 30 git status").
 	for skip := 0; skip < spec.skipPositionals && i < len(args); skip++ {

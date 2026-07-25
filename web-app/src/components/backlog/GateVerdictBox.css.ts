@@ -64,6 +64,14 @@ export const verdictCardPending = style([
   },
 ]);
 
+export const verdictCardUnverifiable = style([
+  verdictCardBase,
+  {
+    borderLeftColor: vars.color.textMuted,
+    background: vars.color.cardBackground,
+  },
+]);
+
 export const verdictHeader = style({
   display: "flex",
   alignItems: "center",
@@ -94,6 +102,10 @@ export const verdictIconPending = style({
   display: "inline-block",
 });
 
+export const verdictIconUnverifiable = style({
+  color: vars.color.textMuted,
+});
+
 export const verdictLabel = style({
   fontSize: vars.fontSize.xs,
   fontWeight: vars.fontWeight.bold,
@@ -118,9 +130,27 @@ export const verdictLabelPending = style({
   color: vars.color.textMuted,
 });
 
+export const verdictLabelUnverifiable = style({
+  color: vars.color.textMuted,
+});
+
 export const verdictSummary = style({
   fontSize: vars.fontSize.sm,
   color: vars.color.textSecondary,
+});
+
+/**
+ * D2 fix (Story 3.1.3, Task 3.1.3d): distinguishes this per-criterion
+ * *review outcome* list from AcCriteriaList's "Acceptance Criteria"
+ * checklist, so the two never read as duplicate/competing AC displays.
+ */
+export const criteriaHeading = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  marginTop: vars.space["2"],
 });
 
 export const criteriaList = style({
@@ -174,6 +204,10 @@ export const primaryButton = style([
     fontWeight: vars.fontWeight.medium,
     ":hover": {
       background: vars.color.primaryHover,
+    },
+    ":disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
     },
   },
 ]);

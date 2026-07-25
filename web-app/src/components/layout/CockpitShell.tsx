@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useCallback, useEffect, ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { DrawerNav } from "./DrawerNav";
 import { BottomNav } from "./BottomNav";
 import { KeyboardShortcutOverlay } from "@/components/ui/KeyboardShortcutOverlay";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import { useNavigation } from "@/lib/contexts/NavigationContext";
+import { useViewport } from "@/components/providers/ViewportProvider";
 import { cockpitRoot, drawerColumn, mainContent } from "@/styles/layout.css";
 
 interface CockpitShellProps {
@@ -22,6 +24,11 @@ interface CockpitShellProps {
 export function CockpitShell({ children }: CockpitShellProps) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const { toggleDrawer } = useNavigation();
+  const pathname = usePathname();
+  const { isMobile, isFoldable } = useViewport();
+  const isNarrow = isMobile || isFoldable;
+  // Hide the floating ? button on pages that already have their own shortcut button
+  const showFloatingShortcutsButton = !isNarrow && pathname !== "/review-queue";
 
   const openShortcuts = useCallback(() => setShortcutsOpen(true), []);
   const closeShortcuts = useCallback(() => setShortcutsOpen(false), []);
@@ -70,6 +77,32 @@ export function CockpitShell({ children }: CockpitShellProps) {
       </div>
       <BottomNav />
       <KeyboardShortcutOverlay isOpen={shortcutsOpen} onClose={closeShortcuts} />
+      {showFloatingShortcutsButton && (
+        <button
+          onClick={openShortcuts}
+          aria-label="Keyboard shortcuts (?)"
+          title="Keyboard shortcuts (?)"
+          style={{
+            position: "fixed",
+            bottom: "1.5rem",
+            right: "1.5rem",
+            width: "2rem",
+            height: "2rem",
+            borderRadius: "50%",
+            background: "var(--card-background)",
+            border: "1px solid var(--border-color)",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            fontSize: "0.875rem",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          ?
+        </button>
+      )}
     </>
   );
 }
