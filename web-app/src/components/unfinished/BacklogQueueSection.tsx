@@ -102,8 +102,8 @@ export function BacklogQueueSection() {
         const failed = issues.length - successCount;
         setError(
           issues.length === 1
-            ? "Failed to import GitHub issue. Check the URL and try again."
-            : `Imported ${successCount} of ${issues.length} issues — ${failed} failed.`
+            ? "Failed to import GitHub issue. Pull requests can't be imported as backlog items."
+            : `Imported ${successCount} of ${issues.length} issues — ${failed} failed. Pull requests can't be imported as backlog items.`
         );
       }
     },

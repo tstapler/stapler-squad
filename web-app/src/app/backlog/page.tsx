@@ -580,7 +580,7 @@ function BacklogPageInner() {
 
   const handlePickerSelect = useCallback(
     async (owner: string, repo: string, issues: GitHubIssue[]) => {
-      setShowForm(false);
+      setGithubImportError(null);
       const createdIds: string[] = [];
       let failures = 0;
       for (const issue of issues) {
@@ -594,10 +594,17 @@ function BacklogPageInner() {
         }
       }
       if (failures > 0) {
+        // Leave the modal open (don't setShowForm(false) below) so this error
+        // is actually visible — closing the form first would unmount it
+        // before the message could ever render.
         setGithubImportError(
-          `Imported ${createdIds.length} of ${issues.length} issues — ${failures} failed.`
+          issues.length === 1
+            ? "Import failed. Check that this is a real issue, not a pull request, and try again."
+            : `Imported ${createdIds.length} of ${issues.length} — ${failures} failed. Pull requests can't be imported as backlog items.`
         );
+        return;
       }
+      setShowForm(false);
       // Only navigate to the item detail when a single issue was imported —
       // with multiple, there's no single item to land on.
       if (createdIds.length === 1) {

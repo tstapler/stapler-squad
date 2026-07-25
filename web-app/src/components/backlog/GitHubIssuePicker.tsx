@@ -359,24 +359,35 @@ function IssueRow({
 }) {
   const age = relativeTime(issue.updatedAt || issue.createdAt);
   const bodyPreview = issue.body?.trim();
+  // ImportGitHubIssue only accepts real issue URLs (ParseGitHubRef categorizes
+  // /pull/N URLs as RefTypePR, not RefTypeIssue) — a PR can never be imported
+  // as a backlog item, so don't offer a selection that's guaranteed to fail.
+  const importable = !issue.isPR;
 
   return (
     <div className={styles.issueRowWrapper}>
       <div
         role="option"
         aria-selected={selected}
-        className={selected ? `${styles.listItem} ${styles.listItemSelected}` : styles.listItem}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          onToggleSelected();
-        }}
+        aria-disabled={!importable}
+        className={
+          (selected ? `${styles.listItem} ${styles.listItemSelected}` : styles.listItem) +
+          (importable ? "" : ` ${styles.listItemDisabled}`)
+        }
+        title={importable ? undefined : "Pull requests can't be imported as backlog items — open it on GitHub instead."}
+        onClick={importable ? onToggleSelected : undefined}
       >
         <input
           type="checkbox"
           checked={selected}
+          disabled={!importable}
           onChange={onToggleSelected}
           onClick={(e) => e.stopPropagation()}
-          aria-label={`Select issue #${issue.number}: ${issue.title}`}
+          aria-label={
+            importable
+              ? `Select issue #${issue.number}: ${issue.title}`
+              : `Issue #${issue.number} is a pull request and can't be imported: ${issue.title}`
+          }
           className={styles.issueCheckbox}
         />
         <span className={issue.isPR ? styles.prTypeBadge : styles.issueTypeBadge}>
@@ -401,9 +412,8 @@ function IssueRow({
             className={styles.expandToggle}
             aria-label={expanded ? "Collapse details" : "Expand details"}
             aria-expanded={expanded}
-            onMouseDown={(e) => {
+            onClick={(e) => {
               e.stopPropagation();
-              e.preventDefault();
               onToggleExpanded();
             }}
           >
@@ -417,7 +427,6 @@ function IssueRow({
           className={styles.openLink}
           aria-label={`Open issue #${issue.number} on GitHub`}
           title="Open on GitHub"
-          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
           👁

@@ -209,6 +209,16 @@ export const listItemSelected = style({
   background: `${vars.color.hoverBackground} !important`,
 });
 
+export const listItemDisabled = style({
+  opacity: 0.5,
+  cursor: "default",
+  selectors: {
+    "&:hover": {
+      background: "transparent",
+    },
+  },
+});
+
 export const historyDivider = style({
   height: "1px",
   background: vars.color.borderColor,
