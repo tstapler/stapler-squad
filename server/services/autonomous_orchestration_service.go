@@ -383,8 +383,47 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 								}
 							}
 						} else {
-							toStatus = session.BacklogStatusReview
-							expectedStatus = string(session.BacklogStatusInProgress)
+							// The orchestrator LLM (session/autonomous_driver.go's
+							// autonomousSystemPrompt) judges "done" purely from a raw
+							// terminal-tail snapshot (buildOrchestrationPrompt) — it has no
+							// visibility into acceptance criteria, committed diff state, or
+							// whether request_review was ever called. That is a much weaker
+							// signal than backlog work's own explicit completion protocol:
+							// the request_review MCP tool (server/mcp/tools_backlog.go),
+							// which rejects uncommitted changes and requires the work
+							// session's own agent to decide the goal is met.
+							//
+							// Confirmed live (2026-07-24/25): this orchestrator hallucinated
+							// DONE ~10 minutes into a still-running SDD workflow, right after
+							// nothing but a requirements.md commit, forcing a premature
+							// in_progress→review transition and spawning a review against an
+							// empty diff — while the underlying session kept working under
+							// its own steam and landed the real fix commits 40+ minutes
+							// later, unaware a (now-stale) FAIL verdict had already been
+							// recorded. Two items hit this independently in the same session.
+							//
+							// Do NOT let this signal drive the transition. If request_review
+							// already fired, item.Status is no longer in_progress and there
+							// is nothing to do here — the legitimate mechanism already
+							// handled it. If it hasn't, the orchestrator's DONE claim is
+							// unconfirmed: leave the item in_progress (request_review remains
+							// the sole path to review) and just log it so a repeat is
+							// diagnosable, without forcing a status change or spawning a
+							// second, competing driver on top of a session that (per the live
+							// evidence above) may still be legitimately working.
+							if session.BacklogStatus(item.Status) == session.BacklogStatusInProgress {
+								log.Warn("[AutonomousDriver] orchestrator reported DONE but request_review was never called; leaving item in_progress",
+									"item", item.ID, "session", sessionUUID, "reason", outcome.Reason)
+							}
+							// A well-formed DONE reply from the orchestrator is still real
+							// evidence the driver itself isn't malfunctioning (looping on
+							// malformed responses, hitting the turn cap) — that claim is
+							// independent of whether we trust "DONE" to mean "ready for
+							// review" above, so still resolve any open autonomous_stuck row,
+							// mirroring the SessionRoleReview case below. Called directly
+							// here (not via the toStatus-gated block further down) since
+							// toStatus is deliberately left unset for this branch.
+							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
 						}
 					case session.SessionRoleReview:
 						// Review outcomes are managed by submit_review_verdict — no transition,

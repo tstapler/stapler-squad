@@ -320,6 +320,69 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	assert.Empty(t, open, "a successful completion must never write an autonomous_stuck row")
 }
 
+// fakeReviewGateTrigger records TriggerReviewForSession calls so tests can assert
+// whether (and how many times) a review was spawned.
+type fakeReviewGateTrigger struct {
+	calls []string
+}
+
+func (f *fakeReviewGateTrigger) TriggerReviewForSession(workSessionUUID string) {
+	f.calls = append(f.calls, workSessionUUID)
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceReview_When_OrchestratorClaimsDoneWithoutRequestReview
+// is the regression test for the live 2026-07-24/25 premature-review-trigger bug: two
+// backlog items each had a review session spawned within minutes of their work session
+// starting — while the work session was still actively running and had committed nothing
+// but a requirements.md doc — because the AutonomousDriver's orchestrator LLM judged
+// "DONE" from a raw terminal-tail snapshot and onAutonomousDriverComplete trusted that
+// signal to force the in_progress→review transition, racing the legitimate completion
+// path (the request_review MCP tool, which requires the work session's own agent to
+// decide the goal is met and rejects uncommitted changes).
+//
+// This reproduces the exact failure shape: a SessionRoleWork driver reports Done=true
+// (simulating the orchestrator's premature DONE verdict) while the backlog item is still
+// "in_progress" (simulating a work session mid-SDD-workflow that never called
+// request_review). The item must NOT transition to review and no review session may be
+// spawned — request_review remains the only path to review for backlog work sessions.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceReview_When_OrchestratorClaimsDoneWithoutRequestReview(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	trigger := &fakeReviewGateTrigger{}
+	svc.SetReviewGateTrigger(trigger)
+
+	const title = "premature-review-trigger-test"
+	inst := addPausedAutonomousInstance(t, storage, title)
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Mid-SDD-workflow work session, never called request_review",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Simulate the orchestrator's premature DONE verdict — the exact signal that forced
+	// the live bug's in_progress→review transition.
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "looks complete from the terminal tail", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), reloaded.Status,
+		"the orchestrator's inferred DONE must never force in_progress→review; only request_review may do that")
+	assert.Empty(t, trigger.calls, "no review session may be spawned off the orchestrator's inferred DONE signal")
+}
+
 // captureLogs swaps the default slog logger for one that writes to a buffer at Debug level,
 // restoring the previous logger via t.Cleanup. Returns the buffer to inspect after the call.
 func captureLogs(t *testing.T) *bytes.Buffer {
