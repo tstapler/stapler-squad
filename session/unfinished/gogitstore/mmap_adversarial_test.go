@@ -33,12 +33,14 @@ package gogitstore
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing/format/idxfile"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // realFixtureIdxBytes builds a small real packed fixture and returns its raw
@@ -369,7 +371,7 @@ func buildFuzzSeedIdx() (data []byte, ok bool) {
 	defer func() { _ = os.RemoveAll(dir) }()
 
 	run := func(args ...string) bool {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",

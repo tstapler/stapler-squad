@@ -40,12 +40,15 @@ package gogitstore
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // buildTruncationFixture creates a small packed repo fixture and returns an
@@ -117,7 +120,7 @@ func TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection(t *testing
 		t.Skip("git binary not available")
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection$", "-test.v")
+	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_CrashesWithoutProtection$", "-test.v")
 	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
 	out, err := cmd.CombinedOutput()
 
@@ -163,7 +166,7 @@ func TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection(t *testin
 		t.Skip("git binary not available")
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection$", "-test.v")
+	cmd := safeexec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestMmapIndexHandle_TruncateWhileMapped_RecoverableWithProtection$", "-test.v")
 	cmd.Env = append(os.Environ(), "GOGITSTORE_TRUNC_HELPER=1")
 	out, err := cmd.CombinedOutput()
 

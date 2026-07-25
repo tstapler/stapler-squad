@@ -1,6 +1,7 @@
 package gogitstore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -17,6 +18,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // --- test fixture helpers -------------------------------------------------
@@ -92,7 +94,7 @@ func gitRunErr(logf func(format string, args ...any), dir string, args ...string
 	var lastErr error
 	var lastOut []byte
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		cmd := exec.Command("git", args...)
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.local",
