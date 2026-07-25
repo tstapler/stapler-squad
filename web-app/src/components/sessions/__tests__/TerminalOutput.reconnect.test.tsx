@@ -114,6 +114,9 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     terminalState: "DISCONNECTED",
     isHardFailed: false,
     handleManualReconnect: jest.fn(),
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

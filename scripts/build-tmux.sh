@@ -93,11 +93,14 @@ if [[ ! -f "./configure" ]]; then
   TMPTAR="$(mktemp /tmp/tmux-XXXXXX.tar.gz)"
   log "Downloading configure from release tarball (${TARBALL_URL})..."
   if curl -fsSL -o "$TMPTAR" "$TARBALL_URL" 2>/dev/null && \
-     tar xzf "$TMPTAR" -C /tmp "tmux-${TMUX_VERSION}/configure" 2>/dev/null; then
-    cp "/tmp/tmux-${TMUX_VERSION}/configure" ./configure
+     tar xzf "$TMPTAR" -C /tmp 2>/dev/null; then
+    # Merge the whole release tree (-n = no-clobber, keeps our BUILD.bazel etc.) —
+    # configure needs its autotools aux files (install-sh, aclocal.m4, Makefile.in),
+    # which only ship in the release tarball, not the bare git clone.
+    cp -rn "/tmp/tmux-${TMUX_VERSION}"/. ./
     chmod +x ./configure
-    rm -f "$TMPTAR"
-    log "configure extracted from release tarball"
+    rm -rf "$TMPTAR" "/tmp/tmux-${TMUX_VERSION}"
+    log "configure + aux files extracted from release tarball"
   else
     rm -f "$TMPTAR"
     log "Tarball download failed; falling back to autoreconf -fi..."

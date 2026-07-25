@@ -94,3 +94,7 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+
+# Backlog context files injected into worktrees — never source files
+.backlog-context.md
+.claude/commands/backlog/
