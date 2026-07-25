@@ -264,6 +264,22 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			wantPriority: PriorityLow,
 		},
 		{
+			name: "high_priority_reason_not_overridden_by_staleness",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: true,
+				ClaudeStatus:       detection.StatusError,
+			},
+			instSetup: func(inst *Instance) {
+				// Beyond StalenessThreshold, but the Urgent-priority error reason
+				// must NOT be downgraded to a Low-priority Stale reason.
+				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
+			},
+			checkAction:  true,
+			wantAction:   DetectionActionAdd,
+			wantReason:   ReasonErrorState,
+			wantPriority: PriorityUrgent,
+		},
+		{
 			name:    "acknowledged_stale_session_skips_stale",
 			content: "",
 			statusInfo: InstanceStatusInfo{

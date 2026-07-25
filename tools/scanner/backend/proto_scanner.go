@@ -137,6 +137,7 @@ var methodToID = map[string]string{
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
+	"DeleteBacklogItem":           "backlog:delete-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
@@ -227,8 +228,6 @@ var methodToID = map[string]string{
 	// Config file rules RPCs (stub implementations in RulesService)
 	"GetConfigFileRules":    "rules:get-config-file",
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
-	// Backlog item lifecycle RPCs
-	"DeleteBacklogItem": "backlog:delete-item",
 	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
 	"WatchBacklogItems": "backlog:watch",
 }

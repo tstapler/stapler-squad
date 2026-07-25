@@ -74,6 +74,8 @@ const AC_STATUS_OPTIONS: { value: AcCriterionStatus; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
+type AcCriterionRow = AcCriterion & { clientKey: string };
+
 export function BacklogItemForm({
   initialValues,
   onSubmit,
@@ -88,8 +90,10 @@ export function BacklogItemForm({
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
   const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
   const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
-  const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
-    initialValues?.acCriteria ?? []
+  // Lazy initializer: crypto.randomUUID() must only run once per row at mount,
+  // not on every re-render.
+  const [acCriteria, setAcCriteria] = useState<AcCriterionRow[]>(
+    () => (initialValues?.acCriteria ?? []).map((c) => ({ ...c, clientKey: crypto.randomUUID() }))
   );
   const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
   // Guards the one-shot SDD default pre-selection below from ever re-firing
@@ -265,7 +269,7 @@ export function BacklogItemForm({
           skipReviewGate,
           autoSpawnSession,
           autoCreatePR,
-          acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
+          acCriteria: acCriteria.map(({ clientKey, ...rest }, i) => ({ ...rest, index: i })),
           skipTriage: isVague,
           pipelineMode,
         });
@@ -279,7 +283,7 @@ export function BacklogItemForm({
   const addCriterion = useCallback(() => {
     setAcCriteria((prev) => [
       ...prev,
-      { index: prev.length, text: "", status: "pending" as AcCriterionStatus },
+      { index: prev.length, text: "", status: "pending" as AcCriterionStatus, clientKey: crypto.randomUUID() },
     ]);
   }, []);
 
@@ -664,7 +668,7 @@ export function BacklogItemForm({
         {acCriteria.length > 0 && (
           <div className={styles.acList} role="list" aria-label="Acceptance criteria list">
             {acCriteria.map((criterion, i) => (
-              <div key={i} className={styles.acRow} role="listitem">
+              <div key={criterion.clientKey} className={styles.acRow} role="listitem">
                 <input
                   type="text"
                   className={styles.acInput}

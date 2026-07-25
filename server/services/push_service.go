@@ -123,6 +123,17 @@ func (ps *PushService) loadVapidKeys() error {
 		return err
 	}
 
+	// ParseRawPrivateKey requires a fixed-length big-endian scalar (32 bytes for
+	// P256). Keys written before the switch to PrivateKey.Bytes() were encoded
+	// via the variable-length big.Int.Bytes(), which omits leading zero bytes,
+	// so left-pad before parsing to stay compatible with already-persisted keys.
+	const p256ScalarLen = 32
+	if len(privateKeyBytes) < p256ScalarLen {
+		padded := make([]byte, p256ScalarLen)
+		copy(padded[p256ScalarLen-len(privateKeyBytes):], privateKeyBytes)
+		privateKeyBytes = padded
+	}
+
 	privateKey := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
 			Curve: elliptic.P256(),

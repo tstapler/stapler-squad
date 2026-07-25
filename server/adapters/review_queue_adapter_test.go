@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -111,6 +112,43 @@ func TestProtoToAttentionReason(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, ProtoToAttentionReason(tc.input))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// subStatusFromItem
+// ---------------------------------------------------------------------------
+
+// TestSubStatusFromItem_AllDetectedStatuses covers every detection.DetectedStatus
+// input to subStatusFromItem. subStatusFromItem drives the review-queue UI badge, so
+// its correctness across all inputs matters directly to what reviewers see; it now
+// delegates to detection.DetectedStatusToSubStatus (the single authoritative mapping)
+// instead of duplicating the switch inline — this test guards that delegation.
+func TestSubStatusFromItem_AllDetectedStatuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status detection.DetectedStatus
+		want   sessionv1.SubStatus
+	}{
+		{"StatusUnknown", detection.StatusUnknown, sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED},
+		{"StatusReady", detection.StatusReady, sessionv1.SubStatus_SUB_STATUS_READY},
+		{"StatusProcessing", detection.StatusProcessing, sessionv1.SubStatus_SUB_STATUS_PROCESSING},
+		{"StatusNeedsApproval", detection.StatusNeedsApproval, sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL},
+		{"StatusInputRequired", detection.StatusInputRequired, sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED},
+		{"StatusError", detection.StatusError, sessionv1.SubStatus_SUB_STATUS_ERROR},
+		{"StatusTestsFailing", detection.StatusTestsFailing, sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING},
+		{"StatusIdle", detection.StatusIdle, sessionv1.SubStatus_SUB_STATUS_IDLE},
+		{"StatusExecuting", detection.StatusExecuting, sessionv1.SubStatus_SUB_STATUS_PROCESSING},
+		{"StatusSuccess", detection.StatusSuccess, sessionv1.SubStatus_SUB_STATUS_SUCCESS},
+		{"StatusWaitingForAgent", detection.StatusWaitingForAgent, sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &session.ReviewItem{ClaudeStatus: tc.status}
+			got := subStatusFromItem(item)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // createTestStorage creates a test storage backed by a temporary SQLite database.
@@ -477,10 +477,25 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	case evt := <-ch:
 		require.Equal(t, events.EventSessionUpdated, evt.Type,
 			"expected SessionUpdatedEvent after session exit")
-		assert.Equal(t, detection.StatusUnknown, evt.DetectedStatusTyped,
-			"detection should be cleared (StatusUnknown) on session exit")
-		assert.Empty(t, evt.DetectedContext,
-			"detected context should be empty on session exit")
+		require.NotNil(t, evt.Session, "event should carry the exited session instance")
+		assert.Equal(t, session.Stopped, evt.Session.Status,
+			"session should be Stopped in the event payload")
+
+		// sessionExitedPublisher.OnLifecycleEvent always constructs its event via the
+		// plain events.NewSessionUpdatedEvent constructor, which never sets
+		// DetectedStatusTyped — so evt.DetectedStatusTyped == StatusUnknown here is
+		// true by construction, regardless of any real "clearing" logic. Instead,
+		// inspect what actually reaches the wire: adapters.InstanceToProto is the
+		// single conversion path used to build the embedded Session proto for both
+		// SessionCreated and SessionUpdated events. Its DetectedStatus field is only
+		// populated while inst.Status == session.Active; regressing that guard would
+		// resurrect the stale "Thinking…" badge bug this PR fixes.
+		proto := adapters.InstanceToProto(evt.Session, nil)
+		require.NotNil(t, proto)
+		assert.Equal(t, sessionv1.DetectedStatus_DETECTED_STATUS_UNSPECIFIED, proto.DetectedStatus,
+			"detection should be cleared on session exit")
+		assert.Empty(t, proto.DetectedContext,
+			"detected context should be cleared on session exit")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SessionUpdatedEvent after session exit")
 	}

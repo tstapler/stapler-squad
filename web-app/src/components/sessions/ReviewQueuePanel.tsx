@@ -12,6 +12,7 @@ import { useFilterState } from "@/lib/hooks/useFilterState";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions } from "@/lib/grouping/strategies";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import { getAttentionReasonInfo } from "./StatusBadge";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import {
@@ -486,6 +487,7 @@ export function ReviewQueuePanel({
   // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
   const formatDuration = (durationSeconds: bigint): string => {
     const duration = Number(durationSeconds);
+    // eslint-disable-next-line no-restricted-syntax -- duration-formatting fallback (clock skew guard), unrelated to DetectedStatus/AttentionReason
     if (duration < 0 || duration > 31_536_000) return "Unknown"; // Cap at 1 year; guards clock skew / unit mismatch
     if (duration < 60) return `${duration}s`;
     if (duration < 3600) return `${Math.floor(duration / 60)}m`;
@@ -523,6 +525,13 @@ export function ReviewQueuePanel({
     }
   };
 
+  // Short filter-chip labels. These are intentionally more compact than
+  // StatusBadge's getAttentionReasonInfo() labels (e.g. "Approval" vs.
+  // "Approval Pending") to fit the filter button UI — that is a deliberate
+  // difference in intended text, not drift. Where the text is identical to
+  // StatusBadge's canonical label (Error, Idle, Tests Failing), delegate to
+  // getAttentionReasonInfo() instead of re-declaring the literal, so the two
+  // stay in sync automatically.
   const getReasonLabel = (reason: AttentionReason): string => {
     switch (reason) {
       case AttentionReason.APPROVAL_PENDING:
@@ -530,10 +539,10 @@ export function ReviewQueuePanel({
       case AttentionReason.INPUT_REQUIRED:
         return "Input";
       case AttentionReason.ERROR_STATE:
-        return "Error";
+        return getAttentionReasonInfo(reason).label;
       case AttentionReason.IDLE_TIMEOUT:
       case AttentionReason.IDLE:
-        return "Idle";
+        return getAttentionReasonInfo(reason).label;
       case AttentionReason.TASK_COMPLETE:
         return "Complete";
       case AttentionReason.STALE:
@@ -541,7 +550,7 @@ export function ReviewQueuePanel({
       case AttentionReason.WAITING_FOR_USER:
         return "Waiting";
       case AttentionReason.TESTS_FAILING:
-        return "Tests Failing";
+        return getAttentionReasonInfo(reason).label;
       default:
         return "All";
     }
