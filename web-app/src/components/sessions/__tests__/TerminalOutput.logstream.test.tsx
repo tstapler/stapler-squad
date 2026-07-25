@@ -86,6 +86,9 @@ function makeStreamMock(overrides = {}) {
     sendFlowControl: jest.fn(),
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

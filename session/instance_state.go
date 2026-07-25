@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -336,9 +337,17 @@ func (i *Instance) RecoverFromStopped() {
 // Routes through the actor mailbox (sendCtx) rather than taking i.mu directly:
 // ForceStatus is invoked from ad hoc goroutines outside the actor (e.g. the async
 // CreateSession goroutine in SessionService), not from inside an actor command.
-// Funneling through sendCtx serializes this write with the actor's command loop
-// when the instance is actor-owned (LiveInstance), and falls back to running
-// synchronously in-place when it isn't (e.g. tests constructing a bare *Instance).
+// runActor's own post-command buildSnapshot rebuild (actor.go) does not take i.mu
+// at all - it relies on single-goroutine confinement - so a direct i.mu.Lock() here
+// raced with that unguarded read under `-race`. Funneling through sendCtx serializes
+// this write with the actor's command loop when the instance is actor-owned
+// (LiveInstance), and falls back to running synchronously in-place when it isn't
+// (e.g. tests constructing a bare *Instance).
+//
+// Bounded with a timeout (not context.Background()): this is an error-recovery
+// path, so a wedged actor mailbox must not hang the caller (e.g. the async
+// CreateSession cleanup goroutine) indefinitely — fail loudly via log.Error
+// instead of blocking forever.
 //
 // The write (loadStatus) and the buildSnapshot read are done under the SAME
 // i.mu.Lock()/Unlock() critical section (not lock-write-then-unlock-then-read,
@@ -352,11 +361,18 @@ func (i *Instance) RecoverFromStopped() {
 // ForceStatus() pairing during CreateSession. See runActor's doc comment in
 // actor.go for the matching fix on the read side.
 func (i *Instance) ForceStatus(s Status) {
-	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
+	// Bounded: this is an error-recovery path, so a wedged actor mailbox must
+	// not hang the caller (e.g. the async CreateSession cleanup goroutine)
+	// indefinitely. Fail loudly instead.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := i.sendCtx(ctx, func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)
 		snap := buildSnapshot(i)
 		i.mu.Unlock()
 		i.snapshot.Store(snap)
-	})
+	}); err != nil {
+		log.Error("[ForceStatus] actor unresponsive, status not applied", "instance", i.ID, "status", s, "err", err)
+	}
 }

@@ -117,6 +117,9 @@ type StreamMock = {
   stopRecording: jest.Mock;
   output: string;
   terminalState: string;
+  requestFullResync: jest.Mock;
+  markResyncComplete: jest.Mock;
+  markPaneResponseReceived: jest.Mock;
 };
 
 function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
@@ -135,6 +138,9 @@ function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
     stopRecording: jest.fn(),
     output: '',
     terminalState: 'STABLE',
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }
@@ -600,6 +606,63 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
 
     // The queued chunk should have been flushed by the RESIZING→STABLE useEffect
     expect(managerInstance.write).toHaveBeenCalledWith('chunk-during-resize');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resync notification: a pending visibility/focus resync must be signalled
+// even when the arriving output lands during a concurrent resize (queued,
+// not written immediately). handleOutput previously called
+// notifyResyncOutputReceivedRef.current() only on the direct-write path,
+// so output that arrived mid-RESIZE never cleared a pending resync — the
+// 4s stall watchdog would then fire and force a spurious disconnect+
+// reconnect even though the resync data had already arrived.
+// ---------------------------------------------------------------------------
+describe('Resync notification: fires even when output is queued during RESIZING', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('notifyResyncOutputReceived clears a pending resync when output arrives mid-resize', async () => {
+    let capturedOnOutput: ((output: string) => void) | undefined;
+
+    const sharedMockFns = makeStreamMock({ isConnected: true });
+    let currentTerminalState = 'STABLE';
+
+    (useTerminalStream as jest.Mock).mockImplementation((opts: { onOutput?: (output: string) => void }) => {
+      capturedOnOutput = opts.onOutput;
+      return { ...sharedMockFns, terminalState: currentTerminalState };
+    });
+
+    const { rerender } = render(
+      <TerminalOutput sessionId="session-resync-during-resize" baseUrl="http://localhost:8543" />
+    );
+    expect(capturedOnOutput).toBeDefined();
+
+    // Arm a pending resync: fire visibilitychange while connected, let the
+    // 300ms debounce elapse so useVisibilityResync calls requestFullResync
+    // and marks a resync pending internally.
+    jest.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      jest.advanceTimersByTime(300);
+    });
+    expect(sharedMockFns.requestFullResync).toHaveBeenCalledWith(true);
+    jest.useRealTimers();
+
+    // Output now arrives while a resize is in flight — it gets queued, not
+    // written directly — but the pending resync must still be cleared.
+    currentTerminalState = 'RESIZING';
+    await act(async () => {
+      rerender(<TerminalOutput sessionId="session-resync-during-resize" baseUrl="http://localhost:8543" />);
+    });
+    await act(async () => {
+      capturedOnOutput!('resync-payload-during-resize');
+    });
+
+    expect(sharedMockFns.markResyncComplete).toHaveBeenCalled();
+    expect(sharedMockFns.markPaneResponseReceived).toHaveBeenCalled();
   });
 });
 

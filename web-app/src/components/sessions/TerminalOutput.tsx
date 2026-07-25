@@ -42,6 +42,7 @@ const SHIFT_KEY_MAP: Record<string, string> = {
   '\x1b[6~': '\x1b[6;2~',  // Shift+PgDn
 };
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
+import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
@@ -409,11 +410,28 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // (useCallback can't take terminalState as a dep without recreating on every state change)
   const terminalStateRef = useRef<string>('DISCONNECTED');
 
+  // Ref-mirror for notifyResyncOutputReceived (Story 2.1.5, Task 2.1.5b). This
+  // must be a ref rather than a direct useCallback dependency: handleOutput is
+  // defined here and passed into useTerminalStream as `onOutput`, but
+  // notifyResyncOutputReceived isn't available until useVisibilityResync is
+  // called further below (which itself depends on useTerminalStream's return
+  // values) — referencing it directly in this dependency array would be a
+  // temporal-dead-zone error. Same ref-mirror idiom used throughout this file
+  // (e.g. sendFlowControlRef) and in useTerminalStream.ts (connectRef).
+  const notifyResyncOutputReceivedRef = useRef<() => void>(() => {});
+
   // Callback to write output directly to terminal via TerminalStreamManager.
   // Task 4.2.2: Output is queued during RESIZING to prevent bytes at the old column width
   // from being written before the post-resize snapshot.
   const handleOutput = useCallback((output: string) => {
     if (!xtermRef.current) return;
+
+    // Signal resync receipt regardless of whether this output is written
+    // immediately or queued for post-resize flush — a concurrent resize
+    // (plausible on backgrounded-tab wakeup) must not make a pending
+    // visibility/focus resync look stalled just because its response
+    // arrived while RESIZING.
+    notifyResyncOutputReceivedRef.current();
 
     if (terminalStateRef.current === 'RESIZING') {
       pendingOutputDuringResizeRef.current.push(output);
@@ -435,7 +453,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -450,6 +468,22 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
   });
+
+  const { notifyResyncOutputReceived } = useVisibilityResync({
+    sessionId: effectiveSessionId,
+    isConnected,
+    terminalState,
+    connect,
+    disconnect,
+    requestFullResync,
+    markResyncComplete,
+    markPaneResponseReceived,
+    setShowReconnectButton,
+    setShowReconnectBanner,
+  });
+  useEffect(() => {
+    notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;
+  }, [notifyResyncOutputReceived]);
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
   // Also flushes queued output when transitioning from RESIZING to STABLE (Task 4.2.2).

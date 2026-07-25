@@ -333,6 +333,9 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	})
 
 	// CreateSession starts the instance and injects hook config asynchronously; wait for both.
+	// Timeouts are generous (vs. the sub-second local case) because CI runs this under
+	// `go test -race` alongside the rest of the server/session/config suite, which can
+	// push tmux session startup + hook injection close to a tighter deadline under load.
 	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
 	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)

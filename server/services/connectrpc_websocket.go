@@ -128,6 +128,7 @@ const (
 	//               in a known default state (scroll region = full screen, etc.)
 	//   2. ED2    — erase the now-full screen
 	//   3. CUP    — position cursor at the absolute origin before writing content
+	// keep in sync with clearAndHome (web-app/src/lib/terminal/__tests__/TerminalStreamManager.resync.test.ts)
 	ansiSnapshotPrefix = ansiDECSTR + ansiEraseScreen + ansiCursorHome
 )
 
