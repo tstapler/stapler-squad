@@ -25,6 +25,7 @@ export const STUCK_REASON_LABELS: Record<StuckReason, string> = {
   [StuckReason.SPAWN_FAILED]: "Rework session failed to start",
   [StuckReason.PLAN_NOT_APPROVED]: "Waiting on plan approval",
   [StuckReason.PR_PENDING_NO_PR]: "PR reference lost",
+  [StuckReason.REWORK_BLOCKED_STALE]: "Rework blocked — session stalled",
 };
 
 /** Decorative icon glyph for every StuckReason (never the sole signal — text label always accompanies it). */
@@ -41,6 +42,7 @@ export const STUCK_REASON_ICONS: Record<StuckReason, string> = {
   [StuckReason.SPAWN_FAILED]: "⛔",
   [StuckReason.PLAN_NOT_APPROVED]: "🟡",
   [StuckReason.PR_PENDING_NO_PR]: "⛔",
+  [StuckReason.REWORK_BLOCKED_STALE]: "🟥",
 };
 
 /** vanilla-extract class per StuckReason (design/ux.md Surface 7 chip legend). */
@@ -57,6 +59,7 @@ export const STUCK_REASON_CLASS: Record<StuckReason, string> = {
   [StuckReason.SPAWN_FAILED]: styles.chipSpawnFailed,
   [StuckReason.PLAN_NOT_APPROVED]: styles.chipPlanNotApproved,
   [StuckReason.PR_PENDING_NO_PR]: styles.chipPrPendingNoPR,
+  [StuckReason.REWORK_BLOCKED_STALE]: styles.chipReworkBlockedStale,
 };
 
 /** Derived (not stored) reason label/class for a stale GitHub-status check (design/ux.md Surface 8). */

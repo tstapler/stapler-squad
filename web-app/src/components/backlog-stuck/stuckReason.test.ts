@@ -18,6 +18,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.STALE_WORK,
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
+  StuckReason.REWORK_BLOCKED_STALE,
 ];
 
 describe("stuckReason", () => {
@@ -52,6 +53,33 @@ describe("stuckReason", () => {
       const bogus = 999 as StuckReason;
       expect(getStuckReasonLabel(bogus)).toBe(getStuckReasonLabel(StuckReason.UNSPECIFIED));
       expect(getStuckReasonClass(bogus)).toBe(getStuckReasonClass(StuckReason.UNSPECIFIED));
+    });
+  });
+
+  // review-gate-stale-session-rework Story 2.2.1: REWORK_BLOCKED_STALE must be
+  // visually distinguishable from the closely-related STALE_WORK (same
+  // underlying "stale work session" concept, different item status/urgency)
+  // — never identical copy, never color-only differentiation. The generic
+  // exhaustiveness tests above already confirm REWORK_BLOCKED_STALE has a
+  // non-empty label/class/icon; these two assert the specific distinctness
+  // that generic coverage can't check.
+  describe("getStuckReasonLabel_should_returnDistinctLabel_When_ReworkBlockedStale", () => {
+    it("is neither equal to nor a substring of STALE_WORK's label", () => {
+      const reworkBlockedLabel = getStuckReasonLabel(StuckReason.REWORK_BLOCKED_STALE);
+      const staleWorkLabel = getStuckReasonLabel(StuckReason.STALE_WORK);
+      expect(reworkBlockedLabel).not.toBe(staleWorkLabel);
+      expect(staleWorkLabel).not.toContain(reworkBlockedLabel);
+      expect(reworkBlockedLabel).not.toContain(staleWorkLabel);
+    });
+  });
+
+  describe("getStuckReasonIcon_should_returnNonFallbackIcon_When_ReworkBlockedStale", () => {
+    it("returns an icon distinct from STALE_WORK's and from UNSPECIFIED's fallback, paired with a non-empty label", () => {
+      const icon = getStuckReasonIcon(StuckReason.REWORK_BLOCKED_STALE);
+      expect(icon).not.toBe(getStuckReasonIcon(StuckReason.UNSPECIFIED));
+      expect(icon).not.toBe(getStuckReasonIcon(StuckReason.STALE_WORK));
+      // Icon must never be the sole signal — a text label always accompanies it.
+      expect(getStuckReasonLabel(StuckReason.REWORK_BLOCKED_STALE).length).toBeGreaterThan(0);
     });
   });
 

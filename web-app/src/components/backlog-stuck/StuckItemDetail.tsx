@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
+import { routes } from "@/lib/routes";
 import { formatAgo, formatSinceUTC, isPrStatusUnknown } from "./stuckReason";
 import * as styles from "./StuckItemDetail.css";
 
@@ -154,6 +156,30 @@ export function StuckItemDetail({ item, onReworkCapOverride }: StuckItemDetailPr
           </a>
         </div>
       )}
+
+      {/*
+        review-gate-stale-session-rework Story 2.2.2: closes a pre-existing gap
+        found during implementation (not new for this feature — applies to
+        every StuckReason, including the 11 that predate it) where this panel
+        never actually linked to the backlog item's own detail page, even
+        though several reasons' actionCopy above tells the user to click
+        "Reopen for Revision" — an action that only exists on that page
+        (GateVerdictBox, web-app/src/components/backlog/BacklogItemDetail.tsx).
+        Reuses the existing ?item= query-param navigation
+        (BacklogQueueSection.tsx's identical `${routes.backlog}?item=...`
+        pattern, handled by web-app/src/app/backlog/page.tsx) rather than
+        inventing a new navigation mechanism.
+      */}
+      <div className={styles.row}>
+        <Link
+          className={styles.prLink}
+          href={`${routes.backlog}?item=${encodeURIComponent(item.itemId)}`}
+          data-testid="stuck-item-open-detail-link"
+          aria-label="Open this item's full detail page"
+        >
+          Open item detail →
+        </Link>
+      </div>
     </div>
   );
 }

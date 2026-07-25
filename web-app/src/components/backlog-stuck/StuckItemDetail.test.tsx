@@ -194,4 +194,37 @@ describe("StuckItemDetail", () => {
       expect(screen.queryByTestId("stuck-item-autonomous-stuck-copy")).not.toBeInTheDocument();
     });
   });
+
+  // review-gate-stale-session-rework Story 2.2.2 / Task 2.2.2a: the stuck-items
+  // UI previously had no click-through path to the item's own detail page at
+  // all (an inline accordion only, gap affecting all StuckReason values, not
+  // just the new rework_blocked_stale one) — this asserts the link this
+  // feature adds reaches the item detail route where GateVerdictBox's
+  // "Reopen for Revision" button lives.
+  describe("StuckItemDetail_should_linkToItemDetail_When_Rendered", () => {
+    it("links to /backlog?item=<itemId> for a rework_blocked_stale item", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({
+            itemId: "rework-blocked-item-id",
+            reason: StuckReason.REWORK_BLOCKED_STALE,
+            prNumber: 0,
+            prUrl: "",
+            context: "active work session idle 20m0s since last meaningful output",
+          })}
+        />
+      );
+      const link = screen.getByTestId("stuck-item-open-detail-link");
+      expect(link).toHaveAttribute("href", "/backlog?item=rework-blocked-item-id");
+    });
+
+    it("links to /backlog?item=<itemId> regardless of reason (generic fix, not reason-gated)", () => {
+      render(<StuckItemDetail item={makeItem({ itemId: "f9fcef32-c27e-434d-b23f-c873c18afa92" })} />);
+      const link = screen.getByTestId("stuck-item-open-detail-link");
+      expect(link).toHaveAttribute(
+        "href",
+        "/backlog?item=f9fcef32-c27e-434d-b23f-c873c18afa92"
+      );
+    });
+  });
 });

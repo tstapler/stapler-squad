@@ -113,6 +113,15 @@ export const chipPrPendingNoPR = style([
   },
 ]);
 
+export const chipReworkBlockedStale = style([
+  chip,
+  {
+    background: vars.color.errorBg,
+    color: vars.color.errorText,
+    border: `1px solid ${vars.color.error}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {
