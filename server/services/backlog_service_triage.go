@@ -890,6 +890,19 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 	return false
 }
 
+// maxReworkBlockStaleness is the threshold notifyIfActiveWorkSessionStale (and
+// its resolve-side counterpart, ResolveReworkBlockedStaleIfRecovered) compare
+// idle-since-last-meaningful-output against when deciding whether a work
+// session blocking a rework attempt is stale enough to durably flag. 15
+// minutes — see ADR-001-staleness-threshold-recalibration.md for the full
+// rationale. Intentionally distinct from both maxWorkSessionStaleness (2h,
+// session/backlog_lifecycle.go — tuned for a quietly-running in_progress
+// item, a less urgent scenario) and the Review Queue's own
+// ReviewQueuePollerConfig.StalenessThreshold (5min after this same change —
+// a low-stakes "might be worth a look" badge). Used by both the mark side
+// (this function) and the resolve side so they agree on one number.
+const maxReworkBlockStaleness = 15 * time.Minute
+
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
 // any work session with EndedAt == nil as "in flight" and skips reopening
@@ -911,13 +924,16 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 // This repo has a deliberate policy against force-stopping a slow-but-alive
 // agent (see docs/tasks/backlog-feature-improvement.md's StuckReasonStaleWork
 // discussion and the stop_session-deletes-branch incident) — killing the
-// session ourselves would just trade one bug for a worse one. All this adds
-// is a notification once the SAME staleness computation and threshold
-// review_queue_determiner.go already uses (Instance.
-// GetTimeSinceLastMeaningfulOutput vs
-// session.DefaultReviewQueuePollerConfig().StalenessThreshold — reused
-// directly rather than inventing a second definition of "stale") confirms
-// the blocking session isn't just idle-but-thinking.
+// session ourselves would just trade one bug for a worse one. The staleness
+// check uses its own dedicated threshold, maxReworkBlockStaleness (15min —
+// see ADR-001-staleness-threshold-recalibration.md), not the Review Queue's
+// StalenessThreshold — the two were previously conflated, which caused a
+// single slow LLM turn to routinely misfire this gate.
+//
+// In addition to the notification below, this function durably marks the
+// item StuckReasonReworkBlockedStale (session/domain/backlog.go) via
+// MarkStuck so the state survives past the one-shot toast — see that
+// constant's doc comment for the full mark/resolve lifecycle.
 //
 // Best-effort and silent by design when it can't observe anything: no
 // sessionStopper/eventBus wired, no active work session found (shouldn't
@@ -931,7 +947,7 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 // autoReopenWithBackoffGate's RemediationDue backoff (minimum 30 minutes
 // between attempts) once the item has been marked "bouncing" — the exact
 // state this bug report describes.
-func (s *BacklogService) notifyIfActiveWorkSessionStale(itemID, itemTitle string, sessions []session.ItemSessionSummary) {
+func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, itemID, itemTitle string, sessions []session.ItemSessionSummary) {
 	if s.sessionStopper == nil || s.eventBus == nil {
 		return
 	}
@@ -949,12 +965,24 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(itemID, itemTitle string
 	if !live {
 		return
 	}
-	threshold := session.DefaultReviewQueuePollerConfig().StalenessThreshold
+	threshold := maxReworkBlockStaleness
 	if idle <= threshold {
 		return
 	}
 	log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
 		itemID, active.SessionUUID, idle.Round(time.Second), threshold)
+
+	// Durably mark the item, best-effort: a storage error or a status
+	// precondition mismatch (item moved off review between read and write)
+	// must never block or skip the notification below — that publish is the
+	// one pre-existing behavior this addition must not regress.
+	if applied, markErr := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview,
+		fmt.Sprintf("active work session %s idle %s since last meaningful output", active.SessionUUID, idle.Round(time.Second))); markErr != nil {
+		log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) error: %v", itemID, markErr)
+	} else if !applied {
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s MarkStuck(rework_blocked_stale) skipped — status precondition no longer holds", itemID)
+	}
+
 	// itemID as sessionID — see comment in notifyReworkCapHit above.
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
@@ -964,6 +992,68 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(itemID, itemTitle string
 		fmt.Sprintf("%s — a failed review can't reopen for another rework attempt because its active work session hasn't produced output in over %s. The session is still running, so it will not be stopped automatically; check it manually, or use \"Reopen for Revision\" once you've confirmed it's actually stuck.", itemTitle, idle.Round(time.Second)),
 		map[string]string{"item_id": itemID},
 	))
+}
+
+// ResolveReworkBlockedStaleIfRecovered implements
+// session.ReworkBlockStaleResolver — the resolve-side counterpart to
+// notifyIfActiveWorkSessionStale above, called from
+// BacklogLifecycleListener.reconcileReworkBlockedStaleResolution once per
+// open StuckReasonReworkBlockedStale row per reconcile tick. Re-checks the
+// item's active work session's current staleness and clears the row
+// (storage.ResolveStuck) if any of three conditions hold: the session is
+// producing output again (recovered), it no longer has an active work
+// session, or the item has left review status — the last two are
+// belt-and-suspenders alongside selfHealStuck's own status-anchored clear,
+// matching reconcileStaleWorkSessions' identical justification for its own
+// resolve pass (same-status clears are invisible to status-anchored
+// self-heal). No-op (nil error) if still stale. Best-effort: a ResolveStuck
+// error is logged and swallowed here (not returned) so one item's storage
+// hiccup can't abort the tick for every other open row — mirroring
+// resolveStuckLogged's established style.
+func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Context, itemID string) error {
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if item.Status != string(session.BacklogStatusReview) {
+		s.resolveReworkBlockedStaleLogged(ctx, itemID)
+		return nil
+	}
+
+	sessions, sessErr := s.storage.ListItemSessions(ctx, itemID)
+	if sessErr != nil {
+		return fmt.Errorf("list sessions: %w", sessErr)
+	}
+	var active *session.ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+			active = &sessions[i]
+			break
+		}
+	}
+	if active == nil {
+		s.resolveReworkBlockedStaleLogged(ctx, itemID)
+		return nil
+	}
+
+	if s.sessionStopper == nil {
+		return nil
+	}
+	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
+	if !live || idle <= maxReworkBlockStaleness {
+		s.resolveReworkBlockedStaleLogged(ctx, itemID)
+	}
+	return nil
+}
+
+// resolveReworkBlockedStaleLogged clears an open StuckReasonReworkBlockedStale
+// row for itemID, logging (not returning) any storage error — see
+// ResolveReworkBlockedStaleIfRecovered's doc comment for why this must never
+// abort the caller's reconcile tick.
+func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, itemID string) {
+	if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale); resolveErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] ResolveReworkBlockedStaleIfRecovered ResolveStuck item=%s: %v", itemID, resolveErr)
+	}
 }
 
 // hasActiveReviewSession reports whether any of the provided ItemSessions is an
@@ -1055,7 +1145,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// live session instead keeps its conversation (and prompt cache) intact.
 	if hasActiveWorkSession(sessions) {
 		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s already has an active work session; leaving it in place to pick up the verdict instead of respawning", itemID)
-		s.notifyIfActiveWorkSessionStale(itemID, item.Title, sessions)
+		s.notifyIfActiveWorkSessionStale(ctx, itemID, item.Title, sessions)
 		return nil
 	}
 

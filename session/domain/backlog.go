@@ -97,6 +97,21 @@ const (
 	// still visible and retryable from /unfinished rather than a silent
 	// permanent stall.
 	StuckReasonPRPendingNoPR StuckReason = "pr_pending_no_pr"
+	// StuckReasonReworkBlockedStale: a review-status item's failed-review
+	// rework attempt is blocked because its prior work session is still alive
+	// (hasActiveWorkSession's guard, in AutoReopenAfterFailedReview) but has
+	// produced no output for longer than maxReworkBlockStaleness (15min — see
+	// project_plans/review-gate-stale-session-rework/decisions/ADR-001-
+	// staleness-threshold-recalibration.md). Set by
+	// notifyIfActiveWorkSessionStale (server/services/backlog_service_triage.go),
+	// resolved by ResolveReworkBlockedStaleIfRecovered once the session
+	// produces output again, leaves review, or its work session ends.
+	// Distinct from StuckReasonStaleWork, which covers the structurally
+	// similar but different-status case of an in_progress item's active work
+	// session going stale — the two are deliberately kept as separate reasons
+	// (different item status, different threshold, different urgency) rather
+	// than merged.
+	StuckReasonReworkBlockedStale StuckReason = "rework_blocked_stale"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -112,6 +127,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonSpawnFailed,
 	StuckReasonPlanNotApproved,
 	StuckReasonPRPendingNoPR,
+	StuckReasonReworkBlockedStale,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -120,7 +136,7 @@ func (r StuckReason) IsValid() bool {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
-		StuckReasonPRPendingNoPR:
+		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale:
 		return true
 	}
 	return false

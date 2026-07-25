@@ -76,6 +76,30 @@ type StaleWorkRemediator interface {
 	RemediateStaleWorkSession(ctx context.Context, itemID string) error
 }
 
+// ReworkBlockStaleResolver re-checks whether a review-status item's open
+// StuckReasonReworkBlockedStale row (server/services/backlog_service_triage.go's
+// notifyIfActiveWorkSessionStale) should resolve — because the blocking work
+// session has produced output again, has ended, or the item has left review —
+// and clears the row via storage.ResolveStuck if so. Implemented outside this
+// package (BacklogService owns the live SessionStopper needed to re-check
+// liveness/staleness) and wired via SetReworkBlockStaleResolver, mirroring
+// StaleWorkRemediator/SetStaleWorkRemediator exactly: session-package
+// orchestration (reconcileReworkBlockedStaleResolution) needs a
+// server/services-layer, liveness-aware action, and this narrow interface —
+// not a direct sessionStopper-shaped dependency added to
+// BacklogLifecycleListener — is this codebase's established pattern for that.
+// No automated remediation counterpart exists for this reason (unlike
+// StaleWorkRemediator's RemediateStaleWorkSession) — see
+// StuckReasonReworkBlockedStale's doc comment (session/domain/backlog.go) for
+// why that's intentional, not a gap.
+type ReworkBlockStaleResolver interface {
+	// ResolveReworkBlockedStaleIfRecovered no-ops (nil error) if the item
+	// still has an open, still-stale blocking work session. Best-effort: a
+	// storage error is logged by the caller, never returned to the reconcile
+	// tick as a hard failure.
+	ResolveReworkBlockedStaleIfRecovered(ctx context.Context, itemID string) error
+}
+
 // ReviewRespawner can automatically re-trigger the review gate for a backlog
 // item stuck in review with no active session in flight (the
 // StuckReasonAbandonedReview condition — see markAbandonedReview). Before this
@@ -259,6 +283,10 @@ type BacklogLifecycleListener struct {
 	staleWorkRemediatorMu sync.RWMutex
 	staleWorkRemediator   StaleWorkRemediator
 
+	// reworkBlockStaleResolverMu guards reworkBlockStaleResolver for concurrent Set/get access.
+	reworkBlockStaleResolverMu sync.RWMutex
+	reworkBlockStaleResolver   ReworkBlockStaleResolver
+
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
@@ -425,6 +453,23 @@ func (l *BacklogLifecycleListener) getStaleWorkRemediator() StaleWorkRemediator 
 	l.staleWorkRemediatorMu.RLock()
 	defer l.staleWorkRemediatorMu.RUnlock()
 	return l.staleWorkRemediator
+}
+
+// SetReworkBlockStaleResolver wires in the resolver used to re-check and clear
+// an open StuckReasonReworkBlockedStale row once its blocking work session
+// recovers, ends, or the item leaves review — same pattern as
+// AutoReopenSpawner/PRFixSpawner/SetStaleWorkRemediator.
+func (l *BacklogLifecycleListener) SetReworkBlockStaleResolver(r ReworkBlockStaleResolver) {
+	l.reworkBlockStaleResolverMu.Lock()
+	defer l.reworkBlockStaleResolverMu.Unlock()
+	l.reworkBlockStaleResolver = r
+}
+
+// getReworkBlockStaleResolver returns the current rework-block-stale resolver under a read lock.
+func (l *BacklogLifecycleListener) getReworkBlockStaleResolver() ReworkBlockStaleResolver {
+	l.reworkBlockStaleResolverMu.RLock()
+	defer l.reworkBlockStaleResolverMu.RUnlock()
+	return l.reworkBlockStaleResolver
 }
 
 // SetReviewRespawner wires in the spawner used to automatically re-trigger the
@@ -1377,6 +1422,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileStaleWorkSessions(ctx, er)
 	})
 
+	// Resolve-only pass for rework_blocked_stale: the mark side
+	// (notifyIfActiveWorkSessionStale) has no periodic tick of its own, so
+	// this closes an open row once its blocking session recovers, ends, or
+	// the item leaves review, mirroring reconcileStaleWorkSessions' own
+	// resolve half for the structurally similar in_progress case.
+	l.runStuckDetector("rework_blocked_stale", &okNames, &panickedNames, func() {
+		l.reconcileReworkBlockedStaleResolution(ctx, er)
+	})
+
 	// Flag review-status items that already have a review verdict but nothing
 	// active in flight (AutoReopenAfterFailedReview's spawn failed and rolled
 	// back, or a legacy review session exited without a verdict), plus
@@ -2017,6 +2071,40 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			continue // still stale this tick
 		}
 		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonStaleWork, "reconcileStaleWorkSessions")
+	}
+}
+
+// reconcileReworkBlockedStaleResolution is the resolve-only counterpart to
+// notifyIfActiveWorkSessionStale (server/services/backlog_service_triage.go),
+// which marks StuckReasonReworkBlockedStale but has no periodic tick of its
+// own to notice when the blocking session recovers, ends, or the item leaves
+// review — MarkStuck only ever runs again from inside
+// AutoReopenAfterFailedReview, which won't re-fire while the item sits
+// untouched in review. Mirrors reconcileStaleWorkSessions' resolve half
+// (FindOpenStuckStates -> filter-by-reason -> delegate), but contains no
+// liveness-checking logic itself — that's ReworkBlockStaleResolver's job,
+// implemented by BacklogService (server/services/backlog_service_triage.go's
+// ResolveReworkBlockedStaleIfRecovered), which has the SessionStopper this
+// package deliberately does not depend on directly (see
+// ReworkBlockStaleResolver's doc comment). Best-effort: query/delegate errors
+// are logged, never returned — one item's failure must not skip the rest.
+func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx context.Context, er *EntRepository) {
+	resolver := l.getReworkBlockStaleResolver()
+	if resolver == nil {
+		return
+	}
+	open, openErr := er.FindOpenStuckStates(ctx)
+	if openErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution FindOpenStuckStates error: %v", openErr)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonReworkBlockedStale {
+			continue
+		}
+		if resolveErr := resolver.ResolveReworkBlockedStaleIfRecovered(ctx, row.ItemID); resolveErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution ResolveReworkBlockedStaleIfRecovered item=%s: %v", row.ItemID, resolveErr)
+		}
 	}
 }
 

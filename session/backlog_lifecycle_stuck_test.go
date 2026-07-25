@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -924,6 +925,101 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, int32(5), rows[0].RemediationAttempts, "parked attempt count must not grow past the cap even with an unlimited rework override")
+}
+
+// --- rework_blocked_stale: reconcileReworkBlockedStaleResolution orchestration
+// (review-gate-stale-session-rework Story 2.1.2) — the mark side
+// (notifyIfActiveWorkSessionStale, server/services/backlog_service_triage.go)
+// has no periodic tick of its own, so this resolve-only pass closes an open
+// row once its blocking session recovers, ends, or the item leaves review. ---
+
+// fakeReworkBlockStaleResolver is a test double implementing
+// ReworkBlockStaleResolver, recording every ResolveReworkBlockedStaleIfRecovered
+// call — mirrors fakeStaleWorkRemediator's shape, but a plain slice+mutex
+// suffices here since reconcileReworkBlockedStaleResolution calls it
+// synchronously per open row (no goroutine dispatch, unlike remediation).
+type fakeReworkBlockStaleResolver struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (f *fakeReworkBlockStaleResolver) ResolveReworkBlockedStaleIfRecovered(ctx context.Context, itemID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, itemID)
+	return f.err
+}
+
+func (f *fakeReworkBlockStaleResolver) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_OpenRowsExist
+// verifies the orchestration function finds every open rework_blocked_stale
+// row and delegates each to the wired ReworkBlockStaleResolver — it contains
+// no liveness-checking logic itself, only the loop and delegation (see that
+// function's doc comment).
+func TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_OpenRowsExist(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Item blocked by a stale-but-alive session",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, BacklogStatusReview, "idle 20m")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	resolver := &fakeReworkBlockStaleResolver{}
+	listener.SetReworkBlockStaleResolver(resolver)
+
+	listener.reconcileReworkBlockedStaleResolution(ctx, er)
+
+	assert.Equal(t, 1, resolver.callCount())
+	assert.Equal(t, item.ID, resolver.calls[0])
+}
+
+// TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_NoOpenRows
+// is the negative case: with no open rework_blocked_stale rows, the resolver
+// must not be called at all.
+func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_NoOpenRows(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	listener := NewBacklogLifecycleListener(storage)
+	resolver := &fakeReworkBlockStaleResolver{}
+	listener.SetReworkBlockStaleResolver(resolver)
+
+	listener.reconcileReworkBlockedStaleResolution(ctx, er)
+
+	assert.Equal(t, 0, resolver.callCount())
+}
+
+// TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWired
+// confirms the nil-safe getter pattern (mirroring getStaleWorkRemediator):
+// calling the orchestration function before SetReworkBlockStaleResolver has
+// ever been called must not panic.
+func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWired(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	listener := NewBacklogLifecycleListener(storage)
+
+	require.NotPanics(t, func() {
+		listener.reconcileReworkBlockedStaleResolution(ctx, er)
+	})
 }
 
 // --- orphaned_triage: standing detector for tombstoneOrphanTriageSessions'

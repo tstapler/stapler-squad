@@ -984,6 +984,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// closed out and a fresh one respawned instead of sitting stuck forever
 	// (see StaleWorkRemediator's doc comment in session/backlog_lifecycle.go).
 	backlogLifecycleListener.SetStaleWorkRemediator(backlogSvc)
+	// Wire the rework_blocked_stale resolver so an open stuck row for a
+	// review-status item's stale-but-alive blocking work session clears once
+	// that session recovers, ends, or the item leaves review (see
+	// ReworkBlockStaleResolver's doc comment in session/backlog_lifecycle.go).
+	backlogLifecycleListener.SetReworkBlockStaleResolver(backlogSvc)
 	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so
 	// it can soft-archive work sessions for items already done/archived — reuses
 	// sessionService's ArchiveSessionByUUID, the same method BacklogService's

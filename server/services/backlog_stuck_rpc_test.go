@@ -46,6 +46,7 @@ func TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString(t *testin
 		{domain.StuckReasonBouncing, sessionv1.StuckReason_STUCK_REASON_BOUNCING},
 		{domain.StuckReasonPushFailed, sessionv1.StuckReason_STUCK_REASON_PUSH_FAILED},
 		{domain.StuckReasonPRPendingNoPR, sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR},
+		{domain.StuckReasonReworkBlockedStale, sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE},
 	}
 	for _, c := range cases {
 		t.Run(string(c.reason), func(t *testing.T) {
@@ -404,6 +405,13 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	domain.StuckReasonOrphanedTriage:  true,
 	domain.StuckReasonSpawnFailed:     true,
 	domain.StuckReasonPlanNotApproved: true,
+	// StuckReasonReworkBlockedStale: deliberately notify + durably mark +
+	// resolve-when-recovered only (plan.md Story 2.1.1) — no automated
+	// remediation action, per requirements.md's explicit out-of-scope item C
+	// (auto-escalation past a grace period that detaches bookkeeping and
+	// proceeds without killing the still-running session needs its own
+	// design, not built here).
+	domain.StuckReasonReworkBlockedStale: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

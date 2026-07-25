@@ -676,6 +676,14 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected an operator notification when the blocking work session is independently stale")
 	}
+
+	// Story 2.1.1: the toast is now paired with a durable MarkStuck row so
+	// this state survives past the one-shot notification.
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
+	assert.Equal(t, session.BacklogStatusReview, open[0].ItemStatus)
 }
 
 // TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification is the
@@ -723,6 +731,173 @@ func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *te
 	case <-time.After(300 * time.Millisecond):
 		// expected: no notification fired
 	}
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "must not durably mark the item stuck when the threshold isn't exceeded")
+}
+
+// TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min and
+// TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min pin the
+// exact ADR-001 boundary (maxReworkBlockStaleness=15min) — distinct from the
+// two tests above, which use values well clear of the boundary on either
+// side. These two sit right at the edge to catch an off-by-one in the `idle
+// <= threshold` comparison.
+func TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 10 * time.Minute},
+	}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item idle 10m — under the 15m threshold",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "10 min idle must not durably mark the item stuck (15 min threshold)")
+}
+
+func TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item idle 20m — over the 15m threshold",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
+}
+
+// TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPreconditionMismatched
+// confirms MarkStuck's expectedStatus precondition is honored: if the item
+// has moved off review by the time notifyIfActiveWorkSessionStale runs (a
+// race between the AutoReopenAfterFailedReview read and this write), the
+// function must not error or panic — it silently skips the durable mark
+// (the notification-publish behavior is unaffected, covered by the two tests
+// above).
+func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPreconditionMismatched(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item that moved off review before the mark call",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+
+	// Simulate the race directly: move the item off review, then call the
+	// function under test with the (now stale) pre-read state, exactly as
+	// AutoReopenAfterFailedReview would if something else touched the item
+	// between its own read and this call.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, "test")
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		svc.notifyIfActiveWorkSessionStale(ctx, item.ID, item.Title, sessions)
+	})
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "MarkStuck's expectedStatus precondition must have prevented the write")
+}
+
+// TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasReworkCapRowOpen
+// is a coexistence smoke test (plan.md Task 2.1.1d): the multi-row
+// BacklogStuckState model already supports multiple simultaneous open
+// reasons per item (see notifyReworkCapHit's own tests) — this confirms
+// MarkStuck-ing rework_blocked_stale onto an item that already has an open,
+// unrelated rework_cap row does not clobber or conflict with it, catching a
+// regression if a future change accidentally assumes one-reason-per-item.
+func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasReworkCapRowOpen(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute},
+	}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item already parked on rework_cap",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, session.BacklogStatusReview, "rework cap hit")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 2, "both the pre-existing rework_cap row and the new rework_blocked_stale row must coexist")
+	reasons := map[domain.StuckReason]bool{}
+	for _, row := range open {
+		reasons[row.Reason] = true
+	}
+	assert.True(t, reasons[domain.StuckReasonReworkCap])
+	assert.True(t, reasons[domain.StuckReasonReworkBlockedStale])
 }
 
 // TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies is the regression
@@ -2456,4 +2631,169 @@ func TestSpawnSessionFromItem_should_RemoveGitDriftCheckHook_When_ReopenedManual
 	assert.False(t, settingsHasDriftHook(t, secondWorktreePath),
 		"git-drift-check hook must be actively removed when a worktree that was previously spawned "+
 			"autonomously is later respawned non-autonomously (manual reopen)")
+}
+
+// --- Story 2.1.2: ResolveReworkBlockedStaleIfRecovered ---
+
+// TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_SessionRecovered
+// verifies the resolve pass clears an open rework_blocked_stale row once the
+// blocking session's idle time drops back under maxReworkBlockStaleness.
+func TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_SessionRecovered(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose blocking session recovered",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview, "was stale")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 2 * time.Minute}, // recovered — well under 15min
+	}
+	svc.SetSessionStopper(stopper)
+
+	require.NoError(t, svc.ResolveReworkBlockedStaleIfRecovered(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "row must be resolved once the session recovers")
+}
+
+// TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStale
+// is the negative case: a session still idle past the threshold must leave
+// the row open (no ResolveStuck call).
+func TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStale(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose blocking session is still stale",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview, "still stale")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 25 * time.Minute}, // still stale
+	}
+	svc.SetSessionStopper(stopper)
+
+	require.NoError(t, svc.ResolveReworkBlockedStaleIfRecovered(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "row must remain open while still stale")
+	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
+}
+
+// TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSession
+// is the belt-and-suspenders case: if the blocking work session has since
+// ended (EndedAt set), the row must resolve even without re-checking
+// liveness — there's nothing left to be stale.
+func TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose blocking session already ended",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview, "session ended")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	svc.SetSessionStopper(&mockSessionStopper{}) // nothing live — must not be consulted
+
+	require.NoError(t, svc.ResolveReworkBlockedStaleIfRecovered(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "row must resolve once the blocking work session has ended, without needing a liveness check")
+}
+
+// --- reconcileReworkBlockedStaleResolution (session package orchestration) ---
+// See session/backlog_lifecycle_test.go for tests exercising the
+// BacklogLifecycleListener orchestration function itself; the tests above
+// cover the ReworkBlockStaleResolver implementation these tests delegate to.
+
+// TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRecovers_Integration
+// is the full round-trip validation.md calls for: MarkStuck via the real
+// notifyIfActiveWorkSessionStale call path -> appears in FindOpenStuckStates
+// -> the blocking session's staleness clears -> a real
+// session.BacklogLifecycleListener's periodic ReconcileStuck tick (wired to
+// the real BacklogService via SetReworkBlockStaleResolver, exactly as
+// server/dependencies.go wires it in production) resolves the row — no fakes
+// on either side, unlike the unit tests above and in
+// session/backlog_lifecycle_stuck_test.go, which each fake out the other
+// side of this interface boundary.
+func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRecovers_Integration(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{"active-work-uuid": true},
+		staleFor:  map[string]time.Duration{"active-work-uuid": 20 * time.Minute}, // stalled
+	}
+	svc.SetSessionStopper(stopper)
+	svc.SetEventBus(events.NewEventBus(4))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose session stalls then recovers",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Mark side: the real production call path (AutoReopenAfterFailedReview ->
+	// notifyIfActiveWorkSessionStale -> MarkStuck), not a direct storage.MarkStuck call.
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "setup: the mark side must have opened a row before the resolve side is exercised")
+	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
+
+	// Session recovers.
+	stopper.staleFor["active-work-uuid"] = 2 * time.Minute
+
+	// Resolve side: a real session.BacklogLifecycleListener's periodic tick,
+	// wired to the real BacklogService exactly as production does it.
+	listener := session.NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+	listener.SetReworkBlockStaleResolver(svc)
+	listener.ReconcileStuck(ctx)
+
+	open, err = storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "the periodic tick must resolve the row once the session recovers")
 }

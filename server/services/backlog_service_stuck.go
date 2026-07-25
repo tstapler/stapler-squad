@@ -49,6 +49,8 @@ func toProtoStuckReason(reason domain.StuckReason) sessionv1.StuckReason {
 		return sessionv1.StuckReason_STUCK_REASON_PLAN_NOT_APPROVED
 	case domain.StuckReasonPRPendingNoPR:
 		return sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR
+	case domain.StuckReasonReworkBlockedStale:
+		return sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE
 	default:
 		return sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED
 	}
@@ -82,6 +84,8 @@ func fromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason {
 		return domain.StuckReasonPlanNotApproved
 	case sessionv1.StuckReason_STUCK_REASON_PR_PENDING_NO_PR:
 		return domain.StuckReasonPRPendingNoPR
+	case sessionv1.StuckReason_STUCK_REASON_REWORK_BLOCKED_STALE:
+		return domain.StuckReasonReworkBlockedStale
 	default:
 		return ""
 	}
