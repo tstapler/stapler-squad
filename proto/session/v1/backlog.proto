@@ -998,6 +998,10 @@ enum StuckReason {
   STUCK_REASON_SPAWN_FAILED = 9;
   STUCK_REASON_PLAN_NOT_APPROVED = 10;
   STUCK_REASON_PR_PENDING_NO_PR = 11;
+  // STUCK_REASON_REWORK_BLOCKED_STALE: see domain.StuckReasonReworkBlockedStale
+  // (session/domain/backlog.go) — a review-status item's rework attempt is
+  // blocked by a still-alive-but-stale prior work session.
+  STUCK_REASON_REWORK_BLOCKED_STALE = 12;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState
