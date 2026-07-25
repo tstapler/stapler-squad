@@ -9,7 +9,19 @@
   "tested": true,
   "testIds": [
     "TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist",
-    "TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString"
+    "TestToProtoStuckReason_should_mapToUnspecified_When_UnknownString",
+    "TestStuckReasonReworkBlockedStale_should_beValid_When_Checked",
+    "TestAllStuckReasons_should_contain12Entries_When_Enumerated",
+    "TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min",
+    "TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min",
+    "TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPreconditionMismatched",
+    "TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasReworkCapRowOpen",
+    "TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_SessionRecovered",
+    "TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStale",
+    "TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSession",
+    "TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_OpenRowsExist",
+    "TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_NoOpenRows",
+    "TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRecovers_Integration"
   ],
-  "lastModified": "2026-07-14T05:58:45.926116979-07:00"
+  "lastModified": "2026-07-24T00:00:00Z"
 }

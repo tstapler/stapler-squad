@@ -22,7 +22,10 @@
     "StuckNavBadge_should_showLoadingAffordance_When_NoFetchHasSucceededYet",
     "getStuckReasonLabel_should_returnTextLabelForEveryReason_When_MappedExhaustively",
     "StuckItem_should_exposeRetryNow_When_OnTriggerRemediationNowProvided",
-    "StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap"
+    "StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap",
+    "getStuckReasonLabel_should_returnDistinctLabel_When_ReworkBlockedStale",
+    "getStuckReasonIcon_should_returnNonFallbackIcon_When_ReworkBlockedStale",
+    "StuckItemDetail_should_linkToItemDetail_When_Rendered"
   ],
-  "lastModified": "2026-07-20T00:00:00Z"
+  "lastModified": "2026-07-24T00:00:00Z"
 }
