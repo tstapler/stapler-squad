@@ -296,6 +296,20 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			}
 		}
 
+		// sendFinal delivers a terminal chunk (typically a ctx-cancellation error)
+		// from a code path where ctx is already Done — send() above cannot be used
+		// there since its own select would immediately take the <-ctx.Done() branch
+		// and silently discard the chunk instead of delivering it. ch is buffered
+		// (16) and this is always the single terminal chunk on its path, so the
+		// buffered send below never blocks in practice; the default case is a
+		// safety net, not an expected outcome.
+		sendFinal := func(chunk StreamChunk) {
+			select {
+			case ch <- chunk:
+			default:
+			}
+		}
+
 		if isFirstCall {
 			// First call: accumulate all output in a helper goroutine so that ctx
 			// cancellation can terminate the subprocess and unblock the read.
@@ -314,6 +328,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 				// Kill subprocess to unblock the ReadAll goroutine, then wait.
 				_ = stop()
 				<-readDone
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 
@@ -327,6 +342,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 
 			// Guard against a ctx cancellation race after ReadAll completes.
 			if ctx.Err() != nil {
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 
@@ -373,6 +389,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			if ctx.Err() != nil {
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 			line := scanner.Text()
@@ -433,16 +450,19 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 
 		// Proxy the inner channel, releasing the parent semaphore when done.
+		// A plain blocking send (not a select racing ctx.Done()) is deliberate:
+		// drainChannelWithCost's reader always ranges over outCh until it's
+		// closed, regardless of ctx state, so this never blocks in practice —
+		// and once ctx is Done, a racing select would have a real chance of
+		// picking the ctx.Done() case over a ready send and silently dropping
+		// the inner goroutine's terminal error chunk (see call()'s sendFinal),
+		// which is exactly the failure this proxy must not reintroduce.
 		outCh := make(chan StreamChunk, 16)
 		go func() {
 			defer close(outCh)
 			defer func() { <-p.concurrencySem }()
 			for chunk := range innerCh {
-				select {
-				case outCh <- chunk:
-				case <-ctx.Done():
-					return
-				}
+				outCh <- chunk
 			}
 		}()
 		return outCh, nil

@@ -138,6 +138,60 @@ func TestPool_Call_ContextCancel_ClosesChannel(t *testing.T) {
 	}
 }
 
+// TestPool_CallBlocking_ContextTimeout_ReturnsError_NotEmptySuccess covers the
+// non-WorkDir (session-reuse) path, reusing the blockingRunner defined below
+// (a ClaudeRunner whose stdout blocks until ctx is done — the exact shape of
+// a genuinely hung headless call, e.g. blocked waiting on a tool-permission
+// prompt no TTY can ever answer). Guards against the bug where a context
+// timeout mid-call silently completed with empty output instead of a real
+// error — TriggerTriage's headless calls ran for the full 30-minute timeout
+// producing zero output, then failed downstream with a confusing "no JSON
+// object found" parse error instead of a clear cancellation error.
+func TestPool_CallBlocking_ContextTimeout_ReturnsError_NotEmptySuccess(t *testing.T) {
+	runner := &blockingRunner{}
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, _, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{})
+
+	require.Error(t, err, "a call cancelled mid-flight must return an error, not silently succeed with empty output")
+	assert.Empty(t, result)
+}
+
+// writeSleepForeverFakeClaudeScript writes a fake `claude` binary that consumes
+// stdin then blocks indefinitely without ever producing output — simulating a
+// hang, for real-subprocess (ProcessRunner) testing of the WorkDir call path.
+func writeSleepForeverFakeClaudeScript(t *testing.T, scriptDir string) string {
+	t.Helper()
+	scriptPath := filepath.Join(scriptDir, "fake-claude-hang.sh")
+	script := "#!/bin/sh\ncat > /dev/null\nsleep 999\n"
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
+	return scriptPath
+}
+
+// TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySuccess
+// covers the WorkDir (one-shot proxy) call path — the exact shape
+// TriggerTriage uses in production — with a real subprocess that hangs and
+// gets killed by ctx's timeout.
+func TestPool_CallBlocking_WorkDirPath_ContextTimeout_ReturnsError_NotEmptySuccess(t *testing.T) {
+	scriptDir := t.TempDir()
+	scriptPath := writeSleepForeverFakeClaudeScript(t, scriptDir)
+	workDir := t.TempDir()
+
+	runner := NewProcessRunnerForTesting(scriptPath)
+	pool := NewPoolWithRunner(PoolConfig{}, runner)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	result, _, err := pool.CallBlocking(ctx, "f1", "sys", "prompt", CallOptions{WorkDir: workDir})
+
+	require.Error(t, err, "a WorkDir call cancelled mid-flight must return an error, not silently succeed with empty output")
+	assert.Empty(t, result)
+}
+
 // TestPool_RotatesSession_AfterMaxCalls verifies session ID changes after MaxCallsPerSession.
 func TestPool_RotatesSession_AfterMaxCalls(t *testing.T) {
 	// MaxCallsPerSession=2: after 2 calls the 3rd call should be a new session.

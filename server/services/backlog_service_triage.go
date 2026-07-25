@@ -1642,6 +1642,35 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 	}
 }
 
+// classifyHeadlessCallError buckets a headless.CallBlocking error into a coarse category
+// for log-line grepping, so a future incident (e.g. a repeat of the 2026-07-24 stuck-triage
+// investigation) can answer "how often does each failure mode happen" from log history alone,
+// without re-deriving it by hand from raw error text and process timing.
+//
+//   - "timeout": ctx deadline exceeded, or elapsed is within 5s of the 30m TriggerTriage
+//     budget (covers a hang whose error got wrapped/lost before reaching context.DeadlineExceeded).
+//   - "shutdown": server shutdown context cancelled mid-call, not a call failure.
+//   - "process_error": the claude subprocess ran and exited non-zero (bad prompt, LLM
+//     refusal, usage error) — see headless.ErrLLMError/ErrUsageError/ErrInterrupted.
+//   - "claude_not_found": the claude binary itself is missing from PATH — an environment
+//     problem, not a per-call one.
+//   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
+func classifyHeadlessCallError(err error, elapsed time.Duration) string {
+	const timeoutBudget = 30 * time.Minute
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), timeoutBudget-elapsed < 5*time.Second:
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "shutdown"
+	case errors.Is(err, headless.ErrClaudeNotFound):
+		return "claude_not_found"
+	case errors.Is(err, headless.ErrLLMError), errors.Is(err, headless.ErrUsageError), errors.Is(err, headless.ErrInterrupted):
+		return "process_error"
+	default:
+		return "other"
+	}
+}
+
 // TriggerTriage kicks off a headless triage planning call for a backlog item.
 // Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
@@ -1791,10 +1820,24 @@ func (s *BacklogService) TriggerTriage(
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
 		defer cancel()
 
+		callStart := time.Now()
 		raw, _, callErr := s.headlessPool.CallBlocking(triageCtx,
 			headless.FeatureKeyTriage,
 			headless.HeadlessTriageSystemPrompt(),
 			triagePrompt,
+			// WorkDir-only, no PermissionMode — matches the empirically-verified
+			// precedent from ADR-001 (project_plans/backlog-already-implemented),
+			// re-confirmed live against the real CLI: a WorkDir-bearing claude -p
+			// call with no --permission-mode flag grants real Write/Bash access via
+			// Claude Code's own auto-mode default (defaultMode: "auto" in
+			// ~/.claude/settings.json) with zero permission_denials and no hang. An
+			// earlier version of this comment claimed a missing PermissionMode
+			// causes a silent hang; that was a misdiagnosis — the 2026-07-24 stuck
+			// sessions correlate with a concurrent memory-exhaustion/zombie-subprocess
+			// incident (swap 100% full, orphaned claude -p processes from 4-18h
+			// earlier), not a permission-mode gap. Do not add bypassPermissions here
+			// without a fresh empirical repro, per ADR-001's own "don't trust
+			// unverified CLI-behavior assumptions" precedent.
 			headless.CallOptions{WorkDir: itemRepoPath},
 		)
 
@@ -1808,15 +1851,26 @@ func (s *BacklogService) TriggerTriage(
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 		defer cleanupCancel()
 
+		callElapsed := time.Since(callStart)
 		if callErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s: %v", itemID, callErr)
+			// elapsed=<duration> lets a future incident distinguish "died fast"
+			// (config/parse/process error) from "ran the full 30m budget" (a real
+			// hang or an upstream call that never returns) at a glance in the log,
+			// without needing to cross-reference session start/end timestamps by
+			// hand — exactly the reconstruction this session had to do manually for
+			// the 2026-07-24 stuck-triage incident. errType classifies the error
+			// into a few high-signal buckets so a grep over historical logs can
+			// answer "how often do we hit each failure mode" without parsing %v text.
+			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
+				itemID, callElapsed.Round(time.Second), classifyHeadlessCallError(callErr, callElapsed), callErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 			return
 		}
 
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s: %v", itemID, parseErr)
+			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s elapsed=%s rawLen=%d: %v",
+				itemID, callElapsed.Round(time.Second), len(raw), parseErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 			return
 		}
@@ -1878,8 +1932,8 @@ func (s *BacklogService) TriggerTriage(
 		}
 
 		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
-		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s suggestions=%d tasks=%d",
-			itemID, len(result.Suggestions), len(result.Tasks))
+		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s elapsed=%s suggestions=%d tasks=%d",
+			itemID, callElapsed.Round(time.Second), len(result.Suggestions), len(result.Tasks))
 	}()
 
 	return connect.NewResponse(&sessionv1.TriggerTriageResponse{

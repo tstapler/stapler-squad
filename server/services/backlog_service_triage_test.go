@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,35 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
+
+// TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping covers
+// classifyHeadlessCallError's decision table — the 2026-07-24 stuck-triage
+// incident required manually reconstructing which failure mode occurred from
+// raw timing/text; this test guards that the bucketing logic keeps matching
+// its own doc comment.
+func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		elapsed time.Duration
+		want    string
+	}{
+		{"ctx deadline exceeded", context.DeadlineExceeded, 5 * time.Minute, "timeout"},
+		{"wrapped ctx deadline exceeded", fmt.Errorf("headless call ended: %w", context.DeadlineExceeded), 5 * time.Minute, "timeout"},
+		{"elapsed within budget tail even without deadline error", errors.New("some other error"), 29*time.Minute + 56*time.Second, "timeout"},
+		{"ctx canceled (shutdown)", context.Canceled, time.Minute, "shutdown"},
+		{"claude binary not found", headless.ErrClaudeNotFound, time.Second, "claude_not_found"},
+		{"llm error", headless.ErrLLMError, time.Minute, "process_error"},
+		{"usage error", headless.ErrUsageError, time.Second, "process_error"},
+		{"interrupted", headless.ErrInterrupted, time.Second, "process_error"},
+		{"unrelated error, short elapsed", errors.New("boom"), time.Minute, "other"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, classifyHeadlessCallError(tc.err, tc.elapsed))
+		})
+	}
+}
 
 // --- Story 2.1.2: rework_cap durable write (notifyReworkCapHit) ---
 
