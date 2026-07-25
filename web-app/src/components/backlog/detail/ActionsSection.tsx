@@ -171,6 +171,23 @@ export function ActionsSection({
           </>
         )}
 
+        {item.status === "queued" && (
+          <>
+            {item.planArtifactsPath && !item.planApproved && (
+              <button
+                className={styles.actionButton}
+                onClick={() => onAction("approve_plan")}
+                disabled={actionLoading !== null}
+                aria-busy={actionLoading === "approve_plan"}
+                title="Queued items can't be dequeued until their plan is approved (or skip_planning is set)."
+                data-testid="backlog-action-approve-plan"
+              >
+                <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
+              </button>
+            )}
+          </>
+        )}
+
         {item.status === "in_progress" && item.linkedSessions.length > 0 && (
           <>
             <a

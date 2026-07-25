@@ -60,7 +60,7 @@ export function StuckItemsSection() {
     bulkResetParkedRemediation,
     triggerRemediationNow,
   } = useStuckBacklogItems();
-  const { updateBacklogItem, transitionStatus, spawnSessionFromItem } = useBacklogService();
+  const { updateBacklogItem, transitionStatus, spawnSessionFromItem, approvePlan } = useBacklogService();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [resolvedGhosts, setResolvedGhosts] = useState<Map<string, ResolvedGhost>>(new Map());
@@ -156,6 +156,25 @@ export function StuckItemsSection() {
       }
     },
     [updateBacklogItem, transitionStatus, spawnSessionFromItem, refetch]
+  );
+
+  // BUG-038 follow-up: the only "Approve Plan" UI action lived inside the
+  // item-detail page's `status === "ready"` block, but items this reason
+  // flags are stuck in `status === "queued"` — so that button was never
+  // reachable. This is the fix: approve directly from the stuck-item card.
+  const handleApprovePlan = useCallback(
+    async (itemId: string): Promise<boolean> => {
+      try {
+        const updated = await approvePlan(itemId);
+        if (!updated) return false;
+        await refetch();
+        return true;
+      } catch (err) {
+        console.error("[StuckItemsSection] approvePlan failed:", err);
+        return false;
+      }
+    },
+    [approvePlan, refetch]
   );
 
   // Visible items: the filtered set actually rendered. Cross-reference badges
@@ -301,6 +320,7 @@ export function StuckItemsSection() {
                       onSnooze={snooze}
                       onReworkCapOverride={handleReworkCapOverride}
                       onTriggerRemediationNow={triggerRemediationNow}
+                      onApprovePlan={handleApprovePlan}
                     />
                   );
                 })}

@@ -38,6 +38,8 @@ interface StuckItemProps {
    * needing to know the specific failure shape.
    */
   onTriggerRemediationNow?: (itemId: string, reason: StuckReason) => Promise<void>;
+  /** Approves the item's plan (ApprovePlan RPC) — omitted disables the approve control entirely. */
+  onApprovePlan?: (itemId: string) => Promise<boolean>;
 }
 
 /** Extracts "owner/repo" from a GitHub PR URL, for the glance-level identity line. */
@@ -110,6 +112,7 @@ export function StuckItem({
   onSnooze,
   onReworkCapOverride,
   onTriggerRemediationNow,
+  onApprovePlan,
 }: StuckItemProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -382,7 +385,11 @@ export function StuckItem({
       )}
 
       {isExpanded && !justResolved && (
-        <StuckItemDetail item={item} onReworkCapOverride={onReworkCapOverride} />
+        <StuckItemDetail
+          item={item}
+          onReworkCapOverride={onReworkCapOverride}
+          onApprovePlan={onApprovePlan}
+        />
       )}
     </div>
   );

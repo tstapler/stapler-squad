@@ -227,4 +227,56 @@ describe("StuckItemDetail", () => {
       );
     });
   });
+
+  describe("StuckItemDetail_should_offerApprovePlanControl_When_ReasonIsPlanNotApproved", () => {
+    it("renders explanatory copy for plan_not_approved", () => {
+      render(
+        <StuckItemDetail
+          item={makeItem({
+            reason: StuckReason.PLAN_NOT_APPROVED,
+            prNumber: 0,
+            prUrl: "",
+            context: "queued item blocked by DequeueNextQueuedItems' planning gate",
+          })}
+        />
+      );
+      expect(screen.getByTestId("stuck-item-plan-not-approved-copy")).toBeInTheDocument();
+    });
+
+    it("does not render for a non-plan_not_approved reason", () => {
+      render(<StuckItemDetail item={makeItem({ reason: StuckReason.PR_READY_UNMERGED })} />);
+      expect(screen.queryByTestId("stuck-item-plan-not-approved-copy")).not.toBeInTheDocument();
+    });
+
+    it("does not render the approve button when no handler is provided", () => {
+      render(<StuckItemDetail item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })} />);
+      expect(screen.queryByTestId("stuck-item-approve-plan-form")).not.toBeInTheDocument();
+    });
+
+    it("calls onApprovePlan with the item id when 'Approve Plan' is clicked", async () => {
+      const onApprovePlan = jest.fn().mockResolvedValue(true);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED, itemId: "item-plan-1" })}
+          onApprovePlan={onApprovePlan}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-approve-plan"));
+
+      await waitFor(() => expect(onApprovePlan).toHaveBeenCalledWith("item-plan-1"));
+    });
+
+    it("shows an error message when the approve call fails", async () => {
+      const onApprovePlan = jest.fn().mockResolvedValue(false);
+      render(
+        <StuckItemDetail
+          item={makeItem({ reason: StuckReason.PLAN_NOT_APPROVED })}
+          onApprovePlan={onApprovePlan}
+        />
+      );
+      fireEvent.click(screen.getByTestId("stuck-item-approve-plan"));
+
+      await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    });
+  });
 });

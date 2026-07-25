@@ -11,6 +11,8 @@ interface StuckItemDetailProps {
   item: StuckBacklogItem;
   /** Sets a per-item rework-cap override and immediately reopens the item — omitted disables the rework_cap override control. */
   onReworkCapOverride?: (itemId: string, override: number) => Promise<boolean>;
+  /** Approves the item's plan (ApprovePlan RPC) — omitted disables the approve control entirely. */
+  onApprovePlan?: (itemId: string) => Promise<boolean>;
 }
 
 /** Read-only "Repo auto-merge: on/off/unknown" line (Story 4.1.4). `allowAutoMerge` is
@@ -25,21 +27,30 @@ function autoMergeLine(allowAutoMerge: boolean | undefined): string {
  * Expanded accordion detail panel for a StuckItem. Renders inline beneath the
  * card (no portal/modal), mirroring UnfinishedItemDetail.tsx.
  */
-export function StuckItemDetail({ item, onReworkCapOverride }: StuckItemDetailProps) {
+export function StuckItemDetail({ item, onReworkCapOverride, onApprovePlan }: StuckItemDetailProps) {
   const unknown = isPrStatusUnknown(item);
   const isPrReady = item.reason === StuckReason.PR_READY_UNMERGED;
   const isReworkCap = item.reason === StuckReason.REWORK_CAP;
   const isAutonomousStuck = item.reason === StuckReason.AUTONOMOUS_STUCK;
+  const isPlanNotApproved = item.reason === StuckReason.PLAN_NOT_APPROVED;
   const why = item.context?.trim() ? item.context : "No additional context recorded";
 
   const [moreRounds, setMoreRounds] = useState("3");
   const [overrideState, setOverrideState] = useState<"idle" | "pending" | "error">("idle");
+  const [approveState, setApproveState] = useState<"idle" | "pending" | "error">("idle");
 
   async function submitOverride(override: number) {
     if (!onReworkCapOverride) return;
     setOverrideState("pending");
     const ok = await onReworkCapOverride(item.itemId, override);
     setOverrideState(ok ? "idle" : "error");
+  }
+
+  async function submitApprovePlan() {
+    if (!onApprovePlan) return;
+    setApproveState("pending");
+    const ok = await onApprovePlan(item.itemId);
+    setApproveState(ok ? "idle" : "error");
   }
 
   return (
@@ -116,6 +127,33 @@ export function StuckItemDetail({ item, onReworkCapOverride }: StuckItemDetailPr
           what it accomplished, then either give it a manual instruction or use &quot;Reopen
           for Revision&quot; / re-trigger triage to let it try again.
         </p>
+      )}
+
+      {isPlanNotApproved && (
+        <>
+          <p className={styles.actionCopy} data-testid="stuck-item-plan-not-approved-copy">
+            This item is queued but can&apos;t be dequeued until its plan is approved (or
+            skip_planning is set). Approve the plan below to unblock it.
+          </p>
+          {onApprovePlan && (
+            <div className={styles.overrideForm} data-testid="stuck-item-approve-plan-form">
+              <button
+                type="button"
+                className={styles.overrideButton}
+                disabled={approveState === "pending"}
+                onClick={() => void submitApprovePlan()}
+                data-testid="stuck-item-approve-plan"
+              >
+                {approveState === "pending" ? "Approving…" : "Approve Plan"}
+              </button>
+              {approveState === "error" && (
+                <span className={styles.overrideStatus} role="alert">
+                  Failed to approve — try again.
+                </span>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       <div className={styles.row}>
