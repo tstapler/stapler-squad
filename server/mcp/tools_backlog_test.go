@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1302,11 +1304,159 @@ func TestAppendBacklogNotes_RejectsMissingNote(t *testing.T) {
 	require.Equal(t, ErrInvalidArgument, errCode)
 }
 
-// TestAppendBacklogNotes_PreconditionGuardsAgainstLostUpdate verifies the
-// optimistic-concurrency precondition that appendBacklogNotes relies on:
-// writing with a stale ExpectedUpdatedAt fails instead of silently
-// overwriting a concurrent change (the lost-update race).
-func TestAppendBacklogNotes_PreconditionGuardsAgainstLostUpdate(t *testing.T) {
+// TestAppendBacklogNotes_ConcurrentCallsOnSameItem_ExactlyOneWins verifies the
+// handler-level contract end to end (not just the storage primitive): two
+// appendBacklogNotes calls racing on the same item — both starting from the
+// same read — must not both succeed. Exactly one wins; the other observes
+// CONFLICT rather than silently dropping the winner's note.
+func TestAppendBacklogNotes_ConcurrentCallsOnSameItem_ExactlyOneWins(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Contended item",
+		Notes:    "original",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	const racers = 8
+	// Each racer's outcome is collected here rather than asserted inside the
+	// goroutine — testify's require/assert call t.FailNow, which uses
+	// runtime.Goexit and is only safe to invoke from the test's own goroutine.
+	outcomes := make([]string, racers)
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for i := 0; i < racers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			req := makeToolReq(map[string]interface{}{
+				"item_id": item.ID,
+				"note":    fmt.Sprintf("racer %d note", i),
+			})
+			result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+			if err != nil {
+				outcomes[i] = "unexpected_error:" + err.Error()
+				return
+			}
+			text := result.Content[0].(mcpgo.TextContent).Text
+			var errEnvelope struct {
+				Success bool `json:"success"`
+				Error   struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if jsonErr := json.Unmarshal([]byte(text), &errEnvelope); jsonErr != nil {
+				// Not JSON — the plain-text success path (errResult returns JSON;
+				// mcpgo.NewToolResultText on success does not).
+				outcomes[i] = "success"
+				return
+			}
+			if !errEnvelope.Success && errEnvelope.Error.Code == ErrConflict {
+				outcomes[i] = "conflict"
+				return
+			}
+			outcomes[i] = "unexpected:" + text
+		}(i)
+	}
+	wg.Wait()
+
+	var successes, conflicts int
+	for _, o := range outcomes {
+		switch o {
+		case "success":
+			successes++
+		case "conflict":
+			conflicts++
+		default:
+			t.Errorf("unexpected outcome: %s", o)
+		}
+	}
+	// At least one racer must win (the first writer always succeeds — there is
+	// no contention until a second write lands); the invariant that must
+	// always hold regardless of exact interleaving is "no note was silently
+	// dropped" — every racer either won or was told to retry via CONFLICT.
+	require.Equal(t, racers, successes+conflicts)
+	require.Greater(t, successes, 0, "at least one racer must succeed")
+}
+
+// TestAppendBacklogNotes_RejectsNoteExceedingMaxLength verifies the note
+// length cap (matches the pattern request_review/submit_review_verdict use
+// to bound their text fields) — an unbounded note would let any linked
+// session grow the notes column without limit.
+func TestAppendBacklogNotes_RejectsNoteExceedingMaxLength(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Item",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"note":    strings.Repeat("x", maxNoteLength+1),
+	})
+
+	result, err := handler.appendBacklogNotes(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+}
+
+// TestArchiveBacklogItem_RejectsNoteExceedingMaxLength mirrors
+// TestAppendBacklogNotes_RejectsNoteExceedingMaxLength for archive_backlog_item's
+// optional note argument.
+func TestArchiveBacklogItem_RejectsNoteExceedingMaxLength(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogItemData{
+		Title:    "Item",
+		Priority: 1,
+		Status:   string(session.BacklogStatusInProgress),
+	}, "work")
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"note":    strings.Repeat("x", maxNoteLength+1),
+	})
+
+	result, err := handler.archiveBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, string(session.BacklogStatusArchived), fetched.Status, "item must not be archived when the note is rejected")
+}
+
+// TestBacklogItemUpdate_PreconditionGuardsAgainstLostUpdate verifies the
+// storage-layer optimistic-concurrency primitive that both
+// archiveBacklogItem and appendBacklogNotes rely on: writing with a stale
+// ExpectedUpdatedAt fails instead of silently overwriting a concurrent
+// change (the lost-update race). See
+// TestAppendBacklogNotes_ReturnsConflict_When_ModifiedConcurrently for the
+// handler-level contract this primitive backs.
+func TestBacklogItemUpdate_PreconditionGuardsAgainstLostUpdate(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
 

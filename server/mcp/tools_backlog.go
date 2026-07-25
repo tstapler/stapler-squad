@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // --- Session UUID context injection ---
@@ -61,6 +62,13 @@ const (
 	ErrFeatureDisabled  = "FEATURE_DISABLED"
 )
 
+// maxNoteLength bounds archive_backlog_item / append_backlog_notes note
+// arguments, matching the cap style already used elsewhere in this file
+// (request_review's message/verification_notes, submit_review_verdict's
+// summary) — an unbounded note lets any linked session grow the notes
+// column without limit.
+const maxNoteLength = 4000
+
 // appendNote merges a new note into an existing notes string, tagging it with
 // a timestamp and the authoring session so multiple appends stay attributable
 // and lossless (no note text is ever overwritten).
@@ -70,6 +78,51 @@ func appendNote(existing, note, sessionUUID string) string {
 		return entry
 	}
 	return existing + "\n\n---\n" + entry
+}
+
+// commitAndPushItemWorktrees commits any dirty work and pushes branches to
+// the remote for all work-role item sessions. Best-effort: errors are logged,
+// not returned — mirrors services.BacklogService.commitAndPushItemWorktrees
+// (server/services/backlog_service.go), which archive_backlog_item can't call
+// directly without threading a *services.BacklogService dependency through
+// server/mcp.NewCore/NewHTTPHandler (see archiveBacklogItem's ponytail note).
+func commitAndPushItemWorktrees(ctx context.Context, storage *session.Storage, sessions []session.ItemSessionSummary) {
+	for _, is := range sessions {
+		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+			continue
+		}
+		wt, err := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
+		if err != nil || wt.WorktreePath == "" {
+			continue
+		}
+		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
+		commitMsg := fmt.Sprintf("[claudesquad] save work before archive (session %s)", is.SessionUUID)
+		if commitErr := g.CommitChanges(commitMsg); commitErr != nil {
+			log.WarningLog.Printf("[mcp:archive_backlog_item] commit failed path=%s: %v", wt.WorktreePath, commitErr)
+		}
+		if pushErr := g.PushBranch(); pushErr != nil {
+			log.WarningLog.Printf("[mcp:archive_backlog_item] push failed path=%s: %v", wt.WorktreePath, pushErr)
+		}
+	}
+}
+
+// cleanupItemWorktrees removes git worktrees for work-role item sessions.
+// Call commitAndPushItemWorktrees first. Best-effort: errors are logged, not
+// returned — mirrors services.BacklogService.cleanupItemWorktrees.
+func cleanupItemWorktrees(ctx context.Context, storage *session.Storage, sessions []session.ItemSessionSummary) {
+	for _, is := range sessions {
+		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+			continue
+		}
+		wt, err := storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
+		if err != nil || wt.WorktreePath == "" {
+			continue
+		}
+		g := git.NewGitWorktreeFromStorage(wt.RepoPath, wt.WorktreePath, wt.SessionName, wt.BranchName, wt.BaseCommitSHA)
+		if cleanErr := g.Cleanup(); cleanErr != nil {
+			log.WarningLog.Printf("[mcp:archive_backlog_item] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
+		}
+	}
 }
 
 // featureDisabledResult returns a FEATURE_DISABLED error result if enabledCheck
@@ -924,6 +977,9 @@ func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.Call
 	}
 
 	note, _ := args["note"].(string)
+	if len(note) > maxNoteLength {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("note must be <= %d characters", maxNoteLength), ""), nil
+	}
 
 	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
 	if getErr != nil {
@@ -944,9 +1000,28 @@ func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.Call
 
 	if note != "" {
 		merged := appendNote(item.Notes, note, callerUUID)
-		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &merged}, nil); updateErr != nil {
+		precondition := &session.BacklogItemPrecondition{ExpectedUpdatedAt: &item.UpdatedAt}
+		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &merged}, precondition); updateErr != nil {
+			if errors.Is(updateErr, session.ErrPreconditionFailed) {
+				return errResult(ErrConflict, "backlog item was modified concurrently — notes not appended, item not archived", "Call get_backlog_item again to see the latest state, then retry archive_backlog_item."), nil
+			}
 			return errResult(ErrInternalError, fmt.Sprintf("update notes: %v", updateErr), ""), nil
 		}
+	}
+
+	// Mirror BacklogService.ArchiveBacklogItem's push-then-cleanup sequence
+	// (server/services/backlog_service_lifecycle.go) so an item archived via
+	// this MCP tool gets the same durability/cleanup guarantees as one
+	// archived through the UI/API: push in-flight work BEFORE archiving so it
+	// isn't stranded on an about-to-be-deleted worktree, then best-effort
+	// remove the worktree/tmux session so it doesn't linger forever.
+	// ponytail: duplicates BacklogService's private helpers rather than
+	// sharing them (that would mean threading a *services.BacklogService
+	// dependency through server/mcp.NewCore/NewHTTPHandler, a bigger change)
+	// — upgrade path: extract both into a shared session-package helper both
+	// callers use if a third caller ever needs this sequence.
+	if sessions, lsErr := h.storage.ListItemSessions(ctx, itemID); lsErr == nil {
+		commitAndPushItemWorktrees(ctx, h.storage, sessions)
 	}
 
 	if _, archiveErr := h.storage.ArchiveBacklogItem(ctx, itemID); archiveErr != nil {
@@ -955,6 +1030,12 @@ func (h *backlogHandlers) archiveBacklogItem(ctx context.Context, req mcpgo.Call
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("archive backlog item: %v", archiveErr), ""), nil
 	}
+
+	if sessions, lsErr := h.storage.ListItemSessions(ctx, itemID); lsErr == nil {
+		cleanupItemWorktrees(ctx, h.storage, sessions)
+	}
+
+	log.InfoLog.Printf("[mcp:archive_backlog_item] session=%s item=%s archived note_provided=%t", callerUUID, itemID, note != "")
 
 	msg := fmt.Sprintf("Backlog item %s archived.", itemID)
 	if note != "" {
@@ -988,6 +1069,9 @@ func (h *backlogHandlers) appendBacklogNotes(ctx context.Context, req mcpgo.Call
 	if !ok || note == "" {
 		return errResult(ErrInvalidArgument, "note is required", ""), nil
 	}
+	if len(note) > maxNoteLength {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("note must be <= %d characters", maxNoteLength), ""), nil
+	}
 
 	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
 	if getErr != nil {
@@ -1014,6 +1098,8 @@ func (h *backlogHandlers) appendBacklogNotes(ctx context.Context, req mcpgo.Call
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("update notes: %v", updateErr), ""), nil
 	}
+
+	log.InfoLog.Printf("[mcp:append_backlog_notes] session=%s item=%s note_len=%d", callerUUID, itemID, len(note))
 
 	return mcpgo.NewToolResultText(fmt.Sprintf("Note appended to backlog item %s.", itemID)), nil
 }
