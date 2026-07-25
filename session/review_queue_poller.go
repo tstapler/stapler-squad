@@ -46,7 +46,7 @@ func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
 		SlowPollInterval:   8 * time.Second,  // Back off to 8s when queue is empty
 		IdleThreshold:      5 * time.Second,  // Add to queue after 5s idle for immediate user notifications
 		InputWaitDuration:  3 * time.Second,  // Flag if waiting for input > 3s (reduced from 5s)
-		StalenessThreshold: 2 * time.Minute,  // Flag if no meaningful output for 2 minutes (reduced from 5min)
+		StalenessThreshold: 5 * time.Minute,  // Flag if no meaningful output for 5 minutes (reverted from an undocumented 2min reduction — a single slow LLM turn routinely exceeds 2min without being stuck; see project_plans/review-gate-stale-session-rework/decisions/ADR-001-staleness-threshold-recalibration.md)
 		ReconcileInterval:  30 * time.Second, // Reconcile against tmux reality every 30 seconds
 	}
 }

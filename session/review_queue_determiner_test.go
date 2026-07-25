@@ -216,9 +216,47 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 				IsControllerActive: false,
 			},
 			instSetup: func(inst *Instance) {
-				// Set LastMeaningfulOutput far in the past (beyond StalenessThreshold=2m)
+				// Set LastMeaningfulOutput far in the past (beyond StalenessThreshold=5m,
+				// recalibrated from an undocumented 2m — ADR-001-staleness-threshold-recalibration.md)
 				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 				inst.UpdatedAt = time.Now().Add(-10 * time.Minute)
+			},
+			checkAction:  true,
+			wantAction:   DetectionActionAdd,
+			wantReason:   ReasonStale,
+			wantPriority: PriorityLow,
+		},
+		{
+			// ADR-001 boundary case: 3 min since output must NOT be flagged stale
+			// under the recalibrated 5-minute threshold (would have been flagged
+			// under the old 2-minute threshold — this is the exact false-positive
+			// shape the recalibration fixes). UpdatedAt is kept fresh so the
+			// separate idle check (basicIdleThreshold=5s) doesn't also fire and
+			// mask what this case is actually testing.
+			name:    "session_stale_under_new_5min_threshold_does_not_flag",
+			content: "",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: false,
+			},
+			instSetup: func(inst *Instance) {
+				inst.LastMeaningfulOutput = time.Now().Add(-3 * time.Minute)
+				inst.UpdatedAt = time.Now()
+			},
+			checkAction: true,
+			wantAction:  DetectionActionSkip,
+		},
+		{
+			// ADR-001 boundary case: 6 min since output must be flagged stale
+			// (just past the recalibrated 5-minute threshold). UpdatedAt kept
+			// fresh for the same reason as above.
+			name:    "session_stale_over_new_5min_threshold_flags",
+			content: "",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: false,
+			},
+			instSetup: func(inst *Instance) {
+				inst.LastMeaningfulOutput = time.Now().Add(-6 * time.Minute)
+				inst.UpdatedAt = time.Now()
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
