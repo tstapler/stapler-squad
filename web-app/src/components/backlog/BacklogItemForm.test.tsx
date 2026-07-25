@@ -90,3 +90,51 @@ describe("BacklogItemForm — cloning busy state", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("BacklogItemForm — acceptance criteria row identity", () => {
+  it("BacklogItemForm_should_PreserveRowIdentity_When_EarlierRowRemoved", () => {
+    render(
+      <BacklogItemForm
+        initialValues={{
+          acCriteria: [
+            { index: 0, text: "First criterion", status: "pending" },
+            { index: 1, text: "Second criterion", status: "pending" },
+          ],
+        }}
+        onSubmit={jest.fn()}
+        onCancel={jest.fn()}
+      />
+    );
+
+    const secondRowInput = screen.getByTestId("backlog-criterion-text-1");
+    secondRowInput.focus();
+
+    fireEvent.click(screen.getByTestId("backlog-remove-criterion-0"));
+
+    const survivingInput = screen.getByTestId("backlog-criterion-text-0");
+    expect(survivingInput).toBe(secondRowInput);
+    expect(survivingInput).toHaveValue("Second criterion");
+    expect(document.activeElement).toBe(survivingInput);
+  });
+
+  it("strips clientKey from the acCriteria payload on submit", async () => {
+    const onSubmit = jest.fn(() => Promise.resolve());
+    render(
+      <BacklogItemForm
+        initialValues={{
+          id: "item-1",
+          title: "Existing item",
+          acCriteria: [{ index: 0, text: "A criterion", status: "pending" }],
+        }}
+        onSubmit={onSubmit}
+        onCancel={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const { acCriteria } = onSubmit.mock.calls[0][0];
+    expect(acCriteria).toEqual([{ index: 0, text: "A criterion", status: "pending" }]);
+  });
+});

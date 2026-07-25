@@ -26,6 +26,8 @@ const AC_STATUS_OPTIONS: { value: AcCriterionStatus; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
+type AcCriterionRow = AcCriterion & { clientKey: string };
+
 export function BacklogItemForm({
   initialValues,
   onSubmit,
@@ -38,8 +40,10 @@ export function BacklogItemForm({
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
-  const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
-    initialValues?.acCriteria ?? []
+  // Lazy initializer: crypto.randomUUID() must only run once per row at mount,
+  // not on every re-render.
+  const [acCriteria, setAcCriteria] = useState<AcCriterionRow[]>(
+    () => (initialValues?.acCriteria ?? []).map((c) => ({ ...c, clientKey: crypto.randomUUID() }))
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -76,7 +80,7 @@ export function BacklogItemForm({
           priority,
           skipPlanning,
           skipReviewGate,
-          acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
+          acCriteria: acCriteria.map(({ clientKey, ...rest }, i) => ({ ...rest, index: i })),
           skipTriage: isVague,
         });
       } finally {
@@ -89,7 +93,7 @@ export function BacklogItemForm({
   const addCriterion = useCallback(() => {
     setAcCriteria((prev) => [
       ...prev,
-      { index: prev.length, text: "", status: "pending" as AcCriterionStatus },
+      { index: prev.length, text: "", status: "pending" as AcCriterionStatus, clientKey: crypto.randomUUID() },
     ]);
   }, []);
 
@@ -266,7 +270,7 @@ export function BacklogItemForm({
         {acCriteria.length > 0 && (
           <div className={styles.acList} role="list" aria-label="Acceptance criteria list">
             {acCriteria.map((criterion, i) => (
-              <div key={i} className={styles.acRow} role="listitem">
+              <div key={criterion.clientKey} className={styles.acRow} role="listitem">
                 <input
                   type="text"
                   className={styles.acInput}
