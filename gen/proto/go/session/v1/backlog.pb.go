@@ -5839,16 +5839,18 @@ func (x *GitHubRepoEntry) GetDescription() string {
 }
 
 type GitHubIssueEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Number        int32                  `protobuf:"varint,1,opt,name=number,proto3" json:"number,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
-	Labels        []string               `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty"`
-	Body          string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	IsPr          bool                   `protobuf:"varint,9,opt,name=is_pr,json=isPr,proto3" json:"is_pr,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Number    int32                  `protobuf:"varint,1,opt,name=number,proto3" json:"number,omitempty"`
+	Title     string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	State     string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Url       string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
+	Labels    []string               `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty"`
+	Body      string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	IsPr      bool                   `protobuf:"varint,9,opt,name=is_pr,json=isPr,proto3" json:"is_pr,omitempty"`
+	// GitHub login of the issue's author.
+	Author        string `protobuf:"bytes,10,opt,name=author,proto3" json:"author,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5944,6 +5946,13 @@ func (x *GitHubIssueEntry) GetIsPr() bool {
 		return x.IsPr
 	}
 	return false
+}
+
+func (x *GitHubIssueEntry) GetAuthor() string {
+	if x != nil {
+		return x.Author
+	}
+	return ""
 }
 
 type SearchGitHubReposRequest struct {
@@ -7841,7 +7850,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\bis_local\x18\x03 \x01(\bR\aisLocal\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x04 \x01(\tR\tlocalPath\x12 \n" +
-	"\vdescription\x18\x05 \x01(\tR\vdescription\"\x9f\x02\n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xb7\x02\n" +
 	"\x10GitHubIssueEntry\x12\x16\n" +
 	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x14\n" +
@@ -7853,7 +7862,9 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x13\n" +
-	"\x05is_pr\x18\t \x01(\bR\x04isPr\"F\n" +
+	"\x05is_pr\x18\t \x01(\bR\x04isPr\x12\x16\n" +
+	"\x06author\x18\n" +
+	" \x01(\tR\x06author\"F\n" +
 	"\x18SearchGitHubReposRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\"N\n" +

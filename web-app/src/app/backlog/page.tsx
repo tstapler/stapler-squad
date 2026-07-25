@@ -24,6 +24,7 @@ import {
   type BacklogItem,
   type BacklogItemStatus,
   type BacklogItemInput,
+  type GitHubIssue,
 } from "@/lib/hooks/useBacklogService";
 import { useWatchBacklogItems } from "@/lib/hooks/useWatchBacklogItems";
 import { useAppDispatch } from "@/lib/store";
@@ -578,14 +579,30 @@ function BacklogPageInner() {
   );
 
   const handlePickerSelect = useCallback(
-    async (owner: string, repo: string, issue: { number: number; title: string; url: string }) => {
-      const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+    async (owner: string, repo: string, issues: GitHubIssue[]) => {
       setShowForm(false);
-      const result = await importGitHubIssue(url.trim());
-      if (result) {
-        await hydrateItemIntoStore(result.item.id);
+      const createdIds: string[] = [];
+      let failures = 0;
+      for (const issue of issues) {
+        const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+        const result = await importGitHubIssue(url.trim());
+        if (result) {
+          await hydrateItemIntoStore(result.item.id);
+          createdIds.push(result.item.id);
+        } else {
+          failures++;
+        }
+      }
+      if (failures > 0) {
+        setGithubImportError(
+          `Imported ${createdIds.length} of ${issues.length} issues — ${failures} failed.`
+        );
+      }
+      // Only navigate to the item detail when a single issue was imported —
+      // with multiple, there's no single item to land on.
+      if (createdIds.length === 1) {
         const params = new URLSearchParams(searchParams.toString());
-        params.set("item", result.item.id);
+        params.set("item", createdIds[0]);
         router.push(`/backlog?${params.toString()}`);
       }
     },
@@ -870,10 +887,17 @@ function BacklogPageInner() {
                 onCancel={() => setShowForm(false)}
               />
             ) : (
-              <GitHubIssuePicker
-                onSelect={handlePickerSelect}
-                onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
-              />
+              <>
+                <GitHubIssuePicker
+                  onSelect={handlePickerSelect}
+                  onCancel={() => { setShowForm(false); setGithubIssueUrl(""); setGithubImportError(null); }}
+                />
+                {githubImportError && (
+                  <p style={{ fontSize: "12px", color: "var(--error)", margin: "8px 0 0" }}>
+                    {githubImportError}
+                  </p>
+                )}
+              </>
             )}
 
             {false && (

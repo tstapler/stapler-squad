@@ -12,7 +12,8 @@
     "TestListGitHubIssues_EmptyRepo",
     "TestListGitHubIssues_InvalidOwnerChars",
     "TestListGitHubIssues_DefaultState",
-    "TestListGitHubIssues_SearchUsesSearchAPI"
+    "TestListGitHubIssues_SearchUsesSearchAPI",
+    "TestListGitHubIssues_PopulatesBodyAuthorAndTimestamps"
   ],
-  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+  "lastModified": "2026-07-24T15:00:00-07:00"
 }

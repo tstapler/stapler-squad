@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -173,6 +174,66 @@ func (s *BacklogService) TriggerSync(
 	return connect.NewResponse(&sessionv1.TriggerSyncResponse{}), nil
 }
 
+// ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
+// +api: ImportGitHubIssue
 func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Request[sessionv1.ImportGitHubIssueRequest]) (*connect.Response[sessionv1.ImportGitHubIssueResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("ImportGitHubIssue not yet implemented"))
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.IssueUrl == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("issue_url is required"))
+	}
+
+	ref, parseErr := gh.ParseGitHubRef(req.Msg.IssueUrl)
+	if parseErr != nil || ref.Type != gh.RefTypeIssue {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid GitHub issue URL %q", req.Msg.IssueUrl))
+	}
+
+	issue, err := gh.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fetch GitHub issue: %w", err))
+	}
+
+	repoPath := req.Msg.RepoPath
+	if repoPath == "" {
+		var resolveErr error
+		repoPath, _, resolveErr = s.resolveGitHubInput(ref.RepoFullName())
+		if resolveErr != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve repo %q: %w", ref.RepoFullName(), resolveErr))
+		}
+	}
+
+	created, err := s.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:        issue.Title,
+		Description:  issue.Body,
+		Priority:     session.DefaultBacklogPriority,
+		Status:       string(session.BacklogStatusIdea),
+		RepoPath:     repoPath,
+		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
+		PipelineMode: defaultPipelineModeForNewItem(nil),
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create backlog item: %w", err))
+	}
+
+	triageTriggered := false
+	if !req.Msg.SkipPlanning && created.RepoPath != "" && s.headlessPool != nil {
+		// 30s gates only the synchronous path (item lookup + ItemSession creation).
+		// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
+		triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		_, triageErr := s.TriggerTriage(triageCtx,
+			connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: created.ID}))
+		if triageErr != nil {
+			log.WarningLog.Printf("[ImportGitHubIssue] auto-triage failed for item %s: %v", created.ID, triageErr)
+			// Do not fail the import; log and continue.
+		} else {
+			triageTriggered = true
+		}
+	}
+
+	return connect.NewResponse(&sessionv1.ImportGitHubIssueResponse{
+		Item:            backlogItemToProto(created, s.buildCostLookup()),
+		TriageTriggered: triageTriggered,
+	}), nil
 }

@@ -20,10 +20,10 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
 // The mock captures the onSelect/onCancel props so tests can drive the picker's
 // callbacks directly without needing the real picker's own selection UI.
 const pickerRender = jest.fn();
-let capturedOnSelect: ((owner: string, repo: string, issue: GitHubIssue) => void) | null = null;
+let capturedOnSelect: ((owner: string, repo: string, issues: GitHubIssue[]) => void) | null = null;
 let capturedOnCancel: (() => void) | null = null;
 jest.mock("@/components/backlog/GitHubIssuePicker", () => ({
-  GitHubIssuePicker: (props: { onSelect: (owner: string, repo: string, issue: GitHubIssue) => void; onCancel: () => void }) => {
+  GitHubIssuePicker: (props: { onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void; onCancel: () => void }) => {
     pickerRender(props);
     capturedOnSelect = props.onSelect;
     capturedOnCancel = props.onCancel;
@@ -120,7 +120,7 @@ describe("BacklogQueueSection — imports a selected GitHub issue and reloads th
 
     const issue = makeIssue({ number: 7, url: "" });
     await act(async () => {
-      capturedOnSelect!("octocat", "hello-world", issue);
+      capturedOnSelect!("octocat", "hello-world", [issue]);
     });
 
     await waitFor(() =>
@@ -143,7 +143,7 @@ describe("BacklogQueueSection — imports a selected GitHub issue and reloads th
     fireEvent.click(screen.getByTestId("import-github-issue-button"));
     const issue = makeIssue({ number: 9, url: "https://github.com/octocat/hello-world/issues/9" });
     await act(async () => {
-      capturedOnSelect!("octocat", "hello-world", issue);
+      capturedOnSelect!("octocat", "hello-world", [issue]);
     });
 
     await waitFor(() =>
@@ -163,7 +163,7 @@ describe("BacklogQueueSection — surfaces an error when GitHub issue import fai
     fireEvent.click(screen.getByTestId("import-github-issue-button"));
     const issue = makeIssue({ number: 3, url: "" });
     await act(async () => {
-      capturedOnSelect!("octocat", "hello-world", issue);
+      capturedOnSelect!("octocat", "hello-world", [issue]);
     });
 
     await waitFor(() =>

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -154,6 +155,154 @@ func TestListGitHubIssues_SearchUsesSearchAPI(t *testing.T) {
 		}))
 	require.NoError(t, err)
 	assert.Equal(t, "/search/issues", capturedPath)
+}
+
+func TestListGitHubIssues_PopulatesBodyAuthorAndTimestamps(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"number":     5,
+				"title":      "Import picker does nothing",
+				"body":       "Selecting an issue never creates a backlog item.",
+				"state":      "open",
+				"html_url":   "https://github.com/acme/widgets/issues/5",
+				"user":       map[string]any{"login": "reporter42"},
+				"created_at": "2026-07-01T12:00:00Z",
+				"updated_at": "2026-07-02T12:00:00Z",
+			},
+		})
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	resp, err := svc.ListGitHubIssues(context.Background(),
+		connect.NewRequest(&sessionv1.ListGitHubIssuesRequest{Owner: "acme", Repo: "widgets"}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Issues, 1)
+	entry := resp.Msg.Issues[0]
+	assert.Equal(t, "Selecting an issue never creates a backlog item.", entry.Body)
+	assert.Equal(t, "reporter42", entry.Author)
+	assert.False(t, entry.IsPr)
+	require.NotNil(t, entry.CreatedAt)
+	require.NotNil(t, entry.UpdatedAt)
+	assert.Equal(t, "2026-07-01T12:00:00Z", entry.CreatedAt.AsTime().Format(time.RFC3339))
+	assert.Equal(t, "2026-07-02T12:00:00Z", entry.UpdatedAt.AsTime().Format(time.RFC3339))
+}
+
+// ─── ImportGitHubIssue ────────────────────────────────────────────────────────
+
+func TestImportGitHubIssue_NilStorage(t *testing.T) {
+	svc := newBacklogServiceNilStorage()
+	_, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets/issues/1"}))
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeUnavailable, connectErr.Code())
+}
+
+func TestImportGitHubIssue_EmptyURL(t *testing.T) {
+	svc := newBacklogService(t)
+	_, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: ""}))
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestImportGitHubIssue_NotAnIssueURL(t *testing.T) {
+	svc := newBacklogService(t)
+	_, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets"}))
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+func TestImportGitHubIssue_FetchError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	_, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{IssueUrl: "https://github.com/acme/widgets/issues/7"}))
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInternal, connectErr.Code())
+}
+
+func TestImportGitHubIssue_CreatesItemFromIssue(t *testing.T) {
+	var capturedPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number":   7,
+			"title":    "Import picker does nothing",
+			"body":     "Selecting an issue never creates a backlog item.",
+			"state":    "open",
+			"html_url": "https://github.com/acme/widgets/issues/7",
+		})
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	resp, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{
+			IssueUrl:     "https://github.com/acme/widgets/issues/7",
+			RepoPath:     "/tmp/local-widgets",
+			SkipPlanning: true,
+		}))
+	require.NoError(t, err)
+	require.Equal(t, "/repos/acme/widgets/issues/7", capturedPath)
+	require.NotNil(t, resp.Msg.Item)
+	assert.Equal(t, "Import picker does nothing", resp.Msg.Item.Title)
+	assert.Equal(t, "Selecting an issue never creates a backlog item.", resp.Msg.Item.Description)
+	assert.Equal(t, "/tmp/local-widgets", resp.Msg.Item.RepoPath)
+	assert.Equal(t, "idea", resp.Msg.Item.Status)
+	assert.Contains(t, resp.Msg.Item.Notes, "https://github.com/acme/widgets/issues/7")
+	assert.False(t, resp.Msg.TriageTriggered, "no headlessPool wired in test service, so triage should never fire")
+}
+
+func TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number":   3,
+			"title":    "Some issue",
+			"body":     "Body text",
+			"state":    "open",
+			"html_url": "https://github.com/acme/widgets/issues/3",
+		})
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	svc := newBacklogService(t)
+	resolver := &fakeGitHubResolver{localPath: "/tmp/fake-clone/acme/widgets"}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	resp, err := svc.ImportGitHubIssue(context.Background(),
+		connect.NewRequest(&sessionv1.ImportGitHubIssueRequest{
+			IssueUrl: "https://github.com/acme/widgets/issues/3",
+		}))
+	require.NoError(t, err)
+	require.Len(t, resolver.calls, 1)
+	assert.Equal(t, "acme/widgets", resolver.calls[0])
+	assert.Equal(t, "/tmp/fake-clone/acme/widgets", resp.Msg.Item.RepoPath)
 }
 
 // ─── GetSessionBacklogIndex ───────────────────────────────────────────────────

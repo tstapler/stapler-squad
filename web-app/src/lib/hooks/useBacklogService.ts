@@ -474,6 +474,8 @@ export interface GitHubRepo {
 export interface GitHubIssue {
   number: number;
   title: string;
+  body?: string;
+  author?: string;
   state: string;
   url: string;
   labels: string[];
@@ -987,6 +989,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.issues.map((i) => ({
           number: i.number,
           title: i.title,
+          body: i.body,
+          author: i.author,
           state: i.state,
           url: i.url,
           labels: i.labels,

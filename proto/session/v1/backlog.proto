@@ -900,6 +900,8 @@ message GitHubIssueEntry {
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   bool is_pr = 9;
+  // GitHub login of the issue's author.
+  string author = 10;
 }
 
 message SearchGitHubReposRequest {

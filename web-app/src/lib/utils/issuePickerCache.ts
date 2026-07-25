@@ -64,6 +64,8 @@ function issuesKey(owner: string, repo: string, state: string): string {
 export interface CachedIssueEntry {
   number: number;
   title: string;
+  body?: string;
+  author?: string;
   state: string;
   url: string;
   labels: string[];

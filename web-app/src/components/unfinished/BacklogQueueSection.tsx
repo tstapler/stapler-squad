@@ -89,14 +89,22 @@ export function BacklogQueueSection() {
   // handlePickerSelect — the hook's `lastError` state updates asynchronously,
   // so reading it synchronously right after this await would race with it.
   const handlePickerSelect = useCallback(
-    async (owner: string, repo: string, issue: GitHubIssue) => {
+    async (owner: string, repo: string, issues: GitHubIssue[]) => {
       setShowImport(false);
-      const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
-      const result = await importGitHubIssue(url);
-      if (result) {
-        await load();
-      } else {
-        setError("Failed to import GitHub issue. Check the URL and try again.");
+      let successCount = 0;
+      for (const issue of issues) {
+        const url = issue.url || `https://github.com/${owner}/${repo}/issues/${issue.number}`;
+        const result = await importGitHubIssue(url);
+        if (result) successCount++;
+      }
+      if (successCount > 0) await load();
+      if (successCount < issues.length) {
+        const failed = issues.length - successCount;
+        setError(
+          issues.length === 1
+            ? "Failed to import GitHub issue. Check the URL and try again."
+            : `Imported ${successCount} of ${issues.length} issues — ${failed} failed.`
+        );
       }
     },
     [importGitHubIssue, load]

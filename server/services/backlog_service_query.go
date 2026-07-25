@@ -277,13 +277,23 @@ func (s *BacklogService) ListGitHubIssues(ctx context.Context, req *connect.Requ
 	}
 	entries := make([]*sessionv1.GitHubIssueEntry, 0, len(results))
 	for _, r := range results {
-		entries = append(entries, &sessionv1.GitHubIssueEntry{
+		entry := &sessionv1.GitHubIssueEntry{
 			Number: int32(r.Number),
 			Title:  r.Title,
+			Body:   r.Body,
+			Author: r.Author,
 			State:  r.State,
 			Url:    r.URL,
 			Labels: r.Labels,
-		})
+			IsPr:   r.IsPR,
+		}
+		if !r.CreatedAt.IsZero() {
+			entry.CreatedAt = timestamppb.New(r.CreatedAt)
+		}
+		if !r.UpdatedAt.IsZero() {
+			entry.UpdatedAt = timestamppb.New(r.UpdatedAt)
+		}
+		entries = append(entries, entry)
 	}
 	return connect.NewResponse(&sessionv1.ListGitHubIssuesResponse{Issues: entries}), nil
 }
