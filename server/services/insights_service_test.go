@@ -488,3 +488,34 @@ func TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticN
 		assert.NotEqual(t, "<synthetic>", mb.ModelFamily)
 	}
 }
+
+// --------------------------------------------------------------------------
+// AC-5: runtime signal — a newly-observed unpriced family is logged once,
+// not once per request. Asserting on actual log output is awkward, so this
+// asserts on the observable dedup state instead (whitebox test in package
+// services): len(loggedUnpricedFamilies) stays at 1 after two calls with the
+// same unpriced family.
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOnce(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	_, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	_, err = svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	assert.Len(t, svc.loggedUnpricedFamilies, 1)
+	assert.True(t, svc.loggedUnpricedFamilies["gpt-99-turbo"])
+}

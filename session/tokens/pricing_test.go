@@ -160,6 +160,24 @@ func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUn
 	assert.False(t, unpriced["claude-sonnet-4"])
 }
 
+// knownActiveClaudeFamilies is maintained independently of DefaultPricingTable()'s keys —
+// deliberately a second source of truth, so a maintainer must touch both this list and
+// the pricing table when a new Claude model family becomes active, giving this test a
+// real chance to fail loudly if one is updated without the other.
+var knownActiveClaudeFamilies = []string{
+	"claude-opus-4", "claude-sonnet-4", "claude-haiku-4",
+	"claude-opus-3", "claude-sonnet-3", "claude-haiku-3",
+	"claude-sonnet-5",
+}
+
+func TestDefaultPricingTable_WhenKnownActiveFamily_ExpectPricingEntryExists(t *testing.T) {
+	pt := DefaultPricingTable()
+	for _, family := range knownActiveClaudeFamilies {
+		_, ok := pt.Prices[family]
+		assert.True(t, ok, "known active family %q has no DefaultPricingTable() entry", family)
+	}
+}
+
 func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {
 	pt := DefaultPricingTable()
 	// Override all effective dates to 31 days ago.
@@ -217,4 +235,26 @@ func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testi
 	assert.Equal(t, 99.0, table.Prices["claude-sonnet-4"].InputPricePerMTok)
 	// Other entries retain hardcoded defaults.
 	assert.Equal(t, 5.0, table.Prices["claude-opus-4"].InputPricePerMTok)
+}
+
+func TestLoadPricingOverride_WhenMalformedJSON_ExpectErrorReturnedDefaultsUntouched(t *testing.T) {
+	// Write a temp override file containing malformed JSON (trailing comma).
+	malformed := []byte(`{"claude-sonnet-5": {"InputPricePerMTok": 2.00,},}`)
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "pricing-malformed-*.json")
+	require.NoError(t, err)
+	_, err = tmpFile.Write(malformed)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	// A separately held defaults reference documents the caller-side contract:
+	// LoadPricingOverride's error must never mutate an already-obtained
+	// DefaultPricingTable() instance the caller is still holding.
+	defaults := DefaultPricingTable()
+
+	table, err := LoadPricingOverride(tmpFile.Name())
+
+	assert.Error(t, err)
+	assert.Nil(t, table)
+	assert.Equal(t, 3.0, defaults.Prices["claude-sonnet-4"].InputPricePerMTok)
 }

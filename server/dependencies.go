@@ -1068,6 +1068,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		historyDir := filepath.Join(homeDir, ".claude", "projects")
 		tokenStore := tokens.NewTokenStore(historyDir)
 		pricing := tokens.DefaultPricingTable()
+		if configDir, cfgErr := config.GetConfigDir(); cfgErr == nil {
+			overridePath := filepath.Join(configDir, "pricing_overrides.json")
+			if overrideTable, loadErr := tokens.LoadPricingOverride(overridePath); loadErr == nil {
+				pricing = overrideTable
+			} else if !os.IsNotExist(loadErr) {
+				log.Warn("failed to load pricing override, using defaults", "path", overridePath, "err", loadErr)
+			}
+		}
+		if pricing.IsStale() {
+			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)
+		}
 		associator := tokens.NewAssociator(storage)
 		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
 		tokenStore.Start(context.Background())

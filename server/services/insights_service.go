@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -22,6 +24,15 @@ type InsightsService struct {
 	store      tokens.TokenStoreReader
 	pricing    *tokens.PricingTable
 	associator *tokens.Associator
+
+	// logMu guards loggedUnpricedFamilies.
+	logMu sync.Mutex
+	// loggedUnpricedFamilies tracks which unpriced model families have already
+	// had a warning logged, so a newly-observed family is only logged once
+	// (not on every request). Grows unbounded over the process lifetime, but
+	// bounded in practice by the number of distinct model families ever seen —
+	// safe to leave unbounded (see pre-mortem's minor note).
+	loggedUnpricedFamilies map[string]bool
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -31,9 +42,25 @@ func NewInsightsService(
 	associator *tokens.Associator,
 ) *InsightsService {
 	return &InsightsService{
-		store:      store,
-		pricing:    pricing,
-		associator: associator,
+		store:                  store,
+		pricing:                pricing,
+		associator:             associator,
+		loggedUnpricedFamilies: make(map[string]bool),
+	}
+}
+
+// warnNewUnpricedFamilies logs a warning for each family in families that has
+// not previously been logged, then marks it logged. Deduped across calls so a
+// given unpriced family produces exactly one log line for the life of the
+// process, not one per request.
+func (s *InsightsService) warnNewUnpricedFamilies(families map[string]bool) {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	for family := range families {
+		if !s.loggedUnpricedFamilies[family] {
+			s.loggedUnpricedFamilies[family] = true
+			log.Warn("insights: unpriced model family observed", "family", family)
+		}
 	}
 }
 
@@ -257,6 +284,11 @@ func (s *InsightsService) GetInsightsSummary(
 		}
 	}
 
+	// Emit a deduped runtime warning for any newly-observed unpriced family
+	// (AC-5 runtime-signal half) — logs each family at most once for the life
+	// of the process, not once per request.
+	s.warnNewUnpricedFamilies(allUnpricedFamilies)
+
 	// Build sorted daily slice.
 	dailyKeys := make([]string, 0, len(dailyMap))
 	for k := range dailyMap {
@@ -327,6 +359,7 @@ func (s *InsightsService) ListSessionTokens(
 
 	// Build session summaries.
 	summaries := make([]*sessionv1.SessionTokenSummary, 0, len(results))
+	allUnpricedFamilies := make(map[string]bool) // union of unpriced families across all sessions in this call
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -345,6 +378,9 @@ func (s *InsightsService) ListSessionTokens(
 		}
 
 		costUSD, unpriced := s.pricing.EstimateCost(r)
+		for _, f := range unpriced {
+			allUnpricedFamilies[f] = true
+		}
 		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
 		topTools := sessionTopTools(r)
 
@@ -378,6 +414,11 @@ func (s *InsightsService) ListSessionTokens(
 		}
 		summaries = append(summaries, summary)
 	}
+
+	// Emit a deduped runtime warning for any newly-observed unpriced family
+	// (AC-5 runtime-signal half) — logs each family at most once for the life
+	// of the process, not once per request.
+	s.warnNewUnpricedFamilies(allUnpricedFamilies)
 
 	// Sort.
 	sortBy := msg.SortBy
