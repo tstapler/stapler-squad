@@ -468,7 +468,7 @@ func (s *BacklogService) GetBacklogItemCost(
 		if result == nil {
 			continue
 		}
-		cost := s.pricing.EstimateCost(result)
+		cost, _ := s.pricing.EstimateCost(result)
 		resp.TotalCostUsd += cost
 		resp.Sessions = append(resp.Sessions, &sessionv1.SessionCostEntry{
 			SessionId:        is.SessionUUID,

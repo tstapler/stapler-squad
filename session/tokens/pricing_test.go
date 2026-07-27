@@ -43,12 +43,17 @@ func TestEstimateCost_WhenKnownModel_ExpectExactPrice(t *testing.T) {
 		},
 	}
 
-	cost := pt.EstimateCost(result)
+	cost, unpriced := pt.EstimateCost(result)
 	// claude-sonnet-4: $3/MTok input + $15/MTok output = $18/MTok for 1M each
 	assert.InDelta(t, 18.0, cost, 0.0001)
+	assert.Empty(t, unpriced)
 }
 
-func TestEstimateCost_WhenUnknownModel_ExpectFallbackToZero(t *testing.T) {
+// TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced is
+// the literal AC-2/AC-5 example from requirements.md: usage present for a
+// family with no PricingTable entry must be flagged unpriced, not silently
+// reported as $0 indistinguishable from genuinely-free usage.
+func TestEstimateCost_WhenUnknownModel_ExpectZeroCostAndFamilyFlaggedUnpriced(t *testing.T) {
 	pt := DefaultPricingTable()
 
 	result := &ParseResult{
@@ -58,8 +63,9 @@ func TestEstimateCost_WhenUnknownModel_ExpectFallbackToZero(t *testing.T) {
 		},
 	}
 
-	cost := pt.EstimateCost(result)
+	cost, unpriced := pt.EstimateCost(result)
 	assert.Equal(t, 0.0, cost)
+	assert.Equal(t, []string{"gpt-99-turbo"}, unpriced)
 }
 
 func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) {
@@ -72,9 +78,86 @@ func TestEstimateCost_WhenCacheReadTokens_ExpectCacheRateIncluded(t *testing.T) 
 		},
 	}
 
-	cost := pt.EstimateCost(result)
+	cost, unpriced := pt.EstimateCost(result)
 	// claude-sonnet-4 cache read rate: $0.30/MTok
 	assert.InDelta(t, 0.30, cost, 0.0001)
+	assert.Empty(t, unpriced)
+}
+
+func TestEstimateCost_WhenSonnet5Model_ExpectExactPrice(t *testing.T) {
+	pt := DefaultPricingTable()
+
+	result := &ParseResult{
+		PrimaryModel: "claude-sonnet-5-6",
+		TotalInput:   1_000_000,
+		TotalOutput:  1_000_000,
+		TurnTimeline: []TurnStats{
+			{Model: "claude-sonnet-5-6", Input: 1_000_000, Output: 1_000_000},
+		},
+	}
+
+	cost, unpriced := pt.EstimateCost(result)
+	// claude-sonnet-5 introductory rate (through 2026-08-31): $2/MTok input +
+	// $10/MTok output = $12/MTok for 1M each. Verified 2026-07-27 against
+	// https://platform.claude.com/docs/en/about-claude/pricing.
+	assert.InDelta(t, 12.0, cost, 0.0001)
+	assert.Empty(t, unpriced)
+
+	// Plausibility check independent of the hardcoded figure above (pre-mortem
+	// Failure #1): same-generation Claude models should sit within a bounded
+	// multiple of each other's rates. This catches a gross unit/order-of-magnitude
+	// error (e.g. a per-1K/per-1M mix-up or transposed digit) even if that error
+	// were shared by both the production table and this test's hardcoded value.
+	sonnet5 := pt.Prices["claude-sonnet-5"]
+	sonnet4 := pt.Prices["claude-sonnet-4"]
+	require.NotZero(t, sonnet4.InputPricePerMTok)
+	require.NotZero(t, sonnet4.OutputPricePerMTok)
+	assert.Greater(t, sonnet5.InputPricePerMTok, sonnet4.InputPricePerMTok*0.2)
+	assert.Less(t, sonnet5.InputPricePerMTok, sonnet4.InputPricePerMTok*5)
+	assert.Greater(t, sonnet5.OutputPricePerMTok, sonnet4.OutputPricePerMTok*0.2)
+	assert.Less(t, sonnet5.OutputPricePerMTok, sonnet4.OutputPricePerMTok*5)
+}
+
+func TestDefaultPricingTable_WhenSonnet5EntryPresent_ExpectAllRateFieldsPopulated(t *testing.T) {
+	pt := DefaultPricingTable()
+
+	entry, ok := pt.Prices["claude-sonnet-5"]
+	require.True(t, ok, "expected claude-sonnet-5 entry in DefaultPricingTable()")
+
+	assert.Greater(t, entry.InputPricePerMTok, 0.0)
+	assert.Greater(t, entry.OutputPricePerMTok, 0.0)
+	assert.Greater(t, entry.CacheWritePerMTok, 0.0)
+	assert.Greater(t, entry.CacheReadPerMTok, 0.0)
+	assert.Equal(t, "claude-sonnet-5", entry.ModelFamily)
+
+	_, err := time.Parse("2006-01-02", entry.EffectiveDate)
+	assert.NoError(t, err, "EffectiveDate must parse as YYYY-MM-DD")
+}
+
+// TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUnknownFlagged
+// exercises a ParseResult whose TurnTimeline has both a priced family
+// (claude-sonnet-4) and an unpriced family (gpt-99-turbo) in the same
+// result — the gap adversarial-review.md flagged: no prior test covered a
+// mix of priced and unpriced families in one TurnTimeline.
+func TestModelFamilyCost_WhenMixedKnownAndUnknownFamilies_ExpectKnownPricedAndUnknownFlagged(t *testing.T) {
+	pt := DefaultPricingTable()
+
+	result := &ParseResult{
+		TurnTimeline: []TurnStats{
+			{Model: "claude-sonnet-4", Input: 1_000_000, Output: 1_000_000},
+			{Model: "gpt-99-turbo", Input: 500_000, Output: 500_000},
+		},
+	}
+
+	costs, unpriced := pt.ModelFamilyCost(result)
+
+	// claude-sonnet-4: $3/MTok input + $15/MTok output = $18/MTok for 1M each.
+	require.Contains(t, costs, "claude-sonnet-4")
+	assert.InDelta(t, 18.0, costs["claude-sonnet-4"], 0.0001)
+	assert.NotContains(t, costs, "gpt-99-turbo")
+
+	assert.True(t, unpriced["gpt-99-turbo"])
+	assert.False(t, unpriced["claude-sonnet-4"])
 }
 
 func TestPricingTable_WhenIsStale_Expect31DaysReturnTrue(t *testing.T) {

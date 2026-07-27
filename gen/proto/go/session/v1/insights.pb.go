@@ -41,8 +41,10 @@ type SessionTokenSummary struct {
 	IsOrphan            bool                   `protobuf:"varint,14,opt,name=is_orphan,json=isOrphan,proto3" json:"is_orphan,omitempty"` // true = no matching stapler-squad session
 	SkillActivations    []string               `protobuf:"bytes,15,rep,name=skill_activations,json=skillActivations,proto3" json:"skill_activations,omitempty"`
 	TopTools            []*TopToolEntry        `protobuf:"bytes,16,rep,name=top_tools,json=topTools,proto3" json:"top_tools,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// unpriced_models lists ModelFamily values with usage but no pricing entry, for this session.
+	UnpricedModels []string `protobuf:"bytes,17,rep,name=unpriced_models,json=unpricedModels,proto3" json:"unpriced_models,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SessionTokenSummary) Reset() {
@@ -187,6 +189,13 @@ func (x *SessionTokenSummary) GetTopTools() []*TopToolEntry {
 	return nil
 }
 
+func (x *SessionTokenSummary) GetUnpricedModels() []string {
+	if x != nil {
+		return x.UnpricedModels
+	}
+	return nil
+}
+
 // TopToolEntry records a tool name and its call count in a session.
 type TopToolEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -261,8 +270,10 @@ type DailyTokenBucket struct {
 	CostByModel map[string]float64 `protobuf:"bytes,7,rep,name=cost_by_model,json=costByModel,proto3" json:"cost_by_model,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
 	// tokens_by_model maps normalized model family to total token count (input+output) for that day.
 	TokensByModel map[string]int64 `protobuf:"bytes,8,rep,name=tokens_by_model,json=tokensByModel,proto3" json:"tokens_by_model,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// unpriced_models is the union of unpriced ModelFamily values across sessions rolled into this day.
+	UnpricedModels []string `protobuf:"bytes,9,rep,name=unpriced_models,json=unpricedModels,proto3" json:"unpriced_models,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DailyTokenBucket) Reset() {
@@ -351,6 +362,13 @@ func (x *DailyTokenBucket) GetTokensByModel() map[string]int64 {
 	return nil
 }
 
+func (x *DailyTokenBucket) GetUnpricedModels() []string {
+	if x != nil {
+		return x.UnpricedModels
+	}
+	return nil
+}
+
 // ModelBreakdown aggregates token usage by model family.
 type ModelBreakdown struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -360,8 +378,11 @@ type ModelBreakdown struct {
 	CacheReadTokens   int64                  `protobuf:"varint,4,opt,name=cache_read_tokens,json=cacheReadTokens,proto3" json:"cache_read_tokens,omitempty"`
 	EstimatedCostUsd  float64                `protobuf:"fixed64,5,opt,name=estimated_cost_usd,json=estimatedCostUsd,proto3" json:"estimated_cost_usd,omitempty"`
 	SessionCount      int32                  `protobuf:"varint,6,opt,name=session_count,json=sessionCount,proto3" json:"session_count,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// pricing_unavailable is true when total_input_tokens/total_output_tokens > 0 but no
+	// PricingTable entry exists for model_family.
+	PricingUnavailable bool `protobuf:"varint,7,opt,name=pricing_unavailable,json=pricingUnavailable,proto3" json:"pricing_unavailable,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ModelBreakdown) Reset() {
@@ -434,6 +455,13 @@ func (x *ModelBreakdown) GetSessionCount() int32 {
 		return x.SessionCount
 	}
 	return 0
+}
+
+func (x *ModelBreakdown) GetPricingUnavailable() bool {
+	if x != nil {
+		return x.PricingUnavailable
+	}
+	return false
 }
 
 // TopEntry is a generic name/value pair for top-N tables.
@@ -597,8 +625,10 @@ type GetInsightsSummaryResponse struct {
 	TopTools             []*TopEntry            `protobuf:"bytes,10,rep,name=top_tools,json=topTools,proto3" json:"top_tools,omitempty"`
 	IsLoading            bool                   `protobuf:"varint,11,opt,name=is_loading,json=isLoading,proto3" json:"is_loading,omitempty"` // true = background parse still in progress
 	PricingAsOf          *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=pricing_as_of,json=pricingAsOf,proto3" json:"pricing_as_of,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// unpriced_models is the aggregate union across all sessions in this response, for a dashboard-level banner.
+	UnpricedModels []string `protobuf:"bytes,13,rep,name=unpriced_models,json=unpricedModels,proto3" json:"unpriced_models,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetInsightsSummaryResponse) Reset() {
@@ -711,6 +741,13 @@ func (x *GetInsightsSummaryResponse) GetIsLoading() bool {
 func (x *GetInsightsSummaryResponse) GetPricingAsOf() *timestamppb.Timestamp {
 	if x != nil {
 		return x.PricingAsOf
+	}
+	return nil
+}
+
+func (x *GetInsightsSummaryResponse) GetUnpricedModels() []string {
+	if x != nil {
+		return x.UnpricedModels
 	}
 	return nil
 }
@@ -980,7 +1017,7 @@ var File_session_v1_insights_proto protoreflect.FileDescriptor
 const file_session_v1_insights_proto_rawDesc = "" +
 	"\n" +
 	"\x19session/v1/insights.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe7\x05\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x90\x06\n" +
 	"\x13SessionTokenSummary\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12'\n" +
@@ -999,13 +1036,14 @@ const file_session_v1_insights_proto_rawDesc = "" +
 	"\x0flast_message_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\rlastMessageAt\x12\x1b\n" +
 	"\tis_orphan\x18\x0e \x01(\bR\bisOrphan\x12+\n" +
 	"\x11skill_activations\x18\x0f \x03(\tR\x10skillActivations\x125\n" +
-	"\ttop_tools\x18\x10 \x03(\v2\x18.session.v1.TopToolEntryR\btopTools\"i\n" +
+	"\ttop_tools\x18\x10 \x03(\v2\x18.session.v1.TopToolEntryR\btopTools\x12'\n" +
+	"\x0funpriced_models\x18\x11 \x03(\tR\x0eunpricedModels\"i\n" +
 	"\fTopToolEntry\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x1d\n" +
 	"\n" +
 	"call_count\x18\x02 \x01(\x05R\tcallCount\x12\x1d\n" +
 	"\n" +
-	"mcp_server\x18\x03 \x01(\tR\tmcpServer\"\xcd\x04\n" +
+	"mcp_server\x18\x03 \x01(\tR\tmcpServer\"\xf6\x04\n" +
 	"\x10DailyTokenBucket\x12.\n" +
 	"\x04date\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x04date\x12,\n" +
 	"\x12total_input_tokens\x18\x02 \x01(\x03R\x10totalInputTokens\x12.\n" +
@@ -1014,20 +1052,22 @@ const file_session_v1_insights_proto_rawDesc = "" +
 	"\x12estimated_cost_usd\x18\x05 \x01(\x01R\x10estimatedCostUsd\x12#\n" +
 	"\rsession_count\x18\x06 \x01(\x05R\fsessionCount\x12Q\n" +
 	"\rcost_by_model\x18\a \x03(\v2-.session.v1.DailyTokenBucket.CostByModelEntryR\vcostByModel\x12W\n" +
-	"\x0ftokens_by_model\x18\b \x03(\v2/.session.v1.DailyTokenBucket.TokensByModelEntryR\rtokensByModel\x1a>\n" +
+	"\x0ftokens_by_model\x18\b \x03(\v2/.session.v1.DailyTokenBucket.TokensByModelEntryR\rtokensByModel\x12'\n" +
+	"\x0funpriced_models\x18\t \x03(\tR\x0eunpricedModels\x1a>\n" +
 	"\x10CostByModelEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\x1a@\n" +
 	"\x12TokensByModelEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\x90\x02\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"\xc1\x02\n" +
 	"\x0eModelBreakdown\x12!\n" +
 	"\fmodel_family\x18\x01 \x01(\tR\vmodelFamily\x12,\n" +
 	"\x12total_input_tokens\x18\x02 \x01(\x03R\x10totalInputTokens\x12.\n" +
 	"\x13total_output_tokens\x18\x03 \x01(\x03R\x11totalOutputTokens\x12*\n" +
 	"\x11cache_read_tokens\x18\x04 \x01(\x03R\x0fcacheReadTokens\x12,\n" +
 	"\x12estimated_cost_usd\x18\x05 \x01(\x01R\x10estimatedCostUsd\x12#\n" +
-	"\rsession_count\x18\x06 \x01(\x05R\fsessionCount\"\x85\x01\n" +
+	"\rsession_count\x18\x06 \x01(\x05R\fsessionCount\x12/\n" +
+	"\x13pricing_unavailable\x18\a \x01(\bR\x12pricingUnavailable\"\x85\x01\n" +
 	"\bTopEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vtoken_count\x18\x02 \x01(\x03R\n" +
@@ -1041,7 +1081,7 @@ const file_session_v1_insights_proto_rawDesc = "" +
 	"\x11session_id_filter\x18\x04 \x01(\tH\x01R\x0fsessionIdFilter\x88\x01\x01\x12'\n" +
 	"\x0finclude_orphans\x18\x05 \x01(\bR\x0eincludeOrphansB\x0f\n" +
 	"\r_model_filterB\x14\n" +
-	"\x12_session_id_filter\"\xf8\x04\n" +
+	"\x12_session_id_filter\"\xa1\x05\n" +
 	"\x1aGetInsightsSummaryResponse\x12;\n" +
 	"\bsessions\x18\x01 \x03(\v2\x1f.session.v1.SessionTokenSummaryR\bsessions\x12$\n" +
 	"\x0etotal_cost_usd\x18\x02 \x01(\x01R\ftotalCostUsd\x12,\n" +
@@ -1057,7 +1097,8 @@ const file_session_v1_insights_proto_rawDesc = "" +
 	" \x03(\v2\x14.session.v1.TopEntryR\btopTools\x12\x1d\n" +
 	"\n" +
 	"is_loading\x18\v \x01(\bR\tisLoading\x12>\n" +
-	"\rpricing_as_of\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vpricingAsOf\"\xe8\x01\n" +
+	"\rpricing_as_of\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\vpricingAsOf\x12'\n" +
+	"\x0funpriced_models\x18\r \x03(\tR\x0eunpricedModels\"\xe8\x01\n" +
 	"\x18ListSessionTokensRequest\x12.\n" +
 	"\x04from\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x04from\x12*\n" +
 	"\x02to\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02to\x12\x17\n" +
