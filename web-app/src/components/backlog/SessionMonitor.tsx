@@ -30,18 +30,33 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
+  // Distinct from a genuinely empty terminal/history — a fetch failure must not
+  // render as "No output yet…"/"No conversation history yet…", which looks
+  // identical to real emptiness and hides the failure from the viewer.
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
 
   const outputRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchTerminal = useCallback(async () => {
-    const output = await getTerminalSnapshot(sessionId, TERMINAL_LINES);
-    if (output) setTerminalOutput(output);
+    try {
+      const output = await getTerminalSnapshot(sessionId, TERMINAL_LINES);
+      setTerminalError(null);
+      if (output) setTerminalOutput(output);
+    } catch (err) {
+      setTerminalError(err instanceof Error ? err.message : "Could not reach the server.");
+    }
   }, [sessionId, getTerminalSnapshot]);
 
   const fetchConversation = useCallback(async () => {
-    const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
-    setMessages(msgs);
+    try {
+      const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
+      setConversationError(null);
+      setMessages(msgs);
+    } catch (err) {
+      setConversationError(err instanceof Error ? err.message : "Could not reach the server.");
+    }
   }, [sessionId, getConversationMessages]);
 
   const refresh = useCallback(() => {
@@ -53,6 +68,8 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
   useEffect(() => {
     setTerminalOutput("");
     setMessages([]);
+    setTerminalError(null);
+    setConversationError(null);
   }, [sessionId]);
 
   // Initial load + polling while running
@@ -129,7 +146,18 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
 
       <div className={styles.outputArea} ref={outputRef} aria-label="Session output" aria-live="polite">
         {view === "history" ? (
-          messages.length === 0 ? (
+          conversationError ? (
+            <div className={styles.errorState} data-testid="session-monitor-conversation-error">
+              <span>Failed to load conversation history: {conversationError}</span>
+              <button
+                className={styles.errorRetryButton}
+                onClick={() => void fetchConversation()}
+                data-testid="session-monitor-retry-conversation"
+              >
+                Retry
+              </button>
+            </div>
+          ) : messages.length === 0 ? (
             <div className={styles.emptyState}>No conversation history yet…</div>
           ) : (
             <div className={styles.messageList}>
@@ -149,6 +177,17 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
               ))}
             </div>
           )
+        ) : terminalError ? (
+          <div className={styles.errorState} data-testid="session-monitor-terminal-error">
+            <span>Failed to load terminal output: {terminalError}</span>
+            <button
+              className={styles.errorRetryButton}
+              onClick={() => void fetchTerminal()}
+              data-testid="session-monitor-retry-terminal"
+            >
+              Retry
+            </button>
+          </div>
         ) : terminalOutput ? (
           <pre className={styles.terminalOutput}>{terminalOutput}</pre>
         ) : (
