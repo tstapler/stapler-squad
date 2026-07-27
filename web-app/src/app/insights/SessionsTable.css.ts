@@ -96,6 +96,8 @@ export const orphanBadge = style({
   verticalAlign: "middle",
 });
 
+export const unpricedBadge = style([orphanBadge, {}]);
+
 export const empty = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.sm,

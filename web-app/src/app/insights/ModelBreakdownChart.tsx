@@ -21,6 +21,7 @@ import {
   legendRow,
   legendItem,
   legendDot,
+  unpricedLabel,
 } from "./ModelBreakdownChart.css";
 
 interface Props {
@@ -43,6 +44,7 @@ interface DataPoint {
   family: string;
   cost: number;
   color: string;
+  pricingUnavailable: boolean;
 }
 
 function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
@@ -52,6 +54,7 @@ function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
       family: m.modelFamily || "unknown",
       cost: m.estimatedCostUsd,
       color: PALETTE[i % PALETTE.length],
+      pricingUnavailable: m.pricingUnavailable,
     }));
 }
 
@@ -108,6 +111,9 @@ export function ModelBreakdownChart({ models }: Props) {
           <div key={d.family} className={legendItem}>
             <div className={legendDot} style={{ background: d.color }} />
             {d.family}
+            {d.pricingUnavailable && (
+              <span className={unpricedLabel}> (pricing unavailable)</span>
+            )}
           </div>
         ))}
       </div>
