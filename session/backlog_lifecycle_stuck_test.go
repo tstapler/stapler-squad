@@ -1446,6 +1446,30 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 // transitions it to done instead of flagging it STUCK_REASON_BOUNCING.
 // Regression test for the 2026-07-20 live repro: backlog item "Add sorting
 // and grouping by repository path" bounced with remediationAttempts: 4 and a
+// TestNotifyTransitionFailed_should_publishNotification_When_Called is the
+// direct unit test for BacklogLifecycleListener's notifyTransitionFailed —
+// the session-package sibling of server/services/backlog_service_triage.go's
+// identical helper (same shape, different package: this package must not
+// import the server layer). Part of the fix for the recurring "silent
+// status-transition failure" bug shape (BUG-030/040/041/046/048).
+func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.notifyTransitionFailed("item-999", "Ship the PR fix",
+		"PR #42 was confirmed merged but the item's transition to done failed",
+		errors.New("precondition failed: expected status \"in_progress\", got \"review\""))
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "Ship the PR fix")
+	assert.Contains(t, notifier.calls[0].Message, "PR #42 was confirmed merged")
+}
+
 // remediation scheduled three hours *after* its PR #172 had already merged,
 // because reconcileBouncingItems never checked merge state before MarkStuck.
 func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged(t *testing.T) {
@@ -1493,6 +1517,75 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	require.NoError(t, err)
 	assert.Empty(t, open, "a merged item must never be flagged bouncing")
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+}
+
+// TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
+// is a regression test for one of the sibling "silent status-transition
+// failure" instances found by the silenttransition lint analyzer (same shape
+// as BUG-030/040/041/046/048, and this fix's originally-reported findings):
+// reconcileBouncingItems confirms the linked PR is already merged, then its
+// own TransitionBacklogItemStatus(done) call can fail — previously that
+// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// with code that had already shipped and nothing else surfacing the mismatch.
+//
+// The precondition failure is forced deterministically (not via a real
+// goroutine race) by having the fake PR-pending-checker mutate the item's
+// status directly, bypassing TransitionBacklogItemStatus, at the exact point
+// a genuine concurrent writer would have: after reconcileBouncingItems reads
+// the item's status but before its own done-transition lands.
+func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, concurrent status race",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	parsedID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	checker := &fakePRPendingChecker{merged: true}
+	checker.onIsPRMerged = func() {
+		// Simulate a concurrent writer moving the item to "review" between
+		// reconcileBouncingItems' own read of item.Status ("in_progress") and
+		// its done-transition call a few lines later — the exact TOCTOU shape
+		// TransitionBacklogItemStatus's precondition exists to catch.
+		_, updErr := er.client.BacklogItem.UpdateOneID(parsedID).SetStatus(string(BacklogStatusReview)).Save(ctx)
+		require.NoError(t, updErr)
+	}
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, checker)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+		"the failed done-transition must not silently succeed; the item stays at whatever the concurrent writer left it")
+
+	require.Len(t, notifier.calls, 1, "the failed transition must surface an operator notification instead of only being logged")
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "confirmed merged")
 }
 
 // TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged verifies
