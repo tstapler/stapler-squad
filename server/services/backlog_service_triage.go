@@ -245,6 +245,36 @@ func (s *BacklogService) notifyTriagePersistFailure(ctx context.Context, itemID,
 	))
 }
 
+// notifyTransitionFailed publishes an operator-facing notification when a backlog
+// item's status-transition (or session-bookkeeping) write fails AFTER its side
+// effects have already happened — e.g. a work session was already spawned and
+// persisted, or code was already confirmed shipped to main — leaving the item's
+// status silently out of sync with reality. Previously these failures only
+// reached the log file, invisible to the operator and to every stuck-item
+// sweep (the recurring "silent status-transition failure" bug shape: BUG-030,
+// BUG-040, BUG-041, BUG-046, BUG-048, and the sibling call sites fixed
+// alongside this helper's introduction — see
+// docs/tasks/backlog-feature-improvement.md's 2026-07-27 update).
+//
+// Mirrors notifyTriagePersistFailure's shape (notification-only, no durable
+// BacklogStuckState row) rather than notifyReworkCapHit's — there is no single
+// good StuckReason bucket for "a routine write failed after the fact"; the
+// value here is making the failure visible immediately, not classifying it.
+// No-op if no event bus is wired.
+func (s *BacklogService) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		"Status update failed after work completed",
+		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
+		map[string]string{"item_id": itemID},
+	))
+}
+
 // headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
 // headless triage path. The orphan guard uses this prefix to identify sessions that have no
 // live tmux process and can be safely tombstoned on re-trigger.
@@ -579,6 +609,12 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 				session.TriggeredBySystem); rbErr != nil {
 				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to queued failed item=%s: %v", item.ID, rbErr)
+				// The same silent-stranding shape notifySpawnAndRollbackFailed was
+				// built for (BUG-030) — that fix only wired this helper into
+				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
+				// sibling one. The item is left claimed (in_progress) with no live
+				// session and no visible error anywhere.
+				s.notifySpawnAndRollbackFailed(ctx, item.ID, item.Title, spawnErr, rbErr)
 			}
 			continue
 		}
@@ -807,6 +843,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 		}
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, triggeredBy); transErr != nil {
 			log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
+			// The work session and worktree above are already created and
+			// persisted — a live session is now running for this item while its
+			// status still says otherwise (also invisible to
+			// countLiveBacklogWorkSessions' WIP-cap accounting, which only counts
+			// in_progress/review items).
+			s.notifyTransitionFailed(item.ID, item.Title, "a work session was spawned but the item's transition to in_progress failed", transErr)
 		}
 	}
 
@@ -1507,6 +1549,11 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 		// Roll back to pr_pending so the reconciler can retry.
 		if _, rollbackErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem); rollbackErr != nil {
 			log.ErrorLog.Printf("[AutoReopenForPRFix] rollback to pr_pending failed for item %s: %v", itemID, rollbackErr)
+			// The caller below only ever learns about spawnErr — a rollback
+			// failure here leaves the item stranded at in_progress with no work
+			// session, same shape notifySpawnAndRollbackFailed was built for
+			// (BUG-030).
+			s.notifySpawnAndRollbackFailed(ctx, itemID, item.Title, spawnErr, rollbackErr)
 		}
 		return fmt.Errorf("spawn session: %w", spawnErr)
 	}
@@ -1588,6 +1635,44 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
 	}
 	log.InfoLog.Printf("[AutoRespawnReview] item %s re-review triggered", itemID)
+	return nil
+}
+
+// AutoRespawnTriage implements session.TriageRespawner. It re-triggers triage for an
+// idea-status item whose most recent triage session orphaned — closing the gap where
+// StuckReasonOrphanedTriage was previously only detected and notified, never acted on
+// (its own doc comment in session/backlog_lifecycle.go used to read "no resolve pass
+// needed here... once the item leaves 'idea'", which was true for resolution but left
+// nothing driving the item TOWARD leaving idea in the first place). Confirmed live
+// 2026-07-27 (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and 505fb733
+// sat stuck in "idea" for 2 days, only recovering once a human noticed the one-time
+// notification and manually re-triggered triage.
+//
+// Delegates entirely to TriggerTriage, which already tombstones any still-open triage
+// session and handles the ready->idea/idea status guard itself — reconcileOrphanedTriageItems
+// (the caller's caller, via the backoff gate) already ended the orphaned session before
+// marking the item stuck, so by the time this runs there is normally nothing left for
+// TriggerTriage's own tombstone step to do; it is still safe to call unconditionally.
+func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusIdea {
+		// Already moved on by the time this async call runs (e.g. a human already
+		// re-triggered triage manually, or the item was otherwise resolved) —
+		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
+		return nil
+	}
+
+	if _, triageErr := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID})); triageErr != nil {
+		return fmt.Errorf("trigger triage: %w", triageErr)
+	}
+	log.InfoLog.Printf("[AutoRespawnTriage] item %s triage re-triggered", itemID)
 	return nil
 }
 
@@ -1904,7 +1989,7 @@ func (s *BacklogService) TriggerTriage(
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID,
+		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID, //nolint:silenttransition surfaced a few lines below via notifyTriagePersistFailure once persistFailures is fully collected
 			session.BacklogStatusReady, precondition, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
@@ -2284,7 +2369,7 @@ Do not modify the code. Only write the review verdict.
 		if createErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review verdict: %w", createErr))
 		}
-		if endErr := s.storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); endErr != nil {
+		if endErr := s.storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); endErr != nil { //nolint:silenttransition bookkeeping timestamp only; the PASS/done transition a few lines below (which does notify on failure) is what actually gates forward progress here
 			log.WarningLog.Printf("[TriggerReReview] UpdateItemSessionEnded: %v", endErr)
 		}
 
@@ -2317,6 +2402,9 @@ Do not modify the code. Only write the review verdict.
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
 				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, precondition, session.TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[TriggerReReview] PASS but transition to done failed: %v", transErr)
+					// Code is confirmed shipped to main — the item is left stuck in
+					// review with nothing further to trigger a retry.
+					s.notifyTransitionFailed(item.ID, item.Title, "code was confirmed shipped to main but the item's transition to done failed", transErr)
 				}
 			}
 		}
@@ -2411,7 +2499,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 			continue // genuinely still running
 		}
 		now := time.Now()
-		if err := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil {
+		if err := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition best-effort tombstone sweep; continue skips only this session, retried every call rather than silently proceeding as if it succeeded
 			log.WarningLog.Printf("[tombstoneOrphanWorkSessions] item=%s session=%s: %v", itemID, is.ID, err)
 			continue
 		}

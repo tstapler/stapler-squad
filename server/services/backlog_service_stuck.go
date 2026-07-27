@@ -252,6 +252,8 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 		return s.AutoRespawnAutonomousWork
 	case domain.StuckReasonStaleWork:
 		return s.RemediateStaleWorkSession
+	case domain.StuckReasonOrphanedTriage:
+		return s.AutoRespawnTriage
 	case domain.StuckReasonPRPendingNoPR:
 		return func(ctx context.Context, itemID string) error {
 			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered reopen — item was stuck in pr_pending with no PR reference (BUG-040)")
