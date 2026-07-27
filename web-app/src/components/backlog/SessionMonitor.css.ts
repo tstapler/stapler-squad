@@ -156,6 +156,32 @@ export const emptyState = style({
   fontStyle: "italic",
 });
 
+export const errorState = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: vars.space["2"],
+  height: "100%",
+  color: vars.color.error,
+  fontSize: vars.fontSize.xs,
+  textAlign: "center",
+  padding: vars.space["3"],
+});
+
+export const errorRetryButton = style({
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  background: "transparent",
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.sm,
+  color: vars.color.error,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { background: vars.color.hoverBackground },
+  },
+});
+
 export const inputRow = style({
   display: "flex",
   gap: vars.space["2"],

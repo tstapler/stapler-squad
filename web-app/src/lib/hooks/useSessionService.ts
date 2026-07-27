@@ -128,6 +128,9 @@ interface UseSessionServiceReturn {
   stopWatching: () => void;
 
   // Session monitor
+  // Both reject on a genuine fetch failure (network/RPC error) rather than
+  // resolving to an empty result — callers must distinguish "fetch failed" from
+  // "genuinely no output yet" and surface the former as a retryable error state.
   getTerminalSnapshot: (sessionId: string, lastNLines?: number) => Promise<string>;
   writeToSession: (sessionId: string, input: string, pressEnter?: boolean) => Promise<boolean>;
   getConversationMessages: (sessionId: string, limit?: number) => Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>>;
@@ -1036,12 +1039,11 @@ export function useSessionService(
   const getTerminalSnapshot = useCallback(
     async (sessionId: string, lastNLines = 50): Promise<string> => {
       if (!clientRef.current) return "";
-      try {
-        const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
-        return resp.content ?? "";
-      } catch {
-        return "";
-      }
+      // Deliberately not caught here: a fetch failure must propagate to the
+      // caller (SessionMonitor) so it can render a distinct "failed to load"
+      // state instead of silently rendering identically to real emptiness.
+      const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
+      return resp.content ?? "";
     },
     []
   );
@@ -1062,17 +1064,16 @@ export function useSessionService(
   const getConversationMessages = useCallback(
     async (sessionId: string, limit = 30): Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>> => {
       if (!clientRef.current) return [];
-      try {
-        const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
-        return (resp.messages ?? []).map((m) => ({
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
-          model: m.model,
-        }));
-      } catch {
-        return [];
-      }
+      // See getTerminalSnapshot above: fetch failures propagate to the caller
+      // instead of resolving to an empty array indistinguishable from "no
+      // conversation history yet".
+      const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
+      return (resp.messages ?? []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
+        model: m.model,
+      }));
     },
     []
   );

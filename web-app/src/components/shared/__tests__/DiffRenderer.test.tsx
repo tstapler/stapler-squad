@@ -65,4 +65,23 @@ describe("DiffRenderer", () => {
 
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
   });
+
+  it("DiffRenderer_should_renderDistinctErrorState_When_errorPropSet", () => {
+    render(<DiffRenderer content="" added={0} removed={0} error="network error" />);
+    expect(screen.getByText("Failed to load changes")).toBeInTheDocument();
+    expect(screen.getByText("network error")).toBeInTheDocument();
+    expect(screen.queryByText("No changes to display")).toBeNull();
+  });
+
+  it("DiffRenderer_should_callOnRefresh_When_retryButtonClicked", () => {
+    const onRefresh = jest.fn();
+    render(<DiffRenderer content="" added={0} removed={0} error="network error" onRefresh={onRefresh} />);
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiffRenderer_should_renderEmptyState_When_noErrorAndDiffEmpty", () => {
+    render(<DiffRenderer content="" added={0} removed={0} />);
+    expect(screen.getByText("No changes to display")).toBeInTheDocument();
+  });
 });
