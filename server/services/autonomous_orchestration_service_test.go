@@ -7,6 +7,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -814,4 +815,51 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1, "onAutonomousDriverComplete must not spawn a competing review session — that is abandoned_review's job")
+}
+
+// TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_When_Called
+// is the regression test for one of the four instances of the recurring
+// "silent status-transition failure" bug shape found by the 2026-07-27
+// backlog-feature-improvement audit (BUG-030/040/041/046/048's shape):
+// onAutonomousDriverComplete's "still genuinely stuck in review" branch (see
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_EndsSession_NoCompetingRespawn)
+// calls UpdateItemSessionEnded — the exact mechanism BUG-048's own fix added
+// to make a stuck review session visible to abandoned_review/bouncing.
+// Previously, if that write itself failed, it was only log.Warn'd — and the
+// caller returns immediately afterward without ever reaching any other
+// notification path — reproducing BUG-048's original gap one layer
+// underneath its own fix. notifyStuckReviewBookkeepingFailed (extracted from
+// that call site so it's directly testable, at the same fidelity as
+// TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called
+// covers BUG-030's equivalent fix) is the closure of that gap.
+func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_When_Called(t *testing.T) {
+	eventBus := events.NewEventBus(4)
+	svc := &AutonomousOrchestrationService{bus: eventBus}
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	svc.notifyStuckReviewBookkeepingFailed("item-456", "Stuck review item", "item-session-789",
+		fmt.Errorf("failed to set ended_at on item session item-session-789: item_session not found"))
+
+	var notif *events.Event
+	for i := 0; i < 3; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 3
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected an operator-facing notification when the stuck-review bookkeeping write fails, instead of only being logged")
+	assert.Equal(t, "Stuck-review bookkeeping failed", notif.NotificationTitle)
+	assert.Equal(t, int32(9), notif.NotificationType, "must surface as a FAILURE notification")
+	assert.Contains(t, notif.NotificationMessage, "Stuck review item")
+	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled review session ended")
 }

@@ -586,7 +586,7 @@ func recordTerminalReviewVerdict(storage *Storage, itemID string, acSnapshot AcC
 	if err != nil {
 		return ItemSessionSummary{}, err
 	}
-	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil {
+	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil { //nolint:silenttransition bookkeeping timestamp only; the caller proceeds regardless (returns is, nil below either way), matching the convention of the other review-session-end bookkeeping call sites
 		log.WarningLog.Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
 	}
 	return is, nil

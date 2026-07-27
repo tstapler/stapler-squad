@@ -197,6 +197,59 @@ func TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called(t *t
 	}
 }
 
+// --- Systemic fix: silent status-transition/session-bookkeeping write failures ---
+//
+// The 2026-07-27 backlog-feature-improvement audit found four more instances
+// of the exact BUG-030/040/041/046/048 shape: a status-transition (or
+// session-bookkeeping) write fails AFTER its side effects have already
+// happened, the failure is only logged, and nothing else ever surfaces the
+// resulting reality/status mismatch. notifyTransitionFailed is the shared fix
+// (mirrors notifyTriagePersistFailure's notification-only shape), wired into
+// spawnSessionAfterGates and TriggerReReview below and their sibling call
+// sites (SubmitManualReview, AttachSessionToItem,
+// autonomous_orchestration_service.go's onAutonomousDriverComplete,
+// session/backlog_lifecycle.go's reconcileBouncingItems/ReconcilePRPending).
+
+// TestNotifyTransitionFailed_should_publishNotification_When_Called is the
+// direct unit test for the shared helper, at the same fidelity as
+// TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called above
+// for BUG-030 — notifyTransitionFailed is notification-only (no durable
+// BacklogStuckState row, unlike notifyReworkCapHit/notifySpawnAndRollbackFailed:
+// there is no single good StuckReason bucket for "a routine write failed").
+func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	svc.notifyTransitionFailed("item-123", "Fix the login bug",
+		"code was confirmed shipped to main but the item's transition to done failed",
+		fmt.Errorf("precondition failed: expected status \"review\", got \"in_progress\""))
+
+	select {
+	case ev := <-ch:
+		require.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, "Status update failed after work completed", ev.NotificationTitle)
+		assert.Contains(t, ev.NotificationMessage, "Fix the login bug")
+		assert.Contains(t, ev.NotificationMessage, "code was confirmed shipped to main")
+		assert.Equal(t, "item-123", ev.NotificationMetadata["item_id"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when a status-transition write fails")
+	}
+}
+
+// TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired verifies the
+// no-op guard — must never panic when no event bus is configured (e.g. a
+// service constructed without one, as in headless/test contexts).
+func TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	assert.NotPanics(t, func() {
+		svc.notifyTransitionFailed("item-123", "Some item", "some failure context", errors.New("boom"))
+	})
+}
+
 // --- Backlog work-item queue: DequeueNextQueuedItems ---
 
 // TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst verifies that once a
