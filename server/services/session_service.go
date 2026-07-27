@@ -1621,6 +1621,20 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 	return session.SessionTypeDirectory
 }
 
+// classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect
+// error code. Permission and state-machine rejections are the caller's fault
+// (FailedPrecondition, not a 500); anything else is an unexpected operational
+// failure (git/tmux errors) and stays CodeInternal.
+func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
+	var transErr session.ErrInvalidTransition
+	if errors.As(err, &transErr) ||
+		errors.Is(err, session.ErrPauseNotPermitted) ||
+		errors.Is(err, session.ErrResumeNotPermitted) {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
+	}
+	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
+}
+
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update
 func (s *SessionService) UpdateSession(
@@ -1779,23 +1793,25 @@ func (s *SessionService) UpdateSession(
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
 
 		if targetStatus == session.Paused && instance.Status != session.Paused {
-			// Set pause reason before transitioning — mirrors HibernateSession pattern.
+			if err := instance.Pause(); err != nil {
+				return nil, classifyPauseResumeErr(err, "pause")
+			}
+			// Set pause reason after a successful transition — mirrors HibernateSession
+			// pattern, and avoids stamping the reason on a request that got rejected
+			// (permission denied, invalid transition).
 			if req.Msg.PauseReason == nil || *req.Msg.PauseReason == "" {
 				instance.SetPauseReason(session.PauseReasonManual)
 			} else {
 				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
-			if err := instance.Pause(); err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
-			}
 			updatedFields = append(updatedFields, "status")
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
-			// Clear pause reason on resume.
-			instance.SetPauseReason("")
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))
+				return nil, classifyPauseResumeErr(err, "resume")
 			}
+			// Clear pause reason only after a successful resume.
+			instance.SetPauseReason("")
 			updatedFields = append(updatedFields, "status")
 		}
 	}

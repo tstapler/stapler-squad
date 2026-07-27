@@ -1283,11 +1283,23 @@ func (i *Instance) Pause() error {
 // pauseLocked is the actor-safe body of Pause().
 func pauseLocked(s *instanceState) error {
 	i := s.inst
-	if !i.started.Load() {
-		return fmt.Errorf("cannot pause instance that has not been started")
+	if !i.Permissions.CanPause {
+		return ErrPauseNotPermitted
 	}
 	if i.Status == Paused {
 		return fmt.Errorf("instance is already paused")
+	}
+	if !i.started.Load() {
+		// Never actually started (e.g. an async CreateSession failure before
+		// Start() completed). There's no real tmux session or git worktree to
+		// tear down, so just perform the state transition — transitionToLocked
+		// still rejects transitions that aren't valid from the current status
+		// (e.g. Creating/Stopped/Hibernated -> Paused).
+		if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+			return fmt.Errorf("failed to transition to Paused: %w", err)
+		}
+		i.started.Store(true)
+		return nil
 	}
 
 	stopControllerLocked(s)
@@ -1350,8 +1362,8 @@ func pauseLocked(s *instanceState) error {
 
 // Resume recreates the worktree and restarts the tmux session
 func (i *Instance) Resume() error {
-	if !i.started.Load() {
-		return fmt.Errorf("cannot resume instance that has not been started")
+	if !i.Permissions.CanResume {
+		return ErrResumeNotPermitted
 	}
 	// Status is actor-managed; use Snapshot() to avoid racing with concurrent actor writes.
 	if i.Snapshot().Status != Paused {
@@ -1454,6 +1466,7 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
 	i.mu.Unlock()
+	i.started.Store(true)
 	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session resumed")
 

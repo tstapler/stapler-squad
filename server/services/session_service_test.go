@@ -617,6 +617,136 @@ func TestUpdateSession_HandlerOrdering_MetadataBeforeStatus(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// UpdateSession – pause/resume on never-started instances (regression tests
+// for the pause/resume-500 bug: UpdateSession must not return CodeInternal
+// when the target Instance was never actually started).
+// --------------------------------------------------------------------------
+
+// TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal verifies
+// that pausing an Active instance that was never started (e.g. the async
+// CreateSession goroutine hasn't finished) succeeds as a no-op instead of 500ing.
+func TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "never-started-active",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	paused := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+	resp, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "never-started-active",
+		Status: &paused,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, sessionv1.SessionStatus_SESSION_STATUS_PAUSED, resp.Msg.Session.Status)
+}
+
+// TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition verifies that
+// an invalid transition (Stopped -> Paused) is classified as FailedPrecondition,
+// not CodeInternal.
+func TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "stopped-session",
+		Path:        "/tmp/test",
+		Status:      session.Stopped,
+		Program:     "claude",
+		Permissions: session.GetManagedPermissions(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	paused := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "stopped-session",
+		Status: &paused,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition verifies that
+// an externally-discovered instance with CanPause=false is rejected with
+// FailedPrecondition rather than silently no-op-pausing (closing the pre-mortem
+// F1 gap: MCP tools call Instance.Pause() directly, bypassing UpdateSession).
+func TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "external-session",
+		Path:        "/tmp/test",
+		Status:      session.Active,
+		Program:     "claude",
+		Permissions: session.GetExternalPermissions(false),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	paused := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "external-session",
+		Status: &paused,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition verifies the
+// resume-side counterpart of the pause permission gate: an externally-discovered
+// Paused instance with CanResume=false is rejected with FailedPrecondition.
+// (The "resume a never-started Paused instance succeeds" scenario needs a fake
+// ProcessManager to avoid spinning up real tmux and is covered at the Instance
+// level by TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverStarted
+// in session/pause_resume_test.go — Instance.processManager isn't exported for
+// injection from this package.)
+func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:       "external-paused-session",
+		Path:        "/tmp/test",
+		Status:      session.Paused,
+		Program:     "claude",
+		Permissions: session.GetExternalPermissions(false),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	addInstanceToPoller(fix.poller, inst)
+
+	active := sessionv1.SessionStatus_SESSION_STATUS_ACTIVE
+	_, err := fix.svc.UpdateSession(context.Background(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
+		Id:     "external-paused-session",
+		Status: &active,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
 // UpdateSession – title conflict
 // --------------------------------------------------------------------------
 

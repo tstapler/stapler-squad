@@ -264,6 +264,8 @@ var (
 	ErrInvalidTitleChars  = errors.New("title contains invalid characters")
 	ErrDuplicateTitle     = errors.New("a session with this title already exists")
 	ErrCannotRestart      = errors.New("session cannot be restarted in current state")
+	ErrPauseNotPermitted  = errors.New("session does not permit pause")
+	ErrResumeNotPermitted = errors.New("session does not permit resume")
 )
 
 // ErrInvalidTransition is returned when a status transition is not allowed
