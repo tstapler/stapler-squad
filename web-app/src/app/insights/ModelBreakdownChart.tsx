@@ -106,6 +106,7 @@ export function ModelBreakdownChart({ models }: Props) {
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {/* +feature: insights-pricing-unavailable-indicator */}
       <div className={legendRow}>
         {data.map((d) => (
           <div key={d.family} className={legendItem}>
