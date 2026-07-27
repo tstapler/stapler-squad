@@ -1031,3 +1031,55 @@ otherwise unchanged (new tasks appended, none renumbered).
     bounding-rect check no Jest test can provide.** Added **Task 2.3.5**,
     `tests/e2e/input-drop-badge.spec.ts`, plus the corresponding
     `frontend-features.json` registry entry.
+
+## Post-Implementation Finding: Task 4.1.1's Manual Repro Procedure Targets the Wrong Session-Creation Path
+
+During the AC5 manual verification pass, three real findings surfaced that
+Task 4.1.1's procedure (as written) did not anticipate:
+
+1. **The omnibar's interactive "Directory"/"New Worktree" session creation
+   never calls `session.StartSessionDriver` at all.** Grepped the full
+   `CreateSession` RPC handler (`server/services/session_service.go:782-1021`,
+   the omnibar's backend) for any reference to `Driver` — zero matches.
+   `StartSessionDriver` is only invoked from `CreateDirectorySession`
+   (backlog-pipeline sessions) and the MCP `create_session` tool
+   (`server/mcp/tools_lifecycle.go:180`). **A session created by clicking
+   through the omnibar, as Task 4.1.1 step 2 instructs, can never exercise
+   `isStartupDialog`/`answerDialogOnce` — the exact code this fix
+   changes** — regardless of how the flap is induced. Task 4.1.1 must be
+   revised to create the verification session via the MCP `create_session`
+   tool or `CreateDirectorySession`, not the omnibar, or it will always
+   appear to "pass" for the wrong reason (the driver was never running).
+2. **`/tmp` is globally pre-trusted on the verification machine**
+   (`~/.claude.json` → `"/tmp": {"hasTrustDialogAccepted": true}`), so a
+   scratch repo under `/tmp` never shows the trust-folder dialog regardless
+   of stapler-squad behavior. Task 4.1.1 step 2's scratch-repo location must
+   avoid any ancestor directory with prior trust acceptance — use a fresh
+   path under `$HOME` (confirmed genuinely untrusted) instead of `/tmp`.
+3. **A genuine, unexplained log-routing gap in isolated
+   (`STAPLER_SQUAD_INSTANCE=`-scoped) instances**: a guaranteed-to-fire
+   startup log line (`session/instance.go:611`) never appeared in
+   `~/.stapler-squad/logs/staplersquad.log` for an isolated instance's
+   process, despite the process holding a confirmed-correct open file
+   descriptor to that path (verified via `/proc/<pid>/fd`). Not root-caused
+   within the verification pass's time budget; flagged as a separate,
+   pre-existing environmental/logging issue, not caused by this fix. Worth
+   a dedicated follow-up ticket — Task 4.1.1's log-tailing step (step 6) is
+   unreliable against an isolated instance until this is understood.
+
+**What was verified instead**: the exact regression tests added in Epic 1
+(`TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded`,
+`TestSessionDriver_TailSliceBoundsDialogMatchAndHash`,
+`TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation`,
+`TestAnswerDialogOnce`'s 7 subtests) were re-run standalone as a substitute
+verification pass — these run the real, unmodified
+`runSessionDriverWithPrompt` goroutine against a fake `ProcessManager`
+engineered to reproduce a stuck/stale dialog buffer, the same methodology
+Phase 0 used to prove the original unbounded bug. All passed, showing
+`SendKeys("1\n")` bounded to 2 calls (under the `maxDialogAnswerAttempts=3`
+cap) over the same ~12s window Phase 0's original repro showed unbounded
+growth. This is real evidence the fix works against the exact code path in
+question, but it is not the live-browser, live-log repro Task 4.1.1
+literally specifies. A human (or a follow-up session) should complete the
+live repro via the MCP `create_session` path once finding 3's log-routing
+gap is understood, to get the fully literal AC5 confirmation.
