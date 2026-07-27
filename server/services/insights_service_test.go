@@ -428,6 +428,34 @@ func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlag
 	assert.Contains(t, resp.Msg.UnpricedModels, "gpt-99-turbo")
 }
 
+// --------------------------------------------------------------------------
+// AC-1: claude-sonnet-5 pricing table entry is reachable end-to-end through
+// the GetInsightsSummary RPC path (not just verified in isolation by
+// session/tokens/pricing_test.go).
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Models, 1)
+	assert.Equal(t, "claude-sonnet-5", resp.Msg.Models[0].ModelFamily)
+	assert.False(t, resp.Msg.Models[0].PricingUnavailable)
+	assert.NotContains(t, resp.Msg.UnpricedModels, "claude-sonnet-5")
+	assert.Greater(t, resp.Msg.TotalCostUsd, float64(0))
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Greater(t, resp.Msg.Sessions[0].EstimatedCostUsd, float64(0))
+}
+
 func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated(t *testing.T) {
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
