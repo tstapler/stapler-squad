@@ -41,7 +41,47 @@ const (
 	// Continuation prompt constants.
 	driverContinuationMaxMessages = 10
 	driverContinuationMaxChars    = 500
+
+	// maxDialogAnswerAttempts bounds retry-on-failure for a DialogAnswerLatch
+	// (ADR-001): a SendKeys failure against the *same* dialog content hash is
+	// retried up to this many times before the latch gives up (dialogGaveUp).
+	// A hash change (a genuinely new/different dialog) resets the counter, so
+	// this does not bound legitimate re-answering of a later, different dialog.
+	maxDialogAnswerAttempts = 3
 )
+
+// dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
+// dialogUnanswered -> dialogAwaitingDismissal -> dialogGaveUp, keyed by a
+// content hash of the (tail-sliced, whitespace-normalized) dialog text.
+type dialogLatchStatus int
+
+const (
+	// dialogUnanswered means either no dialog has been seen yet for the
+	// current hash, or the current hash's send attempts are still under
+	// the maxDialogAnswerAttempts retry cap.
+	dialogUnanswered dialogLatchStatus = iota
+	// dialogAwaitingDismissal means a SendKeys for the current hash
+	// succeeded; the latch will not resend while the hash is unchanged.
+	dialogAwaitingDismissal
+	// dialogGaveUp means SendKeys failed maxDialogAnswerAttempts times in a
+	// row for the current hash; the latch will not retry further while the
+	// hash is unchanged.
+	dialogGaveUp
+)
+
+// dialogAnswerState holds the per-call-site DialogAnswerLatch state for one
+// SendKeys call site within a single runSessionDriverWithPrompt invocation.
+// It is a plain local variable, not an Instance field: StartSessionDriver's
+// driverRunning.CompareAndSwap already guarantees a single sequential
+// goroutine owns this state for the life of one driver run — the same
+// reasoning sentInitial/initialPromptSentAt (already local vars in this
+// function) rely on. The zero value (hash 0, status dialogUnanswered,
+// attempts 0) doubles as "no dialog seen yet" (see ADR-001 Consequences).
+type dialogAnswerState struct {
+	hash     uint64
+	status   dialogLatchStatus
+	attempts int
+}
 
 // StartSessionDriver launches a background goroutine that drives the session
 // through its startup dialogs, fires the initial task prompt, and monitors
@@ -96,6 +136,14 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	sentInitial := false
 	var initialPromptSentAt time.Time
 
+	// DialogAnswerLatch state (ADR-001), one per SendKeys("1\n") call site.
+	// Independently scoped — the approval-prompt latch is not shared with the
+	// startup-dialog latch (a buffer classified true by both detectors
+	// simultaneously, though very unlikely given their disjoint phrase sets,
+	// could fire both in one tick; see ADR-001/plan.md Risk Control).
+	var startupLatch dialogAnswerState
+	var approvalLatch dialogAnswerState
+
 	for range ticker.C {
 		if time.Now().After(totalDeadline) {
 			return
@@ -148,18 +196,34 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
 		output, previewErr := inst.Preview()
-		if previewErr == nil && output != "" {
-			if isStartupDialog(output) {
-				if err := inst.SendKeys("1\n"); err != nil {
-					log.Warn("SessionDriver: failed to answer startup dialog",
-						"session", inst.Title,
-						"err", err,
-					)
-				} else {
-					log.Info("SessionDriver: answered startup dialog",
-						"session", inst.Title,
-					)
-				}
+		hasOutput := previewErr == nil && output != ""
+		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
+		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
+		// so both the isStartupDialog/shouldApprovePrompt match and the latch hash
+		// below are computed against a bounded recent window, not the session's
+		// entire history (ADR-001 "Tail-slice before matching and hashing").
+		var tailed string
+		if hasOutput {
+			tailed = tailContent(output, statusDetectionTailBytes)
+		}
+
+		if hasOutput && isStartupDialog(tailed) {
+			status := answerDialogOnce(&startupLatch, tailed, func() error {
+				return inst.SendKeys("1\n")
+			}, inst.Title, "startup dialog")
+
+			// Control-flow requirement (ADR-001): only dialogUnanswered (a send
+			// was just attempted this tick, whether it succeeded or is still
+			// under the retry cap) keeps the single-tick continue. Once the
+			// latch reaches dialogAwaitingDismissal or dialogGaveUp, fall
+			// through to the rest of the loop body exactly as if
+			// isStartupDialog had been false this tick — restoring
+			// Ready-detection, the inactivity-timeout escalation, and the
+			// NeedsApproval check for ticks after the dialog has been
+			// answered or abandoned. Without this, a dialogGaveUp session
+			// would silently wedge here until driverTotalTimeout (25 min)
+			// with zero operator escalation.
+			if status == dialogUnanswered {
 				continue
 			}
 		}
@@ -205,15 +269,20 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// After the initial prompt is sent, watch for NeedsApproval to handle
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
+		//
+		// Same DialogAnswerLatch defect class as the startup-dialog branch
+		// above (ADR-001), applied via an independently-scoped approvalLatch.
+		// Asymmetry note: unlike the startup-dialog branch, this call site has
+		// no `continue` today (it already falls through naturally to the end
+		// of the loop body regardless of outcome), so there is no analogous
+		// control-flow starvation risk to fix here — the returned status is
+		// only used for the latch's own bookkeeping, not for branching.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" && shouldApprovePrompt(output, allowedPath) {
-					if err := inst.SendKeys("1\n"); err != nil {
-						log.Warn("SessionDriver: failed to approve prompt",
-							"session", inst.Title,
-							"err", err,
-						)
-					}
+				if hasOutput && shouldApprovePrompt(tailed, allowedPath) {
+					answerDialogOnce(&approvalLatch, tailed, func() error {
+						return inst.SendKeys("1\n")
+					}, inst.Title, "approval prompt")
 				}
 			}
 		}
@@ -346,6 +415,63 @@ func buildContinuationPrompt(inst *Instance) string {
 // backlog state by re-triggering lifecycle transitions.
 func isOneShot(inst *Instance) bool {
 	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review")
+}
+
+// answerDialogOnce implements the DialogAnswerLatch state machine (ADR-001):
+// send at most once per unique dialog-content hash, with bounded
+// retry-on-failure only (never retried once a send succeeds).
+//
+// output is tail-sliced to statusDetectionTailBytes and whitespace-normalized
+// before hashing — mirroring GetCurrentStatus's existing tail-then-hash
+// precedent (claude_controller.go:528) — so the comparison is scoped to what
+// is actually still near-current on screen (not the session's entire
+// scrollback history) and is immune to incidental line-wrap/whitespace jitter
+// between polling ticks.
+//
+// Returns the latch's resulting status after this tick's transition, so the
+// call site can decide whether to keep short-circuiting the rest of the poll
+// tick or fall through to it (see ADR-001's "Control flow" section).
+func answerDialogOnce(state *dialogAnswerState, output string, send func() error, sessionTitle, logContext string) dialogLatchStatus {
+	tailed := tailContent(output, statusDetectionTailBytes)
+	normalized := strings.Join(strings.Fields(tailed), " ")
+	hash := hashString(normalized)
+
+	if hash != state.hash {
+		// New dialog, or this dialog was dismissed and a different one
+		// appeared with the same call site — re-arm the latch.
+		state.hash = hash
+		state.status = dialogUnanswered
+		state.attempts = 0
+	}
+
+	if state.status == dialogAwaitingDismissal || state.status == dialogGaveUp {
+		return state.status
+	}
+
+	// dialogUnanswered: this hash has not yet been successfully answered
+	// (or is still within its retry budget) — attempt the send.
+	if err := send(); err != nil {
+		state.attempts++
+		log.Warn("SessionDriver: failed to answer "+logContext,
+			"session", sessionTitle,
+			"attempt", state.attempts,
+			"err", err,
+		)
+		if state.attempts >= maxDialogAnswerAttempts {
+			state.status = dialogGaveUp
+			log.Warn("SessionDriver: giving up on "+logContext+" after repeated send failures",
+				"session", sessionTitle,
+				"attempts", state.attempts,
+			)
+		}
+		return state.status
+	}
+
+	log.Info("SessionDriver: answered "+logContext,
+		"session", sessionTitle,
+	)
+	state.status = dialogAwaitingDismissal
+	return state.status
 }
 
 // isStartupDialog returns true when output contains a Claude Code startup

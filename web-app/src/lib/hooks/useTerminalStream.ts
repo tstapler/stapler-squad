@@ -52,6 +52,8 @@ interface UseTerminalStreamOptions {
   isExternal?: boolean; // Whether this is an external session (uses /ws/external endpoint)
   enablePredictiveEcho?: boolean; // Enable Mosh-style predictive echo (default: false)
   onEchoAck?: (echoNum: bigint, latencyMs: number) => void; // Callback when echo is acknowledged (for RTT stats)
+  /** Called with the number of buffered-but-undelivered messages dropped when a MessageQueue is torn down (superseded connect() or disconnect()). */
+  onInputDropped?: (count: number) => void;
 }
 
 interface TerminalStreamResult {
@@ -90,6 +92,7 @@ export function useTerminalStream({
   streamingMode = "raw",
   enablePredictiveEcho = false,
   onEchoAck,
+  onInputDropped,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   // ---- Connection state ----
   const [isConnected, setIsConnected] = useState(false);
@@ -103,6 +106,11 @@ export function useTerminalStream({
   const isDisconnectingRef = useRef(false);
   const isConnectedRef = useRef(false);
   const textDecoderRef = useRef(new TextDecoder());
+  // Task 2.2.1 — Connection-generation fence (mirrors usePathCompletions.ts's
+  // generationRef idiom). Bumped once per connect() call; a message-processing
+  // loop whose captured generation no longer matches the current value treats
+  // itself as superseded and stops mutating shared state.
+  const connectionGenerationRef = useRef(0);
 
   const clientRef = useRef(createClient(
     SessionService,
@@ -156,6 +164,11 @@ export function useTerminalStream({
   const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
     if (isConnectedRef.current || !sessionId) return;
 
+    // Task 2.2.1 — bump the connection generation immediately so this call's
+    // message-processing loop (started below) can identify itself as "the
+    // current attempt" and detect being superseded by a later connect().
+    const myGeneration = ++connectionGenerationRef.current;
+
     let targetCols = overrideCols ?? initialCols;
     let targetRows = overrideRows ?? initialRows;
 
@@ -172,6 +185,21 @@ export function useTerminalStream({
     setTerminalState('CONNECTING');
 
     try {
+      // Task 2.2.2 — unconditionally tear down whatever generation this call
+      // is about to replace, regardless of connection state. This removes the
+      // previous isConnectedRef-gated skip (the root of the double-live-
+      // connection risk documented in architecture.md §1) by making connect()
+      // itself always close/abort what it's about to replace.
+      if (messageQueueRef.current) {
+        const dropped = messageQueueRef.current.close();
+        if (dropped > 0) {
+          onInputDropped?.(dropped);
+        }
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
       abortControllerRef.current = new AbortController();
       messageQueueRef.current = new MessageQueue();
 
@@ -210,6 +238,15 @@ export function useTerminalStream({
         try {
           let firstMessage = true;
           for await (const msg of stream) {
+            // Task 2.2.3 — a superseded generation's loop must not mutate
+            // shared state (or, transitively, deliver buffered input to the
+            // wrong connection). Mirrors usePathCompletions.ts's
+            // `if (generation !== generationRef.current) return;` guard.
+            if (myGeneration !== connectionGenerationRef.current) {
+              console.warn(`[useTerminalStream] Discarding message from superseded connection generation ${myGeneration} (current: ${connectionGenerationRef.current})`);
+              break;
+            }
+
             if (firstMessage) {
               setIsConnected(true);
               setScrollbackLoaded(true);
@@ -331,10 +368,16 @@ export function useTerminalStream({
             }
           }
         } catch (err) {
-          handleError(err);
+          if (myGeneration === connectionGenerationRef.current) {
+            handleError(err);
+          }
         } finally {
-          setIsConnected(false);
-          setTerminalState('DISCONNECTED');
+          // Task 2.2.3 — a superseded generation's teardown must not stomp
+          // the newer generation's state.
+          if (myGeneration === connectionGenerationRef.current) {
+            setIsConnected(false);
+            setTerminalState('DISCONNECTED');
+          }
         }
       })();
     } catch (err) {
@@ -342,7 +385,7 @@ export function useTerminalStream({
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      streamingMode, flowControl, metrics, handleError, initialCols, initialRows]);
+      streamingMode, flowControl, metrics, handleError, initialCols, initialRows, onInputDropped]);
 
   // ---- Disconnect ----
   // Use stable method reference to avoid disconnect being recreated on every render.
@@ -361,7 +404,10 @@ export function useTerminalStream({
     isDisconnectingRef.current = true;
 
     if (messageQueueRef.current) {
-      messageQueueRef.current.close();
+      const dropped = messageQueueRef.current.close();
+      if (dropped > 0) {
+        onInputDropped?.(dropped);
+      }
       messageQueueRef.current = null;
     }
 
@@ -384,7 +430,7 @@ export function useTerminalStream({
 
     setIsConnected(false);
     isDisconnectingRef.current = false;
-  }, [getIsResyncingRef]);
+  }, [getIsResyncingRef, onInputDropped]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
