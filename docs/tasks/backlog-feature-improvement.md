@@ -49,7 +49,7 @@ notify-only**:
 | Reason | Auto-recovery? | Verdict |
 |---|---|---|
 | `abandoned_review` | No (fix in flight, PR #168, not yet merged) | Real gap |
-| `orphaned_triage` | No — **and the code comment falsely claims it self-heals**; it only `MarkStuck`+notifies, never re-triggers triage | Real gap + misleading comment, fix next |
+| `orphaned_triage` | **FIXED 2026-07-27** — was only `MarkStuck`+notify, never re-triggered triage; see "Update — 2026-07-27" below | Closed |
 | `bouncing` | No | Real gap — no escalation/different-approach retry once non-converging, just a notification |
 | `pr_ready_unmerged` | No | Gap — no direct-merge fallback if `EnablePRAutoMerge` silently doesn't take effect |
 | `stale_work` | No | Deliberate — "a slow-but-alive agent should not be force-stopped" |
@@ -1121,6 +1121,28 @@ auto-retry. **This gap is now fixed** — see PR #274, which wires `orphaned_tri
 backoff/parking machinery as its siblings. **Remaining action**: manually re-trigger triage on
 both items now (or let the new automated retry pick them up once #274 merges and deploys).
 
+**PR #274 implementation detail**: `reconcileOrphanedTriageItems`
+(`session/backlog_lifecycle.go`) correctly detected the orphaned triage session, tombstoned it,
+`MarkStuck`'d the row, and sent exactly one notification, then never retried automatically — its
+own doc comment ("no resolve pass needed here... once the item leaves 'idea'") was true for
+*resolution* but masked that nothing was driving the item toward leaving `idea` in the first
+place. Fixed by wiring the same pattern used for `abandoned_review`/`ReviewRespawner`: a new
+`TriageRespawner` interface + `SetTriageRespawner`/`getTriageRespawner` on
+`BacklogLifecycleListener`, implemented by `BacklogService.AutoRespawnTriage`
+(`server/services/backlog_service_triage.go`), delegating to the existing `TriggerTriage` RPC
+handler after a no-op guard for items that already left `idea`; a new periodic detector
+`reconcileOrphanedTriageRemediation` + backoff-gated dispatcher
+`retryOrphanedTriageWithBackoffGate`, registered as its own `runStuckDetector` entry
+(`orphaned_triage_remediation`) right after the existing detection-only
+`reconcileOrphanedTriageItems`; and `orphaned_triage` wired into `remediationActionByReason`
+(`server/services/backlog_service_stuck.go`) so the manual "Retry now" RPC works for it too —
+removed from `reasonsWithoutAutomatedRemediation` in the exhaustiveness guard test (added by
+commit `a027bc5da`), which caught this gap by construction. No proto/frontend changes needed —
+`StuckItemsSection.tsx`'s "Retry now" button already calls `TriggerRemediationNow`
+unconditionally for every reason; it previously just failed with `CodeUnimplemented` for
+`orphaned_triage` and now succeeds. 8 new regression tests added across `session` and
+`server/services`; full suites and `golangci-lint` pass.
+
 ### [1] Reconciliation Bugs — 4 NEW CRITICAL findings, same recurring shape
 
 All four independently found by the architecture/code-review passes, all the same signature this
@@ -1299,6 +1321,6 @@ yet merged/reviewed):**
    how much default automation to apply per item category, not a bug or a small UX fix.
 6. Interface-pollution cleanup (`PipelineModeRepository`, `Repository`) — low priority,
    mechanical, no functional bug; fold into a future refactor pass rather than its own session.
-7. **Review note**: PRs #274 and this doc's own 07-27 update both touched
-   `docs/tasks/backlog-feature-improvement.md` on divergent branches — check for a merge
-   conflict on this file specifically when reviewing/merging #274.
+7. ~~Review note: PRs #274 and this doc's own 07-27 update both touched this file on divergent
+   branches~~ — resolved: merged both entries into one narrative when landing #274 on top of
+   the updated `main`.

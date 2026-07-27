@@ -402,7 +402,6 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	domain.StuckReasonPRReadyUnmerged: true,
 	domain.StuckReasonReworkCap:       true,
 	domain.StuckReasonPushFailed:      true,
-	domain.StuckReasonOrphanedTriage:  true,
 	domain.StuckReasonSpawnFailed:     true,
 	domain.StuckReasonPlanNotApproved: true,
 	// StuckReasonReworkBlockedStale: deliberately notify + durably mark +
