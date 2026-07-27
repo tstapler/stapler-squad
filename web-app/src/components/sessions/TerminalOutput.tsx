@@ -49,6 +49,8 @@ import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
+import { InputDropBadge } from "./InputDropBadge";
+import { useDropEpisodeCoalescer } from "./useDropEpisodeCoalescer";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
@@ -81,6 +83,9 @@ const MIN_ROWS = 10;
 // and are not used for fast-connect. The actual container size arrives via onResize.
 const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
+
+// Story 2.3 — coalescing window for InputDropBadge drop episodes (design/ux.md §2.2).
+const DROP_EPISODE_COALESCE_WINDOW_MS = 400;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
@@ -453,6 +458,38 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
+  // Story 2.3 — InputDropBadge: dropped-keystroke count + a monotonic
+  // per-episode sequence number (so two consecutive episodes with an
+  // identical count still produce a distinct announcement, see
+  // InputDropBadge.tsx's `episodeSeq` doc comment).
+  const [dropEpisode, setDropEpisode] = useState({ count: 0, seq: 0 });
+  const handleDropEpisodeFlush = useCallback((count: number) => {
+    if (count <= 0) return; // design/ux.md §3.3 — defensive no-op
+    setDropEpisode((prev) => ({ count, seq: prev.seq + 1 }));
+  }, []);
+  const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
+  const handleInputDropped = useCallback((count: number) => {
+    reportDroppedInput(count);
+  }, [reportDroppedInput]);
+
+  // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
+  // reconnect race (the real trigger for onInputDropped) inside Playwright
+  // proved impractical for this pass (it would require deterministically
+  // racing a server-side connection teardown against a client keystroke),
+  // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
+  // announcement/dismiss behavior via this harmless, additive test seam
+  // instead of the full reconnect path (Stories 2.1/2.2 already have direct
+  // Jest coverage of the drop mechanism itself). Not gated behind a build
+  // flag: it only ever forwards to the same handleInputDropped path real
+  // drops use, so calling it has no effect beyond what a real drop would do.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = handleInputDropped;
+    return () => {
+      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+    };
+  }, [handleInputDropped]);
+
   const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
@@ -467,6 +504,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
     isExternal: isExternal,
+    onInputDropped: handleInputDropped,
   });
 
   const { notifyResyncOutputReceived } = useVisibilityResync({
@@ -1700,6 +1738,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   />
 </Suspense>
       </div>
+      {/* Story 2.3 — InputDropBadge is `position: fixed` and portal-rendered
+          to document.body (modeled on XtermTerminal's `copiedToast`), unlike
+          the absolutely-positioned overlays above that live inside
+          styles.terminal — rendering it as a sibling here (not nested inside
+          that container) avoids clipping/mispositioning it. See design/ux.md
+          §Step 4 item 1. */}
+      <InputDropBadge count={dropEpisode.count} episodeSeq={dropEpisode.seq} />
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.
           Row 1: ESC / - HOME ↑ END PGUP
           Row 2: TAB CTRL ALT ← ↓ → PGDN

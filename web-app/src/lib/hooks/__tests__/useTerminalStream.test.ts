@@ -53,16 +53,49 @@ jest.mock('@/gen/session/v1/events_pb', () => ({
   CurrentPaneRequest: class {},
 }));
 
-// MessageQueue — minimal stub; the push side is not exercised in these tests
-jest.mock('@/lib/terminal/MessageQueue', () => ({
-  MessageQueue: class {
-    push = jest.fn();
-    close = jest.fn();
+// MessageQueue — a faithful-enough mock (matching the real implementation's
+// push/close drop semantics) so Story 2.2 tests can exercise real
+// interleaving. Instances are tracked in `mockMessageQueueInstances` so tests
+// can assert on a specific generation's queue (spy on constructor calls).
+const mockMessageQueueInstances: Array<{
+  queue: unknown[];
+  closed: boolean;
+  push: jest.Mock;
+  close: jest.Mock;
+  isClosed: () => boolean;
+}> = [];
+
+jest.mock('@/lib/terminal/MessageQueue', () => {
+  class MockMessageQueue {
+    queue: unknown[] = [];
+    closed = false;
+
+    constructor() {
+      mockMessageQueueInstances.push(this as unknown as (typeof mockMessageQueueInstances)[number]);
+    }
+
+    push = jest.fn((msg: unknown) => {
+      if (this.closed) return;
+      this.queue.push(msg);
+    });
+
+    close = jest.fn((): number => {
+      const dropped = this.queue.length;
+      this.queue = [];
+      this.closed = true;
+      return dropped;
+    });
+
+    isClosed() {
+      return this.closed;
+    }
+
     [Symbol.asyncIterator]() {
       return { next: async () => ({ value: undefined, done: true }) };
     }
-  },
-}));
+  }
+  return { MessageQueue: MockMessageQueue };
+});
 
 // Sub-hooks — minimal stubs so useTerminalStream can render
 jest.mock('../useTerminalFlowControl', () => ({
@@ -751,5 +784,220 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
 
     const visibilityRemoves = removeEventSpy.mock.calls.filter(c => c[0] === 'visibilitychange').length;
     expect(visibilityRemoves).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.2 — connection-generation guard
+// ---------------------------------------------------------------------------
+
+function createOutgoingInputMessage(data: string) {
+  return { sessionId: 'test-session', data: { case: 'input' as const, value: { data } } };
+}
+
+describe('useTerminalStream — connection-generation guard (Story 2.2)', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+    mockMessageQueueInstances.length = 0;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // Task 2.2.5 (adapted — see note below)
+  //
+  // NOTE ON THIS DESCRIBE BLOCK'S ADAPTATION: origin/main independently added
+  // an isConnectingRef guard to connect() (`if (isConnectedRef.current ||
+  // isConnectingRef.current || !sessionId) return;`) that this branch's fork
+  // point did not have. That guard now makes a second connect() call a no-op
+  // for as long as an earlier connect() is still "connecting" (i.e. until its
+  // stream delivers a first message, or its read loop exits) — which is
+  // stronger than this generation-guard fix alone (it prevents the wasted
+  // duplicate connection attempt from starting at all, rather than starting
+  // it and disambiguating afterward). Practically, that closes off directly
+  // constructing "two connect() calls truly overlapping mid-flight" through
+  // the public API the way these tests originally did. Each test below ends
+  // a generation's stream (or calls disconnect() while never-connected, which
+  // is a fast no-op) to clear that guard before starting the next generation
+  // — still exercising the real teardown-and-disambiguation logic (Task 2.2.2
+  // unconditional teardown, the generation check, drop-and-signal), just via
+  // a reachable sequential trigger instead of a same-tick race the guard now
+  // forecloses.
+  it("a superseded generation's stale queue is torn down once a newer generation takes over", async () => {
+    const stream1 = makePushStream<object>();
+    const stream2 = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(stream1.iterable)
+      .mockReturnValueOnce(stream2.iterable);
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }),
+    );
+
+    await act(async () => {
+      result.current.connect(); // generation 1
+    });
+
+    // Generation 1's stream drops before ever delivering a message — its
+    // read loop exits and its finally block runs (still the current
+    // generation at that point), clearing the connecting/connected refs so
+    // a fresh connect() is reachable again.
+    await act(async () => {
+      stream1.end();
+    });
+
+    await act(async () => {
+      result.current.connect(); // generation 2
+    });
+
+    await act(async () => {
+      stream2.push(makeOutputMsg());
+    });
+
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(true);
+    });
+    expect(result.current.terminalState).toBe('STABLE');
+
+    // Generation 1's now-stale queue was torn down by generation 2's
+    // connect() (Task 2.2.2's unconditional teardown), not left dangling.
+    expect(mockMessageQueueInstances).toHaveLength(2);
+    expect(mockMessageQueueInstances[0].close).toHaveBeenCalled();
+
+    stream2.end();
+  });
+
+  // Task 2.2.6
+  it('three rapid connect() calls do not throw or leak', async () => {
+    const stream1 = makePushStream<object>();
+    mockStreamTerminal.mockReturnValueOnce(stream1.iterable);
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }),
+    );
+
+    await act(async () => {
+      // All three calls happen synchronously in the same tick — simulates
+      // StrictMode's double-invoke plus a genuine reconnect. main's own
+      // isConnectingRef/isConnectedRef guard (see note above) makes the 2nd
+      // and 3rd calls safe no-ops while the 1st is still connecting: only
+      // one MessageQueue/connection attempt is ever created, no throw.
+      result.current.connect();
+      result.current.connect();
+      result.current.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockMessageQueueInstances).toHaveLength(1);
+    expect(mockMessageQueueInstances[0].closed).toBe(false);
+
+    stream1.end();
+  });
+
+  // Task 2.2.7 (adapted — see note above)
+  it("disconnect() on a not-yet-connected generation tears down cleanly and does not block a subsequent connect()", async () => {
+    const stream1 = makePushStream<object>();
+    const stream2 = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(stream1.iterable)
+      .mockReturnValueOnce(stream2.iterable);
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }),
+    );
+
+    await act(async () => {
+      result.current.connect(); // generation 1
+    });
+
+    await act(async () => {
+      // disconnect() while generation 1 never became visibly connected takes
+      // the early-exit path (isConnectedRef.current is still false, so no
+      // 1000ms wait) — closes generation 1's queue immediately.
+      await result.current.disconnect();
+    });
+
+    expect(mockMessageQueueInstances).toHaveLength(1);
+    expect(mockMessageQueueInstances[0].close).toHaveBeenCalled();
+
+    // Generation 1's read loop is still technically live in this mock (no
+    // AbortSignal wiring on the push-stream), so end its stream to let the
+    // loop's own finally clear the connecting-ref guard — mirroring a real
+    // aborted WebSocket throwing and unwinding the loop.
+    await act(async () => {
+      stream1.end();
+    });
+
+    await act(async () => {
+      result.current.connect(); // generation 2 — must not be blocked by generation 1's teardown
+    });
+
+    await act(async () => {
+      stream2.push(makeOutputMsg());
+    });
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(true);
+    });
+
+    stream2.end();
+  });
+
+  // Task 2.2.8 (adapted — see note above)
+  it('input buffered in a stale, torn-down generation is dropped, not delivered to the next connection', async () => {
+    const stream1 = makePushStream<object>();
+    const stream2 = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(stream1.iterable)
+      .mockReturnValueOnce(stream2.iterable);
+
+    const onInputDropped = jest.fn();
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...BASE_OPTIONS, autoConnect: false, onInputDropped }),
+    );
+
+    await act(async () => {
+      result.current.connect(); // generation 1
+    });
+
+    expect(mockMessageQueueInstances).toHaveLength(1);
+    const gen1Queue = mockMessageQueueInstances[0];
+    // Sanity: generation 1's handshake message is already buffered (nothing
+    // consumes the outgoing queue in this mock, mirroring how a real
+    // in-flight connection can have buffered-but-undelivered input).
+    const bufferedBeforePush = gen1Queue.queue.length;
+
+    const droppedMessage = createOutgoingInputMessage('typed-while-reconnecting');
+    gen1Queue.push(droppedMessage);
+
+    // Generation 1's connection drops (its read loop exits) while that
+    // input is still sitting, undelivered, in its queue.
+    await act(async () => {
+      stream1.end();
+    });
+
+    await act(async () => {
+      result.current.connect(); // generation 2 — unconditionally tears down generation 1's stale queue (Task 2.2.2)
+    });
+
+    // (a) never observed on generation 1 — its queue was cleared by close().
+    expect(gen1Queue.queue).toHaveLength(0);
+
+    // (b) never replayed onto generation 2's queue.
+    expect(mockMessageQueueInstances).toHaveLength(2);
+    const gen2Queue = mockMessageQueueInstances[1];
+    expect(gen2Queue.queue).not.toContain(droppedMessage);
+
+    // (c) onInputDropped fires with a count reflecting everything that was
+    // dropped (the still-buffered handshake message plus our pushed input).
+    expect(onInputDropped).toHaveBeenCalledWith(bufferedBeforePush + 1);
+
+    stream2.end();
   });
 });

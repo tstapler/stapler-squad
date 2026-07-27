@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 )
 
 // createTestWebSocketPair sets up a test WebSocket server and returns the
@@ -707,6 +709,126 @@ func TestPrepareSnapshotContentPreservesSGR(t *testing.T) {
 			t.Errorf("prepareSnapshotContent: SGR sequence %q was lost; got %q", sgr, got)
 		}
 	}
+}
+
+// --- runInputReadLoop ---
+
+// TestRunInputReadLoopExitsPromptlyOnConnectionClose verifies the WebSocket
+// input-read loop (Story 3.1 / AC4-Go): it processes input while the
+// connection is open, exits within a bounded timeout once the connection is
+// closed (the same event that unblocks it in production via the outer
+// handler's deferred conn.Close()), and does not keep forwarding input
+// received after the loop has exited.
+func TestRunInputReadLoopExitsPromptlyOnConnectionClose(t *testing.T) {
+	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+	defer cleanup()
+
+	var mu sync.Mutex
+	var recordedInput [][]byte
+	onInput := func(data []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		cp := append([]byte(nil), data...)
+		recordedInput = append(recordedInput, cp)
+	}
+	onResize := func(cols, rows int) {}
+	onScrollbackRequest := func(startLine, endLine string) (string, error) {
+		return "", nil
+	}
+
+	doneChan := make(chan struct{})
+	errChan := make(chan error, 2)
+	done := make(chan struct{})
+	go func() {
+		runInputReadLoop(serverStream, doneChan, errChan, "test-session", onInput, onResize, onScrollbackRequest)
+		close(done)
+	}()
+
+	// Write one input envelope from the client side and verify it's recorded.
+	sendInput := func(payload []byte) {
+		t.Helper()
+		td := &sessionv1.TerminalData{
+			Data: &sessionv1.TerminalData_Input{
+				Input: &sessionv1.TerminalInput{Data: payload},
+			},
+		}
+		dataBytes, err := proto.Marshal(td)
+		if err != nil {
+			t.Fatalf("failed to marshal TerminalData: %v", err)
+		}
+		envelope := protocol.CreateEnvelope(0, dataBytes)
+		if err := clientConn.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+			t.Fatalf("failed to write input envelope: %v", err)
+		}
+	}
+
+	sendInput([]byte("hello"))
+
+	// Wait for the loop to record the input (avoid a fixed sleep/race).
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(recordedInput)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for runInputReadLoop to record the first input")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	mu.Lock()
+	if len(recordedInput) != 1 || string(recordedInput[0]) != "hello" {
+		mu.Unlock()
+		t.Fatalf("expected recorded input [%q], got %v", "hello", recordedInput)
+	}
+	mu.Unlock()
+
+	// Close the CLIENT connection, simulating the production shutdown path
+	// where the outer handler's deferred conn.Close() runs.
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("failed to close client connection: %v", err)
+	}
+
+	// The loop must exit within a bounded timeout — this is the core
+	// AC4-Go assertion: no unbounded blocking read after the connection dies.
+	select {
+	case <-done:
+		// loop returned promptly, as expected
+	case <-time.After(2 * time.Second):
+		t.Fatal("runInputReadLoop did not exit within 2s of the client connection closing")
+	}
+
+	// The client attempted (and necessarily failed) to write again after
+	// closing its own end. Regardless of whether that write itself errors,
+	// the loop has already exited, so no further input can have been recorded.
+	_ = sendInputIgnoringError(clientConn, []byte("late-input"))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(recordedInput) != 1 {
+		t.Fatalf("expected recorded input length to stay at 1 after connection close, got %d: %v", len(recordedInput), recordedInput)
+	}
+}
+
+// sendInputIgnoringError attempts to write an input envelope to a (possibly
+// already-closed) client connection, discarding any error. Used to simulate
+// the client "attempting" to send more input after it has closed its end.
+func sendInputIgnoringError(conn *websocket.Conn, payload []byte) error {
+	td := &sessionv1.TerminalData{
+		Data: &sessionv1.TerminalData_Input{
+			Input: &sessionv1.TerminalInput{Data: payload},
+		},
+	}
+	dataBytes, err := proto.Marshal(td)
+	if err != nil {
+		return err
+	}
+	envelope := protocol.CreateEnvelope(0, dataBytes)
+	return conn.WriteMessage(websocket.BinaryMessage, envelope)
 }
 
 // TestAnsiSnapshotPrefixContainsRequiredSequences verifies the prefix used before

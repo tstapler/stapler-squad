@@ -945,146 +945,52 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}()
 
 	// Goroutine 2: Read from WebSocket and handle input/commands
-	go func() {
-		for {
-			select {
-			case <-doneChan:
-				return
-			default:
-				_, message, err := stream.conn.ReadMessage()
-				if err != nil {
-					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						errChan <- nil
-					} else {
-						log.Error("[streamViaControlMode] WebSocket read error", "session", sessionID, "err", err)
-						errChan <- err
-					}
-					return
-				}
+	go runInputReadLoop(stream, doneChan, errChan, sessionID, func(data []byte) {
+		// Handle input - send to tmux via send-keys
+		// Check send permission
+		if !instance.Permissions.CanSendCommand {
+			log.Warn("[streamViaControlMode] send permission denied", "session", sessionID)
+			return
+		}
 
-				// Parse envelope
-				envelope, _, err := protocol.ParseEnvelope(message)
-				if err != nil {
-					log.Error("[streamViaControlMode] failed to parse envelope", "err", err)
-					continue
-				}
+		// Update timestamps for user interaction
+		instance.UpdateTerminalTimestamps(string(data), true)
+		instance.MarkUserResponded()
 
-				// Check for EndStream
-				if envelope.Flags&protocol.EndStreamFlag != 0 {
-					errChan <- nil
-					return
-				}
-
-				// Skip empty envelopes
-				if len(envelope.Data) == 0 {
-					continue
-				}
-
-				// Parse TerminalData
-				var incomingData sessionv1.TerminalData
-				if err := proto.Unmarshal(envelope.Data, &incomingData); err != nil {
-					log.Error("[streamViaControlMode] failed to unmarshal TerminalData", "err", err)
-					continue
-				}
-
-				// Handle input - send to tmux via send-keys
-				if input := incomingData.GetInput(); input != nil {
-					// Check send permission (snap captured at stream start; Permissions is immutable).
-					if !snap.Permissions.CanSendCommand {
-						log.Warn("[streamViaControlMode] send permission denied", "session", sessionID)
-						continue
-					}
-
-					// Update timestamps for user interaction
-					instance.UpdateTerminalTimestamps(string(input.Data), true)
-
-					// Try CM path first (low-latency, no subprocess). Falls back to
-					// subprocess send-keys if CM queue is backed up or not running.
-					// Errors are non-fatal — keystrokes may be lost under load but
-					// the stream stays alive (sending TerminalError kills the stream).
-					sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-					sendErr := instance.SendInputViaControlMode(sendCtx, input.Data)
-					sendCancel()
-					if sendErr != nil {
-						log.Warn("[streamViaControlMode] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
-						if fbErr := sendInputToTmux(snap.TmuxServerSocket, tmuxSessionName, input.Data); fbErr != nil {
-							log.Error("[streamViaControlMode] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
-						}
-					}
-				}
-
-				// Handle resize — send to coalescing worker so rapid window-drag events
-				// never stall input reading and don't pile up unbounded goroutines.
-				if resize := incomingData.GetResize(); resize != nil {
-					req := resizeReq{int(resize.Cols), int(resize.Rows)}
-					select {
-					case resizeCh <- req:
-					default:
-						// Worker is busy; drain stale value and replace with latest.
-						select {
-						case <-resizeCh:
-						default:
-						}
-						resizeCh <- req
-					}
-				}
-
-				// Handle ScrollbackRequest — client requesting historical terminal scrollback.
-				// FromSequence is treated as a line offset from the end of tmux's history:
-				//   offset=0   → capture-pane -S -(limit)   -E -1     (most recent history)
-				//   offset=500 → capture-pane -S -(500+limit) -E -501 (next page back)
-				// Uses -J to join tmux soft-wrapped lines, making content width-agnostic so
-				// it re-wraps correctly in xterm.js after a terminal resize.
-				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
-					const maxScrollbackLimit = 1000
-					limit := int(scrollbackReq.Limit)
-					if limit <= 0 || limit > maxScrollbackLimit {
-						limit = maxScrollbackLimit
-					}
-					offset := scrollbackReq.FromSequence
-
-					startLine := fmt.Sprintf("-%d", offset+uint64(limit))
-					endLine := fmt.Sprintf("-%d", offset+1)
-					content, sbErr := instance.GetScrollbackHistory(startLine, endLine)
-					if sbErr != nil {
-						log.Warn("[streamViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "err", sbErr)
-					} else {
-						trimmed := strings.TrimRight(content, "\n")
-						linesReturned := 0
-						if trimmed != "" {
-							linesReturned = strings.Count(trimmed, "\n") + 1
-						}
-						hasMore := linesReturned >= limit
-						oldestSeq := offset + uint64(linesReturned)
-
-						var chunks []*sessionv1.ScrollbackChunk
-						if linesReturned > 0 {
-							chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
-						}
-						sbResp := &sessionv1.TerminalData{
-							SessionId: sessionID,
-							Data: &sessionv1.TerminalData_ScrollbackResponse{
-								ScrollbackResponse: &sessionv1.ScrollbackResponse{
-									Chunks:         chunks,
-									HasMore:        hasMore,
-									TotalLines:     uint64(linesReturned),
-									OldestSequence: oldestSeq,
-									NewestSequence: offset,
-								},
-							},
-						}
-						if respBytes, merr := proto.Marshal(sbResp); merr != nil {
-							log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
-						} else {
-							_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
-						}
-					}
-				}
-
-				// Note: CurrentPaneRequest is now handled in handshake (not in input loop)
+		// Try CM path first (low-latency, no subprocess). Falls back to
+		// subprocess send-keys if CM queue is backed up or not running.
+		// Errors are non-fatal — keystrokes may be lost under load but
+		// the stream stays alive (sending TerminalError kills the stream).
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		sendErr := instance.SendInputViaControlMode(sendCtx, data)
+		sendCancel()
+		if sendErr != nil {
+			log.Warn("[streamViaControlMode] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
+			if fbErr := sendInputToTmux(snap.TmuxServerSocket, tmuxSessionName, data); fbErr != nil {
+				log.Error("[streamViaControlMode] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
 			}
 		}
-	}()
+	}, func(cols, rows int) {
+		// Handle resize — send to coalescing worker so rapid window-drag events
+		// never stall input reading and don't pile up unbounded goroutines.
+		req := resizeReq{cols, rows}
+		select {
+		case resizeCh <- req:
+		default:
+			// Worker is busy; drain stale value and replace with latest.
+			select {
+			case <-resizeCh:
+			default:
+			}
+			resizeCh <- req
+		}
+	}, func(startLine, endLine string) (string, error) {
+		// Handle ScrollbackRequest — delegate the tmux capture (the only piece of
+		// this handling that depends on `instance`, which runInputReadLoop does not
+		// have access to) back to streamViaControlMode; response building, marshaling,
+		// and writing stay inside runInputReadLoop as part of the pure-moved loop body.
+		return instance.GetScrollbackHistory(startLine, endLine)
+	})
 
 	// Wait for either goroutine to error or complete.
 	// EndStream is sent by the caller (HandleWebSocket) after this function returns.
@@ -1482,6 +1388,143 @@ func (p shellPanePTY) ResizePTY(cols, rows int) error       { return p.session.S
 func (p shellPanePTY) RefreshTmuxClient() error             { return p.session.RefreshClient() }
 func (p shellPanePTY) GetPaneCursorPosition() (x, y int, err error) {
 	return p.session.GetCursorPosition()
+}
+
+// runInputReadLoop is the WebSocket input-read loop for streamViaControlMode
+// (Goroutine 2), extracted into a standalone function so its bounded-exit
+// behavior can be tested against a real WebSocket connection without a live
+// tmux session (see TestRunInputReadLoopExitsPromptlyOnConnectionClose).
+//
+// This is a pure move of the original inline goroutine body: envelope
+// parsing, EndStream detection, and TerminalData unmarshaling are unchanged.
+// The two actions that depended on the enclosing closure's `instance` —
+// forwarding input to tmux (CM path + subprocess fallback) and pushing
+// resize requests to the coalescing worker — become the onInput/onResize
+// callback invocations. ScrollbackRequest handling also touches `instance`
+// (via GetScrollbackHistory) but everything else about it — request
+// validation, response construction, marshaling, and writing to the stream —
+// stays byte-for-byte here; only the tmux capture call itself is delegated
+// via onScrollbackRequest, exactly like onInput/onResize.
+//
+// sessionID is required (not derivable from *connectWebSocketStream) purely
+// for the WebSocket-read-error log line below, which is not covered by
+// either callback.
+func runInputReadLoop(
+	stream *connectWebSocketStream,
+	doneChan chan struct{},
+	errChan chan error,
+	sessionID string,
+	onInput func(data []byte),
+	onResize func(cols, rows int),
+	onScrollbackRequest func(startLine, endLine string) (string, error),
+) {
+	for {
+		select {
+		case <-doneChan:
+			return
+		default:
+			_, message, err := stream.conn.ReadMessage()
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					errChan <- nil
+				} else {
+					log.Error("[streamViaControlMode] WebSocket read error", "session", sessionID, "err", err)
+					errChan <- err
+				}
+				return
+			}
+
+			// Parse envelope
+			envelope, _, err := protocol.ParseEnvelope(message)
+			if err != nil {
+				log.Error("[streamViaControlMode] failed to parse envelope", "err", err)
+				continue
+			}
+
+			// Check for EndStream
+			if envelope.Flags&protocol.EndStreamFlag != 0 {
+				errChan <- nil
+				return
+			}
+
+			// Skip empty envelopes
+			if len(envelope.Data) == 0 {
+				continue
+			}
+
+			// Parse TerminalData
+			var incomingData sessionv1.TerminalData
+			if err := proto.Unmarshal(envelope.Data, &incomingData); err != nil {
+				log.Error("[streamViaControlMode] failed to unmarshal TerminalData", "err", err)
+				continue
+			}
+
+			// Handle input - send to tmux via send-keys
+			if input := incomingData.GetInput(); input != nil {
+				onInput(input.Data)
+			}
+
+			// Handle resize — send to coalescing worker so rapid window-drag events
+			// never stall input reading and don't pile up unbounded goroutines.
+			if resize := incomingData.GetResize(); resize != nil {
+				onResize(int(resize.Cols), int(resize.Rows))
+			}
+
+			// Handle ScrollbackRequest — client requesting historical terminal scrollback.
+			// FromSequence is treated as a line offset from the end of tmux's history:
+			//   offset=0   → capture-pane -S -(limit)   -E -1     (most recent history)
+			//   offset=500 → capture-pane -S -(500+limit) -E -501 (next page back)
+			// Uses -J to join tmux soft-wrapped lines, making content width-agnostic so
+			// it re-wraps correctly in xterm.js after a terminal resize.
+			if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
+				const maxScrollbackLimit = 1000
+				limit := int(scrollbackReq.Limit)
+				if limit <= 0 || limit > maxScrollbackLimit {
+					limit = maxScrollbackLimit
+				}
+				offset := scrollbackReq.FromSequence
+
+				startLine := fmt.Sprintf("-%d", offset+uint64(limit))
+				endLine := fmt.Sprintf("-%d", offset+1)
+				content, sbErr := onScrollbackRequest(startLine, endLine)
+				if sbErr != nil {
+					log.Warn("[streamViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "err", sbErr)
+				} else {
+					trimmed := strings.TrimRight(content, "\n")
+					linesReturned := 0
+					if trimmed != "" {
+						linesReturned = strings.Count(trimmed, "\n") + 1
+					}
+					hasMore := linesReturned >= limit
+					oldestSeq := offset + uint64(linesReturned)
+
+					var chunks []*sessionv1.ScrollbackChunk
+					if linesReturned > 0 {
+						chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
+					}
+					sbResp := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						Data: &sessionv1.TerminalData_ScrollbackResponse{
+							ScrollbackResponse: &sessionv1.ScrollbackResponse{
+								Chunks:         chunks,
+								HasMore:        hasMore,
+								TotalLines:     uint64(linesReturned),
+								OldestSequence: oldestSeq,
+								NewestSequence: offset,
+							},
+						},
+					}
+					if respBytes, merr := proto.Marshal(sbResp); merr != nil {
+						log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
+					}
+				}
+			}
+
+			// Note: CurrentPaneRequest is now handled in handshake (not in input loop)
+		}
+	}
 }
 
 // streamViaTmuxCapturePane handles WebSocket streaming using tmux capture-pane polling.
