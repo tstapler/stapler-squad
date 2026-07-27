@@ -963,6 +963,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogLifecycleListener.SetAutoReopener(backlogSvc)
 	backlogLifecycleListener.SetPRFixSpawner(backlogSvc)
 	backlogLifecycleListener.SetReviewRespawner(backlogSvc)
+	// Wire the orphaned_triage respawner so an idea-status item whose triage
+	// session orphaned (crashed, was killed, or a server restart happened
+	// mid-triage) gets triage automatically re-triggered instead of sitting
+	// stuck until a human notices the one-time notification (see
+	// TriageRespawner's doc comment in session/backlog_lifecycle.go).
+	backlogLifecycleListener.SetTriageRespawner(backlogSvc)
 	backlogLifecycleListener.SetDequeuer(backlogSvc)
 	// Share BacklogService's live *config.Config instance (and its guarding
 	// mutex) with DefaultsService so a Settings update to the WIP cap / rework

@@ -1237,6 +1237,70 @@ func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 		"a PASS verdict from the respawned review should carry the item to done, same as a manual TriggerReReview call")
 }
 
+// --- AutoRespawnTriage: session.TriageRespawner implementation (orphaned_triage
+// remediation) — closes the gap where StuckReasonOrphanedTriage was detected and
+// notified but never automatically retried (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-27 update: items 4f03de7b and 505fb733 sat in "idea" for 2 days). ---
+
+// TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea verifies the happy
+// path: an idea-status item (the only status reconcileOrphanedTriageRemediation ever
+// calls this for) gets triage re-triggered via the same TriggerTriage entry point a
+// manual re-trigger would use.
+func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "Orphaned triage respawn item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
+	require.NoError(t, respawnErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "must actually invoke the headless triage call, not just detect the item")
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after the re-triggered headless triage completes")
+}
+
+// TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea verifies the staleness guard:
+// an item that moved off "idea" between the caller's stuck-row query and this async
+// call running (e.g. a human already re-triggered triage manually) must not be acted
+// on again — mirrors AutoRespawnReview's identical guard for StuckReasonAbandonedReview.
+func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "Already-progressed item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
+	require.NoError(t, respawnErr)
+	assert.Empty(t, pool.calls, "an item that already moved off idea must not have triage re-triggered")
+}
+
 // --- AutoReopenForPRFix: proactive branch sync with main (Task 2.1.6d) ---
 //
 // Before AutoReopenForPRFix respawns a fix session, it now merges main into the

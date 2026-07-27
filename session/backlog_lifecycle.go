@@ -112,6 +112,26 @@ type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
 }
 
+// TriageRespawner can automatically re-trigger triage for a backlog item whose
+// most recent triage-role ItemSession orphaned (StuckReasonOrphanedTriage —
+// reconcileOrphanedTriageItems found the session still open long after it
+// should have finished, tombstoned it, and marked the item stuck). Before this
+// existed, orphaned_triage was detection-and-notify only, exactly like
+// StuckReasonAbandonedReview before ReviewRespawner: a human had to notice the
+// one-time notification and manually re-trigger triage (confirmed live
+// 2026-07-27, docs/tasks/backlog-feature-improvement.md — items 4f03de7b and
+// 505fb733 sat in "idea" for 2 days this way). Implemented outside this
+// package (BacklogService owns TriggerTriage, the RPC-shaped entry point that
+// already knows how to tombstone/re-trigger triage safely) and wired via
+// SetTriageRespawner, mirroring StaleWorkRemediator/ReviewRespawner exactly.
+type TriageRespawner interface {
+	// AutoRespawnTriage re-triggers triage for itemID. No-op (nil error) if
+	// the item already moved off "idea" by the time this runs (e.g. a human
+	// already re-triggered triage manually, or the item was otherwise
+	// resolved) — mirrors AutoRespawnReview's identical staleness guard.
+	AutoRespawnTriage(ctx context.Context, itemID string) error
+}
+
 // QueueDequeuer claims and spawns as many queued backlog items as there are
 // free WIP slots, oldest-queued first. Called the moment a slot frees up
 // (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
@@ -290,6 +310,10 @@ type BacklogLifecycleListener struct {
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
+
+	// triageRespawnMu guards triageRespawner for concurrent Set/get access.
+	triageRespawnMu sync.RWMutex
+	triageRespawner TriageRespawner
 
 	// dequeuerMu guards dequeuer for concurrent Set/get access.
 	dequeuerMu sync.RWMutex
@@ -485,6 +509,21 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	l.reviewRespawnMu.RLock()
 	defer l.reviewRespawnMu.RUnlock()
 	return l.reviewRespawner
+}
+
+// SetTriageRespawner wires in the spawner used to automatically re-trigger
+// triage for idea-status items whose triage session orphaned.
+func (l *BacklogLifecycleListener) SetTriageRespawner(r TriageRespawner) {
+	l.triageRespawnMu.Lock()
+	defer l.triageRespawnMu.Unlock()
+	l.triageRespawner = r
+}
+
+// getTriageRespawner returns the current triage respawner under a read lock.
+func (l *BacklogLifecycleListener) getTriageRespawner() TriageRespawner {
+	l.triageRespawnMu.RLock()
+	defer l.triageRespawnMu.RUnlock()
+	return l.triageRespawner
 }
 
 // SetDequeuer wires in the spawner used to dequeue queued backlog items once a
@@ -1484,6 +1523,20 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileOrphanedTriageItems(ctx, er)
 	})
 
+	// Retry triage for every open orphaned_triage row still anchored at
+	// "idea" (Phase B of docs/tasks/backlog-stuck-item-auto-remediation.md) —
+	// the periodic counterpart to reconcileOrphanedTriageItems' one-time
+	// MarkStuck+notify above, which never retries on its own once the
+	// orphaned triage session is tombstoned (that session's EndedAt is no
+	// longer nil, so the detector above never re-fires for the same item).
+	// Closes the exact gap confirmed live 2026-07-27
+	// (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and
+	// 505fb733 sat in "idea" for 2 days with only the one notification ever
+	// sent.
+	l.runStuckDetector("orphaned_triage_remediation", &okNames, &panickedNames, func() {
+		l.reconcileOrphanedTriageRemediation(ctx, er)
+	})
+
 	// Flag queued items DequeueNextQueuedItems' planning gate refuses to ever
 	// claim (plan not approved, skip_planning not set) — otherwise silent
 	// forever except for a per-tick WARNING log. See reconcilePlanNotApprovedItems'
@@ -2249,6 +2302,80 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
 	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
+}
+
+// reconcileOrphanedTriageRemediation retries triage for every open
+// orphaned_triage stuck row still anchored at "idea" — the periodic
+// counterpart to reconcileOrphanedTriageItems' detection-and-notify pass
+// above, which only ever fires once per orphaned session (the triage
+// ItemSession it tombstones never reopens, so the detector has nothing left
+// to re-observe on later ticks). Without this, an orphaned_triage row sat
+// open forever once its one notification went unnoticed — confirmed live
+// 2026-07-27 (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and
+// 505fb733 sat in "idea" for 2 days, only recovering once a human manually
+// re-triggered triage. Mirrors reconcilePushFailedItems' shape exactly
+// (Phase B of docs/tasks/backlog-stuck-item-auto-remediation.md).
+// Best-effort: query failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx context.Context, er *EntRepository) {
+	open, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error: %v", err)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonOrphanedTriage {
+			continue
+		}
+		if row.ItemStatus != BacklogStatusIdea {
+			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea
+		}
+		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
+	}
+}
+
+// retryOrphanedTriageWithBackoffGate dispatches TriageRespawner.AutoRespawnTriage
+// through the shared remediation backoff gate (Storage.RemediationDue,
+// session/backlog_remediation.go) — the "orphaned_triage" reason's remediation
+// action per docs/tasks/backlog-stuck-item-auto-remediation.md Phase B.
+// Mirrors retryPushFailedWithBackoffGate's shape (bare goroutine, no
+// semaphore): AutoRespawnTriage's underlying TriggerTriage call returns
+// immediately after creating an ItemSession — the actual headless triage call
+// runs inside TriggerTriage's own goroutine — so there is no live LLM call
+// here to bound concurrency against, unlike markAbandonedReview's
+// reviewSem-gated respawn (TriggerReReview blocks synchronously for the
+// review call's duration). Best-effort: gate query/write errors are logged,
+// never returned, and fail OPEN (still attempts the retry) rather than
+// silently stranding the item — same rationale as
+// retryPushFailedWithBackoffGate/remediateStaleWorkWithBackoffGate.
+func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+	respawner := l.getTriageRespawner()
+	if respawner == nil {
+		return
+	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-triage paused",
+			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate item=%s: orphaned_triage remediation backoff not yet due, skipping retry", itemID)
+		return
+	}
+
+	go func() {
+		if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage item=%s: %v", itemID, err)
+		}
+	}()
 }
 
 // planApprovalStaleness is how long a queued item may sit blocked by

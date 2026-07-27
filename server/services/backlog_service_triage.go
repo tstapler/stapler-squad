@@ -1591,6 +1591,44 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	return nil
 }
 
+// AutoRespawnTriage implements session.TriageRespawner. It re-triggers triage for an
+// idea-status item whose most recent triage session orphaned — closing the gap where
+// StuckReasonOrphanedTriage was previously only detected and notified, never acted on
+// (its own doc comment in session/backlog_lifecycle.go used to read "no resolve pass
+// needed here... once the item leaves 'idea'", which was true for resolution but left
+// nothing driving the item TOWARD leaving idea in the first place). Confirmed live
+// 2026-07-27 (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and 505fb733
+// sat stuck in "idea" for 2 days, only recovering once a human noticed the one-time
+// notification and manually re-triggered triage.
+//
+// Delegates entirely to TriggerTriage, which already tombstones any still-open triage
+// session and handles the ready->idea/idea status guard itself — reconcileOrphanedTriageItems
+// (the caller's caller, via the backoff gate) already ended the orphaned session before
+// marking the item stuck, so by the time this runs there is normally nothing left for
+// TriggerTriage's own tombstone step to do; it is still safe to call unconditionally.
+func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	if s.storage == nil {
+		return fmt.Errorf("storage not available")
+	}
+
+	item, err := s.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return fmt.Errorf("load item: %w", err)
+	}
+	if session.BacklogStatus(item.Status) != session.BacklogStatusIdea {
+		// Already moved on by the time this async call runs (e.g. a human already
+		// re-triggered triage manually, or the item was otherwise resolved) —
+		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
+		return nil
+	}
+
+	if _, triageErr := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID})); triageErr != nil {
+		return fmt.Errorf("trigger triage: %w", triageErr)
+	}
+	log.InfoLog.Printf("[AutoRespawnTriage] item %s triage re-triggered", itemID)
+	return nil
+}
+
 // syncPRBranchWithMain merges prFixMainBranch into the worktree of item's most recent
 // work session — the branch behind the currently open, failing PR — and pushes the
 // merge when it brings in new commits, so the live PR is resynced with main before the

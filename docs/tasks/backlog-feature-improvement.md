@@ -49,7 +49,7 @@ notify-only**:
 | Reason | Auto-recovery? | Verdict |
 |---|---|---|
 | `abandoned_review` | No (fix in flight, PR #168, not yet merged) | Real gap |
-| `orphaned_triage` | No — **and the code comment falsely claims it self-heals**; it only `MarkStuck`+notifies, never re-triggers triage | Real gap + misleading comment, fix next |
+| `orphaned_triage` | **FIXED 2026-07-27** — was only `MarkStuck`+notify, never re-triggered triage; see "Update — 2026-07-27" below | Closed |
 | `bouncing` | No | Real gap — no escalation/different-approach retry once non-converging, just a notification |
 | `pr_ready_unmerged` | No | Gap — no direct-merge fallback if `EnablePRAutoMerge` silently doesn't take effect |
 | `stale_work` | No | Deliberate — "a slow-but-alive agent should not be force-stopped" |
@@ -1078,3 +1078,43 @@ rather than re-deriving here.
 3. Nothing else newly actionable this pass — the remediation-backoff system landing is a
    genuine, verified structural win and the is-it-ready verdict would likely improve from
    `FIX-THEN-SHIP` once BUG-040 is closed, contingent on re-confirming bucket [3]'s status.
+
+## Update — 2026-07-27: `orphaned_triage` was the one stuck-reason never wired into the remediation/backoff framework
+
+Confirmed live: two real backlog items (`4f03de7b`, `505fb733`) sat in `idea` status for 2
+days — `reconcileOrphanedTriageItems` (`session/backlog_lifecycle.go`) correctly detected the
+orphaned triage session, tombstoned it, `MarkStuck`'d the row, and sent exactly one
+notification, then never retried automatically; the function's own doc comment ("no resolve
+pass needed here... once the item leaves 'idea'") was true for *resolution* but masked the
+fact that nothing was ever driving the item toward leaving `idea` in the first place. Every
+sibling stuck-reason (`rework`, `stale_work`, `push_failed`, `abandoned_review`) already goes
+through the shared backoff/parking state machine in `session/backlog_remediation.go`
+(`evaluateRemediation`, `RemediationDue`, `MaxRemediationAttempts`) — `orphaned_triage` was the
+sole holdout.
+
+Fixed by wiring the same pattern used for `abandoned_review`/`ReviewRespawner`:
+- New `TriageRespawner` interface + `SetTriageRespawner`/`getTriageRespawner` on
+  `BacklogLifecycleListener` (`session/backlog_lifecycle.go`), implemented by
+  `BacklogService.AutoRespawnTriage` (`server/services/backlog_service_triage.go`), which
+  delegates to the existing `TriggerTriage` RPC handler (already knows how to tombstone/
+  re-trigger safely) after a no-op guard for items that already left `idea`.
+- New periodic detector `reconcileOrphanedTriageRemediation` + backoff-gated dispatcher
+  `retryOrphanedTriageWithBackoffGate`, registered as its own `runStuckDetector` entry
+  (`orphaned_triage_remediation`) right after the existing detection-only
+  `reconcileOrphanedTriageItems` — retries every open `orphaned_triage` row still anchored at
+  `idea`, up to `MaxRemediationAttempts`, then parks with a notification pointing at
+  `ResetStuckRemediation`/`TriggerRemediationNow`, exactly like every other reason.
+- `orphaned_triage` also wired into `remediationActionByReason`
+  (`server/services/backlog_service_stuck.go`) so the manual "Retry now" RPC
+  (`TriggerRemediationNow`) works for it too — removed from
+  `reasonsWithoutAutomatedRemediation` in the exhaustiveness guard test
+  (`server/services/backlog_stuck_rpc_test.go`, added by commit `a027bc5da`), which itself
+  caught this gap by construction (any `StuckReason` must be either wired or explicitly
+  listed as deliberately unwired).
+
+No proto/frontend changes needed — `StuckItemsSection.tsx`'s "Retry now" button already calls
+`TriggerRemediationNow` unconditionally for every reason; it previously just failed with
+`CodeUnimplemented` for `orphaned_triage` and now succeeds. 8 new regression tests added
+across `session` and `server/services` (backoff-gate accounting, dispatch-through-the-
+production-entry-point, staleness no-op guard, happy path). Full `session` + `server/services`
+suites and `golangci-lint` pass.
