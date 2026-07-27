@@ -38,23 +38,42 @@ life of one driver run, so the latch is a plain local variable (mirroring
 `sentInitial`/`initialPromptSentAt`, already local vars in this exact
 function).
 
-State machine (`dialogLatchStatus`): `Unanswered → AwaitingDismissal → GaveUp`,
-keyed by `dialogContentHash` (FNV-64a, reusing the existing `hashString`
-helper at `claude_controller.go:621-625`, of a **normalized** form of the
-dialog text — see "Content normalization before hashing" below):
+**Tail-slice before matching and hashing.** `Preview()`'s doc comment says
+it "returns the current visible terminal content," but its actual
+implementation (`GetRecentOutput(0)` → `PTYAccess.GetBuffer()` →
+`CircularBuffer.GetAll()`) returns the *entire* accumulated PTY buffer, not
+a tailed snapshot. Left as-is, `isStartupDialog`'s substring match would
+keep matching the trust-dialog text for as long as it survives anywhere in
+that (multi-MB) buffer — most of an ordinary session — and the hash of the
+*whole* buffer changes on every tick as soon as any new output is produced,
+which this latch's re-arm rule would treat as "a new dialog appeared,"
+resending `SendKeys("1\n")` into an already-working, non-flapping session.
+This is a real, verified defect (not hypothetical) found during the Phase 4
+pre-mortem, more severe than the formatting-jitter case below because it
+would fire in ordinary operation, not only during a flap. Both the
+`isStartupDialog`/`shouldApprovePrompt` match and the hash are computed
+against `tailContent(output, statusDetectionTailBytes)`
+(`claude_controller.go:608-618`, `56`; same package, same tail-then-hash
+idiom `GetCurrentStatus` already uses at line 528) rather than the raw
+`output`.
+
+State machine (`dialogLatchStatus`): `dialogUnanswered → dialogAwaitingDismissal
+→ dialogGaveUp`, keyed by `dialogContentHash` (FNV-64a, reusing the existing
+`hashString` helper at `claude_controller.go:621-625`, of a **normalized**
+form of the dialog text — see "Content normalization before hashing" below):
 
 - On each tick where `isStartupDialog(output)` is true, compute `hash :=
   hashString(normalize(output))`. If `hash` differs from the latch's stored
   hash, this is either a brand-new dialog or the same dialog having been
-  dismissed and a new one having appeared — reset the latch to `Unanswered`
-  for this hash.
-- `Unanswered`: attempt `SendKeys("1\n")`. On success, transition to
-  `AwaitingDismissal` (do not resend while the hash is unchanged — this is
-  what bounds the ticket's stuck-buffer case to exactly one send). On
+  dismissed and a new one having appeared — reset the latch to
+  `dialogUnanswered` for this hash.
+- `dialogUnanswered`: attempt `SendKeys("1\n")`. On success, transition to
+  `dialogAwaitingDismissal` (do not resend while the hash is unchanged — this
+  is what bounds the ticket's stuck-buffer case to exactly one send). On
   failure, increment an attempt counter and retry next tick, up to
-  `maxDialogAnswerAttempts` (3); after that, transition to `GaveUp` and log a
-  warning so the stuck state is at least visible in server logs.
-- `AwaitingDismissal` / `GaveUp`: no-op until the hash changes.
+  `maxDialogAnswerAttempts` (3); after that, transition to `dialogGaveUp` and
+  log a warning so the stuck state is at least visible in server logs.
+- `dialogAwaitingDismissal` / `dialogGaveUp`: no-op until the hash changes.
 
 `answerDialogOnce` returns the resulting `dialogLatchStatus` so the call site
 can decide whether to keep short-circuiting the rest of the driver's poll
@@ -191,4 +210,44 @@ dialog text), so a dedicated whitespace-collapse is used instead.
   successful auto-recovery). This constant should be revisited if that
   pattern is observed; it is not being changed now for lack of production
   duration data.
+- **The fall-through fix removes what was previously an absolute mutual
+  exclusion between the startup-dialog branch and the `NeedsApproval` branch
+  within a single tick** (pre-fix, the unconditional `continue` made both
+  branches acting in the same tick impossible). If a buffer were ever
+  classified true by both `isStartupDialog` and `shouldApprovePrompt`
+  simultaneously, the independently-scoped `approvalLatch` could now fire a
+  second `SendKeys` in that same tick. Accepted, not mitigated further — the
+  two detectors key on disjoint phrase sets, making simultaneous match very
+  unlikely, and even if it occurred it is bounded (same risk class as the
+  FNV-64a collision risk above). See plan.md's Risk Control table for the
+  same entry.
+- **The fall-through fix also means the `!sentInitial` block (30s
+  `readyDeadline`) can now fire the real initial task prompt and set
+  `sentInitial = true` on the same tick a dialog latch reaches
+  `dialogGaveUp`, regardless of whether `SendKeys` for the initial prompt
+  itself errors** — this was flagged in the Phase 4 pre-mortem. This is
+  accepted as consistent with pre-existing behavior elsewhere in this loop
+  (the initial-prompt send already didn't retry on error before this fix),
+  but it does mean a `dialogGaveUp` session is not distinctly flagged beyond
+  the existing `dialogGaveUp` Warn log line before the initial prompt fires
+  on its own unrelated timeout — an operator reading logs sees "sent initial
+  prompt" and may assume more progress happened than actually did. Not fixed
+  in this ADR's scope; flagged as a follow-up observability improvement
+  (log distinctly when the initial prompt fires immediately after a
+  `dialogGaveUp` fall-through) rather than a blocking gap, since it doesn't
+  reintroduce silent wedging (the inactivity timeout still applies).
+- **The `dialogAwaitingDismissal` transition trusts a successful `SendKeys`
+  call as proof the dialog was actually answered**, without confirming on a
+  later tick that `isStartupDialog` has actually gone false — flagged in the
+  Phase 4 pre-mortem as untested by Phase 0 (all 3 of Phase 0's recorded
+  sends were the success branch, latching after one send with no further
+  observability). Accepted for this fix: the tail-slice + normalization
+  changes above already make "hash unchanged while genuinely still showing"
+  and "hash changed because the dialog cleared" behave correctly relative to
+  each other; adding a dedicated post-send confirmation step is judged
+  unnecessary complexity for what the existing hash-comparison already
+  achieves, but a future iteration could add an explicit
+  `log.Info`/`log.Warn` line distinguishing "sent and buffer changed
+  afterward" from "sent and buffer never changed again" if this needs
+  sharper observability later.
 - No new `Instance` fields, no new locking primitives, no new dependencies.

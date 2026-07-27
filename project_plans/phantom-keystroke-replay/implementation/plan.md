@@ -229,6 +229,33 @@ failing), not once per tick indefinitely. *(AC2 — primary GWT)*
   apply here (it strips tmux status-bar lines, not whitespace/wrap jitter),
   but the general "normalize before hash" precedent is directly reusable.
   No new import beyond `strings` (already imported in this file).
+  **Tail-slice before matching AND hashing (closes pre-mortem.md Failure #1,
+  P1):** `Preview()` → `GetRecentOutput(0)` → `PTYAccess.GetBuffer()` →
+  `CircularBuffer.GetAll()` returns the *entire* accumulated PTY buffer (up
+  to its multi-MB cap), not a tailed "current screen" snapshot, despite
+  `Preview()`'s own doc comment saying "returns the current visible
+  terminal content" (`instance_terminal.go:103-105`) — confirmed by reading
+  `pty_access.go:69-78` and `claude_controller.go:143`'s buffer
+  construction. Left unbounded, `isStartupDialog`'s substring match keeps
+  matching the trust-dialog text for as long as it survives anywhere in
+  that buffer (most of an ordinary session), and the hash of the *whole*
+  buffer changes every tick as soon as Claude produces any new output —
+  which this latch's own re-arm rule ("hash changed → new dialog → reset to
+  `dialogUnanswered`") would treat as a fresh, unanswered dialog, silently
+  resending `SendKeys("1\n")` into an already-working, non-flapping session.
+  This is a materially larger and more ordinary trigger than the
+  formatting-jitter case above. Fix: before either the `isStartupDialog`/
+  `shouldApprovePrompt` match or the hash, tail-slice `output` to a bounded
+  recent window using the existing `tailContent(s string, n int) string`
+  helper (`claude_controller.go:608-618`, same package) with the existing
+  `statusDetectionTailBytes` constant (`claude_controller.go:56`, currently
+  `4096`) — i.e. `tailed := tailContent(output, statusDetectionTailBytes)`,
+  then normalize/hash `tailed`, and run `isStartupDialog(tailed)` (not
+  `isStartupDialog(output)`). This mirrors `GetCurrentStatus`'s own existing
+  tail-then-normalize precedent (`claude_controller.go:528`) applied to the
+  same underlying over-broad buffer read, so both the dialog-match and the
+  hash-based "unchanged" comparison are scoped to what's actually still
+  near-current on screen, not the session's entire history.
 - **Task 1.1.3** — Wire `answerDialogOnce` into the startup-dialog branch of
   `runSessionDriverWithPrompt` (`session/session_driver.go` lines 148-165):
   replace the unconditional `if isStartupDialog(output) { SendKeys...;
@@ -319,7 +346,31 @@ now-obsolete "expect repeated sends" assertion.
   placement) → the normalized-before-hash comparison recognizes these as
   unchanged and the latch does **not** resend (`sendCallCount` stays 1),
   proving the normalization step actually defeats the jitter scenario, not
-  just the byte-identical case (a)/(b) already cover.
+  just the byte-identical case (a)/(b) already cover; (f) **(closes
+  pre-mortem.md Failure #1, P1)** the dialog text stays fixed at the *tail*
+  of `output` across two calls, but call 2's `output` has substantial new,
+  unrelated content *prepended* before it (simulating a growing PTY buffer
+  where Claude has produced real output after the dialog first appeared) →
+  because both calls tail-slice to `statusDetectionTailBytes` before
+  matching/hashing and the dialog text is still within that tail window,
+  the latch recognizes the tail as unchanged and does **not** resend
+  (`sendCallCount` stays 1); a companion case (g) grows the prepended
+  content past `statusDetectionTailBytes` so the dialog text falls fully
+  outside the tail window on call 2 → `isStartupDialog` on the tailed
+  content no longer matches at all, so no send is attempted and the latch
+  is simply never reached (proving the dialog is correctly treated as "no
+  longer on screen," not incorrectly treated as "a new dialog appeared").
+  Also add `TestSessionDriver_TailSliceBoundsDialogMatchAndHash` to
+  `session/session_driver_test.go`: extends the Task 1.2.2 fake
+  `ProcessManager` so `CapturePaneContent()`/`GetRecentOutput` returns
+  growing content each call (dialog text fixed, new unrelated lines
+  appended every tick, mirroring an active non-flapping session producing
+  real output after the dialog was answered), runs
+  `runSessionDriverWithPrompt` for `driverPollInterval*6 + 500ms`, and
+  asserts `fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts` — the
+  live-executing counterpart to unit cases (f)/(g), proving the ordinary
+  active-session case (not just the static-buffer flap case Task 1.2.2
+  covers) does not reproduce the unbounded-resend bug.
 - **Task 1.2.4** — **(closes adversarial-review.md's Task-1.1.4-coverage
   concern)** Task 1.2.2 gives the startup-dialog latch a live-executing
   integration test (`TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded`),
@@ -350,6 +401,28 @@ now-obsolete "expect repeated sends" assertion.
   test," so it isn't silently overstated as having the same rigor as the
   startup-dialog branch. Whichever path is taken, record which one in the
   PR description.
+- **Task 1.2.5** — **(closes validation.md's flagged gap: no test directly
+  proves the Task 1.1.3 fall-through actually reaches the escalation
+  machinery, only that resends stay bounded)** Add
+  `TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation` to
+  `session/session_driver_test.go`: use the Task 1.2.1 fake
+  `ProcessManager` (unchanging stuck-dialog text) with `sentInitial`
+  already forced true and `LastMeaningfulOutputTime()` set far enough in
+  the past that `driverInactivityTimeout` (10 min) — mocked/shortened via
+  the same technique other driver tests use to avoid a real 10-minute
+  wait, or by directly unit-testing the post-`dialogGaveUp` branch logic
+  in isolation rather than the full ticker loop if a full-duration test is
+  impractical — would fire on the very next tick if and only if the loop
+  actually reaches that check. Assert `handleDriverFailure` (or its
+  observable side effect, e.g. a `ReviewQueue` entry) is reached after the
+  latch hits `dialogGaveUp`, proving the fall-through isn't just "doesn't
+  exceed `maxDialogAnswerAttempts`" but actually restores the pre-existing
+  escalation path per ADR-001's "Control flow" section. If a full-duration
+  ticker-loop test proves impractical, an acceptable fallback is a
+  narrower unit test that directly calls the post-latch branch logic with
+  a synthetic `dialogGaveUp` state and asserts it does not early-return —
+  record which approach was taken in the PR description, same as Task
+  1.2.4's fallback clause.
 
 ---
 
@@ -458,6 +531,28 @@ its queue is closed/drop-counted) and only the newer generation's state wins.
   free — if the test reveals state corruption (not just an extra teardown
   cycle), file a follow-up ticket to add a generation check to `disconnect()`
   itself rather than silently expanding this ticket's scope.
+- **Task 2.2.8** — **(closes consistency-review's AC4-coverage BLOCKER: no
+  test exercises the literal "queued-message-drop-on-close interleaving"
+  scenario AC4 names — Task 2.1.2 only unit-tests `MessageQueue.close()` in
+  isolation, with no live reconnect in play.)** Add test `"a message pushed
+  to the live MessageQueue right as a reconnect closes it is dropped, not
+  delivered to either connection"` to
+  `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`: after an
+  initial `connect()` (generation N) is established, call the hook's
+  `sendInput`/`sendInputWithEcho` (or push directly via the exposed
+  `MessageQueue` test seam) in the same microtask tick that a second
+  `connect()` (generation N+1) is triggered — i.e. genuinely interleave a
+  push with the close, not push-then-close-then-check in separate steps —
+  and assert: (a) the pushed message is never observed on generation N's
+  stream (its `MessageQueue`'s async iterator yields nothing after close,
+  per Task 2.1.1's drop semantics), (b) it is never replayed onto generation
+  N+1's `MessageQueue` either (no code path copies a closed queue's dropped
+  items into the new one), and (c) `onInputDropped` fires with a count
+  reflecting the dropped item. This is the one test in the suite that
+  actually exercises "queued while a reconnect is happening," as distinct
+  from Task 2.1.2 (isolated `MessageQueue` unit test, no reconnect) and
+  Tasks 2.2.5-2.2.7 (connection-generation state assertions, no pushed
+  input in flight).
 
 ### Story 2.3 — InputDropBadge (drop-and-signal UI)
 
@@ -582,6 +677,23 @@ episode, naming the count. *(AC3 GWT — user-signal half)*
   immediately before and after `onInputDropped`/`report()` fires) — the
   concrete verification that the badge never steals focus, per
   `design/ux.md` §3.1's non-focus-trapping requirement.
+- **Task 2.3.5** — **(closes validation.md's flagged gap: this repo's
+  `.claude/rules/feature-registry.md` requires an e2e Playwright spec for
+  every new user-facing feature, and `design/ux.md`'s UX-AC-2 specifically
+  calls for a screenshot/bounding-rect check that no Jest/RTL test can
+  provide)** Add `tests/e2e/input-drop-badge.spec.ts` with
+  `test.describe('input-drop-badge', ...)`: drive a session into the
+  reconnect-drop condition (or a test-only trigger if reproducing a real
+  reconnect in Playwright proves impractical — note whichever approach is
+  taken in the PR description, same fallback convention as Tasks 1.2.4/
+  1.2.5) and assert (a) the badge becomes visible, (b) its bounding rect
+  does not intersect the xterm viewport's active cursor region per
+  `design/ux.md` UX-AC-2, and (c) it auto-dismisses within the configured
+  timeout. Register this spec's `id` in
+  `docs/registry/frontend-features.json` per `.claude/rules/feature-
+  registry.md`'s required-steps checklist (new UI feature → registry entry
+  → e2e test → `testIds` populated), alongside Task 2.3.4's registry-
+  generate step.
 
 ---
 
@@ -692,6 +804,17 @@ item. *(AC5 GWT)*
      the correct count.
   8. Record pass/fail, timestamp, and the relevant log excerpt as a comment
      on backlog item `04089969-0f19-499c-be34-2e8bcfc4f13e`.
+  9. **Bisection on ambiguous result (closes pre-mortem.md Failure #4, P2):**
+     Epics 1 (session_driver.go latch) and 2 (client MessageQueue/generation
+     guard) are independent fixes validated together in steps 1-8. If the
+     result is mixed or ambiguous (e.g. no more repeated "1" but the
+     `InputDropBadge` never appeared when input was typed during the flap,
+     or vice versa), repeat steps 2-6 once more against a build with only
+     Epic 1's changes present (revert or comment out Epic 2's changes
+     locally) to isolate whether the server-side latch alone resolves the
+     repeated-keystroke symptom independent of the client-side hardening —
+     this attributes a mixed result to a specific epic rather than leaving
+     it as undifferentiated "the combined fix didn't fully work."
 
 ### Story 4.2 — ADR (already written)
 
@@ -725,7 +848,7 @@ concurrent input is out of scope, **when** this plan's task list is reviewed,
 | AC1 | Already done (`research/phase0-findings.md`) — no new tasks. |
 | AC2 | Epic 1 (Stories 1.1, 1.2). Startup-dialog branch: live-executing test (Task 1.2.2) + unit tests (Task 1.2.3, including the whitespace/line-wrap jitter case). Approval-prompt branch: live-executing test if feasible (Task 1.2.4), otherwise explicitly labeled "fixed by inspection/shared-helper coverage" per Task 1.2.4's fallback clause — see that task for which path was taken. |
 | AC3 | Epic 2 (Stories 2.1, 2.2, 2.3). |
-| AC4 | **Satisfied by two independent, layer-scoped regression suites, not one true cross-layer integration test** (closes adversarial-review.md's "forwarded to tmux exactly once" concern): (1) client-side epoch/queue behavior — Epic 2 Tasks 2.2.5/2.2.6/2.2.7 (Jest: overlapping-connect, triple-rapid-connect, disconnect()-vs-connect() race) and Task 2.1.2 (Jest: queued-message-drop-on-close); (2) server-side read-loop shutdown behavior — Epic 3 Task 3.1.2 (Go: bounded read-goroutine exit, no forwarding after close). Plus Epic 1 Task 1.2.2 (Go: bounded dialog-resend regression) for the dialog-replay half of AC4. This is an intentional scope decision, not a gap: `research/pitfalls.md` §5 explicitly frames client+server coverage as "paired, not single" (a frontend-only test would give false confidence and needs pairing with a Go test) — this plan satisfies "paired," and a future reader should not assume a single test drives an input through both the WebSocket client layer and the server read-loop into one real tmux sink, because none does. |
+| AC4 | **Satisfied by two independent, layer-scoped regression suites, not one true cross-layer integration test** (closes adversarial-review.md's "forwarded to tmux exactly once" concern): (1) client-side epoch/queue behavior — Epic 2 Tasks 2.2.5/2.2.6/2.2.7 (Jest: overlapping-connect, triple-rapid-connect, disconnect()-vs-connect() race), Task 2.1.2 (Jest: isolated `MessageQueue.close()` unit test), and Task 2.2.8 (Jest: the actual queued-message-drop-on-close **interleaving** test AC4 names literally — a message pushed while a reconnect is genuinely in flight, closing the consistency-review's AC4-coverage BLOCKER); (2) server-side read-loop shutdown behavior — Epic 3 Task 3.1.2 (Go: bounded read-goroutine exit, no forwarding after close). Plus Epic 1 Tasks 1.2.2/1.2.3(f)/1.2.3(g)/new-`TestSessionDriver_TailSliceBoundsDialogMatchAndHash` (Go: bounded dialog-resend regression, including the growing-buffer case from pre-mortem.md Failure #1) for the dialog-replay half of AC4. This is an intentional scope decision, not a gap: `research/pitfalls.md` §5 explicitly frames client+server coverage as "paired, not single" (a frontend-only test would give false confidence and needs pairing with a Go test) — this plan satisfies "paired," and a future reader should not assume a single test drives an input through both the WebSocket client layer and the server read-loop into one real tmux sink, because none does. |
 | AC5 | Epic 4 Story 4.1 (manual procedure; step 5 requires timestamp-correlating the resend log lines against the induced flap window, not just a bounded total count — see Plan Revision Log #8). |
 | AC6 | Epic 4 Story 4.3 (confirmation; substantive exclusion already in requirements.md). |
 
@@ -833,3 +956,78 @@ both reviews confirm remains correctly scoped out.
    correct, and noting it should be revisited if production observation
    shows flaps commonly outlasting ~6 seconds — no value change made now
    for lack of production duration data.
+
+## Phase 4 (Validate) Repair Round
+
+Three parallel Phase 4 subagents (validation.md test design, pre-mortem.md,
+cross-artifact consistency check) surfaced one new BLOCKER and one new P1
+not caught by the Phase 3 adversarial/architecture review rounds. Both are
+resolved below; the plan's Domain Glossary and existing Task numbering are
+otherwise unchanged (new tasks appended, none renumbered).
+
+10. **[BLOCKER, consistency check] No test exercises AC4's literal
+    "queued-message-drop-on-close interleaving" scenario.** Task 2.1.2 only
+    unit-tests `MessageQueue.close()` in isolation (push, close, assert
+    dropped) with no live reconnect in play; Tasks 2.2.5-2.2.7 assert
+    connection-generation state with no pushed input in flight. Added
+    **Task 2.2.8**: a genuine interleaving test — push a message in the same
+    tick a reconnect closes the queue, assert it's dropped on both the old
+    and new generation's queues, and that `onInputDropped` fires. AC4's
+    coverage-summary row updated to cite it explicitly.
+11. **[P1, pre-mortem] `Preview()` returns the entire accumulated PTY
+    buffer, not a tailed "current screen" snapshot — the content-hash
+    latch's normalization-only fix (item 2 above) does not bound this,
+    and an active, non-flapping session would still reproduce the
+    unbounded-resend bug once new output changes the whole-buffer hash.**
+    This is a materially larger regression surface than the formatting-
+    jitter case Blocker 2 closed, since it would fire in ordinary
+    operation. Task 1.1.2 revised to tail-slice `output` (via the existing
+    `tailContent`/`statusDetectionTailBytes` precedent already used by
+    `GetCurrentStatus`) before *both* the `isStartupDialog`/
+    `shouldApprovePrompt` match and the hash — not just normalize
+    whitespace on the raw buffer. ADR-001's Decision section gained a
+    dedicated "Tail-slice before matching and hashing" subsection. Task
+    1.2.3 gained cases (f)/(g) and a new live-executing test,
+    `TestSessionDriver_TailSliceBoundsDialogMatchAndHash`, using a fake
+    `ProcessManager` whose buffer grows each tick (simulating real,
+    non-flapping session activity) to prove the tailed latch does not
+    resend once the dialog is out of the tail window and does not
+    misfire while it remains within it.
+12. **[P2, pre-mortem] Fall-through fix's interaction with the unrelated
+    30s initial-prompt timeout, and the untested trust-a-successful-send
+    assumption.** Both documented as accepted, non-blocking consequences
+    in ADR-001's Consequences section (new bullets) rather than silently
+    left unaddressed — neither reintroduces silent wedging (the
+    inactivity-timeout path still applies either way), so they are
+    observability follow-ups, not correctness gaps, per the pre-mortem's
+    own P2 (not P1) severity rating.
+13. **[P2, pre-mortem] No bisection method if AC5's combined manual repro
+    gives a mixed result.** Added **Task 4.1.1 step 9**: on an ambiguous
+    result, repeat the repro against an Epic-1-only build to attribute the
+    outcome to a specific epic.
+14. **[P3, pre-mortem] `InputDropBadge` may fire rarely in production,
+    risking an unexercised latent bug.** Not actioned — P3 (unlikely,
+    not catastrophic) and the existing `console.warn` (Observability Plan)
+    plus the Task 2.3.4 Jest suite already give this path direct test
+    coverage; adding production telemetry for a UI badge is judged
+    disproportionate to this ticket's scope. Noted here as a considered,
+    not overlooked, trade-off.
+15. **[terminology, consistency check] ADR-001's state-machine bullet list
+    used unprefixed `Unanswered`/`AwaitingDismissal`/`GaveUp` names while
+    every other reference used the `dialog`-prefixed Go identifiers.**
+    Fixed to use `dialogUnanswered`/`dialogAwaitingDismissal`/
+    `dialogGaveUp` consistently throughout ADR-001.
+16. **[gap, validation.md] No test directly proves the Task 1.1.3
+    fall-through reaches the pre-existing inactivity-timeout/
+    `handleDriverFailure` escalation, only that resends stay bounded.**
+    Added **Task 1.2.5**,
+    `TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation`,
+    with an explicit fallback clause (narrower unit test on the post-latch
+    branch logic if a full-duration ticker test proves impractical),
+    mirroring Task 1.2.4's fallback convention.
+17. **[gap, validation.md] No Playwright e2e spec exists for
+    `InputDropBadge`, though `.claude/rules/feature-registry.md` requires
+    one for new user-facing features and `design/ux.md`'s UX-AC-2 needs a
+    bounding-rect check no Jest test can provide.** Added **Task 2.3.5**,
+    `tests/e2e/input-drop-badge.spec.ts`, plus the corresponding
+    `frontend-features.json` registry entry.
