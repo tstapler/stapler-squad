@@ -802,7 +802,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, session.TriggeredByUser)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {
@@ -898,7 +898,7 @@ func (s *BacklogService) SubmitManualReview(
 	if createErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save manual review verdict: %w", createErr))
 	}
-	if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil {
+	if endErr := s.storage.UpdateItemSessionEnded(ctx, is.ID, now); endErr != nil { //nolint:silenttransition bookkeeping timestamp only; the PASS/done transition below (which does notify on failure) is what actually gates forward progress here
 		log.WarningLog.Printf("[SubmitManualReview] UpdateItemSessionEnded: %v", endErr)
 	}
 
@@ -917,6 +917,9 @@ func (s *BacklogService) SubmitManualReview(
 				precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
 				if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, session.BacklogStatusDone, precondition, session.TriggeredByUser); transErr != nil {
 					log.WarningLog.Printf("[SubmitManualReview] PASS but transition to done failed: %v", transErr)
+					// Same shape as TriggerReReview's PASS->done path: code is
+					// confirmed shipped to main but the item is left stuck in review.
+					s.notifyTransitionFailed(req.Msg.ItemId, item.Title, "a manual PASS verdict was submitted and code was confirmed shipped to main, but the item's transition to done failed", transErr)
 				}
 			}
 		}

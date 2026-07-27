@@ -625,6 +625,26 @@ func (l *BacklogLifecycleListener) notify(itemID, title, message string, notific
 	}
 }
 
+// notifyTransitionFailed publishes an operator-facing notification when a
+// status-transition write fails AFTER its side effects have already happened
+// — e.g. a PR was confirmed merged, or a commit was confirmed shipped to
+// main — leaving the item's status silently out of sync with reality.
+// Mirrors server/services/backlog_service_triage.go's identical helper (same
+// shape, different package: this package must not import the server layer —
+// see .golangci.yml's no_server_in_core depguard rule). No-op if no notifier
+// is wired. Part of the fix for the recurring "silent status-transition
+// failure" bug shape — see that helper's doc comment for the full history
+// (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
+// sites in reconcileBouncingItems/ReconcilePRPending).
+func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
+	l.notify(itemID,
+		"Status update failed after work completed",
+		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
+		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+	)
+}
+
 // SetSessionArchiver wires in the archiver used to soft-archive backlog work
 // sessions belonging to done/archived items that the transition hook missed
 // (see the archive_terminal_sessions detector in ReconcileStuck). Optional —
@@ -781,7 +801,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
-	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil {
+	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
 		log.ErrorLog.Printf("[BacklogLifecycle] UpdateItemSessionEnded(%s) error: %v", is.ID, err)
 	}
 
@@ -1274,7 +1294,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	archived := 0
 	for _, item := range items {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil {
+		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil { //nolint:silenttransition idempotent by construction (see doc comment above) — item stays "done" and reappears in FindDoneItemsOlderThan's result on the next tick, so a failed archive here is retried, not silently dropped
 			log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
 			continue
 		}
@@ -1607,7 +1627,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 				// EndedAt-nil rows as "active" and silently skips the respawn it was
 				// just dispatched to perform — the zombie detection fired for nothing.
 				for _, is := range item.Edges.ItemSessions {
-					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil {
+					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; markAbandonedReview below still flags/notifies for this item on this same tick regardless of this specific row's outcome, and a failed tombstone here is retried on the next tick since the item still matches FindZombieReviewItems
 						log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, is.ID, endErr)
 					}
 				}
@@ -1727,7 +1747,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		}
 
 		if latest.EndedAt == nil {
-			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil {
+			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort bookkeeping; the verdict processing below (handleReviewSessionExited) runs regardless of this write's outcome
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
 			}
 		}
@@ -2213,7 +2233,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
 		// (see doc comment above: no liveness checker, headless calls don't run
 		// this long) — nothing left to preserve by keeping the row open.
-		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil {
+		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
 		}
 
@@ -2624,6 +2644,10 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
+					// The PR is already confirmed merged — the item is left
+					// bouncing between in_progress/review with nothing else
+					// surfacing this until the next tick retries it.
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
 					// Best-effort: clear any bouncing row from a prior tick
@@ -2644,6 +2668,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
+					// The commit is already confirmed shipped to main — same
+					// silent-stranding risk as the merged-PR branch above.
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, bounceMainBranch), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
 					// Best-effort: clear any bouncing row from a prior tick
@@ -2954,6 +2981,10 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		// the PASS verdict was delivered relative to other transitions.
 		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
+			// A PASS verdict already confirmed the work; there was nothing to
+			// ship, so done was the correct terminal state — a failure here
+			// leaves the item stuck with no further signal.
+			l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("%s, so the item should have moved to done, but the transition failed", reason), transErr)
 		}
 	}
 
@@ -3639,6 +3670,10 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
 			if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
+				// PR #%d is already confirmed merged — the item is left at
+				// pr_pending with nothing else surfacing this until the next
+				// tick retries it.
+				l.notifyTransitionFailed(item.ID.String(), item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 			} else {
 				log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → done (PR #%d merged)", item.ID, item.PrNumber)
 				// The item just reached done — resolve pr_ready_unmerged

@@ -121,6 +121,10 @@ func (s *BacklogService) AttachSessionToItem(
 	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
+			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
+			// session is now attached and running while the item's status still
+			// says otherwise.
+			s.notifyTransitionFailed(item.ID, item.Title, "a session was attached to the item but its transition to in_progress failed", transErr)
 		}
 	}
 

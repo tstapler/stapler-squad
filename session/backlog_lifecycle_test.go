@@ -637,9 +637,19 @@ type fakePRPendingChecker struct {
 	closedPR     int
 	closeComment string
 	closeErr     error
+
+	// onIsPRMerged, if set, runs synchronously inside IsPRMerged before it
+	// returns — lets a test simulate a concurrent status write landing exactly
+	// between the caller's merge check and its own subsequent
+	// TransitionBacklogItemStatus call (the precondition race these calls
+	// guard against), deterministically rather than via a real goroutine race.
+	onIsPRMerged func()
 }
 
 func (f *fakePRPendingChecker) IsPRMerged(prNumber int) (bool, error) {
+	if f.onIsPRMerged != nil {
+		f.onIsPRMerged()
+	}
 	return f.merged, f.mergedErr
 }
 
