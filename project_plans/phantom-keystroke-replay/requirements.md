@@ -25,20 +25,42 @@ Ruled out:
   frontend `sendInputWithEcho` speculative-echo path,
   `TerminalOutput.tsx:539-545`), i.e. delivered as if typed by a user.
 
-## Hypothesis (unconfirmed until Phase 0)
+## Confirmed root cause (Phase 0 — see `research/phase0-findings.md`)
 
-A single physical keystroke was duplicated/replayed across reconnects while
-the session was flapping — plausibly the client-side speculative-echo /
-input-queue path (`MessageQueue`, `useTerminalFlowControl`,
-`useTerminalStream`) re-emitting a buffered/queued message on a new
-connection, and/or a server-side control-mode read/write goroutine
-(`streamViaControlMode`, `session/tmux/control_mode.go`) replaying input on
-reconnect. This may share a root cause with the reconnect/re-render
-instability behind the infinite-resize loop bug (#164).
+The originally-suspected client/server input-relay duplication (`MessageQueue`,
+`useTerminalStream` reconnect, `streamViaControlMode`'s subprocess fallback)
+was **ruled out** as the source of repeated single-keystroke delivery: a
+single push is consumed exactly once by `MessageQueue`'s iterator, and the
+server's per-connection read goroutine sends each received input message at
+most once (fire-and-forget, no path where a successful send also triggers the
+fallback).
 
-**This hypothesis is not yet proven.** Confirming which side (client
-duplication vs. server replay) is doing the re-emission — and the exact code
-path — is a hard gate (AC1) before any fix is written.
+The **confirmed primary root cause** is `session/session_driver.go`'s
+startup-dialog auto-answer loop: `runSessionDriverWithPrompt` polls
+`inst.Preview()` every `driverPollInterval` (2s) and calls
+`inst.SendKeys("1\n")` whenever `isStartupDialog(output)` matches — with **no
+de-duplication, backoff, or "already answered" latch**. This mechanism is
+**unconditional and independent of `auto_yes`** (the ticket only ruled out
+`auto_yes`, not this separate auto-answer path). When the session is
+flapping/stalled, `Preview()`'s underlying buffer can keep returning the same
+stale dialog content long after the live pane has moved on, so the loop
+resends `SendKeys("1\n")` every 2 seconds indefinitely — landing as literal,
+out-of-context "1" characters once the session recovers. This was confirmed
+with a live-executing runtime test (`session/phase0_repro_test.go`), not
+source inference alone: the real driver goroutine produced 3 repeated
+`SendKeys("1\n")` calls over 3 poll ticks against a stalled preview buffer.
+
+A **confirmed secondary hardening gap**, independently real but not the cause
+of this ticket's repeated-single-keystroke symptom, is the client
+`MessageQueue`/`useTerminalStream` reconnect path: `MessageQueue.close()`
+never clears its buffered `queue` array, and `useTerminalStream.connect()` has
+no epoch/generation guard against overlapping reconnects. AC3's text
+explicitly calls out the superseded-`MessageQueue` case, so this is fixed as
+additive hardening alongside the primary fix, not instead of it.
+
+This may share a *reconnect-instability* root with the infinite-resize loop
+bug (#164), but not an *input-duplication* root — features.md found no
+evidence tying #164 to input replay.
 
 ## Goals
 
@@ -108,22 +130,35 @@ path — is a hard gate (AC1) before any fix is written.
    Non-Goals section) so a future multi-tab report is not mistaken for a
    regression of this fix.
 
-## Suspected code (to be confirmed/corrected in research phase)
+## Confirmed code (Phase 0)
 
-- `web-app/src/components/sessions/TerminalOutput.tsx` (`sendInputWithEcho`
-  call site, ~line 539-545)
-- `web-app/src/lib/hooks/useTerminalStream.ts` (connect/disconnect,
-  `MessageQueue` lifecycle, reconnect handling)
-- `web-app/src/lib/hooks/useTerminalFlowControl.ts` (`sendInput`,
-  `sendInputWithEcho`, SSP)
+- `session/session_driver.go` (`runSessionDriverWithPrompt`, lines ~148-165)
+  — **primary fix target**: unbounded `isStartupDialog`/`SendKeys("1\n")`
+  retry loop, no de-duplication/backoff/latch.
+- `session/instance_terminal.go` (`Preview()`, lines 105-125) and
+  `session/claude_controller.go` (`GetRecentOutput`, lines 627-644) — the
+  stale-buffer mechanism that lets `Preview()` keep returning matching dialog
+  content during a flap.
 - `web-app/src/lib/terminal/MessageQueue.ts` (async-iterable outgoing queue;
-  `close()` does not clear buffered `queue` array)
-- `server/services/connectrpc_websocket.go` (`streamViaControlMode`, input
-  relay, the "session not started or paused" / "CM input failed, retrying
-  via subprocess" log lines from the ticket)
-- `session/tmux/control_mode.go` (tmux control-mode read/write goroutines)
-- `session/tmux_process_manager.go`, `session/instance_tmux.go` (session
-  start/stop/pause state feeding the flapping condition)
+  `close()` does not clear buffered `queue` array) — **secondary fix
+  target**.
+- `web-app/src/lib/hooks/useTerminalStream.ts` (`connect()`, lines 156-345 —
+  no epoch/generation guard against overlapping reconnects) — **secondary
+  fix target**. Follow the existing generation-counter idiom already used in
+  this codebase (`web-app/src/lib/hooks/usePathCompletions.ts`).
+- `server/services/connectrpc_websocket.go` (`streamViaControlMode`,
+  lines 857-924) — read, confirmed NOT a duplication source (single
+  fire-and-forget send per received input message); the "session not started
+  or paused" / "CM input failed, retrying via subprocess" log lines were
+  present during the ticket's episode but are not the repeated-"1" mechanism.
+- `session/tmux/control_mode.go` (`SendInputViaControlMode`, lines 659-682)
+  — read, confirmed no double-send path.
+
+Ruled out: `session/tmux_process_manager.go`, `session/instance_tmux.go`
+session-sharing/refcounting issues are a real architectural concern (see
+`research/architecture.md`) contributing to *why* the session flaps, but are
+out of scope for this fix per the Non-Goals section (general reconnect
+stability beyond input replay).
 
 ## Constraints
 
