@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.40.1](https://github.com/tstapler/stapler-squad/compare/v1.40.0...v1.40.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **insights:** close pricing gaps and unaccounted costs on the Insights page ([#280](https://github.com/tstapler/stapler-squad/issues/280)) ([95ed72d](https://github.com/tstapler/stapler-squad/commit/95ed72d34fb224cced334016138b86a64896e67d))
+* **notifications:** suppress dead-end notifications for headless review/triage sessions ([#227](https://github.com/tstapler/stapler-squad/issues/227)) ([5b4d9ea](https://github.com/tstapler/stapler-squad/commit/5b4d9ea307402a9bf9fce609f27c559d1f1bbb53))
+* **session:** rebase pause/resume-500 fix onto the actor-based concurrency model ([#278](https://github.com/tstapler/stapler-squad/issues/278)) ([42b743d](https://github.com/tstapler/stapler-squad/commit/42b743d6b50620ebe0f55b5fb4c2192041f2d9cb))
+* **web:** dead-band terminal resize loop, RPC dedup, and WebGL fallback ([#272](https://github.com/tstapler/stapler-squad/issues/272)) ([9651edd](https://github.com/tstapler/stapler-squad/commit/9651edd5ea2e485684545af235cc6b9155a8627e))
+
 ## [1.40.0](https://github.com/tstapler/stapler-squad/compare/v1.39.0...v1.40.0) (2026-07-27)
 
 
