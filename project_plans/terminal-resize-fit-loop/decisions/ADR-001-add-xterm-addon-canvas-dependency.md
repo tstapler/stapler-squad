@@ -93,3 +93,38 @@ and load a real `CanvasAddon` as the fallback target when the WebGL mismatch-tra
 - Future maintainers reading "canvas renderer" in code comments/logs get a renderer that is
   actually Canvas, not a mislabeled DOM fallback — resolves the terminology drift from
   `terminal-stress/page.tsx` rather than propagating it.
+
+## Addendum (2026-07-27): `@xterm/xterm` bumped to 6.0.0 in an unrelated PR
+
+After this ADR was written, `main` independently upgraded `@xterm/xterm` from `^5.5.0` to
+`^6.0.0` (unrelated PR, merged before this branch's rebase). This reopened the peer-dependency
+question: `@xterm/addon-canvas@0.7.0`'s peer range is `@xterm/xterm: ^5.0.0` and was never
+updated, because upstream removed the canvas renderer from the xterm.js monorepo entirely as
+of 6.0.0 (xtermjs/xterm.js#5105, an explicitly-flagged breaking change: "Remove the canvas
+renderer — this addon no longer exists and we recommend using either the DOM renderer or
+WebGL"). `pnpm install` only warns on the unmet peer range (no `strict-peer-dependencies`
+config in this repo) — CI stays green regardless of whether the addon actually still works.
+
+**Verified, not assumed**: `CanvasAddon.activate()` reaches into `terminal._core`'s private
+service surface (`coreService`, `optionsService`, `screenElement`, `linkifier`, `onWillOpen`,
+`_bufferService`, `_renderService`, `_characterJoinerService`, `_charSizeService`,
+`_coreBrowserService`, `_decorationService`, `_logService`, `_themeService`, plus
+`renderService.setRenderer()`/`handleResize()`). All of these still exist, unrenamed, in the
+compiled `@xterm/xterm@6.0.0` bundle (confirmed via `grep` against
+`node_modules/.pnpm/@xterm+xterm@6.0.0/.../xterm.js`), and a real (unmocked)
+`CanvasAddon` from the installed `@xterm/addon-canvas@0.7.0` activates, resizes, writes, and
+disposes cleanly against a real (unmocked) `@xterm/xterm@6.0.0` `Terminal` in a jsdom
+environment with a minimal fake 2D canvas context standing in for the browser's real one (jsdom
+has no real 2D context at all — the same limitation this codebase already works around for
+`@xterm/addon-serialize`). See
+`web-app/src/components/sessions/__tests__/XtermTerminal.canvasAddonXterm6Compat.test.ts` for
+the runnable proof, which will fail loudly if a *future* `@xterm/xterm` bump breaks this wiring
+(addon-canvas itself will never be updated again, since it no longer exists upstream to update).
+
+**Conclusion**: the peer-dependency warning is stale metadata, not a signal of actual
+incompatibility — `@xterm/xterm@^6.0.0` stays in `web-app/package.json`, `@xterm/addon-canvas`
+stays pinned at `^0.7.0` (the only version that will ever exist), and no code change to the
+fallback path in `XtermTerminal.tsx` is required. This is explicitly a point-in-time finding,
+not a standing guarantee — any future `@xterm/xterm` major bump must re-run (or extend) this
+same verification before assuming the Canvas fallback tier still works, since upstream is not
+maintaining this compatibility on our behalf.

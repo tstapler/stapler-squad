@@ -7,6 +7,15 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
+// @xterm/addon-canvas@0.7.0's peer dependency is @xterm/xterm: ^5.0.0 and will never be
+// bumped -- upstream removed the canvas renderer from the xterm.js monorepo entirely as of
+// 6.0.0 (xtermjs/xterm.js#5105). Despite the stale peer range (and the resulting pnpm install
+// warning against our @xterm/xterm@^6.0.0), this addon is verified to still activate and
+// function correctly against xterm 6 -- see the "Addendum (2026-07-27)" in
+// project_plans/terminal-resize-fit-loop/decisions/ADR-001-add-xterm-addon-canvas-dependency.md
+// and the runnable proof in
+// __tests__/XtermTerminal.canvasAddonXterm6Compat.test.ts. Re-verify before any future
+// @xterm/xterm major bump.
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
