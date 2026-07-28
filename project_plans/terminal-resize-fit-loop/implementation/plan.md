@@ -502,6 +502,59 @@ root-caused.
   ```
 - Files: `web-app/src/components/sessions/XtermTerminal.tsx`
 
+### Epic 2.4: AC1/AC7 — gate the imperative `fit()` entry point too
+**Goal**: **Added per pre-mortem.md P1 #1.** The original plan left the imperative `fit()` method
+exposed via `useImperativeHandle` (`XtermTerminal.tsx:614-616`, called by `TerminalOutput.tsx`'s
+tab-visibility handler and its `visualViewport.resize` handler) ungated, reasoning it was outside
+the 7 ACs' literal "ResizeObserver handler" wording. Pre-mortem correctly escalated this: AC1 and
+AC7's own repro condition is "tab background/resume **or** window resize" — and tab
+background/resume routes through this imperative path, not the `ResizeObserver`. Leaving it
+ungated risks the fix eliminating CPU pegging only for the window-resize half of the repro, not
+the backgrounded-tab half. Gating it is a ~5-line reuse of the exact same `shouldFit` predicate
+already built in Phase 1 — cheap, and removes the residual risk outright rather than merely
+documenting it.
+
+#### Story 2.4.1: Gate the imperative `fit()` handle
+**As a** user whose tab is backgrounded and resumed, **I want** the imperative `fit()` call
+(triggered by visibility/viewport-change handlers, not the `ResizeObserver`) to skip redundant
+work the same way the debounced path does, **so that** AC1/AC7's tab-background/resume trigger is
+covered by the same convergence guarantee as the window-resize trigger.
+**Acceptance Criteria**:
+- The `fit` method exposed via `useImperativeHandle` only calls `fitAddonRef.current.fit()` when
+  `shouldFit` returns `true` against the terminal's live `cols`/`rows` — identical gating logic to
+  Task 2.2.1a, applied at this second call site.
+  - *Given* `terminal.cols=84`, `terminal.rows=60` and `FitAddon.proposeDimensions()` returns
+    `{cols:84,rows:60}`, *When* `TerminalOutput.tsx`'s tab-visibility handler calls `ref.fit()`
+    (e.g. on tab resume) with no actual layout change, *Then* `shouldFit({cols:84,rows:60},
+    {cols:84,rows:60})` returns `false` and `fitAddonRef.current.fit()` is not called.
+  - *Given* the same setup but the container genuinely changed size while backgrounded (e.g.
+    `visualViewport` reports a new size on resume) and `proposeDimensions()` now returns
+    `{cols:90,rows:62}`, *When* `ref.fit()` is called, *Then* `shouldFit` returns `true` and
+    `fitAddonRef.current.fit()` **is** called — no regression to the existing legitimate use of
+    this path (mobile viewport changes, visibility restoration after a real size change).
+**Files**: `web-app/src/components/sessions/XtermTerminal.tsx`
+
+##### Task 2.4.1a: Gate the `useImperativeHandle` `fit` method (~3 min)
+- In the `useImperativeHandle(ref, () => ({ ... }), [])` block (lines 595-629 in the original
+  file), replace the `fit` method (currently `fit: () => { fitAddonRef.current?.fit(); },`) with:
+  ```ts
+  fit: () => {
+    const term = terminalRef.current;
+    const addon = fitAddonRef.current;
+    if (term && addon) {
+      const proposed = addon.proposeDimensions();
+      if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
+        addon.fit();
+      }
+    }
+  },
+  ```
+  (`shouldFit` is already imported at the top of the file from Task 2.2.1a — no new import
+  needed.) No new console.log here — this path is called frequently enough during normal
+  visibility/viewport handling that a log line per skip would be noisier than useful; the
+  `ResizeObserver` path's existing log line is sufficient for debugging convergence.
+- Files: `web-app/src/components/sessions/XtermTerminal.tsx`
+
 ---
 
 ## Phase 3: `useTerminalFlowControl.ts` + `TerminalOutput.tsx` Integration (AC3)
@@ -575,7 +628,13 @@ today).
   `TerminalOutput.tsx:640`, inside `handleTerminalResize`) is left unchanged (it stays
   caller-side-deduped by `sizeChanged` plus now also hook-side-deduped by AC3 — both apply, no
   conflict).
-**Files**: `web-app/src/components/sessions/TerminalOutput.tsx`
+- Regression-tested: both call sites are asserted to pass `force=true` literally, not just
+  "compiles" (per `validation.md`'s cross-check finding — `force` is an optional 3rd parameter, so
+  a future edit that silently drops it would compile fine and only surface as AC3's dedup
+  unexpectedly swallowing a legitimate reconnect/force-resize call, a hard-to-diagnose runtime bug
+  rather than a build failure).
+**Files**: `web-app/src/components/sessions/TerminalOutput.tsx`,
+`web-app/src/components/sessions/__tests__/TerminalOutputBug.test.tsx`
 
 ##### Task 3.1.2a: Reconnect-resync call site → `force=true` (~2 min)
 - Change line 664 from `resize(currentSize.cols, currentSize.rows);` to
@@ -585,6 +644,14 @@ today).
 ##### Task 3.1.2b: Manual force-resize call site → `force=true` (~2 min)
 - Change line 1160 from `resize(cols, rows);` to `resize(cols, rows, true);`.
 - Files: `web-app/src/components/sessions/TerminalOutput.tsx`
+
+##### Task 3.1.2c: Regression test — both call sites pass `force=true` (~4 min)
+- In `TerminalOutputBug.test.tsx`, using the existing `resize: jest.fn()` mock already wired at
+  line 134 for `useTerminalFlowControl`, add two assertions: (1) triggering the reconnect-resync
+  path (simulate `isConnected` transitioning `false→true`) asserts `resize` was called with
+  `(currentSize.cols, currentSize.rows, true)` — 3rd arg literally `true`; (2) triggering the
+  manual force-resize debug action asserts `resize` was called with `(cols, rows, true)`.
+- Files: `web-app/src/components/sessions/__tests__/TerminalOutputBug.test.tsx`
 
 ---
 
@@ -781,14 +848,14 @@ renderer" wording, per requirements.md's explicit ADR mandate.
     break) — and structurally rare, since the counter only sees *post*-AC2/AC3-dedup applications
     (a value that survived `shouldFit`/became a real `terminal.onResize` firing), not raw
     observer/pointer-move noise.
-  - **Scope note on the imperative `fit()` path** (`XtermTerminal.tsx:615`, exposed via
-    `useImperativeHandle`, called by `TerminalOutput.tsx`'s visibility and `visualViewport.resize`
-    handlers): the oscillation counter observes this path too whenever it produces a genuinely new
-    `terminal.onResize` value (same funnel), but a rapid sequence of calls to this path that never
-    changes the proposed value (real layout-measurement cost, no `onResize` firing) is not counted
-    and not gated by `shouldFit` — deliberately out of scope for this fix (the 7 ACs describe the
-    `ResizeObserver`-driven chain specifically; this path already has its own pre-existing
-    `isFittingRef` reentrancy guard). Noted here as an accepted residual risk, not silently ignored.
+  - **The imperative `fit()` path is also gated** (`XtermTerminal.tsx:615`, exposed via
+    `useImperativeHandle`, called by `TerminalOutput.tsx`'s tab-visibility and
+    `visualViewport.resize` handlers — see Epic 2.4, added per pre-mortem.md P1 #1). AC1/AC7's
+    repro explicitly includes "tab background/resume," which routes through this path, not the
+    `ResizeObserver`; leaving it ungated would have left that half of the repro unfixed. It now
+    reuses the identical `shouldFit` predicate, so a repeated call with no actual layout change is
+    a no-op there too, and the oscillation counter observes it via the same `terminal.onResize`
+    funnel whenever it does produce a genuinely new value.
   - **Double-dispose safety**: the oscillation-triggered dispose path checks `terminalRef.current`
     is non-null before calling `.dispose()`, structurally preventing a dispose-after-teardown race
     (xterm.js#5181) given the `onResize` subscription is itself torn down during unmount cleanup.
@@ -800,26 +867,51 @@ renderer" wording, per requirements.md's explicit ADR mandate.
   format.
 - Files: `project_plans/terminal-resize-fit-loop/decisions/ADR-001-webgl-oscillation-fallback-to-default-renderer.md`
 
-### Epic 5.2: Manual verification (AC1, AC7)
+### Epic 5.2: Manual verification (AC1, AC7) — HARD MERGE GATE
 **Goal**: There is no automated way to peg CPU and observe convergence end-to-end across multiple
-real browser tabs — this is a documented manual QA checklist, not a code task.
+real browser tabs, and no automated test in this plan exercises real WebGL glyph-metric divergence
+at all (Jest/JSDOM has no GPU rendering) — this is a documented manual QA checklist, not a code
+task. **Per pre-mortem.md P1 #4, this is upgraded from a PR-description nice-to-have to a required
+pre-merge gate**: the PR must not be merged until Story 5.2.1's checklist is completed and its
+results recorded, specifically on hardware that can reproduce the original report's WebGL
+glyph-metric mismatch (or the closest available approximation), not "any available dev machine."
 
-#### Story 5.2.1: Manual repro checklist
+#### Story 5.2.1: Manual repro checklist (must pass before merge)
 **As a** developer shipping this fix, **I want** a documented manual verification pass reproducing
 the original ticket scenario, **so that** AC1 and AC7 (which have no automated equivalent) are
-explicitly checked off before merge.
+explicitly checked off before merge, and so a future regression has a quantitative baseline to
+compare against rather than a bare pass/fail.
 **Acceptance Criteria** (the checklist itself — no code):
-- AC1: *Given* 3 concurrent browser tabs, each with its own `XtermTerminal`/session (per
-  `research/features.md`'s confirmation that this is the real architecture — one terminal per tab,
-  not an in-page tiled layout), *When* the OS window is resized once (e.g. 1200×800 → 1400×900),
-  *Then* Chrome DevTools' Performance panel, recorded for 5s starting at the resize, shows the
-  ResizeObserver→fit()→onResize chain settling (no repeating `[XtermTerminal] Container resized`
-  log lines after the first 1-2 debounce cycles) and CPU usage returns to idle (<5%, verified via
-  the DevTools Performance panel's CPU track) within 2 seconds of the resize ending, in each tab.
-- AC7: *Given* the same 3-tab setup, *When* one tab is backgrounded (switch away) and resumed
-  (switch back), or the window is resized once, *Then* input in all 3 tabs remains responsive
-  throughout (typing echoes without a perceptible stall) and no tab shows a frozen/unresponsive
-  terminal — the original repro condition from the backlog item.
-- Record the outcome (pass/fail + DevTools screenshot or CPU trace, if fail) directly in the PR
-  description; do not skip this checklist step even though it produces no test file.
+- AC1 (window-resize trigger): *Given* 3 concurrent browser tabs, each with its own
+  `XtermTerminal`/session (per `research/features.md`'s confirmation that this is the real
+  architecture — one terminal per tab, not an in-page tiled layout), on a machine/browser with
+  WebGL enabled (Chrome, per the original report), *When* the OS window is resized once (e.g.
+  1200×800 → 1400×900), *Then* Chrome DevTools' Performance panel, recorded for 5s starting at the
+  resize, shows the ResizeObserver→fit()→onResize chain settling (no repeating
+  `[XtermTerminal] Container resized` log lines after the first 1-2 debounce cycles) and CPU usage
+  returns to idle (<5%, verified via the DevTools Performance panel's CPU track) within 2 seconds
+  of the resize ending, in each tab.
+- AC7 (tab background/resume trigger — tested as its own independent sub-case, not assumed covered
+  by AC1's window-resize pass, per pre-mortem.md P1 #1): *Given* the same 3-tab setup, *When* one
+  tab is backgrounded (switch away for ≥5s, to let `visualViewport`/visibility handlers fire) and
+  resumed (switch back), *Then* input in all 3 tabs remains responsive throughout (typing echoes
+  without a perceptible stall) and no tab shows a frozen/unresponsive terminal — the original repro
+  condition from the backlog item, verified specifically via the tab-background/resume path (Epic
+  2.4's imperative-`fit()` gate), not just the window-resize path.
+- **Quantitative baseline** (per pre-mortem.md P1 #4): record the console-logged "Actual pixels per
+  column" vs "Expected pixels per column" values (`XtermTerminal.tsx`'s existing mount-time log,
+  lines ~386-393) observed during this pass, along with the browser/OS/GPU used, in the PR
+  description — even on a pass, these numbers establish a baseline; if the original 8.45px vs
+  8.33px mismatch cannot be reproduced on available hardware, say so explicitly rather than
+  reporting an unqualified "pass."
+- **Corroborating signal** (per cross-artifact consistency check): watch the console during both
+  sub-cases above for `shortcutRegistry.ts`'s "Duplicate shortcut id" churn (the requirements.md
+  out-of-scope carve-out is conditioned on "if verification shows it still fires after the
+  convergence fix lands" — this pass is that verification). Record whether it still fires; if it
+  does, the shortcut-registry idempotency issue should be filed as a separate follow-up per
+  requirements.md's carve-out, not silently ignored.
+- Record the full outcome (pass/fail per sub-case + DevTools screenshot or CPU trace if fail +
+  the quantitative baseline + the shortcut-id observation) directly in the PR description. **This
+  is a merge gate, not an optional checklist item** — do not merge without it, and do not report
+  AC1/AC7 as satisfied without these specifics recorded.
 **Files**: None (manual QA — documented in the PR description, not committed to the repo).

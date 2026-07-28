@@ -41,9 +41,16 @@ window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver
    sent — this dedup is independent of the existing 200ms time throttle (both apply).
 4. The WebGL actual-vs-expected pixels-per-column discrepancy cannot cause unbounded churn even
    if it isn't fully eliminated: an oscillation detector recognizes a resize burst (the same
-   `cols`/`rows` pair recurring ≥3 times within a rolling 2000ms window) and falls back to the
-   canvas renderer, disposing the WebGL addon. The renderer-selection decision is documented in
-   an ADR.
+   `cols`/`rows` pair recurring ≥3 times within a rolling 2000ms window) and falls back to
+   **xterm.js's default (non-WebGL) DOM renderer** by disposing the WebGL addon — *amended during
+   Phase 3 planning*: the original wording here said "canvas renderer," but `@xterm/addon-canvas`
+   is deprecated and incompatible with this repo's pinned `@xterm/xterm ^6.0.0`; see
+   `docs/adr/018-webgl-oscillation-fallback-to-default-renderer.md` for the full correction and
+   rationale. The functional intent (eliminate WebGL as the loop's amplifier) is unchanged. A
+   `console.error` backstop fires when there is no WebGL addon instance to dispose because it
+   genuinely never loaded — a second oscillation burst *after* an earlier successful fallback this
+   session is a distinct, already-handled state and does not repeat that error (logged instead at
+   `console.log`, per the ADR). The renderer-fallback decision is documented in an ADR.
 5. Automated regression coverage (unit tests for the extracted pure decision functions, plus a
    component test exercising the real `ResizeObserver` wiring) simulates a sequence of sub-cell
    container resizes and asserts `fit()` and the resize RPC are each invoked at most once when
@@ -61,9 +68,11 @@ window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver
 - Integer-`cols`/`rows` gating in `XtermTerminal`'s `ResizeObserver` handler before scheduling
   `fit()` (AC2)
 - Value-based dedup in `useTerminalFlowControl.resize()`, independent of the time throttle (AC3)
-- Oscillation/refit-burst detector (`shouldFallbackToCanvas()`-style pure function) that triggers
-  a WebGL → canvas renderer fallback, with a `console.error` backstop when there is no WebGL
-  addon instance to dispose (AC4)
+- Oscillation/refit-burst detector (implemented as `shouldAbandonWebgl()` — renamed from this
+  bullet's original working name `shouldFallbackToCanvas()` during Phase 3 planning, since "canvas"
+  is not what's actually being fallen back to; see plan.md's Domain Glossary and AC4 above) that
+  triggers a WebGL → default-renderer fallback, with a `console.error` backstop when there is no
+  WebGL addon instance to dispose because it never loaded (AC4)
 - ADR documenting the renderer-fallback decision and rationale (AC4)
 - Unit tests for the new pure functions (dimension-gate comparison, resize dedup, oscillation
   detector) (AC5)

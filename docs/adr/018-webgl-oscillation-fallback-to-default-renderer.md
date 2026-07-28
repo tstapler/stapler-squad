@@ -84,12 +84,28 @@ session, not a stable global property of the browser or machine, so a permanent/
 disablement would be over-broad. Root-causing the underlying pixel-vs-cell-width mismatch is
 explicitly out of scope for this decision and for the parent project.
 
-If the detector trips but no `WebglAddon` instance is currently loaded (`webglAddonRef.current`
-is `null` — WebGL never successfully loaded, e.g. no `WebGL2RenderingContext` on the platform, or
-it was already disposed by `onContextLoss`), the fallback branch logs via `console.error` instead
-of throwing, since canvas/DOM is presumably already active and "falling back" is a no-op that
-should still be visible for debugging (the oscillation in that case has some other root cause
-worth flagging distinctly).
+If the detector trips but no `WebglAddon` instance is currently loaded
+(`webglAddonRef.current` is `null`), a `webglFallbackTrippedRef` flag distinguishes two distinct
+cases so the log signal stays meaningful: if WebGL genuinely never loaded (no
+`WebGL2RenderingContext` on the platform, or the dynamic import failed) and no earlier fallback
+happened this session, the branch logs via `console.error` — canvas/DOM is presumably already
+active and this is worth flagging distinctly as an oscillation with some other root cause. If,
+instead, an *earlier* oscillation burst already tripped the fallback this session (WebGL was
+disposed on purpose, and the underlying pixel/glyph mismatch this ADR does not root-cause keeps
+producing bursts even on the default renderer), the branch logs a single `console.log` instead —
+repeating `console.error` for an already-handled, expected state would be misleading, not useful.
+
+The oscillation-triggered dispose path also checks that the terminal instance itself is still live
+(`terminalRef.current` non-null) before calling `.dispose()`, structurally preventing a
+dispose-after-teardown race (comparable to xterm.js#5181) given the `onResize` subscription this
+detector is hooked to is itself torn down during unmount cleanup.
+
+The same `shouldFit` gate (AC2) is applied at **both** entry points that call `fit()`: the
+`ResizeObserver`'s debounced callback, and the imperative `fit()` method exposed via
+`useImperativeHandle` (used by `TerminalOutput.tsx`'s tab-visibility and `visualViewport.resize`
+handlers for the tab-background/resume trigger). Both funnel into the same `terminal.onResize`
+event this oscillation detector observes, so a burst reachable via either trigger is caught the
+same way.
 
 The fallback is deliberately **silent to the user** — `console.warn`/`console.error` only, no
 toast or status indicator — matching every other renderer-level infrastructure event already
@@ -123,6 +139,20 @@ event in this codebase already follows the silent pattern.
   instance that tripped the detector (session-scoped), not all tabs/sessions.
 - Font rendering may differ subtly (WebGL texture-atlas glyphs vs. DOM `fillText` glyphs) — an
   existing, already-live risk from the `onContextLoss` path, not a new risk introduced here.
+- **Residual false-positive risk**: a legitimate slow window/pane drag that lingers near a cell
+  boundary can, in principle, produce an alternating A/B/A/B/A `onResize` sequence indistinguishable
+  from a genuine WebGL glyph-metric wobble, tripping the fallback for a session that didn't
+  actually need it. Accepted as low-cost: a false trip just disables WebGL for that tab for the
+  rest of the session (a rendering-performance regression, not a correctness break), and it is
+  structurally rare since the detector only observes *post*-dedup `terminal.onResize` applications,
+  never raw observer/pointer-move noise.
+- The detector's 3-recurrences-in-2000ms threshold does not catch a slow periodic oscillation with
+  a repeat interval above roughly 666ms (`windowMs / threshold`) — a real, unbounded loop at that
+  cadence would still pass `shouldFit`/`shouldSendResize` (each recurrence is a "real" value change
+  relative to the alternating partner value) without ever accumulating 3 hits in any single 2000ms
+  window. Documented here as an accepted residual risk rather than silently unhandled; the manual
+  verification pass (Story 5.2.1) should watch for low-frequency residual churn, not just total
+  freeze, when judging AC1's "settles to zero" criterion.
 
 ### Neutral
 - No mechanism exists (or is added) to re-enable WebGL later in the same mount, or to remember the
