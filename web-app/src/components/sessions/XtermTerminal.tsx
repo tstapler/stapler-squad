@@ -8,12 +8,14 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
+import { shouldFit, shouldAbandonWebgl, type ResizeEvent } from "@/lib/terminal/resizeConvergence";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 
@@ -103,6 +105,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
+  const webglFallbackTrippedRef = useRef(false);
 
   // Refs for floating Copy button and toast — avoid React re-renders on 60fps selection changes
   const copyButtonRef = useRef<HTMLButtonElement>(null);
@@ -261,22 +265,31 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminal.loadAddon(serializeAddon);
 
     // xterm.js issue #2033 — guard WebGL before loading on Android/mobile
+    // `cancelled` guards against the async import() resolving after this effect run has been
+    // torn down (StrictMode double-invoke, or a fast [scrollback]-triggered remount while the
+    // WebGL addon chunk is still downloading) — see plan.md Epic 2.1 / architecture-review.md
+    // Blocker. Checked before terminal.loadAddon() is ever called, so a cancelled mount never
+    // mutates an already-disposed terminal.
+    let cancelled = false;
     (async () => {
       if (typeof WebGL2RenderingContext !== 'undefined') {
         try {
           const { WebglAddon } = await import('@xterm/addon-webgl');
+          if (cancelled) return;
           const webglAddon = new WebglAddon();
           webglAddon.onContextLoss(() => {
-            console.warn('[XtermTerminal] WebGL context lost, falling back to canvas renderer');
+            console.warn('[XtermTerminal] WebGL context lost, falling back to default renderer');
             webglAddon.dispose();
+            webglAddonRef.current = null;
           });
           terminal.loadAddon(webglAddon);
+          webglAddonRef.current = webglAddon;
           console.log("[XtermTerminal] WebGL renderer enabled");
         } catch (e) {
           console.warn("[XtermTerminal] WebGL failed to load:", e);
         }
       } else {
-        console.log("[XtermTerminal] WebGL2 unavailable (Android?), using canvas renderer");
+        console.log("[XtermTerminal] WebGL2 unavailable (Android?), using default renderer");
       }
     })();
 
@@ -430,11 +443,42 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
       });
 
+      // AC4 oscillation/burst history — effect-scoped (not a component-level useRef) so a
+      // [scrollback]-triggered full terminal teardown/recreate starts with a clean history
+      // instead of carrying stale burst entries into the new instance. See Domain Glossary
+      // ("oscillationHistory") and Pattern Decisions ("Oscillation history storage").
+      let oscillationHistory: ResizeEvent[] = [];
+      const OSCILLATION_WINDOW_MS = 2000;
+      const OSCILLATION_THRESHOLD = 3;
+
       const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+        if (!terminalRef.current) return; // torn down — never dispose against a dead instance
+
         // Only trigger callback if size actually changed
         const lastSize = lastSizeRef.current;
         if (!lastSize || lastSize.cols !== cols || lastSize.rows !== rows) {
           lastSizeRef.current = { cols, rows };
+
+          const now = Date.now();
+          oscillationHistory.push({ cols, rows, at: now });
+          oscillationHistory = oscillationHistory.filter((e) => now - e.at <= OSCILLATION_WINDOW_MS);
+
+          if (shouldAbandonWebgl(oscillationHistory, now, OSCILLATION_WINDOW_MS, OSCILLATION_THRESHOLD)) {
+            if (webglAddonRef.current) {
+              console.warn(
+                `[XtermTerminal] Resize oscillation detected (cols/rows repeated ${OSCILLATION_THRESHOLD}x in <${OSCILLATION_WINDOW_MS}ms), falling back to default renderer`
+              );
+              webglAddonRef.current.dispose();
+              webglAddonRef.current = null;
+              webglFallbackTrippedRef.current = true;
+            } else if (!webglFallbackTrippedRef.current) {
+              console.error('[XtermTerminal] Resize oscillation detected but no WebGL addon to dispose');
+            } else {
+              console.log('[XtermTerminal] Resize oscillation persists after WebGL fallback');
+            }
+            oscillationHistory = [];
+          }
+
           onResizeRef.current?.(cols, rows);
         }
       });
@@ -487,7 +531,19 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           resizeTimeout = setTimeout(() => {
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                fitAddonRef.current?.fit();
+                // AC2 gate: only call fit() when proposeDimensions()'s integer output genuinely
+                // differs from the terminal's live cols/rows — a sub-cell WebGL glyph-metric
+                // wobble should not keep re-triggering the debounce→rAF→fit() cycle.
+                const term = terminalRef.current;
+                const addon = fitAddonRef.current;
+                if (term && addon) {
+                  const proposed = addon.proposeDimensions();
+                  if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
+                    addon.fit();
+                  } else {
+                    console.log('[XtermTerminal] Skipping fit(): proposed dims match current cols/rows');
+                  }
+                }
                 // Sync lastContainerSize to the post-fit DOM dimensions so the next
                 // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
                 // is filtered out, breaking the scrollbar-appearance oscillation loop.
@@ -509,6 +565,10 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // Cleanup
       return () => {
+        // Must be first: prevents a still-in-flight WebGL addon import() from mutating
+        // webglAddonRef (or loading onto) an already-disposed terminal — see the `cancelled`
+        // guard set up above the async IIFE.
+        cancelled = true;
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);
         }
@@ -522,6 +582,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         fitAddonRef.current = null;
         searchAddonRef.current = null;
         serializeAddonRef.current = null;
+        webglAddonRef.current = null;
       };
     } catch (error) {
       console.error('[XtermTerminal] Terminal initialization failed:', error);
@@ -612,7 +673,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.focus();
     },
     fit: () => {
-      fitAddonRef.current?.fit();
+      // AC1/AC7 gate: same shouldFit convergence check as the ResizeObserver path (Epic 2.2),
+      // applied here too since tab background/resume routes through this imperative fit()
+      // handle rather than the ResizeObserver.
+      const term = terminalRef.current;
+      const addon = fitAddonRef.current;
+      if (term && addon) {
+        const proposed = addon.proposeDimensions();
+        if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
+          addon.fit();
+        }
+      }
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;
