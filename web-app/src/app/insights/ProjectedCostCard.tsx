@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import type { ProjectedCostResult } from "@/lib/hooks/useProjectedCost";
-import { card, label, value, sub, budgetInput, warningText, inputError } from "./ProjectedCostCard.css";
+import { card, label, value, sub, budgetInput, warningText, inputError, caveat } from "./ProjectedCostCard.css";
 import { fmtCost } from "./insightsFormatters";
 
 interface Props {
@@ -38,6 +38,9 @@ export function ProjectedCostCard({ projection, threshold, isHydrated, onThresho
       <span className={label}>Projected this month</span>
       <span className={value}>{fmtCost(projection.projectedMonthly)}</span>
       <span className={sub}>Based on {projection.daysData} of {projection.daysInMonth} days</span>
+      {projection.hasUnpricedUsage && (
+        <span className={caveat}>Projection excludes unpriced usage</span>
+      )}
       {isWarning && (
         <span className={warningText}>Over budget!</span>
       )}

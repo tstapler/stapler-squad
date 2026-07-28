@@ -404,3 +404,146 @@ func TestGetInsightsSummary_CacheHitRate_ComputedCorrectly(t *testing.T) {
 	assert.InDelta(t, 0.2, resp.Msg.Sessions[0].CacheHitRate, 0.001)
 	assert.InDelta(t, 0.2, resp.Msg.OverallCacheHitRate, 0.001)
 }
+
+// --------------------------------------------------------------------------
+// AC-2/AC-5: unpriced-model signal reaches the RPC response
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Models, 1)
+	assert.Equal(t, "gpt-99-turbo", resp.Msg.Models[0].ModelFamily)
+	assert.True(t, resp.Msg.Models[0].PricingUnavailable)
+	assert.Contains(t, resp.Msg.UnpricedModels, "gpt-99-turbo")
+}
+
+// --------------------------------------------------------------------------
+// AC-1: claude-sonnet-5 pricing table entry is reachable end-to-end through
+// the GetInsightsSummary RPC path (not just verified in isolation by
+// session/tokens/pricing_test.go).
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Models, 1)
+	assert.Equal(t, "claude-sonnet-5", resp.Msg.Models[0].ModelFamily)
+	assert.False(t, resp.Msg.Models[0].PricingUnavailable)
+	assert.NotContains(t, resp.Msg.UnpricedModels, "claude-sonnet-5")
+	assert.Greater(t, resp.Msg.TotalCostUsd, float64(0))
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Greater(t, resp.Msg.Sessions[0].EstimatedCostUsd, float64(0))
+}
+
+func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.ListSessionTokens(
+		context.Background(),
+		connect.NewRequest(&sessionv1.ListSessionTokensRequest{}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, []string{"gpt-99-turbo"}, resp.Msg.Sessions[0].UnpricedModels)
+}
+
+// --------------------------------------------------------------------------
+// Pre-mortem Failure #2 (P2): <synthetic> must never leak into the unpriced
+// signal end-to-end, even though Epic 1.2's parser-boundary filter already
+// keeps it out of TurnTimeline in production. This test constructs the
+// ParseResult by hand (bypassing the parser) to prove the service layer
+// itself has no separate leak path — see pre-mortem.md row 2.
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenSyntheticTurnMixedWithRealTurns_ExpectSyntheticNeverSurfacedAsUnpriced(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		{
+			SessionUUID: "uuid-mixed",
+			ProjectPath: "/proj",
+			FileModTime: now,
+			TurnTimeline: []tokens.TurnStats{
+				// Synthetic turn: zero usage across every counter, matching the
+				// real empirical shape Claude Code's transcript writer emits.
+				{Model: "<synthetic>", Timestamp: now},
+				{Model: "claude-sonnet-4", Input: 1000, Output: 500, Timestamp: now},
+				{Model: "gpt-99-turbo", Input: 700, Output: 300, Timestamp: now},
+			},
+			TotalInput:  1700,
+			TotalOutput: 800,
+			ToolUsage:   map[string]tokens.ToolTokenStats{},
+		},
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+
+	require.NoError(t, err)
+
+	assert.Contains(t, resp.Msg.UnpricedModels, "gpt-99-turbo")
+	assert.NotContains(t, resp.Msg.UnpricedModels, "<synthetic>")
+
+	for _, mb := range resp.Msg.Models {
+		assert.NotEqual(t, "<synthetic>", mb.ModelFamily)
+	}
+}
+
+// --------------------------------------------------------------------------
+// AC-5: runtime signal — a newly-observed unpriced family is logged once,
+// not once per request. Asserting on actual log output is awkward, so this
+// asserts on the observable dedup state instead (whitebox test in package
+// services): len(loggedUnpricedFamilies) stays at 1 after two calls with the
+// same unpriced family.
+// --------------------------------------------------------------------------
+
+func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOnce(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	_, err := svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	_, err = svc.GetInsightsSummary(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}),
+	)
+	require.NoError(t, err)
+
+	assert.Len(t, svc.loggedUnpricedFamilies, 1)
+	assert.True(t, svc.loggedUnpricedFamilies["gpt-99-turbo"])
+}

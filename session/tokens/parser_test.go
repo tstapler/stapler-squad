@@ -141,6 +141,30 @@ func TestParseFile_WhenCacheHeavySession_ExpectCacheTokensSummedCorrectly(t *tes
 	assert.Equal(t, int64(8000), result.CacheRead)
 }
 
+func TestParseFile_WhenSyntheticModelTurn_ExpectExcludedFromTimelineAndModelCounts(t *testing.T) {
+	jsonl := `{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"synthetic turn"}],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-1","timestamp":"2026-05-15T10:00:00.000Z","sessionId":"synthetic-turn"}` + "\n" +
+		`{"parentUuid":"asst-1","isSidechain":false,"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"real turn"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"uuid":"asst-2","timestamp":"2026-05-15T10:00:01.000Z","sessionId":"synthetic-turn"}` + "\n"
+
+	p := NewParser()
+	result, err := p.ParseReader(strings.NewReader(jsonl))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// <synthetic> turn must not appear in TurnTimeline.
+	require.Len(t, result.TurnTimeline, 1)
+	for _, turn := range result.TurnTimeline {
+		assert.NotEqual(t, "<synthetic>", turn.Model)
+	}
+
+	// <synthetic> must not become PrimaryModel or appear in Models.
+	assert.NotEqual(t, "<synthetic>", result.PrimaryModel)
+	assert.Equal(t, "claude-sonnet-4-6", result.PrimaryModel)
+	assert.NotContains(t, result.Models, "<synthetic>")
+
+	// Both turns are still counted toward MessageCount (unrelated to the aggregation guard).
+	assert.Equal(t, 2, result.MessageCount)
+}
+
 // BenchmarkTokenParser_ProcessUserEntry measures allocations in user-entry parsing.
 // The fixture includes a large tool_result content payload to surface the allocation
 // profile of jsonlUserContent vs the old jsonlContent (which carried Input json.RawMessage).

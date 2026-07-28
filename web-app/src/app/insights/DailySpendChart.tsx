@@ -12,7 +12,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { chartCard, chartTitle, chartWrap, emptyChart } from "./DailySpendChart.css";
+import { chartCard, chartTitle, chartWrap, emptyChart, unpricedFootnote } from "./DailySpendChart.css";
 
 interface Props {
   daily: DailyTokenBucket[];
@@ -21,6 +21,7 @@ interface Props {
 interface DataPoint {
   date: string;
   cost: number;
+  hasUnpriced: boolean;
 }
 
 function toDataPoints(daily: DailyTokenBucket[]): DataPoint[] {
@@ -29,7 +30,7 @@ function toDataPoints(daily: DailyTokenBucket[]): DataPoint[] {
       ? new Date(Number(b.date.seconds) * 1000)
       : new Date(0);
     const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    return { date: label, cost: b.estimatedCostUsd };
+    return { date: label, cost: b.estimatedCostUsd, hasUnpriced: (b.unpricedModels?.length ?? 0) > 0 };
   });
 }
 
@@ -49,9 +50,16 @@ export function DailySpendChart({ daily }: Props) {
     );
   }
 
+  const unpricedDayCount = data.filter((d) => d.hasUnpriced).length;
+
   return (
     <div className={chartCard}>
       <div className={chartTitle}>Daily Spend (USD)</div>
+      {unpricedDayCount > 0 && (
+        <span className={unpricedFootnote}>
+          {unpricedDayCount} day{unpricedDayCount !== 1 ? "s" : ""} include{unpricedDayCount === 1 ? "s" : ""} unpriced model usage
+        </span>
+      )}
       <div className={chartWrap}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>

@@ -5,7 +5,9 @@
   "method": "ListSessionTokens",
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-21T12:39:06.59282763-07:00"
+  "tested": true,
+  "testIds": [
+    "TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
 }

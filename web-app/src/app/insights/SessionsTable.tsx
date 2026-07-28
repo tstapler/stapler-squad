@@ -19,6 +19,7 @@ import {
   tdMono,
   orphanBadge,
   backlogBadge,
+  unpricedBadge,
   empty,
   filterBar,
   searchInput,
@@ -156,7 +157,10 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
         <td className={tdRight}>{fmtTokens(s.totalInputTokens)}</td>
         <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
         <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
-        <td className={tdRight}>{fmtCost(s.estimatedCostUsd)}</td>
+        <td className={tdRight}>
+          {fmtCost(s.estimatedCostUsd)}
+          {s.unpricedModels.length > 0 && <span className={unpricedBadge}>unpriced</span>}
+        </td>
       </>
     );
   };

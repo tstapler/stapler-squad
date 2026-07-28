@@ -20,6 +20,7 @@ import {
   legend,
   legendItem,
   legendSwatch,
+  unpricedLegendLabel,
 } from "./ModelOverTimeChart.css";
 
 // Distinct colours per model family — maps first to most-expensive models.
@@ -58,6 +59,14 @@ function collectModels(daily: DailyTokenBucket[]): string[] {
   return Array.from(seen).sort();
 }
 
+function collectUnpricedModels(daily: DailyTokenBucket[]): Set<string> {
+  const unpriced = new Set<string>();
+  for (const bucket of daily) {
+    for (const m of bucket.unpricedModels ?? []) unpriced.add(m);
+  }
+  return unpriced;
+}
+
 function toDataPoints(daily: DailyTokenBucket[], models: string[], mode: "cost" | "tokens"): DataPoint[] {
   return daily.map((b) => {
     const d = b.date ? new Date(Number(b.date.seconds) * 1000) : new Date(0);
@@ -87,6 +96,7 @@ function fmtTick(v: number, mode: "cost" | "tokens"): string {
 export function ModelOverTimeChart({ daily, mode = "cost" }: Props) {
   const models = useMemo(() => collectModels(daily), [daily]);
   const data = useMemo(() => toDataPoints(daily, models, mode), [daily, models, mode]);
+  const unpricedModels = useMemo(() => collectUnpricedModels(daily), [daily]);
 
   if (daily.length === 0 || models.length === 0) {
     return (
@@ -158,6 +168,7 @@ export function ModelOverTimeChart({ daily, mode = "cost" }: Props) {
               style={{ background: colorForModel(m, i) }}
             />
             {m}
+            {unpricedModels.has(m) && <span className={unpricedLegendLabel}> (pricing unavailable)</span>}
           </div>
         ))}
       </div>

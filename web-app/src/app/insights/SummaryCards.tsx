@@ -19,6 +19,11 @@ export function SummaryCards({ summary }: Props) {
         <span className={cardLabel}>Total Cost</span>
         <span className={cardValue}>{fmtCost(summary.totalCostUsd)}</span>
         <span className={cardSub}>{sessionCount} session{sessionCount !== 1 ? "s" : ""}</span>
+        {summary.unpricedModels.length > 0 && (
+          <span className={cardSub}>
+            excludes {summary.unpricedModels.length} unpriced model{summary.unpricedModels.length !== 1 ? "s" : ""}
+          </span>
+        )}
       </div>
 
       <div className={card}>

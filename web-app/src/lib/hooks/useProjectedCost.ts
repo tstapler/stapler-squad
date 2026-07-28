@@ -5,6 +5,7 @@ export interface ProjectedCostResult {
   projectedMonthly: number;
   daysData: number;
   daysInMonth: number;
+  hasUnpricedUsage: boolean;
 }
 
 function getDaysInMonth(utcYear: number, utcMonth: number): number {
@@ -24,6 +25,8 @@ export function useProjectedCost(daily: DailyTokenBucket[]): ProjectedCostResult
       return d.getUTCFullYear() === currentYear && d.getUTCMonth() === currentMonth;
     });
 
+    const hasUnpricedUsage = currentMonthBuckets.some((b) => (b.unpricedModels?.length ?? 0) > 0);
+
     const daysData = currentMonthBuckets.length;
     if (daysData < 7) return null;
 
@@ -32,6 +35,6 @@ export function useProjectedCost(daily: DailyTokenBucket[]): ProjectedCostResult
     const daysInMonth = getDaysInMonth(currentYear, currentMonth);
     const projectedMonthly = avgDailyCost * daysInMonth;
 
-    return { projectedMonthly, daysData, daysInMonth };
+    return { projectedMonthly, daysData, daysInMonth, hasUnpricedUsage };
   }, [daily]);
 }
