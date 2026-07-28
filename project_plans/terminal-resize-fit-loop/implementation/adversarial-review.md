@@ -8,7 +8,10 @@
 
 ## Concerns
 
-- [ ] **Second `fit()` entry point (`XtermTerminal.tsx:615`, the imperative `fit()` exposed via
+**All 3 resolved during Phase 4 repair passes** (pre-mortem P1 #1 and triad engineering-lens
+repair) — checked off below; see `plan.md` Epic 2.4, Task 2.3.1b, and ADR-018 Consequences.
+
+- [x] **RESOLVED (Epic 2.4, added per pre-mortem.md P1 #1)** — **Second `fit()` entry point (`XtermTerminal.tsx:615`, the imperative `fit()` exposed via
   `useImperativeHandle`, called from `TerminalOutput.tsx`'s `isVisible` handler (~801) and its
   `visualViewport.resize` handler (~819)) is never gated by `shouldFit`.** The plan's own Pattern
   Decisions table correctly reasons that hooking the oscillation detector at `terminal.onResize`
@@ -28,7 +31,7 @@
   the same `shouldFit` gate inside the line-615 imperative handler (cheap, ~3 lines, same pattern
   as Task 2.2.1a) for full defense-in-depth.
 
-- [ ] **WebGL double-dispose/teardown-race guard from `research/pitfalls.md` §4
+- [x] **RESOLVED (Task 2.3.1b's `terminalRef.current` guard)** — **WebGL double-dispose/teardown-race guard from `research/pitfalls.md` §4
   (xterm.js#5181) is not implemented.** Pitfalls recommended checking `terminalRef.current` is
   still non-null / not-already-disposed before calling `webglAddon.dispose()` from the new
   oscillation-triggered fallback path. Task 2.3.1b's dispose branch (`XtermTerminal.tsx` inside
@@ -41,7 +44,7 @@
   2.3.1b, or add a one-sentence note in ADR-018 explaining why the race is structurally impossible
   given the disposal ordering.
 
-- [ ] **Residual false-positive risk from `research/pitfalls.md` §3 (legitimate drag jitter near a
+- [x] **RESOLVED (ADR-018 Consequences, Negative section)** — **Residual false-positive risk from `research/pitfalls.md` §3 (legitimate drag jitter near a
   cell boundary producing an A/B/A/B/A `onResize` sequence indistinguishable from the real WebGL
   oscillation bug) is not documented anywhere the plan says the ADR will live.** Pitfalls.md
   explicitly recommends the ADR "state this explicitly... since it's easy to get [the design]

@@ -132,27 +132,32 @@ resizeConvergence.ts (Phase 1 — pure fns + unit tests)
         |
         |-----------------------------------------------------------.
         v                                                            v
-XtermTerminal.tsx: webglAddonRef plumbing (2.1)          useTerminalFlowControl.ts:
-        |                                                 lastSentSizeRef + force param (3.1)
+XtermTerminal.tsx: webglAddonRef +                        useTerminalFlowControl.ts:
+webglFallbackTrippedRef plumbing,                          lastSentSizeRef + force param (3.1)
+cancelled-guard (2.1)                                                |
+        |                                                            |
         v                                                            |
 XtermTerminal.tsx: AC2 gate in ResizeObserver->fit() (2.2)           |
         |                                                            |
-        v                                                            |
-XtermTerminal.tsx: AC4 detector at terminal.onResize (2.3)           |
-        |                                                            v
-        |                                          TerminalOutput.tsx: 2 callers pass force=true (3.2)
-        |                                                            |
-        '-----------------------------.       .--------------------'
-                                       v       v
+        |-----------------------------.                              |
+        v                              v                             |
+XtermTerminal.tsx: AC4 detector    XtermTerminal.tsx: AC1/AC7 gate   |
+at terminal.onResize (2.3)         on imperative fit() (2.4)         |
+        |                              |                             v
+        |                              |          TerminalOutput.tsx: 2 callers pass
+        |                              |          force=true + regression test (3.2, incl. 3.1.2c)
+        |                              |                             |
+        '------------------.       .--'       .--------------------'
+                             v       v         v
                         Test coverage (Phase 4): resizeConvergence.test.ts,
                         useTerminalFlowControl.test.ts additions,
-                        new XtermTerminalResize.test.tsx (AC5/AC6/AC4)
+                        new XtermTerminalResize.test.tsx (AC1/AC4/AC5/AC6/AC7)
                                        |
                                        v
                         ADR-018 + docs/adr stub (Phase 5.1)
                                        |
                                        v
-                        Manual verification checklist AC1/AC7 (Phase 5.2)
+                        Manual verification hard gate AC1/AC7 (Phase 5.2)
 ```
 
 ---
@@ -772,6 +777,36 @@ this.
 ##### Task 4.2.3a: Write the AC6 no-regression test (~5 min)
 - Add `describe('AC6: genuine cols/rows change still converges exactly once', ...)` with the
   scenario above.
+- Files: `web-app/src/components/sessions/__tests__/XtermTerminalResize.test.tsx`
+
+#### Story 4.2.4: AC1/AC7 — imperative `fit()` handle is gated too
+**Added per engineering-lens triad review (2026-07-27 repair pass)**: Epic 2.4's fix (gating the
+`useImperativeHandle`-exposed `fit` method, used by `TerminalOutput.tsx`'s tab-visibility and
+`visualViewport.resize` handlers for the tab-background/resume trigger) previously had zero
+automated coverage — only the one-time manual QA checklist (Story 5.2.1) exercised it, meaning a
+future regression there would pass CI silently. This closes that gap with the same harness already
+built for Story 4.2.2/4.2.3, exercising the imperative handle directly instead of the
+`ResizeObserver`.
+**Acceptance Criteria**:
+- *Given* `XtermTerminal` is rendered with a ref, mounted with `terminal.cols=84, terminal.rows=60`
+  and `harness.proposedDimensions` set to the same `{cols:84,rows:60}` (no actual layout change),
+  *When* the test calls `ref.current.fit()` directly (simulating `TerminalOutput.tsx`'s
+  visibility-restore/`visualViewport.resize` handlers calling the imperative handle), *Then*
+  `harness.fitCalledCount` does not increase — mirrors Story 4.2.2's no-op assertion but via the
+  imperative path instead of the `ResizeObserver`.
+- *Given* the same setup but `harness.proposedDimensions` is changed to `{cols:90,rows:62}` before
+  the call (a genuine change, as if the container resized while the tab was backgrounded), *When*
+  `ref.current.fit()` is called, *Then* `harness.fitCalledCount` increases by exactly 1 and the mock
+  terminal's `cols`/`rows` become `90`/`62` — proving the gate on this path doesn't regress the
+  path's existing legitimate use (mobile viewport changes, visibility restoration after a real
+  size change), mirroring Story 4.2.3's no-regression assertion.
+**Files**: `web-app/src/components/sessions/__tests__/XtermTerminalResize.test.tsx`
+
+##### Task 4.2.4a: Write the imperative-`fit()` gate tests (~4 min)
+- Add `describe('AC1/AC7: imperative fit() handle is gated the same as the ResizeObserver path',
+  ...)` with both cases above, calling the component's exposed ref method directly (no
+  `fireResizeObserver` involved) — reuses the same `harness.fitCalledCount` counter and
+  `MockFitAddon.proposeDimensions()`/`MockTerminal.resize()` semantics from Task 4.2.1a.
 - Files: `web-app/src/components/sessions/__tests__/XtermTerminalResize.test.tsx`
 
 ### Epic 4.3: AC4 — oscillation burst trips the WebGL fallback
