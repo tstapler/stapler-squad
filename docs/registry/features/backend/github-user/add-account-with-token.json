@@ -1,0 +1,16 @@
+{
+  "id": "github-user:add-account-with-token",
+  "type": "backend",
+  "service": "GitHubUserService",
+  "method": "AddGitHubAccountWithToken",
+  "protoFile": "proto/session/v1/github_user.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/github_user_service.go",
+  "tested": true,
+  "testIds": [
+    "TestAddGitHubAccountWithToken_ValidToken_StoresAndReturnsAccount",
+    "TestAddGitHubAccountWithToken_InvalidToken_ReturnsPermissionDenied",
+    "TestAddGitHubAccountWithToken_EmptyToken_ReturnsInvalidArgument"
+  ],
+  "lastModified": "2026-07-28T12:24:26.383558421-07:00"
+}

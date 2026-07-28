@@ -538,6 +538,49 @@ export const searchInput = style({
   },
 });
 
+// --- Add account panel (tab switcher) ---
+
+export const addAccountPanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  marginLeft: vars.space["4"],
+});
+
+export const authTabs = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+});
+
+const authTabBase = style({
+  padding: `${vars.space["1"]} ${vars.space["3"]}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+  cursor: "pointer",
+  border: `1px solid ${vars.color.borderMuted}`,
+  background: "transparent",
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+  ":hover": {
+    borderColor: vars.color.borderHover,
+    color: vars.color.textSecondary,
+  },
+});
+
+export const authTab = style([authTabBase, {}]);
+
+export const authTabActive = style([
+  authTabBase,
+  {
+    background: vars.color.accentBg,
+    borderColor: vars.color.inputFocusBorder,
+    color: vars.color.inputFocusBorder,
+    fontWeight: 600,
+  },
+]);
+
 // --- Session action buttons ---
 
 export const prActions = style({

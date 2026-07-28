@@ -54,6 +54,9 @@ const (
 	// GitHubUserServiceListGitHubAccountsProcedure is the fully-qualified name of the
 	// GitHubUserService's ListGitHubAccounts RPC.
 	GitHubUserServiceListGitHubAccountsProcedure = "/session.v1.GitHubUserService/ListGitHubAccounts"
+	// GitHubUserServiceAddGitHubAccountWithTokenProcedure is the fully-qualified name of the
+	// GitHubUserService's AddGitHubAccountWithToken RPC.
+	GitHubUserServiceAddGitHubAccountWithTokenProcedure = "/session.v1.GitHubUserService/AddGitHubAccountWithToken"
 )
 
 // GitHubUserServiceClient is a client for the session.v1.GitHubUserService service.
@@ -81,6 +84,10 @@ type GitHubUserServiceClient interface {
 	RevokeGitHubToken(context.Context, *connect.Request[v1.RevokeGitHubTokenRequest]) (*connect.Response[v1.RevokeGitHubTokenResponse], error)
 	// ListGitHubAccounts returns all connected GitHub accounts (from keychain and env vars).
 	ListGitHubAccounts(context.Context, *connect.Request[v1.ListGitHubAccountsRequest]) (*connect.Response[v1.ListGitHubAccountsResponse], error)
+	// AddGitHubAccountWithToken validates a personal access token against the
+	// host's /user endpoint and stores it in the keychain on success. Use this
+	// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+	AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
 }
 
 // NewGitHubUserServiceClient constructs a client for the session.v1.GitHubUserService service. By
@@ -136,18 +143,25 @@ func NewGitHubUserServiceClient(httpClient connect.HTTPClient, baseURL string, o
 			connect.WithSchema(gitHubUserServiceMethods.ByName("ListGitHubAccounts")),
 			connect.WithClientOptions(opts...),
 		),
+		addGitHubAccountWithToken: connect.NewClient[v1.AddGitHubAccountWithTokenRequest, v1.AddGitHubAccountWithTokenResponse](
+			httpClient,
+			baseURL+GitHubUserServiceAddGitHubAccountWithTokenProcedure,
+			connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountWithToken")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // gitHubUserServiceClient implements GitHubUserServiceClient.
 type gitHubUserServiceClient struct {
-	listUserPRs           *connect.Client[v1.ListUserPRsRequest, v1.ListUserPRsResponse]
-	watchUserPRs          *connect.Client[v1.WatchUserPRsRequest, v1.UserPREvent]
-	getGitHubAuthState    *connect.Client[v1.GetGitHubAuthStateRequest, v1.GetGitHubAuthStateResponse]
-	startGitHubDeviceAuth *connect.Client[v1.StartGitHubDeviceAuthRequest, v1.StartGitHubDeviceAuthResponse]
-	pollGitHubDeviceAuth  *connect.Client[v1.PollGitHubDeviceAuthRequest, v1.PollGitHubDeviceAuthResponse]
-	revokeGitHubToken     *connect.Client[v1.RevokeGitHubTokenRequest, v1.RevokeGitHubTokenResponse]
-	listGitHubAccounts    *connect.Client[v1.ListGitHubAccountsRequest, v1.ListGitHubAccountsResponse]
+	listUserPRs               *connect.Client[v1.ListUserPRsRequest, v1.ListUserPRsResponse]
+	watchUserPRs              *connect.Client[v1.WatchUserPRsRequest, v1.UserPREvent]
+	getGitHubAuthState        *connect.Client[v1.GetGitHubAuthStateRequest, v1.GetGitHubAuthStateResponse]
+	startGitHubDeviceAuth     *connect.Client[v1.StartGitHubDeviceAuthRequest, v1.StartGitHubDeviceAuthResponse]
+	pollGitHubDeviceAuth      *connect.Client[v1.PollGitHubDeviceAuthRequest, v1.PollGitHubDeviceAuthResponse]
+	revokeGitHubToken         *connect.Client[v1.RevokeGitHubTokenRequest, v1.RevokeGitHubTokenResponse]
+	listGitHubAccounts        *connect.Client[v1.ListGitHubAccountsRequest, v1.ListGitHubAccountsResponse]
+	addGitHubAccountWithToken *connect.Client[v1.AddGitHubAccountWithTokenRequest, v1.AddGitHubAccountWithTokenResponse]
 }
 
 // ListUserPRs calls session.v1.GitHubUserService.ListUserPRs.
@@ -185,6 +199,11 @@ func (c *gitHubUserServiceClient) ListGitHubAccounts(ctx context.Context, req *c
 	return c.listGitHubAccounts.CallUnary(ctx, req)
 }
 
+// AddGitHubAccountWithToken calls session.v1.GitHubUserService.AddGitHubAccountWithToken.
+func (c *gitHubUserServiceClient) AddGitHubAccountWithToken(ctx context.Context, req *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error) {
+	return c.addGitHubAccountWithToken.CallUnary(ctx, req)
+}
+
 // GitHubUserServiceHandler is an implementation of the session.v1.GitHubUserService service.
 type GitHubUserServiceHandler interface {
 	// ListUserPRs returns all open PRs authored by the authenticated user,
@@ -210,6 +229,10 @@ type GitHubUserServiceHandler interface {
 	RevokeGitHubToken(context.Context, *connect.Request[v1.RevokeGitHubTokenRequest]) (*connect.Response[v1.RevokeGitHubTokenResponse], error)
 	// ListGitHubAccounts returns all connected GitHub accounts (from keychain and env vars).
 	ListGitHubAccounts(context.Context, *connect.Request[v1.ListGitHubAccountsRequest]) (*connect.Response[v1.ListGitHubAccountsResponse], error)
+	// AddGitHubAccountWithToken validates a personal access token against the
+	// host's /user endpoint and stores it in the keychain on success. Use this
+	// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+	AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error)
 }
 
 // NewGitHubUserServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -261,6 +284,12 @@ func NewGitHubUserServiceHandler(svc GitHubUserServiceHandler, opts ...connect.H
 		connect.WithSchema(gitHubUserServiceMethods.ByName("ListGitHubAccounts")),
 		connect.WithHandlerOptions(opts...),
 	)
+	gitHubUserServiceAddGitHubAccountWithTokenHandler := connect.NewUnaryHandler(
+		GitHubUserServiceAddGitHubAccountWithTokenProcedure,
+		svc.AddGitHubAccountWithToken,
+		connect.WithSchema(gitHubUserServiceMethods.ByName("AddGitHubAccountWithToken")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.GitHubUserService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GitHubUserServiceListUserPRsProcedure:
@@ -277,6 +306,8 @@ func NewGitHubUserServiceHandler(svc GitHubUserServiceHandler, opts ...connect.H
 			gitHubUserServiceRevokeGitHubTokenHandler.ServeHTTP(w, r)
 		case GitHubUserServiceListGitHubAccountsProcedure:
 			gitHubUserServiceListGitHubAccountsHandler.ServeHTTP(w, r)
+		case GitHubUserServiceAddGitHubAccountWithTokenProcedure:
+			gitHubUserServiceAddGitHubAccountWithTokenHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -312,4 +343,8 @@ func (UnimplementedGitHubUserServiceHandler) RevokeGitHubToken(context.Context, 
 
 func (UnimplementedGitHubUserServiceHandler) ListGitHubAccounts(context.Context, *connect.Request[v1.ListGitHubAccountsRequest]) (*connect.Response[v1.ListGitHubAccountsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.GitHubUserService.ListGitHubAccounts is not implemented"))
+}
+
+func (UnimplementedGitHubUserServiceHandler) AddGitHubAccountWithToken(context.Context, *connect.Request[v1.AddGitHubAccountWithTokenRequest]) (*connect.Response[v1.AddGitHubAccountWithTokenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.GitHubUserService.AddGitHubAccountWithToken is not implemented"))
 }

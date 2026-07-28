@@ -219,9 +219,10 @@ var methodToID = map[string]string{
 	"GetHookStatus": "hooks:status",
 	"InstallHooks":  "hooks:install",
 	// GitHub user RPCs
-	"ListUserPRs":        "github-user:list-prs",
-	"WatchUserPRs":       "github-user:watch-prs",
-	"GetGitHubAuthState": "github-user:get-auth-state",
+	"ListUserPRs":               "github-user:list-prs",
+	"WatchUserPRs":              "github-user:watch-prs",
+	"GetGitHubAuthState":        "github-user:get-auth-state",
+	"AddGitHubAccountWithToken": "github-user:add-account-with-token",
 	// Provider limits RPCs
 	"GetProviderLimits": "session:get-provider-limits",
 	// Config file rules RPCs (stub implementations in RulesService)

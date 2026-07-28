@@ -39,6 +39,11 @@ service GitHubUserService {
 
   // ListGitHubAccounts returns all connected GitHub accounts (from keychain and env vars).
   rpc ListGitHubAccounts(ListGitHubAccountsRequest) returns (ListGitHubAccountsResponse) {}
+
+  // AddGitHubAccountWithToken validates a personal access token against the
+  // host's /user endpoint and stores it in the keychain on success. Use this
+  // for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+  rpc AddGitHubAccountWithToken(AddGitHubAccountWithTokenRequest) returns (AddGitHubAccountWithTokenResponse) {}
 }
 
 // GitHubAccount is a single connected GitHub account.
@@ -123,4 +128,13 @@ message ListGitHubAccountsResponse {
   // enterprise_hosts lists the GHES hostnames configured on the server
   // (github.com is always implicitly available and not included here).
   repeated string enterprise_hosts = 2;
+}
+
+message AddGitHubAccountWithTokenRequest {
+  string host  = 1; // GitHub host to authenticate against; empty means github.com
+  string token = 2; // personal access token
+}
+
+message AddGitHubAccountWithTokenResponse {
+  GitHubAuthState auth_state = 1; // updated state on success
 }

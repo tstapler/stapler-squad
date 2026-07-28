@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -242,6 +243,42 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
 		Accounts:        accounts,
 		EnterpriseHosts: hosts,
+	}), nil
+}
+
+// +api: github-user:add-account-with-token
+// AddGitHubAccountWithToken validates a personal access token against the
+// host's /user endpoint and stores it in the keychain on success. Use this
+// for hosts that don't support OAuth Device Flow (e.g. some GHES instances).
+func (s *GitHubUserService) AddGitHubAccountWithToken(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AddGitHubAccountWithTokenRequest],
+) (*connect.Response[sessionv1.AddGitHubAccountWithTokenResponse], error) {
+	token := strings.TrimSpace(req.Msg.Token)
+	if token == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("token is required"))
+	}
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+
+	login, err := githubpkg.GetCurrentUserLoginWithToken(ctx, host, token)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("validate token: %w", err))
+	}
+	if login == "" {
+		// CodePermissionDenied, not CodeUnauthenticated: the latter triggers the
+		// frontend's global session-expired redirect to /login (createAuthInterceptor
+		// in web-app/src/lib/config.ts), which would yank the user off this form
+		// instead of showing the inline "token rejected" error.
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("token was rejected — check the token and host"))
+	}
+	if err := githubpkg.SetKeychainTokenForAccount(host, login, token); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token: %w", err))
+	}
+
+	s.cache.InvalidateLoginCache()
+	_ = s.cache.Refresh(ctx)
+	return connect.NewResponse(&sessionv1.AddGitHubAccountWithTokenResponse{
+		AuthState: s.resolveAuthState(ctx),
 	}), nil
 }
 

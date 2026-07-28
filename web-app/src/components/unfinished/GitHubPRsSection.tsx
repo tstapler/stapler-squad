@@ -11,6 +11,7 @@ import {
   StartGitHubDeviceAuthRequestSchema,
   PollGitHubDeviceAuthRequestSchema,
   RevokeGitHubTokenRequestSchema,
+  AddGitHubAccountWithTokenRequestSchema,
   DeviceAuthStatus,
 } from "@/gen/session/v1/github_user_pb";
 import { createClient } from "@connectrpc/connect";
@@ -400,6 +401,124 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
   );
 }
 
+// --- Add account panel (tab switcher) ---
+
+type AddAccountMode = "device" | "token";
+
+function AddAccountPanel({ errorMessage, onAuthComplete, onCancel }: DeviceAuthBannerProps) {
+  const [mode, setMode] = useState<AddAccountMode>("device");
+  return (
+    <div className={styles.addAccountPanel} data-testid="github-add-account-panel">
+      <div className={styles.authTabs} role="tablist">
+        <button
+          role="tab"
+          aria-selected={mode === "device"}
+          className={mode === "device" ? styles.authTabActive : styles.authTab}
+          onClick={() => setMode("device")}
+          data-testid="github-auth-tab-device"
+        >
+          Device flow
+        </button>
+        <button
+          role="tab"
+          aria-selected={mode === "token"}
+          className={mode === "token" ? styles.authTabActive : styles.authTab}
+          onClick={() => setMode("token")}
+          data-testid="github-auth-tab-token"
+        >
+          Personal access token
+        </button>
+      </div>
+      {mode === "device" ? (
+        <DeviceAuthBanner
+          errorMessage={errorMessage}
+          onAuthComplete={onAuthComplete}
+          onCancel={onCancel}
+        />
+      ) : (
+        <TokenAuthForm onAuthComplete={onAuthComplete} onCancel={onCancel} />
+      )}
+    </div>
+  );
+}
+
+interface TokenAuthFormProps {
+  onAuthComplete: () => void;
+  onCancel?: () => void;
+}
+
+function TokenAuthForm({ onAuthComplete, onCancel }: TokenAuthFormProps) {
+  const client = useGitHubUserClient();
+  const [host, setHost] = useState("");
+  const [token, setToken] = useState("");
+  const [status, setStatus] = useState<{ kind: "idle" | "submitting" | "error"; message?: string }>({
+    kind: "idle",
+  });
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      setStatus({ kind: "submitting" });
+      try {
+        await client.addGitHubAccountWithToken(
+          create(AddGitHubAccountWithTokenRequestSchema, {
+            host: host.trim(),
+            token: token.trim(),
+          })
+        );
+        onAuthComplete();
+      } catch (err) {
+        setStatus({ kind: "error", message: String(err) });
+      }
+    },
+    [client, host, token, onAuthComplete]
+  );
+
+  return (
+    <form
+      className={styles.deviceFlowCard}
+      onSubmit={handleSubmit}
+      data-testid="github-token-auth-form"
+    >
+      <input
+        className={styles.hostInput}
+        value={host}
+        onChange={(e) => setHost(e.target.value)}
+        placeholder="github.com"
+        aria-label="GitHub host"
+        data-testid="github-token-host-input"
+      />
+      <input
+        type="password"
+        className={styles.hostInput}
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        placeholder="ghp_… or a GHES personal access token"
+        aria-label="Personal access token"
+        data-testid="github-token-input"
+      />
+      <button
+        type="submit"
+        className={styles.connectButton}
+        disabled={status.kind === "submitting" || !token.trim()}
+        data-testid="github-token-submit-button"
+      >
+        {status.kind === "submitting" ? "Validating…" : "Connect with token"}
+      </button>
+      {onCancel && (
+        <button type="button" className={styles.cancelButton} onClick={onCancel}>
+          Cancel
+        </button>
+      )}
+      {status.kind === "error" && (
+        <span className={styles.authError} data-testid="github-token-auth-error">
+          {status.message}
+        </span>
+      )}
+    </form>
+  );
+}
+
 // --- Filter / sort bar ---
 
 type FilterStatus =
@@ -663,7 +782,7 @@ export function GitHubPRsSection() {
       {isOpen && (
         <div id="github-prs-list">
           {authUnavailable && !addingAccount ? (
-            <DeviceAuthBanner
+            <AddAccountPanel
               errorMessage={authState?.errorMessage ?? ""}
               onAuthComplete={refresh}
             />
@@ -678,7 +797,7 @@ export function GitHubPRsSection() {
               )}
 
               {addingAccount && (
-                <DeviceAuthBanner
+                <AddAccountPanel
                   errorMessage=""
                   onAuthComplete={handleAddAccountComplete}
                   onCancel={handleAddAccountCancel}
