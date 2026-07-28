@@ -206,13 +206,28 @@ func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
 	assert.False(t, pt.IsStale())
 }
 
-func TestDefaultPricingTable_WhenCalledToday_ExpectNotStale(t *testing.T) {
-	// Regression guard: DefaultPricingTable()'s own entries must never trip
-	// IsStale() the moment they ship, or the startup warning becomes
-	// permanent noise instead of a signal. Every actively-monitored entry's
-	// EffectiveDate must be kept within 30 days of release; frozen/retired
-	// entries must leave EffectiveDate blank (see claude-opus-3/sonnet-3/haiku-3).
-	assert.False(t, DefaultPricingTable().IsStale())
+func TestDefaultPricingTable_WhenVerifiedAsOfDate_ExpectNoEntryAlreadyStale(t *testing.T) {
+	// Regression guard: DefaultPricingTable()'s own entries must not ship
+	// already past IsStale()'s 30-day window, or the startup warning becomes
+	// permanent noise instead of a signal (this bit us once — see
+	// claude-opus-3/sonnet-3/haiku-3's history). Anchored to the "as of" date
+	// in DefaultPricingTable's doc comment, not time.Now(): a real-time check
+	// would itself become a ticking time bomb, failing on unrelated PRs the
+	// moment 30 days elapse with no code change. Bump this alongside the doc
+	// comment (and re-verify prices) the next time entries are refreshed.
+	const asOf = "2026-07-27"
+	asOfTime, err := time.Parse("2006-01-02", asOf)
+	require.NoError(t, err)
+	threshold := asOfTime.AddDate(0, 0, -30)
+
+	for family, p := range DefaultPricingTable().Prices {
+		if p.EffectiveDate == "" {
+			continue // frozen/retired entry, intentionally exempt from staleness
+		}
+		d, err := time.Parse("2006-01-02", p.EffectiveDate)
+		require.NoErrorf(t, err, "family %q has unparseable EffectiveDate %q", family, p.EffectiveDate)
+		assert.Falsef(t, d.Before(threshold), "family %q EffectiveDate %q is already stale as of %s", family, p.EffectiveDate, asOf)
+	}
 }
 
 func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testing.T) {

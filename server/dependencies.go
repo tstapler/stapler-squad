@@ -1075,6 +1075,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			} else if !os.IsNotExist(loadErr) {
 				log.Warn("failed to load pricing override, using defaults", "path", overridePath, "err", loadErr)
 			}
+		} else {
+			log.Warn("failed to resolve config dir, skipping pricing override, using defaults", "err", cfgErr)
 		}
 		if pricing.IsStale() {
 			log.Warn("pricing table is stale (an entry's EffectiveDate is 30+ days old)", "loadedAt", pricing.LoadedAt)

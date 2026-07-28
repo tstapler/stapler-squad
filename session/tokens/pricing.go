@@ -182,6 +182,14 @@ func NormalizeModelFamily(modelID string) string {
 	return normalized
 }
 
+// hasUsage reports whether any token counter is non-zero. Shared by
+// EstimateCost, ModelFamilyCost, and their callers to decide whether an
+// unpriced model family had real usage worth flagging (vs. a zero-usage
+// family like Claude Code's internal "<synthetic>" turns).
+func hasUsage(input, output, cacheCreation, cacheRead int64) bool {
+	return input != 0 || output != 0 || cacheCreation != 0 || cacheRead != 0
+}
+
 // EstimateCost computes USD cost for a ParseResult using the PricingTable.
 // Returns 0.0 for the cost of any model family not found in the table, and
 // reports those skipped families in unpriced (sorted) so the caller can
@@ -225,7 +233,7 @@ func (pt *PricingTable) EstimateCost(r *ParseResult) (cost float64, unpriced []s
 	for family, inputTok := range modelInputs {
 		pricing, ok := pt.Prices[family]
 		if !ok {
-			if inputTok != 0 || modelOutputs[family] != 0 || modelCacheCreation[family] != 0 || modelCacheRead[family] != 0 {
+			if hasUsage(inputTok, modelOutputs[family], modelCacheCreation[family], modelCacheRead[family]) {
 				unpricedSet[family] = true
 			}
 			continue
@@ -281,7 +289,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 		family := NormalizeModelFamily(turn.Model)
 		pricing, ok := pt.Prices[family]
 		if !ok {
-			if turn.Input != 0 || turn.Output != 0 || turn.CacheCreation != 0 || turn.CacheRead != 0 {
+			if hasUsage(turn.Input, turn.Output, turn.CacheCreation, turn.CacheRead) {
 				unpriced[family] = true
 			}
 			continue
@@ -303,7 +311,7 @@ func (pt *PricingTable) ModelFamilyCost(r *ParseResult) (costs map[string]float6
 				float64(r.CacheCreation)/1_000_000.0*pricing.CacheWritePerMTok +
 				float64(r.CacheRead)/1_000_000.0*pricing.CacheReadPerMTok
 			result[family] = cost
-		} else if r.TotalInput != 0 || r.TotalOutput != 0 || r.CacheCreation != 0 || r.CacheRead != 0 {
+		} else if hasUsage(r.TotalInput, r.TotalOutput, r.CacheCreation, r.CacheRead) {
 			unpriced[family] = true
 		}
 	}

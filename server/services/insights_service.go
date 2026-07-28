@@ -146,6 +146,9 @@ func (s *InsightsService) GetInsightsSummary(
 		for _, f := range unpriced {
 			allUnpricedFamilies[f] = true
 		}
+		// Computed once per session and reused below for both the daily rollup
+		// and the model breakdown — avoids walking r.TurnTimeline twice.
+		modelFamilyCosts, unpricedFamilies := s.pricing.ModelFamilyCost(r)
 		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
 
 		// Build top tools list for this session.
@@ -210,8 +213,7 @@ func (s *InsightsService) GetInsightsSummary(
 			b.EstimatedCostUsd += costUSD
 			b.SessionCount++
 			// Per-model breakdown within this day.
-			modelFamilyCostsForDay, unpricedForDay := s.pricing.ModelFamilyCost(r)
-			for family, cost := range modelFamilyCostsForDay {
+			for family, cost := range modelFamilyCosts {
 				b.CostByModel[family] += cost
 			}
 			for _, turn := range r.TurnTimeline {
@@ -223,13 +225,12 @@ func (s *InsightsService) GetInsightsSummary(
 			if dailyUnpriced[bucketDay] == nil {
 				dailyUnpriced[bucketDay] = make(map[string]bool)
 			}
-			for family := range unpricedForDay {
+			for family := range unpricedFamilies {
 				dailyUnpriced[bucketDay][family] = true
 			}
 		}
 
 		// Model breakdown.
-		modelFamilyCosts, unpricedFamilies := s.pricing.ModelFamilyCost(r)
 		for _, turn := range r.TurnTimeline {
 			family := tokens.NormalizeModelFamily(turn.Model)
 			// Skip turns with no usage at all across every counter — e.g. Claude
