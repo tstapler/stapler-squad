@@ -65,7 +65,7 @@ alternative-rejected entries.
 | `webglFallbackTrippedRef` | New `useRef(false)` in `XtermTerminal.tsx`. Set `true` the first time the oscillation detector successfully disposes WebGL; never reset for the life of the mount. | Added per architecture-review.md Concern #2: distinguishes "WebGL never loaded" (AC4's `console.error` backstop case) from "already fell back this session" (a later burst is expected and should not re-log the backstop error). |
 | default (DOM) renderer | What xterm.js actually falls back to when `webglAddon.dispose()` is called and no other accelerated renderer addon is loaded. | Corrects AC4's literal "canvas renderer" wording — `@xterm/addon-canvas` is deprecated/incompatible with the pinned `@xterm/xterm ^6.0.0`. See ADR-018. |
 | `lastSentSizeRef` | New `useRef<TerminalSize \| null>(null)` inside `useTerminalFlowControl`, alongside the existing `lastResizeTimeRef`. Tracks the last `(cols, rows)` value actually pushed via a `TerminalResize` RPC. | Distinct from `TerminalOutput.tsx`'s `lastResizeRef` (client-observed size) and from the existing dead-code `dimensionSyncRef` — do not conflate any of the three. |
-| `force` (resize bypass parameter) | New optional 3rd parameter on `resize(cols, rows, force?)`. When `true`, skips the AC3 value-dedup check (but not the 200ms time-throttle) and unconditionally updates `lastSentSizeRef.current` after sending. | Required so the 2 non-standard callers (reconnect-resync, manual force-resize) keep working under a naive value-dedup. |
+| `force` (resize bypass parameter) | New optional 3rd parameter on `resize(cols, rows, force?)`. When `true`, skips **both** the 200ms time-throttle and the AC3 value-dedup check, guaranteeing delivery, and unconditionally updates `lastResizeTimeRef`/`lastSentSizeRef.current` after sending. **CORRECTED post-implementation (Gate 2 code review, CRITICAL finding)**: the original design bypassed only the value-dedup, not the time-throttle — but both real callers need *guaranteed* delivery (reconnect-resync, manual force-resize), and a partial bypass let the send be silently dropped if it fired within 200ms of a prior send, exactly the failure class this fix exists to prevent. | Required so the 2 non-standard callers (reconnect-resync, manual force-resize) keep working under a naive value-dedup *and* aren't silently swallowed by the pre-existing time-throttle. |
 | dedup | Value-based skip (same value → no-op), as opposed to throttle (time-based skip regardless of value). | AC3 requires both to independently apply. |
 
 14 glossary terms.
@@ -582,7 +582,10 @@ ResizeObserver debounce produces) doesn't keep re-sending after the throttle win
   - *Given* the same `lastSentSizeRef.current = {cols:100,rows:30}`, *When* `resize(150, 45)` is
     called, *Then* `shouldSendResize({cols:150,rows:45}, {...})` returns `true`, `pushMessage` is
     called exactly once, and `lastSentSizeRef.current` updates to `{cols:150,rows:45}`.
-- `force=true` (the 2 non-standard callers) bypasses only the value-dedup, not the time-throttle.
+- `force=true` (the 2 non-standard callers) bypasses **both** the value-dedup and the time-throttle
+  — **CORRECTED per Gate 2 code review (CRITICAL finding)**: the original design bypassed only
+  the value-dedup, leaving `force` calls that land within 200ms of a prior send silently dropped
+  by the pre-existing throttle — exactly defeating the guarantee both real callers need.
   - *Given* the client reconnects (`isConnected` transitions `false→true`) with
     `TerminalOutput.tsx`'s `lastResizeRef.current = {cols:100,rows:30}` — matching what
     `lastSentSizeRef.current` in the hook already holds from before the disconnect — *When* the
@@ -591,6 +594,12 @@ ResizeObserver debounce produces) doesn't keep re-sending after the throttle win
     `lastSentSizeRef.current` is (re-)set to `{cols:100,rows:30}`, which is what makes this
     "reset on reconnect" — the forced send always re-establishes the ref to the authoritative
     post-reconnect value rather than requiring a separate clear-to-null step.
+  - *Given* `lastResizeTimeRef.current` was set 50ms ago (inside the 200ms `THROTTLE_MS` window —
+    the exact scenario a reconnect or a fast double-click on the manual force-resize button can
+    produce), *When* `resize(100, 30, true)` is called, *Then* `pushMessage` **is still called** —
+    `force=true` bypasses the time-throttle check too, not just the value-dedup check. This is the
+    regression this correction specifically closes: the original implementation would have hit the
+    throttle's `return` before ever reaching the `force` check and silently dropped the send.
 **Files**: `web-app/src/lib/hooks/useTerminalFlowControl.ts`
 
 ##### Task 3.1.1a: Add `lastSentSizeRef` + import `shouldSendResize` (~2 min)
@@ -602,9 +611,23 @@ ResizeObserver debounce produces) doesn't keep re-sending after the throttle win
 - Files: `web-app/src/lib/hooks/useTerminalFlowControl.ts`
 
 ##### Task 3.1.1b: Update `resize()` signature + dedup check + ref update (~5 min)
+- **CORRECTED per Gate 2 code review (CRITICAL finding, empirically verified)**: `force` must
+  bypass BOTH the time-throttle and the value-dedup check, not just the latter. The original plan
+  text below left the time-throttle check unconditional, which silently drops a forced send if it
+  lands within 200ms of a prior send — exactly the failure mode the 2 real `force=true` callers
+  (reconnect-resync, manual force-resize) need guaranteed immunity from.
 - Change the signature at line 403 from `const resize = useCallback((cols: number, rows: number) => {`
   to `const resize = useCallback((cols: number, rows: number, force = false) => {`.
-- After the existing time-throttle check (lines 409-416) and before the `try` block (line 418),
+- Change the existing time-throttle check (lines 409-416) to also respect `force`:
+  ```ts
+  if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
+    console.log(`[useTerminalFlowControl] Resize throttled (${timeSinceLastResize}ms since last, need ${THROTTLE_MS}ms)`);
+    return;
+  }
+  ```
+  (i.e. add `!force &&` to the existing condition — this is the actual fix; everything else in
+  this task is unchanged from the original plan.)
+- After that (now `force`-aware) time-throttle check and before the `try` block (line 418),
   insert:
   ```ts
   if (!force && !shouldSendResize({ cols, rows }, lastSentSizeRef.current)) {
@@ -614,6 +637,11 @@ ResizeObserver debounce produces) doesn't keep re-sending after the throttle win
   ```
 - Immediately after `lastResizeTimeRef.current = now;` (line 420), add
   `lastSentSizeRef.current = { cols, rows };`.
+- Add a doc comment above the `resize` function explaining `force`'s guarantee (per
+  architecture-review's specific request): "When true, bypasses both the send-throttle and the
+  value-dedup check, guaranteeing the resize reaches the server even if it repeats the last-sent
+  value or arrives within the throttle window. Use only for resync-critical call sites — silently
+  dropping those leaves the server with stale dimensions with no user-visible signal."
 - Add `lastSentSizeRef` to the `useCallback` dependency array... it is a ref (stable identity), so
   no dependency-array change is required — confirm the existing deps list at line 455 is unchanged.
 - Files: `web-app/src/lib/hooks/useTerminalFlowControl.ts`
@@ -691,6 +719,18 @@ today).
   and "throttled by time", per adversarial-review.md Minor #2); then calls `resize(100, 30)` (no
   force) and asserts it IS deduped (no 3rd send), proving the forced call correctly re-set
   `lastSentSizeRef`.
+- Files: `web-app/src/lib/hooks/__tests__/useTerminalFlowControl.test.ts`
+
+##### Task 4.1.1d: `force=true` within the throttle window still sends (~4 min) — **added per Gate 2
+CRITICAL finding**
+- The existing Task 4.1.1c test always advances fake timers past 200ms *before* the forced call —
+  it structurally cannot catch a `force` that only bypasses value-dedup, not the time-throttle
+  (exactly the bug the architecture reviewer found empirically). Add a distinct test: call
+  `resize(100, 30)` (send #1), advance fake timers by only **50ms** (still inside the 200ms
+  `THROTTLE_MS` window), then call `resize(100, 30, true)` and assert `pushMessage` **is** called
+  a second time — proving `force=true` bypasses the time-throttle, not just the value-dedup.
+  Without the Task 3.1.1b fix, this test fails (the throttle's early `return` fires before the
+  `force` check is ever reached).
 - Files: `web-app/src/lib/hooks/__tests__/useTerminalFlowControl.test.ts`
 
 ### Epic 4.2: `XtermTerminal` component test harness + AC5/AC6 coverage
@@ -917,22 +957,41 @@ the original ticket scenario, **so that** AC1 and AC7 (which have no automated e
 explicitly checked off before merge, and so a future regression has a quantitative baseline to
 compare against rather than a bare pass/fail.
 **Acceptance Criteria** (the checklist itself — no code):
-- AC1 (window-resize trigger): *Given* 3 concurrent browser tabs, each with its own
-  `XtermTerminal`/session (per `research/features.md`'s confirmation that this is the real
-  architecture — one terminal per tab, not an in-page tiled layout), on a machine/browser with
+
+**CORRECTED (post-implementation, during PR review)**: the original checklist below used "3
+concurrent browser tabs" as the primary repro topology, citing `research/features.md`'s claim
+that no in-page tiled layout exists. That claim was wrong — see `requirements.md`'s corrected
+Problem Statement and `research/features.md`'s ERRATA note. `PaneSplitRenderer.tsx` genuinely
+tiles multiple independent `XtermTerminal` instances as sibling panes on one page, and that is
+the *original* ticket's actual repro topology ("3 terminals open in a split/tiled layout... panes
+resize in lockstep"). The checklist below now requires the same-page tiled scenario as the
+**primary** check, with separate browser tabs as a secondary (still valid, since that topology is
+also real) check.
+
+- AC1 (window-resize trigger, PRIMARY — same-page tiled panes): *Given* 3 concurrent terminal
+  sessions tiled as sibling panes on **one page** via the split-pane cockpit UI (open a session,
+  split the pane 2-3 times to add sibling `session-detail` panes, each bound to a different
+  session — this is the actual original topology, not 3 browser tabs), on a machine/browser with
   WebGL enabled (Chrome, per the original report), *When* the OS window is resized once (e.g.
-  1200×800 → 1400×900), *Then* Chrome DevTools' Performance panel, recorded for 5s starting at the
-  resize, shows the ResizeObserver→fit()→onResize chain settling (no repeating
-  `[XtermTerminal] Container resized` log lines after the first 1-2 debounce cycles) and CPU usage
-  returns to idle (<5%, verified via the DevTools Performance panel's CPU track) within 2 seconds
-  of the resize ending, in each tab.
+  1200×800 → 1400×900) — which resizes *all 3 panes simultaneously* via their shared flex
+  container, potentially cascading layout reflows between sibling panes — *Then* Chrome DevTools'
+  Performance panel, recorded for 5s starting at the resize, shows the ResizeObserver→fit()→onResize
+  chain settling in every pane (no repeating `[XtermTerminal] Container resized` log lines after
+  the first 1-2 debounce cycles, in any pane, including cascading reflows triggered by sibling
+  panes) and CPU usage returns to idle (<5%, verified via the DevTools Performance panel's CPU
+  track) within 2 seconds of the resize ending.
+- AC1 (window-resize trigger, SECONDARY — separate browser tabs): *Given* 3 concurrent browser
+  tabs, each with its own `XtermTerminal`/session (a real, independently-valid topology, just not
+  the original ticket's), *When* the OS window is resized once, *Then* the same convergence
+  criteria as above hold in each tab.
 - AC7 (tab background/resume trigger — tested as its own independent sub-case, not assumed covered
-  by AC1's window-resize pass, per pre-mortem.md P1 #1): *Given* the same 3-tab setup, *When* one
-  tab is backgrounded (switch away for ≥5s, to let `visualViewport`/visibility handlers fire) and
-  resumed (switch back), *Then* input in all 3 tabs remains responsive throughout (typing echoes
-  without a perceptible stall) and no tab shows a frozen/unresponsive terminal — the original repro
-  condition from the backlog item, verified specifically via the tab-background/resume path (Epic
-  2.4's imperative-`fit()` gate), not just the window-resize path.
+  by AC1's window-resize pass, per pre-mortem.md P1 #1): *Given* the same tiled-panes setup (and,
+  secondarily, the 3-tab setup), *When* the tab/window is backgrounded (switch away for ≥5s, to let
+  `visualViewport`/visibility handlers fire) and resumed (switch back), *Then* input in all panes
+  (or all 3 tabs) remains responsive throughout (typing echoes without a perceptible stall) and no
+  pane/tab shows a frozen/unresponsive terminal — the original repro condition from the backlog
+  item, verified specifically via the tab-background/resume path (Epic 2.4's imperative-`fit()`
+  gate), not just the window-resize path.
 - **Quantitative baseline** (per pre-mortem.md P1 #4): record the console-logged "Actual pixels per
   column" vs "Expected pixels per column" values (`XtermTerminal.tsx`'s existing mount-time log,
   lines ~386-393) observed during this pass, along with the browser/OS/GPU used, in the PR

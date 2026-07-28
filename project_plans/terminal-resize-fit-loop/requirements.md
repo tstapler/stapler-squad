@@ -6,11 +6,22 @@ Backlog item: fc63d55b-d6cf-4e11-af02-c76c86637c5e
 
 ## Problem Statement
 
-In multi-terminal usage (multiple sessions open, one per browser tab per current architecture —
-the original report described a same-page "tiled" layout that does not exist in this codebase;
-the equivalent reproducible condition is multiple concurrent terminal tabs/sessions plus a
-window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver` → `fit()` →
-`terminal.onResize` → `useTerminalFlowControl.resize()` chain can fail to converge:
+**CORRECTION (added during PR review, after initial implementation)**: this document originally
+claimed "the original report described a same-page 'tiled' layout that does not exist in this
+codebase" and reframed the repro to 3 separate browser tabs. **That claim was wrong.** A same-page
+tiled/split-pane layout genuinely exists: `PaneSplitRenderer.tsx`'s `PaneLeafComponent` (for
+`viewKind === "session-detail"` leaves) renders `<SessionDetail>` → `SessionDetailView.tsx` → a
+`next/dynamic`-lazy-loaded `TerminalOutput` → `XtermTerminal`, and `PaneSplitComponent` renders
+sibling leaf panes side by side via CSS flex, each able to hold an independent session's terminal.
+This is the original ticket's actual repro topology ("3 terminals open in a split/tiled layout...
+panes resize in lockstep"). The error came from a research grep that only checked
+`PaneSplitRenderer.tsx`'s own source text for the literal strings `<XtermTerminal`/`TerminalOutput`
+and missed the 3-hop import chain. See `research/features.md`'s ERRATA note for the full account.
+
+In multi-terminal usage (multiple sessions open **either as sibling panes in the same-page tiled
+layout, or across separate browser tabs — both topologies are in scope**), `XtermTerminal`'s
+`ResizeObserver` → `fit()` → `terminal.onResize` → `useTerminalFlowControl.resize()` chain can
+fail to converge:
 
 - The `ResizeObserver` handler (`XtermTerminal.tsx`, around line 453) gates on a **raw pixel**
   delta (`Math.abs(width - lastContainerSize.width) > 1`), not on whether `FitAddon` actually
@@ -31,8 +42,16 @@ window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver
 
 1. Any resize-triggering event (window resize, tab background/resume, container reflow) settles
    to zero further `fit()` calls and zero further resize RPCs within a bounded number of debounce
-   cycles, per terminal instance, independent of how many terminal sessions/tabs are open
-   concurrently.
+   cycles, per terminal instance, independent of how many terminal sessions are open concurrently
+   **and independent of whether those instances share one page as tiled sibling panes (the
+   original repro's actual topology — see corrected Problem Statement) or are spread across
+   separate browser tabs.** Each `XtermTerminal` instance's gate/dedup/oscillation state is
+   scoped per-component-instance with no cross-instance coordination — this must hold even when
+   a resize of one pane cascades into a layout reflow affecting sibling panes' `ResizeObserver`s
+   (the "panes resize in lockstep... ping-pong off each other" behavior from the original
+   report), since each instance still only calls `fit()`/sends an RPC when *its own* proposed
+   dimensions differ from *its own* current dimensions — a cascade should converge as each
+   instance's local gate reaches a fixed point, not require shared/synchronized state.
 2. `fit()` is only invoked when `FitAddon.proposeDimensions()` reports an integer `cols`/`rows`
    pair that differs from the terminal's currently-applied `cols`/`rows` — sub-cell pixel deltas
    are a no-op regardless of the existing 1px raw-pixel prefilter.
@@ -58,9 +77,12 @@ window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver
 6. A real `cols`/`rows` change (e.g. resizing the browser window enough to cross a cell boundary)
    still triggers exactly one `fit()` and one resize RPC — the fix must not cause legitimate
    resizes to be silently dropped.
-7. The original manual repro (3 concurrent terminal sessions, one per browser tab; background/
-   resume the tab or resize the window once) no longer pegs CPU or freezes input, verified
-   manually after the fix lands.
+7. The original manual repro (3 concurrent terminal sessions **tiled as sibling panes on one
+   page via the split-pane cockpit UI — the actual original topology**; background/resume the
+   tab or resize the window once) no longer pegs CPU or freezes input, verified manually after
+   the fix lands. (A secondary, separately-valuable check: the same holds across 3 separate
+   browser tabs, since that topology is also real and in scope, just not the ticket's original
+   scenario.)
 
 ## Scope
 
@@ -84,9 +106,10 @@ window resize or tab background/resume cycle), `XtermTerminal`'s `ResizeObserver
 - Nothing beyond Must Have — this is a targeted convergence bug fix, not a resize-system rewrite.
 
 ### Out of Scope
-- Building an in-page tiled/split-pane terminal layout (does not exist in this codebase today;
-  AC1's repro is reframed to the existing one-session-per-tab architecture, per the AC1 text
-  itself)
+- ~~Building an in-page tiled/split-pane terminal layout (does not exist in this codebase
+  today...)~~ **REMOVED — this was based on the incorrect claim corrected in the Problem
+  Statement above. The tiled/split-pane layout already exists (`PaneSplitRenderer.tsx`) and is
+  in scope as the primary repro topology, not something to build.**
 - Root-causing xterm.js's/WebGL's exact sub-pixel glyph-metric math — the fix bounds and
   mitigates the symptom (unbounded churn), it does not attempt to make WebGL glyph width exactly
   equal to CSS cell width upstream

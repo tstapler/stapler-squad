@@ -75,17 +75,37 @@ this will be new code, not a refactor-to-reuse.
   live in the same effect-scoped closure or a ref cleared in the same cleanup path, or it will leak
   a stale rolling-window array across remounts of the *same* component instance (React strict-mode
   double-invoke in dev, or a session pane genuinely remounting).
-- **Multiple `XtermTerminal` instances resizing simultaneously — currently possible, but only in
-  test/stress harnesses, not real navigation flows.** Grepped all `<XtermTerminal` render sites:
+- **ERRATA (added post-implementation, during PR review — this original finding was WRONG and
+  is corrected here rather than silently rewritten, so the reasoning error is visible):** the
+  claim below that "`PaneSplitRenderer.tsx` does **not** render `TerminalOutput`/`XtermTerminal`
+  at all" was based on a shallow grep for the literal string `<XtermTerminal`/`TerminalOutput`
+  directly inside `PaneSplitRenderer.tsx`'s source text, which misses a real import chain:
+  `PaneSplitRenderer.tsx`'s `PaneLeafComponent` (for `viewKind === "session-detail"` leaves)
+  renders `<SessionDetail>` → `SessionDetailView.tsx` → a `next/dynamic`-lazy-loaded
+  `TerminalOutput` (`SessionDetailView.tsx:43`) → `XtermTerminal`. **A same-page tiled/split
+  layout with multiple concurrently-mounted, independent `XtermTerminal` instances genuinely
+  exists** (`PaneSplitComponent` renders sibling leaf panes side by side via CSS flex, each able
+  to hold its own `session-detail` view bound to a different session). This is the actual
+  original bug repro topology ("3 terminals open in a split/tiled layout... panes resize in
+  lockstep") — it was never a "3 separate browser tabs" scenario. The reframing of AC1/AC7 in
+  requirements.md and the "no cross-instance coordination needed" conclusion below were both
+  downstream of this error and have been corrected in requirements.md and plan.md; new test
+  coverage (a real multi-instance `XtermTerminal` convergence test, not mocked-through-Pane) and
+  a redone manual verification pass using the actual split-pane UI address the gap. The original
+  (incorrect) analysis is preserved below for transparency, not deleted.
+
+- ~~Multiple `XtermTerminal` instances resizing simultaneously — currently possible, but only in
+  test/stress harnesses, not real navigation flows.~~ Grepped all `<XtermTerminal` render sites:
   it's rendered exactly once, inside `TerminalOutput.tsx`, which itself is rendered exactly once,
-  inside `SessionDetailView.tsx` (single active session view). `PaneSplitRenderer.tsx` does **not**
-  render `TerminalOutput`/`XtermTerminal` at all (confirms the requirements doc's "Out of Scope:
-  building an in-page tiled/split-pane layout — doesn't exist in this codebase"). So the
-  requirements' "3 terminal sessions/tabs" repro scenario refers to **3 separate browser tabs**
-  each running their own `SessionDetailView`/`XtermTerminal` instance — not 3 terminals sharing one
-  page's DOM/CPU budget as siblings. This matters for the oscillation-burst detector: it can be
-  scoped per-component-instance (module-local ref inside the mount effect) with no cross-instance
-  coordination needed, since instances never share a tab.
+  inside `SessionDetailView.tsx` (single active session view). ~~`PaneSplitRenderer.tsx` does
+  **not** render `TerminalOutput`/`XtermTerminal` at all~~ (confirms the requirements doc's "Out
+  of Scope: building an in-page tiled/split-pane layout — doesn't exist in this codebase"). ~~So
+  the requirements' "3 terminal sessions/tabs" repro scenario refers to **3 separate browser
+  tabs** each running their own `SessionDetailView`/`XtermTerminal` instance — not 3 terminals
+  sharing one page's DOM/CPU budget as siblings. This matters for the oscillation-burst detector:
+  it can be scoped per-component-instance (module-local ref inside the mount effect) with no
+  cross-instance coordination needed, since instances never share a tab.~~ **(struck through —
+  see ERRATA above; this entire paragraph's premise was wrong.)**
 - **Font-size-change effect interaction (AC-adjacent, not in the 7 ACs but explicitly flagged in
   the task)**: `XtermTerminal.tsx` ~572 has `useEffect(() => { ...; setTimeout(() =>
   fitAddonRef.current?.fit(), 0); }, [fontSize])` — same pattern exists for `fontFamily` (~580).
