@@ -16,9 +16,10 @@ import (
 // "git worktree not initialized", which would propagate into the error chain.
 func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	inst := &Instance{
-		Title:      "test-non-worktree",
-		Status:     Active,
-		IsWorktree: false,
+		Title:       "test-non-worktree",
+		Status:      Active,
+		IsWorktree:  false,
+		Permissions: GetManagedPermissions(),
 		// gitManager left as zero value — IsDirty() returns error if called
 	}
 	inst.started.Store(true)
@@ -36,9 +37,10 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 // GitWorktreeManager returns an error, confirming the guard condition is honored.
 func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t *testing.T) {
 	inst := &Instance{
-		Title:      "test-worktree-uninit",
-		Status:     Active,
-		IsWorktree: true,
+		Title:       "test-worktree-uninit",
+		Status:      Active,
+		IsWorktree:  true,
+		Permissions: GetManagedPermissions(),
 		// gitManager.worktree == nil → IsDirty returns "git worktree not initialized"
 	}
 	inst.started.Store(true)
