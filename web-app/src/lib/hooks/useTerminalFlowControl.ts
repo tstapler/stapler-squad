@@ -3,6 +3,7 @@
 import { useRef, useCallback, useEffect } from "react";
 import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
+import { dimensionsEqual, type ResizeDimensions } from "@/lib/terminal/types";
 import type { Terminal } from '@xterm/xterm';
 
 export interface UseTerminalFlowControlOptions {
@@ -16,7 +17,7 @@ export interface UseTerminalFlowControlOptions {
 
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
-  resize: (cols: number, rows: number) => void;
+  resize: (cols: number, rows: number, force?: boolean) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
   requestFullResync: (urgent?: boolean) => void;
@@ -42,16 +43,23 @@ export function useTerminalFlowControl({
   const waitingForPaneResponseRef = useRef(false);
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
+  const lastSentDimsRef = useRef<ResizeDimensions | null>(null);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paneRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
 
-  // Cancel any pending deferred resize timer when the component unmounts to prevent
-  // the timer callback from firing against a torn-down component/connection.
+  // Cancel any pending deferred resize/pane-request timers when the component
+  // unmounts to prevent the timer callback from firing against a torn-down
+  // component/connection.
   useEffect(() => {
     return () => {
       if (pendingResizeTimerRef.current) {
         clearTimeout(pendingResizeTimerRef.current);
         pendingResizeTimerRef.current = null;
+      }
+      if (paneRequestTimerRef.current) {
+        clearTimeout(paneRequestTimerRef.current);
+        paneRequestTimerRef.current = null;
       }
     };
   }, []);
@@ -186,16 +194,34 @@ export function useTerminalFlowControl({
     sendChunk();
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
-  const resize = useCallback((cols: number, rows: number) => {
+  const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {
       console.warn("Cannot resize terminal: stream not connected");
       return;
     }
 
     // Cancel any previously deferred resize — we have newer dimensions now.
+    // This MUST run before the value-dedup early-return below: otherwise a
+    // bounce-back call whose dimensions match lastSentDimsRef (e.g. A -> B
+    // deferred within the throttle window -> back to A) would dedup-return
+    // without cancelling the still-pending deferred send for B, letting that
+    // stale send fire later with the wrong dimensions.
     if (pendingResizeTimerRef.current) {
       clearTimeout(pendingResizeTimerRef.current);
       pendingResizeTimerRef.current = null;
+    }
+
+    // Value-dedup: skip if this exact (cols, rows) pair was the last one actually
+    // sent, independent of (and checked before) the time throttle below. An
+    // unchanged value must not keep the throttle window "warm" — lastResizeTimeRef
+    // is deliberately left untouched here.
+    if (
+      !force &&
+      lastSentDimsRef.current !== null &&
+      dimensionsEqual(lastSentDimsRef.current, { cols, rows })
+    ) {
+      console.log(`[useTerminalFlowControl] Resize skipped, value unchanged (${cols}x${rows})`);
+      return;
     }
 
     const now = Date.now();
@@ -206,7 +232,6 @@ export function useTerminalFlowControl({
     // fresh pane capture so xterm.js and tmux are guaranteed to agree on content.
     const doSend = () => {
       if (!pushMessageRef.current || !isConnectedRef.current) return;
-      lastResizeTimeRef.current = Date.now();
       try {
         console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
         pushMessage(
@@ -216,31 +241,41 @@ export function useTerminalFlowControl({
           })
         );
 
+        // Only record success (and refresh the throttle/dedup state) after the
+        // send above completed without throwing.
+        lastResizeTimeRef.current = Date.now();
+        lastSentDimsRef.current = { cols, rows };
+
         // After resizing, request fresh terminal content
-        setTimeout(() => {
+        paneRequestTimerRef.current = setTimeout(() => {
+          paneRequestTimerRef.current = null;
           if (!pushMessageRef.current || !isConnectedRef.current) return;
-          console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
-          pushMessage(
-            create(TerminalDataSchema, {
-              sessionId,
-              data: {
-                case: "currentPaneRequest",
-                value: create(CurrentPaneRequestSchema, {
-                  lines: 50,
-                  includeEscapes: true,
-                  targetCols: cols,
-                  targetRows: rows,
-                }),
-              },
-            })
-          );
+          try {
+            console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
+            pushMessage(
+              create(TerminalDataSchema, {
+                sessionId,
+                data: {
+                  case: "currentPaneRequest",
+                  value: create(CurrentPaneRequestSchema, {
+                    lines: 50,
+                    includeEscapes: true,
+                    targetCols: cols,
+                    targetRows: rows,
+                  }),
+                },
+              })
+            );
+          } catch (err) {
+            handleError(err);
+          }
         }, 100);
       } catch (err) {
         handleError(err);
       }
     };
 
-    if (timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
+    if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
       // Defer instead of drop: schedule the trailing-edge send so the final
       // settled size always reaches the server after rapid resize sequences.
       const remaining = THROTTLE_MS - timeSinceLastResize;

@@ -114,6 +114,11 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     terminalState: "DISCONNECTED",
     isHardFailed: false,
     handleManualReconnect: jest.fn(),
+    // useVisibilityResync is wired unconditionally in TerminalOutput.tsx and
+    // calls these on every unmount/session-id change.
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

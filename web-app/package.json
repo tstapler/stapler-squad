@@ -65,6 +65,7 @@
     "@swc/helpers": "^0.5.21",
     "@tanstack/react-virtual": "^3.13.25",
     "@vanilla-extract/recipes": "^0.5.7",
+    "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-serialize": "^0.14.0",

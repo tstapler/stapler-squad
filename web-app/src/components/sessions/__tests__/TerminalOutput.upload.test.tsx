@@ -83,6 +83,11 @@ function makeStreamMock(overrides = {}) {
     sendFlowControl: jest.fn(),
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
+    // useVisibilityResync is wired unconditionally in TerminalOutput.tsx and
+    // calls these on every unmount/session-id change.
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

@@ -14,6 +14,10 @@ require("@testing-library/jest-dom");
 // and lets tests that mock getBoundingClientRect() control the reported size.
 // Tests that need a fully controllable ResizeObserver can override with:
 //   Object.defineProperty(global, 'ResizeObserver', { writable: true, value: ... })
+// XtermTerminal.test.tsx does exactly this (installCapturingResizeObserver) to get a
+// deliberately inert, manually-driven ResizeObserver for its dead-band sampler tests
+// (ADR-002) — the auto-firing behavior here would otherwise start the sampler
+// immediately on every mount, before the fake-timer-driven test bodies are ready.
 // BroadcastChannel is not available in jsdom. Provide a minimal stub so that
 // components using createNotificationSyncChannel() don't throw in tests.
 // The stub is fire-and-forget; tests that need to assert cross-tab messages
