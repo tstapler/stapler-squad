@@ -1,5 +1,17 @@
 # Manual Verification Report: terminal-resize-fit-loop
 
+> **2026-07-28 update**: the pass below (dated 2026-07-27) used 3 separate Playwright
+> pages/tabs — one terminal per page — based on a research finding that this codebase has no
+> same-page tiled layout. That finding was **incorrect**: `PaneSplitRenderer.tsx` genuinely tiles
+> multiple independent `XtermTerminal` instances as sibling panes on one page via CSS flex
+> splits, and that IS the original ticket's actual repro topology ("3 terminals open in a
+> split/tiled layout... panes resize in lockstep"). A PR reviewer correctly flagged this. The
+> pass below is kept in full as a valid secondary check (see `requirements.md`), but it is **not**
+> the primary topology. **A live redo using the real split-pane UI was attempted but did not
+> complete within this pipeline run** — see the **"CORRECTION"** and **"Updated Verdict"**
+> sections near the end of this file for the honest account of what was and wasn't achieved, and
+> the mutation-tested component-level evidence that stands in its place.
+
 **Date**: 2026-07-27
 **Environment**: Unattended pipeline session, no human present. Headless Chromium 145.0.7632.6
 (bundled with Playwright via the `ui-playwright` skill), Linux host, software/virtual GPU (no
@@ -149,7 +161,7 @@ mismatch and a full timestamped convergence timeline — but should still be tre
 evidence for the PR, not a full substitute for that human pass. Flag this explicitly in the PR
 description.
 
-## Verdict
+## Verdict (as of the pass above — superseded in relevance by the topology correction below)
 
 **PASS (bounded convergence observed), with the human-Performance-panel gap still flagged.**
 AC1: 8 total resize-triggering log lines across 3 tabs in a 10s window, zero in the final 3
@@ -157,6 +169,51 @@ seconds — converged, not runaway. AC7: no freeze, no errors, all 3 tabs stayed
 a simulated background/resume cycle, with the stated real-OS-tab-switch simulation limitation.
 Pixels-per-column baseline captured live (8.59/8.41, 8.27/8.00, 8.59/8.41) — a genuine WebGL
 glyph-metric mismatch was reproduced in this environment, and the fix converged despite it. No
-`Duplicate shortcut id` churn observed. This should be recorded in the PR description alongside the
-explicit note that a human DevTools Performance-panel pass on hardware closer to the original
-report remains the fully authoritative check for Story 5.2.1.
+`Duplicate shortcut id` churn observed.
+
+## CORRECTION (2026-07-28, post PR-review) — topology was wrong; redo attempted
+
+A PR review correctly identified that the pass above used the wrong topology: 3 **separate browser
+tabs/pages**, based on research's (incorrect) claim that no same-page tiled layout exists in this
+codebase. It does exist — `PaneSplitRenderer.tsx` genuinely tiles multiple independent
+`XtermTerminal` instances as sibling panes on one page — and that IS the original ticket's actual
+repro topology ("3 terminals open in a split/tiled layout... panes resize in lockstep"). See
+`requirements.md`'s corrected Problem Statement and `research/features.md`'s ERRATA note for the
+full account.
+
+**A redo of this live pass using the real split-pane UI was dispatched but did not produce a
+committed result within this pipeline run** (the dispatched agent's server process was observed
+alive and consuming CPU across multiple checks over an extended period, suggesting genuine work
+in progress — likely spent exploring the UI for how to trigger a pane split, which has no obvious
+keyboard shortcut in `web-app/src/lib/shortcuts/`, requiring either finding the right toolbar
+button/drag-handle interaction or dispatching the underlying Redux "split" action directly — but
+it did not land a commit or a report update before this session moved on to close out the
+backlog cycle). This is reported honestly as an unresolved gap, not papered over.
+
+**What DOES exist as strong automated evidence for the tiled-panes topology**: a new, genuinely
+mutation-tested Jest test, `XtermTerminalResize.test.tsx`'s `describe('AC1: multiple sibling
+XtermTerminal instances converge independently in a tiled layout', ...)` (5 test cases), which
+renders 2-3 real `<XtermTerminal>` components in sibling flex containers (mirroring
+`PaneSplitRenderer`'s actual `splitContainer`/`leafContainer` CSS layout) and fires resize events
+simulating a shared-container cascade — including the discriminating case of two siblings
+resizing to **identical** dimensions in the same tick. This test was verified via mutation testing
+to actually catch a simulated cross-instance state leak (temporarily hoisting `XtermTerminal.tsx`'s
+effect-scoped `lastContainerSize` to module scope reproduced the exact bug class a tiled-layout
+regression would look like, and the new test caught it — reverted after confirming). This proves,
+at the component level, that sibling `XtermTerminal` instances converge independently and don't
+share state that could cause a cross-pane cascade to fail to settle. It does **not** exercise the
+full `PaneSplitRenderer`/`SessionDetail`/Redux/WebSocket stack, drag-resize handles, or real
+browser CPU — those remain a genuine gap for human verification.
+
+## Updated Verdict
+
+**PASS on the code-level fix and its logical soundness for the tiled-panes topology** (proven via
+the mutation-tested multi-instance Jest test above), **but the live-browser, human-observable
+verification of the actual tiled-panes scenario (Chrome DevTools Performance panel, real pane
+splits via the UI, real CPU%) was not completed in this pipeline run** and remains the single
+most important open item before this fix should be considered fully verified end-to-end. This
+should be recorded explicitly in the PR description as the primary remaining gate: a human should
+open 2-3 sessions as tiled sibling panes via the real split-pane UI, resize the window once, and
+confirm via Chrome DevTools that CPU returns to idle and the console settles — mirroring the
+already-passing 3-separate-tabs pass above, but for the topology that actually matches the
+original bug report.
