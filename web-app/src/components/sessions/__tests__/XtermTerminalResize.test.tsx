@@ -47,6 +47,21 @@ interface MockTerminalLike {
   resize(cols: number, rows: number): void;
 }
 
+/**
+ * Per-instance record, one per constructed MockTerminal, in construction order. Added (AC1
+ * multi-instance tiled-pane convergence coverage — see describe block near the bottom of this
+ * file) so 2-3 concurrently-mounted `<XtermTerminal>` instances each get their own independent
+ * `fitCalledCount`/`onResizeCb`/`proposedDimensions`, instead of all sharing the single
+ * `XtermResizeTestHarness` singleton fields below (which only ever reflected ONE instance at a
+ * time and get silently overwritten by whichever MockTerminal was constructed last).
+ */
+interface XtermInstanceRecord {
+  terminal: MockTerminalLike | null;
+  fitCalledCount: number;
+  onResizeCb: ((p: { cols: number; rows: number }) => void) | null;
+  proposedDimensions: { cols: number; rows: number } | undefined;
+}
+
 interface XtermResizeTestHarness {
   fitCalledCount: number;
   onResizeCb: ((p: { cols: number; rows: number }) => void) | null;
@@ -54,6 +69,12 @@ interface XtermResizeTestHarness {
   proposedDimensions: { cols: number; rows: number } | undefined;
   element: HTMLDivElement;
   modes: { mouseTrackingMode: string };
+  /**
+   * Per-instance records for multi-instance tests. The singleton fields above are left fully
+   * intact (still mirroring the LAST constructed MockTerminal) so every pre-existing
+   * single-instance test keeps working unchanged.
+   */
+  instances: XtermInstanceRecord[];
   setProposedDimensions(cols: number, rows: number): void;
   reset(): void;
 }
@@ -80,8 +101,16 @@ jest.mock("@xterm/xterm", () => {
     proposedDimensions: { cols: 80, rows: 24 },
     element: el,
     modes: { mouseTrackingMode: "none" },
+    instances: [],
     setProposedDimensions(cols: number, rows: number) {
       this.proposedDimensions = { cols, rows };
+      // Every pre-existing (single-instance) test calls this legacy singleton setter AFTER the
+      // component has already mounted (i.e. after MockTerminal's per-instance record has already
+      // snapshotted the OLD default). Keep that working by also updating the currently-active
+      // instance's own record — multi-instance tests bypass this setter entirely and mutate
+      // harness.instances[i].proposedDimensions directly instead.
+      const current = this.instances[this.instances.length - 1];
+      if (current) current.proposedDimensions = { cols, rows };
     },
     reset() {
       this.fitCalledCount = 0;
@@ -89,6 +118,7 @@ jest.mock("@xterm/xterm", () => {
       this.terminal = null;
       this.proposedDimensions = { cols: 80, rows: 24 };
       this.modes = { mouseTrackingMode: "none" };
+      this.instances = [];
     },
   };
 
@@ -98,10 +128,23 @@ jest.mock("@xterm/xterm", () => {
     options: Record<string, unknown> = {};
     element = el;
     modes = harness.modes;
+    __record: XtermInstanceRecord;
 
     constructor(opts?: Record<string, unknown>) {
       if (opts) Object.assign(this.options, opts);
       harness.terminal = this;
+      // Snapshot the harness default at construction time so tests that call
+      // harness.setProposedDimensions(...) BEFORE rendering (the existing single-instance
+      // convention) still seed this instance's own proposed dims correctly.
+      this.__record = {
+        terminal: this,
+        fitCalledCount: 0,
+        onResizeCb: null,
+        proposedDimensions: harness.proposedDimensions
+          ? { ...harness.proposedDimensions }
+          : undefined,
+      };
+      harness.instances.push(this.__record);
     }
 
     buffer = {
@@ -116,12 +159,16 @@ jest.mock("@xterm/xterm", () => {
       if (cols !== this.cols || rows !== this.rows) {
         this.cols = cols;
         this.rows = rows;
-        harness.onResizeCb?.({ cols, rows });
+        // Fire via this instance's own record — for single-instance tests this is the exact
+        // same callback reference that used to be routed through the harness singleton, so
+        // behavior there is unchanged. Multi-instance tests each get their own callback.
+        this.__record.onResizeCb?.({ cols, rows });
       }
     }
 
     onResize(cb: (p: { cols: number; rows: number }) => void) {
       harness.onResizeCb = cb;
+      this.__record.onResizeCb = cb;
       return { dispose: jest.fn() };
     }
     onData() {
@@ -131,7 +178,14 @@ jest.mock("@xterm/xterm", () => {
       return { dispose: jest.fn() };
     }
     attachCustomKeyEventHandler() {}
-    loadAddon() {}
+    loadAddon(addon: unknown) {
+      // Mirrors real xterm.js's Terminal.loadAddon(addon), which calls addon.activate(terminal)
+      // — lets MockFitAddon (a separate mock module) learn which MockTerminal instance it's
+      // paired with, instead of relying on the module-level harness singleton (needed for
+      // multi-instance tests where more than one Terminal/FitAddon pair coexists).
+      const a = addon as { __attachTerminal?: (t: MockTerminal) => void };
+      a?.__attachTerminal?.(this);
+    }
     open() {}
     dispose() {}
     getSelection() {
@@ -159,18 +213,35 @@ jest.mock("@xterm/addon-fit", () => {
 
   return {
     FitAddon: class MockFitAddon {
+      // Wired via MockTerminal.loadAddon() → __attachTerminal(), mirroring real xterm.js's
+      // addon.activate(terminal). Lets each FitAddon instance read/resize ITS OWN terminal's
+      // per-instance record instead of the module-level harness singleton — required for
+      // multi-instance tests (AC1 tiled-pane convergence) where several Terminal/FitAddon pairs
+      // coexist. Falls back to the harness singleton when unset (defensive only; every real
+      // XtermTerminal mount calls terminal.loadAddon(fitAddon) immediately after construction).
+      private __terminal: (MockTerminalLike & { __record?: XtermInstanceRecord }) | null = null;
+
+      __attachTerminal(terminal: MockTerminalLike & { __record?: XtermInstanceRecord }) {
+        this.__terminal = terminal;
+      }
+
       fit() {
         // fit() being *called* is tracked unconditionally — it's gated upstream by
         // shouldFit in XtermTerminal.tsx, so fitCalledCount measures "how many times
         // XtermTerminal decided to call fit()", which is what AC5/AC6 assert on.
         harness.fitCalledCount++;
-        const p = harness.proposedDimensions;
-        if (p && harness.terminal) {
-          harness.terminal.resize(p.cols, p.rows);
+        const terminal = this.__terminal ?? harness.terminal;
+        const record = (terminal as { __record?: XtermInstanceRecord } | null)?.__record;
+        if (record) record.fitCalledCount++;
+        const p = record ? record.proposedDimensions : harness.proposedDimensions;
+        if (p && terminal) {
+          terminal.resize(p.cols, p.rows);
         }
       }
       proposeDimensions() {
-        return harness.proposedDimensions;
+        const terminal = this.__terminal ?? harness.terminal;
+        const record = (terminal as { __record?: XtermInstanceRecord } | null)?.__record;
+        return record ? record.proposedDimensions : harness.proposedDimensions;
       }
       dispose() {}
     },
@@ -280,18 +351,56 @@ function getWebglMock(): WebglMockClass {
 
 let observerCallback: ResizeObserverCallback | null = null;
 
-function fireResizeObserver(width: number, height: number) {
-  const cb = observerCallback;
-  if (!cb) return;
-  const entry = {
+/**
+ * Per-instance ResizeObserver callbacks, one per constructed observer, in construction order.
+ * Populated alongside `observerCallback` (unchanged — still mirrors the LAST constructed
+ * observer, for single-instance test backward compatibility). Added so multi-instance tests can
+ * fire 2-3 sibling `<XtermTerminal>` instances' own ResizeObservers independently or all within
+ * one `act()` batch (AC1 tiled-pane convergence coverage).
+ */
+let resizeObserverCallbacks: ResizeObserverCallback[] = [];
+
+function makeResizeEntry(width: number, height: number): ResizeObserverEntry {
+  return {
     contentRect: { width, height, top: 0, left: 0, bottom: height, right: width },
     borderBoxSize: [],
     contentBoxSize: [],
     devicePixelContentBoxSize: [],
     target: document.createElement("div"),
   } as unknown as ResizeObserverEntry;
+}
+
+function fireResizeObserver(width: number, height: number) {
+  const cb = observerCallback;
+  if (!cb) return;
   act(() => {
-    cb([entry], {} as ResizeObserver);
+    cb([makeResizeEntry(width, height)], {} as ResizeObserver);
+  });
+}
+
+/** Fires a single sibling instance's own ResizeObserver, by construction-order index. */
+function fireResizeObserverAt(index: number, width: number, height: number) {
+  const cb = resizeObserverCallbacks[index];
+  if (!cb) return;
+  act(() => {
+    cb([makeResizeEntry(width, height)], {} as ResizeObserver);
+  });
+}
+
+/**
+ * Fires every currently-registered sibling ResizeObserver within a single `act()` batch —
+ * simulates a real window/shared-container resize cascading into all tiled sibling panes'
+ * individual ResizeObservers at (effectively) the same tick, i.e. the "panes resize in
+ * lockstep" topology from the original bug report. `dims[i]` pairs positionally with
+ * `resizeObserverCallbacks[i]`; a missing entry leaves that instance untouched.
+ */
+function fireResizeObserverOnAll(dims: Array<{ width: number; height: number } | undefined>) {
+  act(() => {
+    resizeObserverCallbacks.forEach((cb, i) => {
+      const d = dims[i];
+      if (!d) return;
+      cb([makeResizeEntry(d.width, d.height)], {} as ResizeObserver);
+    });
   });
 }
 
@@ -325,6 +434,28 @@ function renderTerminal(onResize: (cols: number, rows: number) => void = jest.fn
   return ref;
 }
 
+/**
+ * Mounts N independent `<XtermTerminal>` instances as sibling leaf panes inside one shared flex
+ * container — mirrors the real tiled-pane shape (`PaneSplitRenderer.tsx`'s `PaneSplitComponent`
+ * renders sibling `leafContainer` panes side by side; `web-app/src/styles/pane/paneSplit.css.ts`'s
+ * `leafContainer`/`paneBody` recipes are `display:flex` column, wrapped by the split grid) without
+ * pulling in the real Pane/Redux/WebSocket stack — see task context for why that's disproportionate
+ * to what this test needs to prove about sibling `XtermTerminal` independence.
+ */
+function renderMultiTerminals(onResizeFns: Array<(cols: number, rows: number) => void>) {
+  const refs = onResizeFns.map(() => React.createRef<XtermTerminalHandle>());
+  render(
+    <div style={{ display: "flex", flexDirection: "row", width: "100%", height: "100%" }}>
+      {onResizeFns.map((onResize, i) => (
+        <div key={i} style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+          <XtermTerminal ref={refs[i]} onResize={onResize} />
+        </div>
+      ))}
+    </div>,
+  );
+  return refs;
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -339,6 +470,7 @@ beforeEach(() => {
   getHarness().reset();
   getWebglMock().__reset();
   observerCallback = null;
+  resizeObserverCallbacks = [];
 
   logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
   warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
@@ -373,6 +505,7 @@ beforeEach(() => {
     value: class MockResizeObserver {
       constructor(cb: ResizeObserverCallback) {
         observerCallback = cb;
+        resizeObserverCallbacks.push(cb);
       }
       observe() {}
       unobserve() {}
@@ -727,5 +860,230 @@ describe("webglFallbackTrippedRef resets across a scrollback-triggered remount",
 
     const logMessages = logSpy.mock.calls.map((c) => String(c[0]));
     expect(logMessages.some((m) => m.includes("persists after WebGL fallback"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC1 (corrected Problem Statement/Success Criteria — see
+// project_plans/terminal-resize-fit-loop/requirements.md): "panes resize in lockstep... ping-pong
+// off each other" describes 3 terminals tiled as sibling panes on ONE page (PaneSplitRenderer.tsx's
+// PaneSplitComponent renders sibling leafContainer panes via CSS flex/grid, each holding an
+// independent session's XtermTerminal). Every test above this point instantiates exactly ONE
+// XtermTerminal at a time, so none of them exercise the real bug topology: multiple concurrently-
+// mounted XtermTerminal instances sharing a page, where a resize can cascade into all siblings'
+// ResizeObservers at once. These tests mount 2-3 real XtermTerminal instances side by side inside
+// one shared flex container (renderMultiTerminals, above) and assert each instance's fit/resize
+// state converges independently — bounded, and with no coordination between instances.
+// ---------------------------------------------------------------------------
+describe("AC1: multiple sibling XtermTerminal instances converge independently in a tiled layout", () => {
+  it("fitCalledCount_should_increaseByOneEach_and_convergeToDistinctDimensions_When_sharedParentResizeCascadesGenuineChangesToAllSiblings", () => {
+    const onResize1 = jest.fn();
+    const onResize2 = jest.fn();
+    const onResize3 = jest.fn();
+    renderMultiTerminals([onResize1, onResize2, onResize3]);
+    flushInitialMount();
+
+    const harness = getHarness();
+    expect(harness.instances).toHaveLength(3);
+    const [rec1, rec2, rec3] = harness.instances;
+
+    onResize1.mockClear();
+    onResize2.mockClear();
+    onResize3.mockClear();
+    const baseline = harness.instances.map((r) => r.fitCalledCount);
+
+    // Each sibling pane gets a genuinely different proposed grid — a real cell-boundary
+    // crossing per instance, mirroring 3 independent terminal sessions tiled at different
+    // widths, not a sub-pixel wobble.
+    rec1.proposedDimensions = { cols: 100, rows: 30 };
+    rec2.proposedDimensions = { cols: 120, rows: 35 };
+    rec3.proposedDimensions = { cols: 90, rows: 28 };
+
+    // Simulate a window resize cascading into all 3 sibling panes' ResizeObservers at once
+    // ("the panes resize in lockstep" topology from the original bug report).
+    fireResizeObserverOnAll([
+      { width: 900, height: 700 },
+      { width: 1000, height: 750 },
+      { width: 850, height: 650 },
+    ]);
+    flushDebounce();
+
+    expect(rec1.fitCalledCount).toBe(baseline[0] + 1);
+    expect(rec2.fitCalledCount).toBe(baseline[1] + 1);
+    expect(rec3.fitCalledCount).toBe(baseline[2] + 1);
+
+    expect(rec1.terminal?.cols).toBe(100);
+    expect(rec1.terminal?.rows).toBe(30);
+    expect(rec2.terminal?.cols).toBe(120);
+    expect(rec2.terminal?.rows).toBe(35);
+    expect(rec3.terminal?.cols).toBe(90);
+    expect(rec3.terminal?.rows).toBe(28);
+
+    expect(onResize1).toHaveBeenCalledTimes(1);
+    expect(onResize1).toHaveBeenCalledWith(100, 30);
+    expect(onResize2).toHaveBeenCalledTimes(1);
+    expect(onResize2).toHaveBeenCalledWith(120, 35);
+    expect(onResize3).toHaveBeenCalledTimes(1);
+    expect(onResize3).toHaveBeenCalledWith(90, 28);
+  });
+
+  it("fitCalledCount_should_notIncrease_and_onResize_should_notFire_When_subPixelWobbleCascadesToAllSiblingsSimultaneously", () => {
+    const onResize1 = jest.fn();
+    const onResize2 = jest.fn();
+    const onResize3 = jest.fn();
+    renderMultiTerminals([onResize1, onResize2, onResize3]);
+    flushInitialMount();
+
+    const harness = getHarness();
+    const [rec1, rec2, rec3] = harness.instances;
+
+    onResize1.mockClear();
+    onResize2.mockClear();
+    onResize3.mockClear();
+    const baseline = harness.instances.map((r) => r.fitCalledCount);
+
+    // proposedDimensions is left untouched (still each instance's default {80,24}, matching the
+    // terminal's already-applied cols/rows) — every sibling's ResizeObserver reports a raw pixel
+    // wobble (the "ping-pong off each other" symptom from the original report) that never
+    // actually changes FitAddon's proposed integer grid for ANY instance.
+    fireResizeObserverOnAll([
+      { width: 801, height: 600 },
+      { width: 701, height: 500 },
+      { width: 601, height: 400 },
+    ]);
+    flushDebounce();
+    fireResizeObserverOnAll([
+      { width: 802, height: 601 },
+      { width: 702, height: 501 },
+      { width: 602, height: 401 },
+    ]);
+    flushDebounce();
+    fireResizeObserverOnAll([
+      { width: 801, height: 600 },
+      { width: 701, height: 500 },
+      { width: 601, height: 400 },
+    ]);
+    flushDebounce();
+
+    expect(rec1.fitCalledCount).toBe(baseline[0]);
+    expect(rec2.fitCalledCount).toBe(baseline[1]);
+    expect(rec3.fitCalledCount).toBe(baseline[2]);
+    expect(onResize1).not.toHaveBeenCalled();
+    expect(onResize2).not.toHaveBeenCalled();
+    expect(onResize3).not.toHaveBeenCalled();
+  });
+
+  it("unaffectedSiblings_fitCalledCount_should_NOT_move_When_onlyOneSiblingsContainerActuallyResizes", () => {
+    const onResize1 = jest.fn();
+    const onResize2 = jest.fn();
+    const onResize3 = jest.fn();
+    renderMultiTerminals([onResize1, onResize2, onResize3]);
+    flushInitialMount();
+
+    const harness = getHarness();
+    const [rec1, rec2, rec3] = harness.instances;
+
+    onResize1.mockClear();
+    onResize2.mockClear();
+    onResize3.mockClear();
+    const baseline = harness.instances.map((r) => r.fitCalledCount);
+
+    // Only the middle sibling (index 1) genuinely resizes; instances 0 and 2 receive no
+    // ResizeObserver firing at all. There is no shared/global state in the real implementation
+    // that would let instance 1's resize perturb 0 or 2 — this proves that directly.
+    rec2.proposedDimensions = { cols: 130, rows: 40 };
+    fireResizeObserverAt(1, 1100, 850);
+    flushDebounce();
+
+    expect(rec1.fitCalledCount).toBe(baseline[0]);
+    expect(rec3.fitCalledCount).toBe(baseline[2]);
+    expect(onResize1).not.toHaveBeenCalled();
+    expect(onResize3).not.toHaveBeenCalled();
+
+    expect(rec2.fitCalledCount).toBe(baseline[1] + 1);
+    expect(rec2.terminal?.cols).toBe(130);
+    expect(rec2.terminal?.rows).toBe(40);
+    expect(onResize2).toHaveBeenCalledTimes(1);
+    expect(onResize2).toHaveBeenCalledWith(130, 40);
+  });
+
+  it("fitCalledCount_should_NOT_growUnbounded_When_theSameGenuineResizeRepeatsAcrossAllSiblings", () => {
+    const onResize1 = jest.fn();
+    const onResize2 = jest.fn();
+    renderMultiTerminals([onResize1, onResize2]);
+    flushInitialMount();
+
+    const harness = getHarness();
+    const [rec1, rec2] = harness.instances;
+
+    onResize1.mockClear();
+    onResize2.mockClear();
+    const baseline = harness.instances.map((r) => r.fitCalledCount);
+
+    rec1.proposedDimensions = { cols: 150, rows: 45 };
+    rec2.proposedDimensions = { cols: 160, rows: 48 };
+
+    const dims = [
+      { width: 1200, height: 900 },
+      { width: 1300, height: 950 },
+    ];
+
+    // Fire the identical genuine-resize entries 3 times across both siblings. Each instance must
+    // converge to a fixed point after the first cycle — a regression that let one instance's
+    // settle-then-refire loop leak into (or amplify via) a sibling would show up here as
+    // unbounded growth instead of a flat count on cycles 2 and 3.
+    fireResizeObserverOnAll(dims);
+    flushDebounce();
+    fireResizeObserverOnAll(dims);
+    flushDebounce();
+    fireResizeObserverOnAll(dims);
+    flushDebounce();
+
+    expect(rec1.fitCalledCount).toBe(baseline[0] + 1);
+    expect(rec2.fitCalledCount).toBe(baseline[1] + 1);
+    expect(onResize1).toHaveBeenCalledTimes(1);
+    expect(onResize2).toHaveBeenCalledTimes(1);
+  });
+
+  it("fitCalledCount_should_increaseByOneEach_When_twoSiblingsResizeToTheIdenticalNewPixelDimensionsSimultaneously", () => {
+    // Regression guard for a hypothetical cross-instance state leak: if XtermTerminal's
+    // ResizeObserver-gate tracking (e.g. `lastContainerSize`) were ever accidentally shared
+    // across instances instead of scoped per-mount, then two sibling panes reporting the exact
+    // same incoming pixel size in the same tick (a very plausible tiled-layout scenario — e.g.
+    // two equal-width panes both widening to the same new width after a 3-way split rebalances)
+    // would make the SECOND instance's ResizeObserver handler see "no change" (because it'd be
+    // comparing against whatever the FIRST instance just wrote to the shared variable, not its
+    // own prior size), silently dropping its genuine resize. Each instance must still fit/converge
+    // independently even when the raw incoming numbers happen to collide.
+    const onResize1 = jest.fn();
+    const onResize2 = jest.fn();
+    renderMultiTerminals([onResize1, onResize2]);
+    flushInitialMount();
+
+    const harness = getHarness();
+    const [rec1, rec2] = harness.instances;
+
+    onResize1.mockClear();
+    onResize2.mockClear();
+    const baseline = harness.instances.map((r) => r.fitCalledCount);
+
+    rec1.proposedDimensions = { cols: 140, rows: 42 };
+    rec2.proposedDimensions = { cols: 145, rows: 44 };
+
+    // Identical width/height fired for BOTH siblings, in the same act() batch (before any
+    // debounce/rAF flush) — the scenario that exposes a shared (rather than per-instance)
+    // "last known container size" gate.
+    fireResizeObserverOnAll([
+      { width: 950, height: 720 },
+      { width: 950, height: 720 },
+    ]);
+    flushDebounce();
+
+    expect(rec1.fitCalledCount).toBe(baseline[0] + 1);
+    expect(rec2.fitCalledCount).toBe(baseline[1] + 1);
+    expect(rec1.terminal?.cols).toBe(140);
+    expect(rec2.terminal?.cols).toBe(145);
+    expect(onResize1).toHaveBeenCalledTimes(1);
+    expect(onResize2).toHaveBeenCalledTimes(1);
   });
 });
