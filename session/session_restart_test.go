@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestSessionRestartWithConversationContinuity verifies that sessions restart
@@ -645,4 +646,170 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	assert.NotNil(t, instance.GetClaudeSession())
 
 	t.Logf("✓ Claude session with git worktree restart succeeded")
+}
+
+// TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux is a regression
+// test for a bug where reloading a persisted Active instance (e.g. via
+// LoadInstances(), which health.go's periodic health check calls on every
+// tick) always took the "cold restore" path in Instance.Start() and relaunched
+// the program — even when the underlying tmux session was still alive —
+// because FromInstanceData's Active branch never wired the freshly-constructed
+// Instance's TmuxProcessManager to the existing tmux session before calling
+// Start(). HasSession()/IsAlive() therefore always reported false on the first
+// check, regardless of the real tmux state, unlike the Paused/Stopped/Hibernated
+// branches which correctly call SetSession() first.
+//
+// Uses a real (but test-isolated, via a private tmux server socket) tmux
+// session rather than the mock builder: FromInstanceData calls Start()
+// internally, before a test gets a chance to inject a mock process manager on
+// the newly-constructed Instance, so this scenario can only be exercised
+// end-to-end against a real tmux server.
+//
+// Proves the fix by round-tripping a live instance through
+// ToInstanceData()/FromInstanceData() and asserting: the reconstructed
+// instance detects the live session (TmuxAlive()==true immediately), and its
+// pane's foreground PID is unchanged — i.e. it hot-attached to the same
+// process rather than relaunching it.
+func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+
+	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		Title:            "active-restore-test",
+		Path:             t.TempDir(),
+		Program:          "bash -c 'echo test session; exec bash'",
+		SessionType:      SessionTypeDirectory,
+		AutoYes:          true,
+		TmuxServerSocket: getTestTmuxSocket(t),
+	})
+	require.NoError(t, err)
+	defer func() {
+		if cleanup != nil {
+			if cleanupErr := cleanup(); cleanupErr != nil {
+				t.Logf("Cleanup warning: %v", cleanupErr)
+			}
+		}
+	}()
+
+	startCleanup, err := instance.StartWithCleanup(true)
+	require.NoError(t, err, "Session should start successfully")
+	defer func() {
+		if startCleanup != nil {
+			if cleanupErr := startCleanup(); cleanupErr != nil {
+				t.Logf("Start cleanup warning: %v", cleanupErr)
+			}
+		}
+	}()
+
+	require.True(t, instance.TmuxAlive(), "tmux session should be alive after Start")
+	require.Equal(t, Active, instance.Status, "instance should be Active after Start")
+
+	// A freshly-created tmux server socket can transiently fail "list-sessions"
+	// for a few ms right after creation (server startup lag), independent of
+	// this bug. Real health-checker calls always land against sessions that
+	// have been alive for seconds/minutes/hours, so wait for the tmux SERVER
+	// itself to stabilize before exercising the actual scenario under test.
+	// Must probe with a brand-new TmuxSession object each time (not `instance`,
+	// whose existsCache would just replay its own already-cached "true" and
+	// never actually wait for the server) — this mirrors exactly what
+	// FromInstanceData's restore path does: construct a fresh object and
+	// immediately check aliveness on it.
+	require.Eventually(t, func() bool {
+		probe := tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, "staplersquad_", instance.TmuxServerSocket, tmux.WithRegistry(nil))
+		return probe.DoesSessionExist()
+	}, 2*time.Second, 10*time.Millisecond, "tmux server should stabilize so a freshly-constructed session object can see it")
+
+	pidBefore, err := instance.GetPanePID()
+	require.NoError(t, err, "should be able to read the pane's foreground PID")
+	require.NotZero(t, pidBefore)
+
+	// Round-trip through the same serialize/deserialize path LoadInstances() uses.
+	data := instance.ToInstanceData()
+	restored, err := FromInstanceData(data)
+	require.NoError(t, err, "FromInstanceData should succeed for an Active instance with a live tmux session")
+
+	assert.True(t, restored.TmuxAlive(),
+		"restored instance should detect the already-running tmux session, not report it as dead")
+
+	pidAfter, err := restored.GetPanePID()
+	require.NoError(t, err, "restored instance should be able to read the pane's foreground PID")
+	assert.Equal(t, pidBefore, pidAfter,
+		"pane PID must be unchanged — a changed PID means the process was relaunched (cold restore) instead of hot-attached to the still-live session")
+
+	t.Logf("✓ FromInstanceData correctly hot-attached to the already-running tmux session (pid %d unchanged)", pidBefore)
+}
+
+// TestLoadInstances_DoesNotBlockOnStartingActiveSessions is a regression test
+// for the server-startup-hang bug: LoadInstances() used to call the public
+// FromInstanceData for every persisted session, which starts Active instances
+// synchronously — cold-restoring every session whose tmux process no longer
+// exists, one at a time, before LoadInstances() (and therefore the "runtime"
+// warren phase, and therefore the HTTP server bind in main.go) could return.
+// With even a handful of dead sessions this made server startup take minutes,
+// and the deploy script's health check would time out and roll back.
+//
+// LoadInstances() must instead defer Start() to the async "Step 6" background
+// loop in server/dependencies.go's BuildRuntimeDeps, which already exists
+// specifically so the HTTP server can bind immediately. This test asserts that
+// contract directly: a session persisted as Active, with no live tmux session
+// behind it (so a naive Start() would try to cold-restore, i.e. spawn a real
+// program), comes back from LoadInstances() unstarted and near-instantly,
+// rather than blocking on a relaunch.
+func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
+
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	// Build and really start an instance so it passes SaveInstances' "must be
+	// Started()" gate, then persist it and kill the underlying tmux session to
+	// simulate a session whose process died (the exact scenario that used to
+	// make LoadInstances cold-restore synchronously, one session at a time).
+	instance, instCleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		Title:            "load-instances-defer-start-test",
+		Path:             t.TempDir(),
+		Program:          "bash -c 'echo hi; exec bash'",
+		SessionType:      SessionTypeDirectory,
+		AutoYes:          true,
+		TmuxServerSocket: getTestTmuxSocket(t),
+	})
+	require.NoError(t, err)
+	defer func() {
+		if instCleanup != nil {
+			_ = instCleanup()
+		}
+	}()
+	startCleanup, err := instance.StartWithCleanup(true)
+	require.NoError(t, err)
+	if startCleanup != nil {
+		defer func() { _ = startCleanup() }()
+	}
+	require.True(t, instance.Started())
+
+	require.NoError(t, storage.SaveInstances([]*Instance{instance}))
+	require.NoError(t, instance.KillSession(), "simulate the process dying before the next server start")
+
+	start := time.Now()
+	instances, err := storage.LoadInstances()
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+
+	const budget = 3 * time.Second
+	assert.Lessf(t, elapsed, budget,
+		"LoadInstances took %s — Start() may be getting called synchronously again instead of deferred to the async Step 6 loop", elapsed)
+
+	var found *Instance
+	for _, inst := range instances {
+		if inst.UUID == instance.UUID {
+			found = inst
+			break
+		}
+	}
+	require.NotNil(t, found, "loaded instance not found")
+	assert.False(t, found.Started(), "instance should not be Started() yet — that's the async Step 6 loop's job")
+
+	t.Logf("✓ LoadInstances returned in %s without blocking on Start()", elapsed)
 }

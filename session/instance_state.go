@@ -8,9 +8,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -43,6 +43,8 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 	i.Status = to
 	// Store before calling After: After hooks may spawn goroutines that race with
 	// a post-After snapshot read of the same fields.
+	// Caller already holds i.mu (see doc comment above), so buildSnapshot's
+	// "must be called while i.mu is held" contract is satisfied here.
 	i.snapshot.Store(buildSnapshot(i))
 	if def.After != nil {
 		def.After(ctx, i)
@@ -57,18 +59,40 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 // Must only be called from within sendSyncErr/send/sendCtx closures.
 func transitionToLocked(s *instanceState, ctx context.Context, to Status) error {
 	i := s.inst
-	def, ok := transitionIndex[transitionKey{i.Status, to}]
+	// i.mu.RLock() around this initial read: RecoverFromStopped bypasses the
+	// actor entirely (a direct i.mu.Lock()-protected write, not routed through
+	// sendCtx/the mailbox), so it can genuinely run concurrently with an
+	// in-flight actor command. Reading i.Status without the lock raced with
+	// RecoverFromStopped's protected write under -race. See runActor's doc
+	// comment in actor.go for the full explanation.
+	i.mu.RLock()
+	status := i.Status
+	i.mu.RUnlock()
+	def, ok := transitionIndex[transitionKey{status, to}]
 	if !ok {
-		return ErrInvalidTransition{From: i.Status, To: to}
+		return ErrInvalidTransition{From: status, To: to}
 	}
 	if def.Guard != nil {
 		if err := def.Guard(ctx, i); err != nil {
-			return fmt.Errorf("transition %s → %s blocked: %w", i.Status, to, err)
+			return fmt.Errorf("transition %s → %s blocked: %w", status, to, err)
 		}
 	}
+	// The write to i.Status and the buildSnapshot read are done under the same
+	// i.mu.Lock()/Unlock() critical section, not just the read alone: legacy
+	// setters (MarkViewed, MarkUserResponded, MarkAcknowledged,
+	// SetLastMeaningfulOutput, RecoverFromStopped) bypass the actor and mutate
+	// fields directly from arbitrary caller goroutines while holding
+	// i.mu.Lock(), and their own buildSnapshot() call reads i.Status as part of
+	// the full-struct copy. An unlocked write here raced with those i.mu-locked
+	// readers under -race even though the write itself is otherwise safely
+	// confined to the actor goroutine relative to OTHER actor commands. See
+	// runActor's doc comment in actor.go for the full explanation.
+	i.mu.Lock()
 	from := i.Status
 	i.Status = to
-	i.snapshot.Store(buildSnapshot(i))
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	// Trigger side-effects inline instead of via def.After so the actor goroutine
 	// doesn't block waiting for the hook to complete.
 	switch (transitionKey{from, to}) {
@@ -167,7 +191,13 @@ func (i *Instance) MarkUserResponded() time.Time {
 func (i *Instance) MarkAcknowledged() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.LastAcknowledged = time.Now()
+	now := time.Now()
+	i.LastAcknowledged = now
+	// Keep the lock-free shadow in sync so IsAcknowledgedAfterOutput() can be called safely
+	// from goroutines outside the actor pattern (e.g. ReviewQueuePoller's own goroutine via
+	// review_queue_determiner.go's Determine()) — same discipline as UpdateTimestamps()
+	// storing lastMeaningfulOutputNs alongside LastMeaningfulOutput.
+	atomic.StoreInt64(&i.lastAcknowledgedNs, now.UnixNano())
 	i.snapshot.Store(buildSnapshot(i))
 }
 
@@ -306,24 +336,27 @@ func (i *Instance) RecoverFromStopped() {
 // Routes through the actor mailbox (sendCtx) rather than taking i.mu directly:
 // ForceStatus is invoked from ad hoc goroutines outside the actor (e.g. the async
 // CreateSession goroutine in SessionService), not from inside an actor command.
-// runActor's own post-command buildSnapshot rebuild (actor.go) does not take i.mu
-// at all - it relies on single-goroutine confinement - so a direct i.mu.Lock() here
-// raced with that unguarded read under `-race`. Funneling through sendCtx serializes
-// this write with the actor's command loop when the instance is actor-owned
-// (LiveInstance), and falls back to running synchronously in-place when it isn't
-// (e.g. tests constructing a bare *Instance).
+// Funneling through sendCtx serializes this write with the actor's command loop
+// when the instance is actor-owned (LiveInstance), and falls back to running
+// synchronously in-place when it isn't (e.g. tests constructing a bare *Instance).
+//
+// The write (loadStatus) and the buildSnapshot read are done under the SAME
+// i.mu.Lock()/Unlock() critical section (not lock-write-then-unlock-then-read,
+// which is what this used to do). buildSnapshot reads every mutable field,
+// including ones mutated directly under i.mu by legacy setters (MarkViewed,
+// SetLastMeaningfulOutput, MarkUserResponded, MarkAcknowledged,
+// RecoverFromStopped) that bypass the actor entirely and run on arbitrary
+// caller goroutines. Calling buildSnapshot() after releasing the lock left a
+// window where one of those setters could mutate fields concurrently with
+// this unguarded read — caught by -race via a concurrent MarkViewed()/
+// ForceStatus() pairing during CreateSession. See runActor's doc comment in
+// actor.go for the matching fix on the read side.
 func (i *Instance) ForceStatus(s Status) {
-	// Bounded: this is an error-recovery path, so a wedged actor mailbox must
-	// not hang the caller (e.g. the async CreateSession cleanup goroutine)
-	// indefinitely. Fail loudly instead.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := i.sendCtx(ctx, func(_ *instanceState) {
+	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)
+		snap := buildSnapshot(i)
 		i.mu.Unlock()
-		i.snapshot.Store(buildSnapshot(i))
-	}); err != nil {
-		log.Error("[ForceStatus] actor unresponsive, status not applied", "instance", i.ID, "status", s, "err", err)
-	}
+		i.snapshot.Store(snap)
+	})
 }

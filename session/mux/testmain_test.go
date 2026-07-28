@@ -8,9 +8,14 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 )
 
 func TestMain(m *testing.M) {
+	tmuxreap.ReapLeakedTestServers()
+	tmuxreap.StartTestServerWatchdog(os.Getpid())
+
 	// Periodic goroutine dump so hangs produce visible output rather than silence.
 	stop := make(chan struct{})
 	go func() {

@@ -19,6 +19,17 @@ const (
 	HookPreToolLogging     HookName = "pre_tool_logging"    // maps to PreToolUse event
 	HookPostToolLogging    HookName = "post_tool_logging"   // maps to PostToolUse event
 	HookPromptSubmit       HookName = "prompt_submit"       // maps to UserPromptSubmit event
+
+	// HookGitDriftCheck also maps to PostToolUse, but on its own dedicated endpoint
+	// (distinct from HookPostToolLogging's) so it can be injected independently of
+	// the generic hooks a manually-created session opts into. Scoped strictly to
+	// autonomous backlog work sessions — see spawnSessionAfterGates in
+	// server/services/backlog_service_triage.go, the only call site that injects
+	// it, and hook_receiver_drift.go for the receiver. Fires the same branch-drift
+	// check that gates review (BUG-044) right after every git commit/push, so an
+	// autonomous session notices and can self-correct immediately instead of only
+	// learning about drift from a review verdict hours or days later.
+	HookGitDriftCheck HookName = "git_drift_check" // maps to PostToolUse event
 )
 
 // hookEventName maps a HookName to the Claude Code hooks.* key.
@@ -28,6 +39,7 @@ var hookEventName = map[HookName]string{
 	HookPreToolLogging:     "PreToolUse",
 	HookPostToolLogging:    "PostToolUse",
 	HookPromptSubmit:       "UserPromptSubmit",
+	HookGitDriftCheck:      "PostToolUse",
 }
 
 // hookBaseURLFn resolves the base URL (scheme + host + port) used to build hook callback
@@ -58,6 +70,7 @@ func hookEndpoints(baseURLFn func() string) map[HookName]string {
 		HookPreToolLogging:     base + "/api/hooks/pre-tool-use",
 		HookPostToolLogging:    base + "/api/hooks/post-tool-use",
 		HookPromptSubmit:       base + "/api/hooks/prompt-submit",
+		HookGitDriftCheck:      base + "/api/hooks/post-tool-use-drift-check",
 	}
 }
 
@@ -155,6 +168,120 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 			return fmt.Errorf("marshal hooks for %s: %w", eventKey, err)
 		}
 		hooksMap[eventKey] = json.RawMessage(mergedJSON)
+	}
+
+	hooksJSON, err := json.Marshal(hooksMap)
+	if err != nil {
+		return fmt.Errorf("marshal hooks map: %w", err)
+	}
+	raw["hooks"] = json.RawMessage(hooksJSON)
+
+	return writeSettingsAtomic(settingsPath, claudeDir, raw)
+}
+
+// RemoveHooksConfig strips any previously-injected entries for the given hooks from
+// <rootDir>/.claude/settings.local.json, leaving every other hook (ours or the
+// user's own) untouched. It is the inverse of InjectHooksConfig, needed because a
+// backlog work session's worktree/branch is reused across reopen cycles (see
+// spawnSessionAfterGates in backlog_service_triage.go — same "backlog/<item>" branch
+// every revision): without an explicit removal step, a hook injected while an item
+// was spawned autonomously would otherwise persist in that worktree's settings file
+// forever, even after a later manual ("Reopen for Revision") respawn on the same
+// worktree — silently violating the "never inject into a human-driven session"
+// scoping requirement HookGitDriftCheck depends on. Call this whenever spawning a
+// session in a mode that must NOT have a given hook, symmetrically with the
+// InjectHooksConfig call used for the mode that must.
+//
+// No-op (not an error) if the settings file doesn't exist or doesn't reference the
+// hook — safe to call unconditionally on every spawn.
+func RemoveHooksConfig(rootDir string, hooks []HookName) error {
+	if len(hooks) == 0 {
+		return nil
+	}
+	claudeDir := filepath.Join(rootDir, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.local.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", settingsPath, err)
+	}
+
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		log.Warn("[RemoveHooksConfig] settings file has invalid JSON, attempting repair", "path", settingsPath, "err", err)
+		repaired, repairErr := repairSettingsJSON(data)
+		if repairErr != nil {
+			return fmt.Errorf("settings file is corrupt and could not be repaired: %w", repairErr)
+		}
+		if err := json.Unmarshal(repaired, &raw); err != nil {
+			return fmt.Errorf("unmarshal repaired settings: %w", err)
+		}
+	}
+
+	hooksRaw, ok := raw["hooks"]
+	if !ok {
+		return nil
+	}
+	hooksMap := map[string]json.RawMessage{}
+	if err := json.Unmarshal(hooksRaw, &hooksMap); err != nil {
+		return fmt.Errorf("unmarshal hooks map: %w", err)
+	}
+
+	endpoints := hookEndpoints(hookBaseURLFn)
+	changed := false
+
+	for _, hookName := range hooks {
+		eventKey, ok := hookEventName[hookName]
+		if !ok {
+			continue
+		}
+		url := endpoints[hookName]
+		existingRaw, ok := hooksMap[eventKey]
+		if !ok {
+			continue
+		}
+		var groups []hookMatcherGroup
+		if err := json.Unmarshal(existingRaw, &groups); err != nil {
+			continue
+		}
+
+		filtered := make([]hookMatcherGroup, 0, len(groups))
+		for _, g := range groups {
+			keptHooks := make([]hookEntry, 0, len(g.Hooks))
+			for _, h := range g.Hooks {
+				if h.Type == "command" && strings.Contains(h.Command, url) {
+					changed = true
+					continue
+				}
+				keptHooks = append(keptHooks, h)
+			}
+			if len(keptHooks) > 0 {
+				g.Hooks = keptHooks
+				filtered = append(filtered, g)
+			} else if len(g.Hooks) > 0 {
+				// The group had hooks but all were removed — drop the (now-empty) group.
+				changed = true
+			} else {
+				filtered = append(filtered, g)
+			}
+		}
+
+		if len(filtered) == 0 {
+			delete(hooksMap, eventKey)
+		} else {
+			filteredJSON, err := json.Marshal(filtered)
+			if err != nil {
+				return fmt.Errorf("marshal hooks for %s: %w", eventKey, err)
+			}
+			hooksMap[eventKey] = json.RawMessage(filteredJSON)
+		}
+	}
+
+	if !changed {
+		return nil
 	}
 
 	hooksJSON, err := json.Marshal(hooksMap)

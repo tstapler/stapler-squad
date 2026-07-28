@@ -115,10 +115,10 @@ func (ts *TerminalService) WriteToSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 
-	text := req.Msg.Input
-	if req.Msg.PressEnter {
-		text += "\n"
-	}
+	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
+	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
+	text := session.BuildSubmittableInput(req.Msg.Input, req.Msg.PressEnter)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- inst.SendKeys(text) }()

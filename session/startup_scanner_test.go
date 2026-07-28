@@ -94,6 +94,7 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 	now := time.Now()
 	inst.UpdatedAt = now            // prevents idle threshold (5s)
 	inst.LastMeaningfulOutput = now // prevents staleness threshold (2min)
+	inst.SyncAtomicTimestamps()     // keep atomic shadow in sync — Determine() reads it lock-free
 
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
 		inst.Title: {IsControllerActive: false},
@@ -179,6 +180,7 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 	now := time.Now()
 	activeSession.UpdatedAt = now
 	activeSession.LastMeaningfulOutput = now
+	activeSession.SyncAtomicTimestamps() // keep atomic shadow in sync — Determine() reads it lock-free
 	inputRequired := makeStartedInstance("input-required")
 
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{

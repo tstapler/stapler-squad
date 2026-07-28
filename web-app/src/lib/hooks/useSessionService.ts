@@ -44,6 +44,14 @@ const EMPTY_SESSIONS: Session[] = [];
 const selectNoSessions = () => EMPTY_SESSIONS;
 import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlice";
 
+// Bounds the createSession RPC so a stalled backend (e.g. a stuck tmux start
+// or hung GitHub clone) can't leave the omnibar's Create button grayed out
+// forever — the promise always settles, letting the caller's catch handler
+// reset isSubmitting and surface an error. Kept comfortably above the
+// server's own createSessionTimeout (150s in session_service.go); if that
+// value changes, update this one too.
+const CREATE_SESSION_TIMEOUT_MS = 160_000;
+
 interface UseSessionServiceOptions {
   baseUrl?: string;
   autoWatch?: boolean;
@@ -79,7 +87,7 @@ interface UseSessionServiceReturn {
   systemMemoryPct: number;
 
   // Methods
-  listSessions: (options?: { category?: string; status?: SessionStatus }) => Promise<void>;
+  listSessions: (options?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => Promise<void>;
   getSession: (id: string) => Promise<Session | null>;
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
@@ -120,6 +128,9 @@ interface UseSessionServiceReturn {
   stopWatching: () => void;
 
   // Session monitor
+  // Both reject on a genuine fetch failure (network/RPC error) rather than
+  // resolving to an empty result — callers must distinguish "fetch failed" from
+  // "genuinely no output yet" and surface the former as a retryable error state.
   getTerminalSnapshot: (sessionId: string, lastNLines?: number) => Promise<string>;
   writeToSession: (sessionId: string, input: string, pressEnter?: boolean) => Promise<boolean>;
   getConversationMessages: (sessionId: string, limit?: number) => Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>>;
@@ -199,7 +210,7 @@ export function useSessionService(
 
   // List sessions with retry logic
   const listSessions = useCallback(
-    async (listOptions?: { category?: string; status?: SessionStatus }) => {
+    async (listOptions?: { category?: string; status?: SessionStatus; includeArchived?: boolean }) => {
       if (!clientRef.current) return;
 
       dispatch(setLoading(true));
@@ -209,6 +220,7 @@ export function useSessionService(
         const response = await clientRef.current.listSessions({
           category: listOptions?.category,
           status: listOptions?.status,
+          includeArchived: listOptions?.includeArchived,
         });
 
         dispatch(setSessions(response.sessions));
@@ -248,24 +260,27 @@ export function useSessionService(
       dispatch(setError(null));
 
       try {
-        const response = await clientRef.current.createSession({
-          title: request.title ?? "",
-          path: request.path ?? "",
-          workingDir: request.workingDir,
-          branch: request.branch,
-          program: request.program,
-          category: request.category,
-          prompt: request.prompt,
-          autoYes: request.autoYes,
-          existingWorktree: request.existingWorktree,
-          sessionType: request.sessionType,
-          createIfMissing: request.createIfMissing ?? false,
-          initialPrompt: request.initialPrompt,
-          autonomousMode: request.autonomousMode ?? false,
-          permissionMode: request.permissionMode ?? "",
-          aliasName: request.aliasName ?? "",
-          cliFlags: request.cliFlags ?? "",
-        });
+        const response = await clientRef.current.createSession(
+          {
+            title: request.title ?? "",
+            path: request.path ?? "",
+            workingDir: request.workingDir,
+            branch: request.branch,
+            program: request.program,
+            category: request.category,
+            prompt: request.prompt,
+            autoYes: request.autoYes,
+            existingWorktree: request.existingWorktree,
+            sessionType: request.sessionType,
+            createIfMissing: request.createIfMissing ?? false,
+            initialPrompt: request.initialPrompt,
+            autonomousMode: request.autonomousMode ?? false,
+            permissionMode: request.permissionMode ?? "",
+            aliasName: request.aliasName ?? "",
+            cliFlags: request.cliFlags ?? "",
+          },
+          { timeoutMs: CREATE_SESSION_TIMEOUT_MS }
+        );
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)
         if (response.session) {
@@ -1024,12 +1039,11 @@ export function useSessionService(
   const getTerminalSnapshot = useCallback(
     async (sessionId: string, lastNLines = 50): Promise<string> => {
       if (!clientRef.current) return "";
-      try {
-        const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
-        return resp.content ?? "";
-      } catch {
-        return "";
-      }
+      // Deliberately not caught here: a fetch failure must propagate to the
+      // caller (SessionMonitor) so it can render a distinct "failed to load"
+      // state instead of silently rendering identically to real emptiness.
+      const resp = await clientRef.current.getTerminalSnapshot({ sessionId, lastNLines });
+      return resp.content ?? "";
     },
     []
   );
@@ -1050,17 +1064,16 @@ export function useSessionService(
   const getConversationMessages = useCallback(
     async (sessionId: string, limit = 30): Promise<Array<{ role: string; content: string; timestamp?: string; model?: string }>> => {
       if (!clientRef.current) return [];
-      try {
-        const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
-        return (resp.messages ?? []).map((m) => ({
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
-          model: m.model,
-        }));
-      } catch {
-        return [];
-      }
+      // See getTerminalSnapshot above: fetch failures propagate to the caller
+      // instead of resolving to an empty array indistinguishable from "no
+      // conversation history yet".
+      const resp = await clientRef.current.getClaudeHistoryMessages({ id: sessionId, limit, tail: true });
+      return (resp.messages ?? []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp ? new Date(Number(m.timestamp.seconds) * 1000).toISOString() : undefined,
+        model: m.model,
+      }));
     },
     []
   );

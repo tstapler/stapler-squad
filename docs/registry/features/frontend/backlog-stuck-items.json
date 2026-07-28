@@ -1,0 +1,31 @@
+{
+  "id": "backlog-stuck-items",
+  "type": "frontend",
+  "component": "StuckItemsSection",
+  "path": "web-app/src/components/backlog-stuck/StuckItemsSection.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/backlog-stuck-items.spec.ts",
+    "StuckItemsSection_should_showStaleBannerAndRetainList_When_RefreshPollFails",
+    "StuckItemsSection_should_alwaysOfferRecoveryAction_When_InAnyDegradedState",
+    "StuckItemsSection_should_wrapChipsInRoleGroupWithAriaPressed_When_Rendered",
+    "StuckItemsSection_should_useAriaLivePoliteForCount_When_CountChanges",
+    "StuckItemsSection_should_showOtherReasonsBadge_When_SameItemInMultipleGroups",
+    "StuckItem_should_renderCouldntCheckChipNotGreen_When_LastCheckedOlderThan5Min",
+    "StuckItem_should_showResolvedConfirmationThenFade_When_ResolvesWhileExpanded",
+    "StuckItem_should_exposeButtonRoleAndAriaExpanded_When_Toggled",
+    "StuckItem_should_truncateWithTitleTooltip_When_TitleIsLong",
+    "StuckItemDetail_should_showAutoMergeUnknownAndRenderRest_When_SettingFetchFailed",
+    "StuckItemDetail_should_showExplicitMergeCopy_When_ReasonIsPrReadyUnmerged",
+    "StuckNavBadge_should_haveFullPhraseAriaLabelAndHideAtZero_When_Rendered",
+    "StuckNavBadge_should_showLoadingAffordance_When_NoFetchHasSucceededYet",
+    "getStuckReasonLabel_should_returnTextLabelForEveryReason_When_MappedExhaustively",
+    "StuckItem_should_exposeRetryNow_When_OnTriggerRemediationNowProvided",
+    "StuckItemsSection_should_offerBulkResetParked_When_AnyItemHasHitTheAttemptCap",
+    "getStuckReasonLabel_should_returnDistinctLabel_When_ReworkBlockedStale",
+    "getStuckReasonIcon_should_returnNonFallbackIcon_When_ReworkBlockedStale",
+    "StuckItemDetail_should_linkToItemDetail_When_Rendered"
+  ],
+  "lastModified": "2026-07-24T00:00:00Z"
+}

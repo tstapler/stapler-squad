@@ -87,8 +87,20 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		// explicitly here, matching transitionToLocked's own discipline — but only
 		// when UpdateTimestamps actually changed something, so a terminal frame
 		// with no meaningful content doesn't force a snapshot rebuild.
-		if s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title) {
-			s.inst.snapshot.Store(buildSnapshot(s.inst))
+		//
+		// UpdateTimestamps and the buildSnapshot read are done under i.mu so this
+		// is ordered against legacy direct-lock setters (MarkViewed & co.) that
+		// read these same fields via buildSnapshot under i.mu.Lock() from outside
+		// the actor. See runActor's doc comment in actor.go.
+		s.inst.mu.Lock()
+		changed := s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
+		var snap *InstanceSnapshot
+		if changed {
+			snap = buildSnapshot(s.inst)
+		}
+		s.inst.mu.Unlock()
+		if changed {
+			s.inst.snapshot.Store(snap)
 		}
 	})
 }

@@ -110,6 +110,26 @@ func (_u *SessionGoalUpdate) ClearSetBy() *SessionGoalUpdate {
 	return _u
 }
 
+// SetWorkspaceKey sets the "workspace_key" field.
+func (_u *SessionGoalUpdate) SetWorkspaceKey(v string) *SessionGoalUpdate {
+	_u.mutation.SetWorkspaceKey(v)
+	return _u
+}
+
+// SetNillableWorkspaceKey sets the "workspace_key" field if the given value is not nil.
+func (_u *SessionGoalUpdate) SetNillableWorkspaceKey(v *string) *SessionGoalUpdate {
+	if v != nil {
+		_u.SetWorkspaceKey(*v)
+	}
+	return _u
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (_u *SessionGoalUpdate) ClearWorkspaceKey() *SessionGoalUpdate {
+	_u.mutation.ClearWorkspaceKey()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *SessionGoalUpdate) SetUpdatedAt(v time.Time) *SessionGoalUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -204,6 +224,12 @@ func (_u *SessionGoalUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.SetByCleared() {
 		_spec.ClearField(sessiongoal.FieldSetBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.WorkspaceKey(); ok {
+		_spec.SetField(sessiongoal.FieldWorkspaceKey, field.TypeString, value)
+	}
+	if _u.mutation.WorkspaceKeyCleared() {
+		_spec.ClearField(sessiongoal.FieldWorkspaceKey, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(sessiongoal.FieldUpdatedAt, field.TypeTime, value)
@@ -307,6 +333,26 @@ func (_u *SessionGoalUpdateOne) SetNillableSetBy(v *string) *SessionGoalUpdateOn
 // ClearSetBy clears the value of the "set_by" field.
 func (_u *SessionGoalUpdateOne) ClearSetBy() *SessionGoalUpdateOne {
 	_u.mutation.ClearSetBy()
+	return _u
+}
+
+// SetWorkspaceKey sets the "workspace_key" field.
+func (_u *SessionGoalUpdateOne) SetWorkspaceKey(v string) *SessionGoalUpdateOne {
+	_u.mutation.SetWorkspaceKey(v)
+	return _u
+}
+
+// SetNillableWorkspaceKey sets the "workspace_key" field if the given value is not nil.
+func (_u *SessionGoalUpdateOne) SetNillableWorkspaceKey(v *string) *SessionGoalUpdateOne {
+	if v != nil {
+		_u.SetWorkspaceKey(*v)
+	}
+	return _u
+}
+
+// ClearWorkspaceKey clears the value of the "workspace_key" field.
+func (_u *SessionGoalUpdateOne) ClearWorkspaceKey() *SessionGoalUpdateOne {
+	_u.mutation.ClearWorkspaceKey()
 	return _u
 }
 
@@ -434,6 +480,12 @@ func (_u *SessionGoalUpdateOne) sqlSave(ctx context.Context) (_node *SessionGoal
 	}
 	if _u.mutation.SetByCleared() {
 		_spec.ClearField(sessiongoal.FieldSetBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.WorkspaceKey(); ok {
+		_spec.SetField(sessiongoal.FieldWorkspaceKey, field.TypeString, value)
+	}
+	if _u.mutation.WorkspaceKeyCleared() {
+		_spec.ClearField(sessiongoal.FieldWorkspaceKey, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(sessiongoal.FieldUpdatedAt, field.TypeTime, value)

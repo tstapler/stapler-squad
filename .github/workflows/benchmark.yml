@@ -23,10 +23,19 @@ on:
       - '.github/workflows/benchmark.yml'
 
 # Cancel in-progress runs on PRs when a new commit is pushed.
-# On main, never cancel — baseline-commit steps must be allowed to complete.
+# On main, never cancel — baseline-save steps must be allowed to complete.
+#
+# Baselines: each job's baseline lives in a GitHub Actions cache entry (key
+# "bench-<name>-<run_id>", restored by "bench-<name>-" prefix match), not a
+# file committed to git — a prior version of this workflow committed updated
+# baselines to `benchmarks/` on every push to main, which flooded the commit
+# history with "chore(bench): update ... baseline" noise for very little
+# value. Cache gives the same "PRs compare against the latest main baseline"
+# behavior without touching git history. See individual job comments for the
+# cache key used by that job's baseline file.
 concurrency:
-  # Shared with build.yml benchmark-gate so baseline pushes are serialized.
-  # On PRs cancel old runs; on main never cancel (baseline commits must land).
+  # Shared with build.yml benchmark-gate so runs are serialized (avoids
+  # redundant concurrent benchmark runs contending for runner resources).
   group: baseline-push-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
@@ -38,18 +47,20 @@ jobs:
   #   - DeltaGeneration (terminal package)
   #   - CircularBuffer (scrollback package)
   #   - SessionService_ListSessions, GetSession, StreamTerminal (services package)
-  # On push to main: commits updated baseline to benchmarks/go/tier1-baseline.txt.
-  # On PR: runs benchstat against the committed baseline and posts a PR comment.
+  # On push to main: saves updated baseline to the "bench-tier1-" cache.
+  # On PR: restores the latest baseline from cache, runs benchstat, posts a comment.
   # ─────────────────────────────────────────────────────────────────────────────
   go-tier1:
     name: Go Benchmarks (Tier 1)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write      # Push baseline updates to main
+      contents: read
       pull-requests: write # Post PR comments on regression alerts
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -71,6 +82,15 @@ jobs:
             ./server/events ./server/terminal ./session/scrollback \
             ./session ./session/detection/ratelimit ./session/tmux \
             ./session/unfinished ./session/queue ./session/tokens | tee tier1-bench.txt
+
+      - name: Restore benchmark baseline (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmarks/go/tier1-baseline.txt
+          key: bench-tier1-
+          restore-keys: |
+            bench-tier1-
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
@@ -116,40 +136,35 @@ jobs:
               });
             }
 
-      - name: Update baseline (push to main only)
+      - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          pushed=false
-          for i in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p benchmarks/go
-            cp tier1-bench.txt benchmarks/go/tier1-baseline.txt
-            git add benchmarks/go/tier1-baseline.txt
-            git diff --cached --quiet && echo "no changes to baseline" && pushed=true && break
-            git commit -m "chore(bench): update go tier1 baseline [skip ci]"
-            git push origin HEAD:main && pushed=true && break
-            sleep $((5*i))
-          done
-          $pushed || { echo "ERROR: git push failed after 3 retries"; exit 1; }
+          mkdir -p benchmarks/go
+          cp tier1-bench.txt benchmarks/go/tier1-baseline.txt
+
+      - name: Persist baseline to cache (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/go/tier1-baseline.txt
+          key: bench-tier1-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Tier 2: Full Go benchmark suite — push to main only.
-  # Commits updated baseline to benchmarks/go/tier2-baseline.txt.
+  # Baseline persisted to benchmarks/go/tier2-baseline.txt via GitHub Actions
+  # cache (not committed — see "Baselines" note at the top of this file).
   # Uses a separate baseline file so it never pollutes the Tier 1 comparison.
   # ─────────────────────────────────────────────────────────────────────────────
   go-tier2:
     name: Go Benchmarks (Tier 2 - Extended)
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    permissions:
-      contents: write      # Push baseline updates to main
     # Only run on push to main, not on PRs (too slow for per-PR checks)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -167,23 +182,16 @@ jobs:
             -timeout=30m \
             ./... | tee tier2-bench.txt
 
-      - name: Update baseline
+      - name: Save benchmark baseline
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          pushed=false
-          for i in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p benchmarks/go
-            cp tier2-bench.txt benchmarks/go/tier2-baseline.txt
-            git add benchmarks/go/tier2-baseline.txt
-            git diff --cached --quiet && echo "no changes to baseline" && pushed=true && break
-            git commit -m "chore(bench): update go tier2 baseline [skip ci]"
-            git push origin HEAD:main && pushed=true && break
-            sleep $((5*i))
-          done
-          $pushed || { echo "ERROR: git push failed after 3 retries"; exit 1; }
+          mkdir -p benchmarks/go
+          cp tier2-bench.txt benchmarks/go/tier2-baseline.txt
+
+      - name: Persist baseline to cache
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/go/tier2-baseline.txt
+          key: bench-tier2-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Frontend: Bundle size gate via size-limit.
@@ -197,6 +205,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -230,7 +240,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # Frontend: Playwright terminal throughput benchmark.
   # Measures bytes/second rendered by xterm.js under realistic load.
-  # On push to main: commits updated baseline to benchmarks/frontend/throughput-baseline.json.
+  # On push to main: saves updated baseline to the "bench-frontend-throughput-" cache.
   # On PR: compares against baseline and posts a PR comment.
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-throughput:
@@ -239,10 +249,12 @@ jobs:
     timeout-minutes: 30
     needs: frontend-bundle
     permissions:
-      contents: write      # Push baseline updates to main
+      contents: read
       pull-requests: write # Post PR comments on regression alerts
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -285,6 +297,15 @@ jobs:
             exit 1
           fi
           cat web-app/benchmark-results.json
+
+      - name: Restore benchmark baseline (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmarks/frontend/throughput-baseline.json
+          key: bench-frontend-throughput-
+          restore-keys: |
+            bench-frontend-throughput-
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
@@ -341,24 +362,18 @@ jobs:
               });
             }
 
-      - name: Update baseline (push to main only)
+      - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          pushed=false
-          for i in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p benchmarks/frontend
-            cp web-app/benchmark-results.json benchmarks/frontend/throughput-baseline.json
-            git add benchmarks/frontend/throughput-baseline.json
-            git diff --cached --quiet && echo "no changes to baseline" && pushed=true && break
-            git commit -m "chore(bench): update frontend throughput baseline [skip ci]"
-            git push origin HEAD:main && pushed=true && break
-            sleep $((5*i))
-          done
-          $pushed || { echo "ERROR: git push failed after 3 retries"; exit 1; }
+          mkdir -p benchmarks/frontend
+          cp web-app/benchmark-results.json benchmarks/frontend/throughput-baseline.json
+
+      - name: Persist baseline to cache (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/frontend/throughput-baseline.json
+          key: bench-frontend-throughput-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Lighthouse CI: Advisory performance audit (non-blocking).
@@ -373,6 +388,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -415,7 +432,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # E2E Latency: Playwright RPC timing benchmarks.
   # Measures ListSessions TTFB, total RPC time, and React render time separately.
-  # On push to main: commits updated baseline to benchmarks/e2e/latency-baseline.json.
+  # On push to main: saves updated baseline to the "bench-e2e-latency-" cache.
   # On PR: compares against baseline and posts a PR comment.
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-latency:
@@ -424,10 +441,12 @@ jobs:
     timeout-minutes: 25
     needs: frontend-bundle
     permissions:
-      contents: write      # Push baseline updates to main
+      contents: read
       pull-requests: write # Post PR comments on regression alerts
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: true
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -493,6 +512,15 @@ jobs:
           fi
           cat web-app/e2e-latency-results.json
 
+      - name: Restore benchmark baseline (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: benchmarks/e2e/latency-baseline.json
+          key: bench-e2e-latency-
+          restore-keys: |
+            bench-e2e-latency-
+
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
         run: |
@@ -548,21 +576,15 @@ jobs:
               });
             }
 
-      - name: Update baseline (push to main only)
+      - name: Save benchmark baseline (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          pushed=false
-          for i in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p benchmarks/e2e
-            cp web-app/e2e-latency-results.json benchmarks/e2e/latency-baseline.json
-            git add benchmarks/e2e/latency-baseline.json
-            git diff --cached --quiet && echo "no changes to baseline" && pushed=true && break
-            git commit -m "chore(bench): update e2e latency baseline [skip ci]"
-            git push origin HEAD:main && pushed=true && break
-            sleep $((5*i))
-          done
-          $pushed || { echo "ERROR: git push failed after 3 retries"; exit 1; }
+          mkdir -p benchmarks/e2e
+          cp web-app/e2e-latency-results.json benchmarks/e2e/latency-baseline.json
+
+      - name: Persist baseline to cache (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/e2e/latency-baseline.json
+          key: bench-e2e-latency-${{ github.run_id }}

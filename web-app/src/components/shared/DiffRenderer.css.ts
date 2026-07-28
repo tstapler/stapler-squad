@@ -95,6 +95,71 @@ export const viewModeButtonActive = style({
   color: vars.color.primaryText,
 });
 
+export const body = style({
+  display: "flex",
+  flex: 1,
+  minHeight: 0,
+  "@media": {
+    "(max-width: 768px)": {
+      flexDirection: "column",
+    },
+  },
+});
+
+export const fileTree = style({
+  flexShrink: 0,
+  width: "260px",
+  overflowY: "auto",
+  borderRight: `1px solid ${vars.color.terminalBorder}`,
+  background: vars.color.terminalHeaderBg,
+  "@media": {
+    "(max-width: 768px)": {
+      width: "100%",
+      maxHeight: "160px",
+      borderRight: "none",
+      borderBottom: `1px solid ${vars.color.terminalBorder}`,
+    },
+  },
+});
+
+export const fileTreeItem = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "0.5rem",
+  width: "100%",
+  padding: "0.5rem 0.75rem",
+  background: "transparent",
+  border: "none",
+  borderLeft: "3px solid transparent",
+  color: vars.color.terminalForeground,
+  fontSize: "0.8rem",
+  textAlign: "left",
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { background: vars.color.terminalHoverBg },
+  },
+});
+
+export const fileTreeItemActive = style({
+  background: vars.color.terminalHoverBg,
+  borderLeftColor: vars.color.primary,
+});
+
+export const fileTreeFilename = style({
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  wordBreak: "break-all",
+});
+
+export const fileTreeStats = style({
+  display: "flex",
+  gap: "0.4rem",
+  flexShrink: 0,
+  fontSize: "0.75rem",
+});
+
 export const diffContent = style({
   flex: 1,
   overflowY: "auto",
@@ -263,4 +328,19 @@ export const errorState = style({
   padding: "2rem",
   textAlign: "center",
   color: vars.color.error,
+});
+
+export const errorRetryButton = style({
+  marginTop: "1rem",
+  padding: "0.4rem 1rem",
+  background: "transparent",
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: "4px",
+  color: vars.color.error,
+  fontSize: "0.875rem",
+  cursor: "pointer",
+  transition: "background 0.2s",
+  selectors: {
+    "&:hover": { background: vars.color.terminalHoverBg },
+  },
 });

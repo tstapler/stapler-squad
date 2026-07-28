@@ -38,7 +38,12 @@ import (
 func (i *Instance) ToInstanceData() InstanceData {
 	var snap *InstanceSnapshot
 	_ = i.sendSyncErr(func(s *instanceState) error {
+		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
+		// mutate fields directly under i.mu.Lock() from outside the actor — see
+		// runActor's doc comment in actor.go.
+		s.inst.mu.Lock()
 		snap = buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
 		return nil
 	})
 
@@ -62,6 +67,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Tags:                 snap.Tags, // Include tags in serialization
 		SessionType:          snap.SessionType,
 		TmuxPrefix:           snap.TmuxPrefix,
+		TmuxServerSocket:     snap.TmuxServerSocket,
 		LastTerminalUpdate:   snap.LastTerminalUpdate,
 		LastMeaningfulOutput: snap.LastMeaningfulOutput,
 		LastOutputSignature:  snap.LastOutputSignature,
@@ -148,7 +154,27 @@ func (i *Instance) ToInstanceData() InstanceData {
 }
 
 // FromInstanceData creates a new Instance from serialized data
+// FromInstanceData reconstructs an *Instance from persisted data, starting it
+// synchronously (hot-attaching to an already-live tmux session or cold-restoring
+// one) before returning. Use for on-demand single-instance loads (e.g.
+// Registry.Acquire) where the caller needs a ready instance immediately.
+//
+// Bulk startup loads should use fromInstanceData(data, true) via LoadInstances
+// instead — starting every instance synchronously here is what made server
+// startup block on restoring all sessions (including cold-relaunching every
+// dead one) before the HTTP server could bind. See server/dependencies.go's
+// "Step 6" background goroutine, which already exists to start un-started
+// instances asynchronously once the deferred path skips Start() here.
 func FromInstanceData(data InstanceData) (*Instance, error) {
+	return fromInstanceData(data, false)
+}
+
+// fromInstanceData is the shared implementation. When deferStart is true, the
+// Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
+// tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
+// the synchronous Start() call, leaving Instance.Started() false so the async
+// Step 6 loop in BuildRuntimeDeps picks it up off the startup critical path.
+func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// MIGRATION: Fix corrupted paths from before defensive tilde expansion was added
 	// Detect paths like "/absolute/path/~/other/path" and fix them
 	migratedPath := data.Path
@@ -187,24 +213,25 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:         data.Title,
-		UUID:          data.UUID,
-		Path:          migratedPath, // Use migrated path
-		WorkingDir:    data.WorkingDir,
-		Branch:        data.Branch,
-		Status:        data.Status,
-		Height:        data.Height,
-		Width:         data.Width,
-		CreatedAt:     data.CreatedAt,
-		UpdatedAt:     data.UpdatedAt,
-		Program:       data.Program,
-		Prompt:        data.Prompt,
-		InitialPrompt: data.InitialPrompt,
-		Category:      data.Category,
-		IsExpanded:    data.IsExpanded,
-		Tags:          tags, // Use migrated tags (includes category if needed)
-		SessionType:   data.SessionType,
-		TmuxPrefix:    data.TmuxPrefix,
+		Title:            data.Title,
+		UUID:             data.UUID,
+		Path:             migratedPath, // Use migrated path
+		WorkingDir:       data.WorkingDir,
+		Branch:           data.Branch,
+		Status:           data.Status,
+		Height:           data.Height,
+		Width:            data.Width,
+		CreatedAt:        data.CreatedAt,
+		UpdatedAt:        data.UpdatedAt,
+		Program:          data.Program,
+		Prompt:           data.Prompt,
+		InitialPrompt:    data.InitialPrompt,
+		Category:         data.Category,
+		IsExpanded:       data.IsExpanded,
+		Tags:             tags, // Use migrated tags (includes category if needed)
+		SessionType:      data.SessionType,
+		TmuxPrefix:       data.TmuxPrefix,
+		TmuxServerSocket: data.TmuxServerSocket,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -273,6 +300,11 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	// Initialize TagManager backed by the Instance.Tags slice
 	instance.tagManager = NewTagManager(&instance.Tags)
+
+	// Shell registry is not part of InstanceData and defaults to nil; initialize
+	// it so restored instances can spawn/track shells (see ShellRegistry's
+	// nil-receiver-safe methods, which otherwise silently no-op).
+	instance.initShellRegistry()
 
 	// Sync atomic shadow fields so lock-free readers see the correct initial values.
 	instance.SyncAtomicTimestamps()
@@ -367,7 +399,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		if instance.processManager.IsAlive() {
 			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
 			instance.loadStatus(Active)
-			if err := instance.Start(false); err != nil {
+			if deferStart {
+				// Leave started=false: the async Step 6 loop will call Start(false)
+				// and hot-attach to this already-live session off the critical path.
+			} else if err := instance.Start(false); err != nil {
 				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
 				instance.loadStatus(Stopped)
 				instance.started.Store(true)
@@ -394,7 +429,31 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		}
 		instance.started.Store(true)
 	} else {
-		if err := instance.Start(false); err != nil {
+		// Wire the tmux session object first (mirrors the Paused/Stopped/Hibernated
+		// branches above) so initTmuxSession()'s HasSession() check correctly detects
+		// an already-running tmux session instead of unconditionally treating every
+		// restore as a fresh launch. Without this, HasSession() is false on this
+		// freshly-constructed Instance regardless of whether the real tmux session
+		// is alive, so every LoadInstances() call (health checks, MCP tool handlers,
+		// etc.) logs a spurious "creating tmux session" and re-runs launch bookkeeping
+		// for every Active session, even ones that were never actually down.
+		tmuxPrefix := instance.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if tb, ok := instance.processManager.(*TmuxBackend); ok {
+			if instance.TmuxServerSocket != "" {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
+			} else {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
+			}
+		}
+		if deferStart {
+			// Leave started=false: the async Step 6 loop in BuildRuntimeDeps calls
+			// Start(false) later, off the startup critical path. That loop already
+			// hot-attaches to a live tmux session or cold-restores a dead one —
+			// the same logic this branch would otherwise run synchronously here.
+		} else if err := instance.Start(false); err != nil {
 			return nil, err
 		}
 	}

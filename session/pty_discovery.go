@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -27,9 +28,18 @@ type paneEntry struct {
 // Returns a map keyed by session name; only the first pane per session is kept.
 // socket is the tmux server socket name (empty = default server).
 func batchPTYInfo(socket string) map[string]paneEntry {
-	args := tmux.ResolveSocket(socket).Args("list-panes", "-a", "-F", "#{session_name} #{pane_tty} #{pane_pid}")
+	resolved := tmux.ResolveSocket(socket)
+	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_tty} #{pane_pid}")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Background poller: skip this tick rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(resolved.String())
+	if !ok {
+		return nil
+	}
+	defer release()
+
 	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 	output, err := cmd.Output()
 	if err != nil {
@@ -118,9 +128,18 @@ func parseProcessState(state string) PTYStatus {
 // a session has produced new output since the last capture, without spawning capture-pane.
 // Returns nil when tmux is unavailable.
 func batchPaneActivity(socket string) map[string]time.Time {
-	args := tmux.ResolveSocket(socket).Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
+	resolved := tmux.ResolveSocket(socket)
+	args := resolved.Args("list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Background poller: skip this tick rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(resolved.String())
+	if !ok {
+		return nil
+	}
+	defer release()
+
 	cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 	output, err := cmd.Output()
 	if err != nil {
@@ -279,6 +298,7 @@ type PTYDiscovery struct {
 	refreshRate   time.Duration
 	config        PTYDiscoveryConfig // Discovery configuration
 	sessionLister tmux.SessionLister // nil = use exec fallback
+	refreshing    atomic.Bool        // true while a Refresh() from monitorLoop is in flight
 }
 
 // NewPTYDiscovery creates a new PTY discovery service with default configuration.
@@ -408,13 +428,28 @@ func (pd *PTYDiscovery) monitorLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := pd.Refresh(); err != nil {
+			if ran, err := pd.tryRefreshOnce(); !ran {
+				log.Debug("PTY discovery: skipping tick, previous refresh still running")
+			} else if err != nil {
 				log.Error("PTY discovery refresh failed", "err", err)
 			}
 		case <-pd.stopCh:
 			return
 		}
 	}
+}
+
+// tryRefreshOnce runs Refresh() unless a previous call (from a concurrent tick)
+// is still in flight, in which case it returns ran=false without calling
+// Refresh() again. This poller fires every refreshRate (default 5s) forever
+// regardless of session count, and a slow tmux call (server under load) must
+// not cause ticks to pile up as concurrent Refresh() calls.
+func (pd *PTYDiscovery) tryRefreshOnce() (ran bool, err error) {
+	if !pd.refreshing.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	defer pd.refreshing.Store(false)
+	return true, pd.Refresh()
 }
 
 // discoverPTYs performs the actual PTY discovery.
@@ -548,9 +583,17 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
+		// Background poller: skip this source for the tick rather than queue
+		// behind interactive traffic.
+		release, ok := tmux.TryAcquireExecSlot(resolvedSocket.String())
+		if !ok {
+			return connections
+		}
 		args := resolvedSocket.Args("list-sessions", "-F", "#{session_name}")
 		cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 		output, err := cmd.Output()
+		release()
 		if err != nil {
 			return connections
 		}
@@ -647,8 +690,16 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
+		// Background poller: skip this source for the tick rather than queue
+		// behind interactive traffic.
+		release, ok := tmux.TryAcquireExecSlot(resolvedSocket.String())
+		if !ok {
+			return connections
+		}
 		cmd := safeexec.CommandContext(ctx, tmux.Binary(), resolvedSocket.Args("list-sessions", "-F", "#{session_name}")...)
 		output, err := cmd.Output()
+		release()
 		if err != nil {
 			return connections
 		}
@@ -731,6 +782,14 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 func (pd *PTYDiscovery) getPTYInfoFromTmuxWithSocket(sessionName string, socket tmux.Socket) (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Background poller: skip this candidate rather than queue behind interactive traffic.
+	release, ok := tmux.TryAcquireExecSlot(socket.String())
+	if !ok {
+		return "", 0, fmt.Errorf("failed to get tmux pane info: exec gate busy")
+	}
+	defer release()
+
 	cmd := safeexec.CommandContext(ctx, tmux.Binary(), socket.Args("display-message", "-p", "-t", sessionName,
 		"#{pane_tty}:#{pane_pid}")...)
 

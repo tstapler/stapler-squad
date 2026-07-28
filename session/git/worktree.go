@@ -35,12 +35,20 @@ const IsDirtyCacheTTL = 30 * time.Second
 // cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
 const IsDirtyCleanCacheTTL = 5 * time.Minute
 
+// IsDirtyErrorCacheTTL is the TTL applied when `git status` itself fails (e.g. the
+// worktree directory is missing — a stale path left behind by a rework/reopen cycle).
+// Without a backoff, a broken worktree gets re-checked on every poller tick (every few
+// seconds), burning a subprocess spawn per tick indefinitely; 60s keeps failure visible
+// in logs at a sane rate while still recovering quickly once the worktree is fixed.
+const IsDirtyErrorCacheTTL = 60 * time.Second
+
 // dirtyCacheState is the immutable snapshot stored in GitWorktree.isDirtyCache.
 // atomic.Value replaces the previous sync.RWMutex + two fields; readers do a
 // lock-free Load() on the hot per-tick path.
 type dirtyCacheState struct {
 	dirty bool
 	time  time.Time
+	err   error
 }
 
 // GitWorktree manages git worktree operations for a session
@@ -247,7 +255,7 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	}
 
 	// Find the repository root from the worktree path
-	repoPath, err := findGitRepoRoot(existingWorktreePath)
+	repoPath, err := findMainRepoPathForWorktree(existingWorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find repository root for worktree '%s': %w", existingWorktreePath, err)
 	}

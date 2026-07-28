@@ -45,6 +45,14 @@ const (
 	// before it is considered stuck and restarted. Only fires after the initial prompt is sent.
 	driverInactivityTimeout = 10 * time.Minute
 
+	// driverBacklogNudgeDelay is how long after the initial prompt a backlog work session can
+	// be idle before we send a task-reminder nudge (instead of restarting immediately).
+	driverBacklogNudgeDelay = 5 * time.Minute
+
+	// driverBacklogNudgeGrace is how long we wait after sending a nudge before treating
+	// the session as stuck and falling through to the normal restart path.
+	driverBacklogNudgeGrace = 5 * time.Minute
+
 	// driverMinRuntimeBeforeRetry is the minimum time after sending the initial prompt before
 	// an unexpected exit is treated as a crash worth retrying. Sessions that ran longer than
 	// this are assumed to have completed their task normally.
@@ -132,15 +140,26 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(driverPollInterval)
 	defer ticker.Stop()
 
-	// Cooldown after answering a startup dialog: prevents the same tick-detected
-	// buffer from firing a second "1\n" before the terminal clears the dialog.
-	var lastDialogAnsweredAt time.Time
-	const dialogCooldown = 5 * time.Second
+	// dialogAwaitingClear latches after we answer a startup dialog: it blocks a
+	// second "1\r" until the dialog text has visibly disappeared from the pane
+	// at least once. A fixed time-based cooldown is not sufficient here — a
+	// slow/loaded terminal can still be redrawing the same already-answered
+	// dialog past any fixed window, and sending another "1\r" then queues into
+	// whatever prompt appears next once the redraw finally completes.
+	var dialogAwaitingClear bool
+
+	// Same guard for directory-access approval prompts (see #165): NeedsApproval
+	// can stay the detected status for several poll ticks after "1\r" is sent.
+	var approvalAwaitingClear bool
 
 	// Once a PR URL is found in terminal output we stop scanning.
 	// Pre-seed from the current in-memory state so we don't re-scan for sessions
 	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
 	prURLLinked := inst.GitHubPRNumber > 0
+
+	// nudgeSentAt records when the last backlog-work nudge was sent.
+	// Zero means no nudge has been sent yet.
+	var nudgeSentAt time.Time
 
 	// No initial prompt configured — skip the send step; driver still handles
 	// startup dialogs, auto-approval, and monitoring.
@@ -222,20 +241,24 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
 		output, previewErr := inst.Preview()
 		if previewErr == nil && output != "" {
-			if shouldAnswerStartupDialog(output, lastDialogAnsweredAt, dialogCooldown) {
+			dialogVisible := isStartupDialog(output)
+			if shouldAnswerStartupDialog(dialogVisible, dialogAwaitingClear) {
 				if err := inst.SendKeys("1\r"); err != nil {
 					log.Warn("SessionDriver: failed to answer startup dialog",
 						"session", inst.Title,
 						"err", err,
 					)
 				} else {
-					lastDialogAnsweredAt = time.Now()
+					dialogAwaitingClear = true
 					log.Info("SessionDriver: answered startup dialog",
 						"session", inst.Title,
 					)
 				}
 				continue
 			}
+			// Latch clears only once the dialog text is no longer visible —
+			// this is what lets a genuinely new occurrence be answered later.
+			dialogAwaitingClear = dialogAwaitingClear && dialogVisible
 		}
 
 		if !sentInitial {
@@ -244,9 +267,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			//
 			// Do NOT use st == Ready (which equals st == Active — a deprecated alias
 			// that fires the moment the session starts, long before readline is ready).
-			// detection.StatusUnknown is the `.*` catch-all; detection.StatusReady is an
-			// explicit prompt match (e.g. gemini_ready). detection.StatusIdle remains the
-			// precise signal used here.
+			// StatusReady is a `.*` catch-all; StatusIdle is the precise signal.
 			claudeAtPrompt := detectedSt == detection.StatusIdle
 			timedOut := time.Now().After(readyDeadline)
 
@@ -303,7 +324,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				// that the keystrokes were actually received (read-back confirmation).
 				contentBefore, _ := inst.Preview()
 
-				if err := inst.SendKeys(initialPrompt + "\r"); err != nil {
+				if err := inst.SendKeys(initialPrompt + EnterKeySequence); err != nil {
 					log.Warn("SessionDriver: failed to send initial prompt",
 						"session", inst.Title,
 						"claudeAtPrompt", claudeAtPrompt,
@@ -376,10 +397,28 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			if !last.IsZero() && last.After(initialPromptSentAt) {
 				activityRef = last
 			}
-			if time.Since(activityRef) > driverInactivityTimeout {
+			if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
+				activityRef = nudgeSentAt
+			}
+
+			idle := time.Since(activityRef)
+
+			// For backlog work sessions: send a task-reminder nudge before restarting.
+			// This preserves conversational context when Claude finishes but forgets to
+			// call /backlog/review or report_progress.
+			if inst.HasTag(TagBacklogWork) && nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
+				nudgeSentAt = attemptBacklogNudge(inst, idle)
+				continue
+			}
+
+			graceTimeout := driverInactivityTimeout
+			if inst.HasTag(TagBacklogWork) && !nudgeSentAt.IsZero() {
+				graceTimeout = driverBacklogNudgeGrace
+			}
+			if idle > graceTimeout {
 				log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
 					"session", inst.Title,
-					"inactivity", time.Since(activityRef).Round(time.Second),
+					"inactivity", idle.Round(time.Second),
 				)
 				handleDriverFailure(inst, allowedPath, retried, "inactivity timeout")
 				return
@@ -390,12 +429,22 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" && shouldApprovePrompt(output, allowedPath) {
-					if err := inst.SendKeys("1\r"); err != nil {
-						log.Warn("SessionDriver: failed to approve prompt",
-							"session", inst.Title,
-							"err", err,
-						)
+				if previewErr == nil && output != "" {
+					approvalVisible := shouldApprovePrompt(output, allowedPath)
+					if shouldApprovePromptOnce(approvalVisible, approvalAwaitingClear) {
+						if err := inst.SendKeys("1\r"); err != nil {
+							log.Warn("SessionDriver: failed to approve prompt",
+								"session", inst.Title,
+								"err", err,
+							)
+						} else {
+							approvalAwaitingClear = true
+							log.Info("SessionDriver: approved directory-access prompt",
+								"session", inst.Title,
+							)
+						}
+					} else {
+						approvalAwaitingClear = approvalAwaitingClear && approvalVisible
 					}
 				}
 			}
@@ -417,6 +466,36 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			}
 		}
 	}
+}
+
+// attemptBacklogNudge sends a backlog work session the "you appear to have paused"
+// task-reminder nudge and returns the value the caller should record as nudgeSentAt.
+//
+// It always returns a non-zero, current timestamp — on a failed send exactly the same
+// as on a successful one. BUG-041: previously nudgeSentAt was only set in the success
+// case, so an identical failing SendKeys call retried on every subsequent driver tick
+// forever (live evidence: 392 consecutive failed sends over ~13 minutes against one
+// dead-pane session). A SendKeys failure here (e.g. tmux "invalid argument") is very
+// likely a dead/gone pane that retrying cannot fix, so this deliberately does not retry
+// the nudge itself. Returning a non-zero time makes the caller's graceTimeout/idle check
+// (which already fires once nudgeSentAt is non-zero) take over: after
+// driverBacklogNudgeGrace of continued silence it logs "session stuck" and calls
+// handleDriverFailure, which restarts the session once and marks it for human attention
+// on a second failure — the give-up signal this nudge path previously lacked.
+func attemptBacklogNudge(inst *Instance, idle time.Duration) time.Time {
+	nudge := "You appear to have paused. Run `/backlog/status` to see remaining " +
+		"acceptance criteria. Mark each complete criterion with `/backlog/done-N`, " +
+		"then submit with `/backlog/review` once all are done."
+	if sendErr := inst.SendKeys(nudge + EnterKeySequence); sendErr != nil {
+		log.Warn("SessionDriver: failed to send backlog nudge, will not retry — falling through to inactivity timeout",
+			"session", inst.Title, "err", sendErr)
+	} else {
+		log.Info("SessionDriver: sent backlog nudge",
+			"session", inst.Title,
+			"idle", idle.Round(time.Second),
+		)
+	}
+	return time.Now()
 }
 
 // handleDriverFailure is called when the driver detects a stuck or crashed session.
@@ -579,11 +658,26 @@ func isStartupDialog(output string) bool {
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
 }
 
-// shouldAnswerStartupDialog returns true when the terminal output shows a startup
-// dialog and the cooldown since the last answer has elapsed. Extracted to make
-// the double-fire guard directly unit-testable.
-func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
-	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
+// shouldSendOnce returns true when detected is true and awaitingClear is
+// false — the shared double-fire guard used by both the startup-dialog and
+// directory-approval auto-answer paths. awaitingClear must stay true (blocking
+// further sends) until the caller observes detected go false at least once,
+// confirming the dialog we already answered has actually left the pane. A
+// fixed time-based cooldown is deliberately not used here: a slow/loaded
+// terminal can still be showing the same already-answered dialog past any
+// fixed window, and sending another "1\r" then queues into whatever prompt
+// appears next once the redraw finally completes (see #165 and its
+// trust-folder analog).
+func shouldSendOnce(detected bool, awaitingClear bool) bool {
+	return detected && !awaitingClear
+}
+
+// shouldAnswerStartupDialog returns true when the terminal output shows a
+// startup dialog that has not yet been answered (or was answered but has
+// since been confirmed cleared). Extracted to make the double-fire guard
+// directly unit-testable.
+func shouldAnswerStartupDialog(dialogVisible bool, awaitingClear bool) bool {
+	return shouldSendOnce(dialogVisible, awaitingClear)
 }
 
 // outputShowsConversationStarted returns true when live terminal content
@@ -736,4 +830,13 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 		return true
 	}
 	return strings.Contains(output, allowedPath)
+}
+
+// shouldApprovePromptOnce adds the same double-fire guard used by
+// shouldAnswerStartupDialog: NeedsApproval can remain the detected status for
+// several poll ticks after "1\r" is sent (the PTY needs time to redraw), so
+// without this latch the driver resends "1" every driverPollInterval until the
+// dialog visibly clears — the repeated-"1" bug in #165.
+func shouldApprovePromptOnce(approvalVisible bool, awaitingClear bool) bool {
+	return shouldSendOnce(approvalVisible, awaitingClear)
 }

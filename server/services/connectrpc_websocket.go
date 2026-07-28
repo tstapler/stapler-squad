@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -126,7 +128,6 @@ const (
 	//               in a known default state (scroll region = full screen, etc.)
 	//   2. ED2    — erase the now-full screen
 	//   3. CUP    — position cursor at the absolute origin before writing content
-	// keep in sync with clearAndHome (web-app/src/lib/terminal/__tests__/TerminalStreamManager.resync.test.ts)
 	ansiSnapshotPrefix = ansiDECSTR + ansiEraseScreen + ansiCursorHome
 )
 
@@ -162,11 +163,17 @@ func prepareSnapshotContent(content string) string {
 // sequences emitted by the process to rewind to the wrong lines — producing the
 // "billowing" effect where each animation frame stacks below the previous one
 // instead of overwriting it.
-func withCursorSync(content string, instance *session.Instance) string {
-	if instance == nil {
+// cursorPositioner is satisfied by both *session.Instance and shellPanePTY, letting
+// withCursorSync target either the main session's pane or a shell's sibling tmux pane.
+type cursorPositioner interface {
+	GetPaneCursorPosition() (x, y int, err error)
+}
+
+func withCursorSync(content string, target cursorPositioner) string {
+	if target == nil {
 		return content
 	}
-	x, y, err := instance.GetPaneCursorPosition()
+	x, y, err := target.GetPaneCursorPosition()
 	if err != nil {
 		return content
 	}
@@ -250,7 +257,12 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 	captureFn func() (string, error),
 ) (string, error) {
 	if snap, ok := h.snapshotCache.Load(sessionID); ok && !snap.dirty {
-		log.Info("[SnapshotCache] serving cached snapshot", "session", sessionID, "bytes", len(snap.content), "age", time.Since(snap.capturedAt).Round(time.Millisecond))
+		// Debug, not Info: this fires on every WebSocket connect (production) and
+		// every benchmark iteration (BenchmarkSnapshotCacheHit/Miss run into the
+		// hundreds of millions of iterations). At Info level this previously
+		// produced tens of millions of log lines during `go test -bench`, which
+		// blew past CI log size limits and failed the benchmark job.
+		log.Debug("[SnapshotCache] serving cached snapshot", "session", sessionID, "bytes", len(snap.content), "age", time.Since(snap.capturedAt).Round(time.Millisecond))
 		return snap.content, nil
 	}
 
@@ -265,7 +277,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 		dirty:      false,
 	})
 
-	log.Info("[SnapshotCache] refreshed snapshot", "session", sessionID, "bytes", len(content))
+	log.Debug("[SnapshotCache] refreshed snapshot", "session", sessionID, "bytes", len(content))
 	return content, nil
 }
 
@@ -443,13 +455,33 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	}
 
 	sessionID := terminalData.SessionId
-	log.Info("StreamTerminal called", "session", sessionID)
+	shellID := terminalData.ShellId
+	log.Info("StreamTerminal called", "session", sessionID, "shell", shellID)
 
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
 	instance, _ := h.resolveSession(sessionID)
 	if instance == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Shell tabs are independent sibling tmux sessions (see instance_shells.go), not the
+	// main session's PTY, so they need their own control-mode session rather than reusing
+	// the main Instance's. streamShellViaControlMode targets the shell's tmux session
+	// directly, keeping shells on the same low-latency event-driven pipeline as the main
+	// terminal instead of falling back to capture-pane polling.
+	if shellID != "" {
+		shellTmuxSessionName, ok := instance.GetShellTmuxSessionName(shellID)
+		if !ok {
+			return fmt.Errorf("shell not found: %s (session %s)", shellID, sessionID)
+		}
+		useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
+		if useControlMode == "" || useControlMode == "true" {
+			log.Info("[WebSocket] routing shell stream to control mode", "session", sessionID, "shell", shellID, "tmux", shellTmuxSessionName)
+			return h.streamShellViaControlMode(stream, instance, shellID, shellTmuxSessionName)
+		}
+		log.Info("[WebSocket] routing shell stream to capture-pane polling", "session", sessionID, "shell", shellID, "tmux", shellTmuxSessionName)
+		return h.streamViaTmuxCapturePane(stream, instance, shellTmuxSessionName)
 	}
 
 	// A hibernated session has no tmux session at all -- Hibernate() explicitly kills
@@ -490,7 +522,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// - It detects content changes and only sends deltas
 	// - It works reliably for both managed and external tmux sessions
 	log.Info("[WebSocket] routing session to capture-pane polling", "session", sessionID)
-	return h.streamViaTmuxCapturePane(stream, instance)
+	return h.streamViaTmuxCapturePane(stream, instance, "")
 }
 
 // streamViaControlMode handles WebSocket streaming using tmux control mode (-C flag).
@@ -515,7 +547,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"
 	}
-	tmuxSessionName := tmuxPrefix + snap.Title
+	// Always derive via the canonical sanitizer, never by hand-concatenating prefix+title —
+	// a raw title containing spaces would target a session name that was never created (#162).
+	tmuxSessionName := tmux.NewSessionName(snap.Title, tmuxPrefix).String()
 
 	log.Info("[streamViaControlMode] starting", "session", sessionID, "tmux", tmuxSessionName)
 
@@ -559,6 +593,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		log.Info("[streamViaControlMode] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
+			if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
+				// Its working directory is gone (e.g. a pruned worktree) — fail the
+				// session with a visible status instead of leaving it "Active" with a
+				// terminal that can never reconnect.
+				instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
+				instance.ForceStatus(session.Stopped)
+			}
 			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
 		}
 	}
@@ -966,7 +1007,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					sendCancel()
 					if sendErr != nil {
 						log.Warn("[streamViaControlMode] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
-						if fbErr := sendInputToTmux(tmuxSessionName, input.Data); fbErr != nil {
+						if fbErr := sendInputToTmux(snap.TmuxServerSocket, tmuxSessionName, input.Data); fbErr != nil {
 							log.Error("[streamViaControlMode] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
 						}
 					}
@@ -1055,6 +1096,394 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 }
 
+// streamShellViaControlMode streams a shell tab through the same low-latency,
+// event-driven tmux control-mode pipeline as streamViaControlMode, instead of
+// the capture-pane polling path. It targets the shell's own sibling tmux
+// session directly (shellSess) rather than the parent Instance's PTY, since
+// the shell runs in its own tmux session sharing only the server socket.
+func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWebSocketStream, instance *session.Instance, shellID, shellTmuxSessionName string) error {
+	snap := instance.Snapshot()
+	sessionID := snap.Title
+
+	shellSess := tmux.NewTmuxSessionFromExistingWithServerSocket(shellTmuxSessionName, snap.TmuxServerSocket)
+	cursorTarget := shellPanePTY{session: shellSess}
+
+	log.Info("[streamShellViaControlMode] starting", "session", sessionID, "shell", shellID, "tmux", shellTmuxSessionName)
+
+	instance.MarkViewed()
+
+	var handshakeData sessionv1.TerminalData
+	if err := proto.Unmarshal(stream.requestMsg, &handshakeData); err != nil {
+		return fmt.Errorf("failed to parse handshake: %w", err)
+	}
+	currentPaneReq := handshakeData.GetCurrentPaneRequest()
+	if currentPaneReq == nil {
+		return fmt.Errorf("handshake missing CurrentPaneRequest - client may need update")
+	}
+
+	if !shellSess.DoesSessionExistNoCache() {
+		return fmt.Errorf("shell tmux session missing: %s", shellTmuxSessionName)
+	}
+
+	if err := shellSess.StartControlMode(); err != nil {
+		return fmt.Errorf("failed to start control mode for shell: %w", err)
+	}
+	defer func() {
+		if err := shellSess.StopControlMode(); err != nil {
+			log.Warn("[streamShellViaControlMode] StopControlMode error", "err", err)
+		}
+	}()
+
+	quiescenceCh := make(chan struct{}, 16)
+
+	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+		targetCols := int(*currentPaneReq.TargetCols)
+		targetRows := int(*currentPaneReq.TargetRows)
+
+		log.Info("[streamShellViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
+
+		if targetCols > 1 {
+			if resizeErr := shellSess.SetWindowSize(targetCols-1, targetRows); resizeErr != nil {
+				log.Warn("[streamShellViaControlMode] pre-nudge resize failed", "err", resizeErr)
+			}
+		}
+
+		if err := shellSess.SetWindowSize(targetCols, targetRows); err != nil {
+			log.Error("[streamShellViaControlMode] failed to resize", "err", err)
+		} else {
+			quiescenceStart := time.Now()
+			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 50*time.Millisecond)
+			if elapsed := time.Since(quiescenceStart); elapsed >= 500*time.Millisecond-5*time.Millisecond {
+				log.Warn("[streamShellViaControlMode] initial quiescence timed out; shell may be stalled", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID, "shell", shellID)
+			}
+		}
+	} else {
+		log.Warn("[streamShellViaControlMode] handshake missing dimensions, layout may be incorrect")
+	}
+
+	initialContent, err := shellSess.CapturePaneContentRaw()
+	if err != nil {
+		log.Info("[streamShellViaControlMode] capture-pane failed, sending stopped notice", "session", sessionID, "shell", shellID, "err", err)
+		initialContent = "\r\n\x1b[33m[shell stopped — no terminal content available]\x1b[0m\r\n"
+	}
+
+	if initialContent != "" {
+		fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(initialContent), cursorTarget)
+
+		terminalData := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			ShellId:   shellID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{
+					Data: []byte(fullContent),
+				},
+			},
+		}
+		dataBytes, err := proto.Marshal(terminalData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal initial content: %w", err)
+		}
+		envelope := protocol.CreateEnvelope(0, dataBytes)
+		if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+			return fmt.Errorf("failed to send initial content: %w", err)
+		}
+		log.Info("[streamShellViaControlMode] sent initial snapshot", "bytes", len(initialContent), "session", sessionID, "shell", shellID)
+	}
+
+	subscriberID, updateChan := shellSess.SubscribeToControlModeUpdates()
+	defer shellSess.UnsubscribeFromControlModeUpdates(subscriberID)
+
+	log.Info("[streamShellViaControlMode] subscribed to control mode", "subscriber_id", subscriberID, "session", sessionID, "shell", shellID)
+
+	errChan := make(chan error, 2)
+	doneChan := make(chan struct{})
+
+	go func() {
+		defer close(doneChan)
+		sendData := func(data []byte) error {
+			msg := terminalDataPool.Get().(*sessionv1.TerminalData)
+			msg.SessionId = sessionID
+			msg.ShellId = shellID
+			msg.Data = &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{Data: data},
+			}
+			err := marshalProtoEnvelope(stream, 0, msg)
+			proto.Reset(msg)
+			terminalDataPool.Put(msg)
+			return err
+		}
+
+		for {
+			select {
+			case <-doneChan:
+				return
+			case data, ok := <-updateChan:
+				if !ok {
+					return
+				}
+				cbp := coalesceBufPool.Get().(*[]byte)
+				buf := append((*cbp)[:0], data...)
+				const maxBatchFrames = 32
+				framesInBatch := 1
+			coalesce:
+				for framesInBatch < maxBatchFrames {
+					select {
+					case more, ok := <-updateChan:
+						if !ok {
+							break coalesce
+						}
+						buf = append(buf, more...)
+						framesInBatch++
+					default:
+						break coalesce
+					}
+				}
+
+				sendErr := sendData(buf)
+				*cbp = buf[:0]
+				coalesceBufPool.Put(cbp)
+				if sendErr != nil {
+					log.Error("[streamShellViaControlMode] failed to send output", "err", sendErr)
+					errChan <- fmt.Errorf("failed to send output: %w", sendErr)
+					return
+				}
+				select {
+				case quiescenceCh <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	type resizeReq struct{ cols, rows int }
+	resizeCh := make(chan resizeReq, 1)
+	go func() {
+		type lastResize struct {
+			cols, rows int
+			t          time.Time
+		}
+		var last lastResize
+		for {
+			select {
+			case <-doneChan:
+				return
+			case r := <-resizeCh:
+				if r.cols == last.cols && r.rows == last.rows && time.Since(last.t) < 50*time.Millisecond {
+					continue
+				}
+				if err := shellSess.SetWindowSize(r.cols, r.rows); err != nil {
+					log.Error("[streamShellViaControlMode] failed to resize", "err", err)
+					continue
+				}
+				last = lastResize{cols: r.cols, rows: r.rows, t: time.Now()}
+
+				sendResizeQuiescence := func(resizing bool) {
+					rqMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						ShellId:   shellID,
+						Data: &sessionv1.TerminalData_ResizeQuiescence{
+							ResizeQuiescence: &sessionv1.ResizeQuiescence{
+								Resizing: resizing,
+								Cols:     int32(r.cols),
+								Rows:     int32(r.rows),
+							},
+						},
+					}
+					if rqBytes, merr := proto.Marshal(rqMsg); merr != nil {
+						log.Error("[streamShellViaControlMode] failed to marshal ResizeQuiescence", "session", sessionID, "shell", shellID, "err", merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, rqBytes))
+					}
+				}
+
+				sendResizeQuiescence(true)
+
+				quiescenceDeadline := 300 * time.Millisecond
+				quiescenceStart := time.Now()
+				waitForQuiescence(quiescenceCh, quiescenceDeadline, 100*time.Millisecond)
+				if elapsed := time.Since(quiescenceStart); elapsed >= quiescenceDeadline-5*time.Millisecond {
+					log.Error("[streamShellViaControlMode] quiescence timed out, sending snapshot anyway", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID, "shell", shellID, "cols", r.cols, "rows", r.rows)
+				}
+
+				if snapContent, snapErr := shellSess.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
+					snapMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						ShellId:   shellID,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: []byte(ansiSnapshotPrefix + prepareSnapshotContent(snapContent)),
+							},
+						},
+					}
+					if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
+						log.Error("[streamShellViaControlMode] failed to marshal post-resize snapshot", "session", sessionID, "shell", shellID, "err", merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, snapBytes))
+					}
+				}
+
+				sendResizeQuiescence(false)
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			select {
+			case <-doneChan:
+				return
+			default:
+				_, message, err := stream.conn.ReadMessage()
+				if err != nil {
+					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+						errChan <- nil
+					} else {
+						log.Error("[streamShellViaControlMode] WebSocket read error", "session", sessionID, "shell", shellID, "err", err)
+						errChan <- err
+					}
+					return
+				}
+
+				envelope, _, err := protocol.ParseEnvelope(message)
+				if err != nil {
+					log.Error("[streamShellViaControlMode] failed to parse envelope", "err", err)
+					continue
+				}
+
+				if envelope.Flags&protocol.EndStreamFlag != 0 {
+					errChan <- nil
+					return
+				}
+
+				if len(envelope.Data) == 0 {
+					continue
+				}
+
+				var incomingData sessionv1.TerminalData
+				if err := proto.Unmarshal(envelope.Data, &incomingData); err != nil {
+					log.Error("[streamShellViaControlMode] failed to unmarshal TerminalData", "err", err)
+					continue
+				}
+
+				if input := incomingData.GetInput(); input != nil {
+					if !snap.Permissions.CanSendCommand {
+						log.Warn("[streamShellViaControlMode] send permission denied", "session", sessionID, "shell", shellID)
+						continue
+					}
+
+					instance.UpdateTerminalTimestamps(string(input.Data), true)
+
+					sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					sendErr := shellSess.SendInputViaControlMode(sendCtx, input.Data)
+					sendCancel()
+					if sendErr != nil {
+						log.Warn("[streamShellViaControlMode] CM input failed, retrying via subprocess", "session", shellTmuxSessionName, "err", sendErr)
+						if fbErr := sendInputToTmux(snap.TmuxServerSocket, shellTmuxSessionName, input.Data); fbErr != nil {
+							log.Error("[streamShellViaControlMode] subprocess fallback also failed", "session", shellTmuxSessionName, "err", fbErr)
+						}
+					}
+				}
+
+				if resize := incomingData.GetResize(); resize != nil {
+					req := resizeReq{int(resize.Cols), int(resize.Rows)}
+					select {
+					case resizeCh <- req:
+					default:
+						select {
+						case <-resizeCh:
+						default:
+						}
+						resizeCh <- req
+					}
+				}
+
+				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
+					const maxScrollbackLimit = 1000
+					limit := int(scrollbackReq.Limit)
+					if limit <= 0 || limit > maxScrollbackLimit {
+						limit = maxScrollbackLimit
+					}
+					offset := scrollbackReq.FromSequence
+
+					startLine := fmt.Sprintf("-%d", offset+uint64(limit))
+					endLine := fmt.Sprintf("-%d", offset+1)
+					content, sbErr := shellSess.CapturePaneContentWithOptions(startLine, endLine)
+					if sbErr != nil {
+						log.Warn("[streamShellViaControlMode] ScrollbackRequest tmux capture failed", "session", sessionID, "shell", shellID, "err", sbErr)
+					} else {
+						trimmed := strings.TrimRight(content, "\n")
+						linesReturned := 0
+						if trimmed != "" {
+							linesReturned = strings.Count(trimmed, "\n") + 1
+						}
+						hasMore := linesReturned >= limit
+						oldestSeq := offset + uint64(linesReturned)
+
+						var chunks []*sessionv1.ScrollbackChunk
+						if linesReturned > 0 {
+							chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
+						}
+						sbResp := &sessionv1.TerminalData{
+							SessionId: sessionID,
+							ShellId:   shellID,
+							Data: &sessionv1.TerminalData_ScrollbackResponse{
+								ScrollbackResponse: &sessionv1.ScrollbackResponse{
+									Chunks:         chunks,
+									HasMore:        hasMore,
+									TotalLines:     uint64(linesReturned),
+									OldestSequence: oldestSeq,
+									NewestSequence: offset,
+								},
+							},
+						}
+						if respBytes, merr := proto.Marshal(sbResp); merr != nil {
+							log.Error("[streamShellViaControlMode] failed to marshal scrollback response", "session", sessionID, "shell", shellID, "err", merr)
+						} else {
+							_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-doneChan:
+		return nil
+	}
+}
+
+// panePTY abstracts pane capture/resize/dimension operations so streamViaTmuxCapturePane
+// can target either the main session's instance-managed PTY or a shell's sibling tmux
+// session. *session.Instance already satisfies this interface natively.
+type panePTY interface {
+	CapturePaneContent() (string, error)
+	CapturePaneContentRaw() (string, error)
+	GetPaneDimensions() (cols, rows int, err error)
+	ResizePTY(cols, rows int) error
+	RefreshTmuxClient() error
+	GetPaneCursorPosition() (x, y int, err error)
+}
+
+// shellPanePTY adapts a shell's sibling *tmux.TmuxSession to the panePTY interface so
+// shell tab streams target their own PTY instead of the parent session's.
+type shellPanePTY struct {
+	session *tmux.TmuxSession
+}
+
+func (p shellPanePTY) CapturePaneContent() (string, error) { return p.session.CapturePaneContent() }
+func (p shellPanePTY) CapturePaneContentRaw() (string, error) {
+	return p.session.CapturePaneContentRaw()
+}
+func (p shellPanePTY) GetPaneDimensions() (int, int, error) { return p.session.GetPaneDimensions() }
+func (p shellPanePTY) ResizePTY(cols, rows int) error       { return p.session.SetWindowSize(cols, rows) }
+func (p shellPanePTY) RefreshTmuxClient() error             { return p.session.RefreshClient() }
+func (p shellPanePTY) GetPaneCursorPosition() (x, y int, err error) {
+	return p.session.GetCursorPosition()
+}
+
 // streamViaTmuxCapturePane handles WebSocket streaming using tmux capture-pane polling.
 // This is the correct method for ALL tmux sessions (both managed and external) because:
 // 1. PTY-based streaming doesn't work for tmux (reads from "tmux attach" PTY, not the actual process)
@@ -1062,27 +1491,49 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 // 3. Works identically for managed sessions (prefix "staplersquad_<name>") and external sessions
 //
 // This function polls tmux's pane buffer at regular intervals and sends content deltas to clients.
-func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *session.Instance) error {
+func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *session.Instance, shellTmuxSessionName string) error {
 	// Lock-free snapshot for all direct Instance field reads in this handler.
 	// Method calls (MarkViewed, ResizePTY, etc.) and write paths are left as-is.
 	snap := instance.Snapshot()
 
+	isShellStream := shellTmuxSessionName != ""
+
 	// Determine tmux session name based on session type
 	var tmuxSessionName string
-	if snap.ExternalMetadata != nil && snap.ExternalMetadata.TmuxSessionName != "" {
+	switch {
+	case isShellStream:
+		// Shell tab - target its own sibling tmux session, never the parent's.
+		tmuxSessionName = shellTmuxSessionName
+	case snap.ExternalMetadata != nil && snap.ExternalMetadata.TmuxSessionName != "":
 		// External session - use metadata tmux name
 		tmuxSessionName = snap.ExternalMetadata.TmuxSessionName
-	} else {
-		// Managed session - construct tmux name using prefix
+	default:
+		// Managed session - construct tmux name using prefix.
+		// Always via the canonical sanitizer (see #162 — raw concatenation targets
+		// a session name that was never actually created whenever the title has spaces).
 		tmuxPrefix := snap.TmuxPrefix
 		if tmuxPrefix == "" {
 			tmuxPrefix = "staplersquad_" // Default prefix
 		}
-		tmuxSessionName = tmuxPrefix + snap.Title
+		tmuxSessionName = tmux.NewSessionName(snap.Title, tmuxPrefix).String()
 	}
 	sessionID := snap.Title
 
-	log.Info("[streamViaTmuxCapture] starting", "session", sessionID, "tmux", tmuxSessionName, "managed", snap.IsManaged)
+	// A shell has its own live PTY (via its sibling tmux session), so it's treated like a
+	// managed session for capture/resize/redraw purposes — just scoped to shellTarget below
+	// instead of the parent Instance's own PTY.
+	effectiveManaged := isShellStream || snap.IsManaged
+
+	// target is where pane capture/resize/dimension calls are actually sent: the parent
+	// Instance's own PTY for the main terminal, or the shell's sibling tmux session for a
+	// shell tab stream. This is the fix for shell tabs duplicating the main terminal's
+	// content — without it, every call below stays bound to the parent Instance.
+	var target panePTY = instance
+	if isShellStream {
+		target = shellPanePTY{session: tmux.NewTmuxSessionFromExisting(shellTmuxSessionName)}
+	}
+
+	log.Info("[streamViaTmuxCapture] starting", "session", sessionID, "tmux", tmuxSessionName, "managed", snap.IsManaged, "shell", isShellStream)
 
 	// Get or create tmux streamer for this session
 	if h.tmuxStreamerManager == nil {
@@ -1098,24 +1549,37 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	instance.MarkViewed()
 	log.Info("updated LastViewed timestamp for external session", "session", sessionID)
 
-	// For managed sessions: parse handshake dimensions and force a TUI redraw via ±1 nudge
-	// so the initial capture-pane snapshot reflects a freshly-drawn terminal state.
-	if snap.IsManaged {
+	// For managed sessions (and shells, which have their own live PTY): parse handshake
+	// dimensions and force a TUI redraw via ±1 nudge so the initial capture-pane snapshot
+	// reflects a freshly-drawn terminal state.
+	if effectiveManaged {
 		var handshakeCaptureData sessionv1.TerminalData
 		if parseErr := proto.Unmarshal(stream.requestMsg, &handshakeCaptureData); parseErr == nil {
 			if paneReq := handshakeCaptureData.GetCurrentPaneRequest(); paneReq != nil &&
 				paneReq.TargetCols != nil && paneReq.TargetRows != nil {
 				targetCols := int(*paneReq.TargetCols)
 				targetRows := int(*paneReq.TargetRows)
-				log.Info("[streamViaTmuxCapture] forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
-				if targetCols > 1 {
-					if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr == nil {
-						time.Sleep(50 * time.Millisecond)
+				// Skip the nudge when the pane is already at the requested size — this is
+				// the common case for a reconnect (e.g. tab regains focus after a dropped
+				// idle websocket) against a pane whose viewport never changed. Nudging
+				// unconditionally sends a real SIGWINCH on every reconnect, which makes
+				// readline-based shells (zsh/bash) redraw and re-echo the in-progress
+				// input line into the pane's scrollback — visible to the user as a
+				// duplicated command line even though nothing was actually retyped.
+				actualCols, actualRows, dimErr := target.GetPaneDimensions()
+				if dimErr == nil && actualCols == targetCols && actualRows == targetRows {
+					log.Info("[streamViaTmuxCapture] skipping redraw nudge, pane already at target size", "cols", targetCols, "rows", targetRows)
+				} else {
+					log.Info("[streamViaTmuxCapture] forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
+					if targetCols > 1 {
+						if resizeErr := target.ResizePTY(targetCols-1, targetRows); resizeErr == nil {
+							time.Sleep(50 * time.Millisecond)
+						}
 					}
-				}
-				if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr == nil {
-					time.Sleep(200 * time.Millisecond)
-					log.Info("[streamViaTmuxCapture] redraw complete", "cols", targetCols, "rows", targetRows)
+					if resizeErr := target.ResizePTY(targetCols, targetRows); resizeErr == nil {
+						time.Sleep(200 * time.Millisecond)
+						log.Info("[streamViaTmuxCapture] redraw complete", "cols", targetCols, "rows", targetRows)
+					}
 				}
 			}
 		}
@@ -1128,8 +1592,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	// For managed sessions that just had a forced redraw, capture fresh content directly.
 	// For external sessions, fall back to the streamer's cached snapshot.
 	var initialContent string
-	if snap.IsManaged {
-		if freshContent, captureErr := instance.CapturePaneContentRaw(); captureErr == nil {
+	if effectiveManaged {
+		if freshContent, captureErr := target.CapturePaneContentRaw(); captureErr == nil {
 			initialContent = freshContent
 		} else {
 			log.Info("[streamViaTmuxCapture] fresh capture failed, falling back to cached", "err", captureErr)
@@ -1139,7 +1603,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		initialContent = streamer.GetContent()
 	}
 	if initialContent != "" {
-		fullContent := clearAndHome + prepareSnapshotContent(initialContent)
+		fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(initialContent), target)
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
 			Data: &sessionv1.TerminalData_Output{
@@ -1201,8 +1665,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				return
 			case content := <-outputChan:
 				// Send full terminal content with clear screen prefix
-				// Since tmux capture-pane returns full snapshots, we need to clear first
-				fullContent := clearAndHome + content
+				// Since tmux capture-pane returns full snapshots, we need to clear first.
+				// Must go through the same sanitize+CRLF-normalize treatment as the initial
+				// snapshot (prepareSnapshotContent) — capture-pane's bare LFs and any
+				// leftover absolute-positioning/clear codes are otherwise replayed raw into
+				// xterm.js on every poll tick, which is what produces the "messed up"
+				// staircased/garbled rendering for shell tabs.
+				fullContent := withCursorSync(clearAndHome+prepareSnapshotContent(content), target)
 
 				terminalData := terminalDataPool.Get().(*sessionv1.TerminalData)
 				terminalData.SessionId = sessionID
@@ -1228,11 +1697,18 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 			case <-doneChan:
 				return
 			default:
-				// Rolling 30s deadline: resets on each iteration so active clients
-				// are never dropped, but a stalled/disconnected client is cleaned up.
-				stream.conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+				// Blocking read with no deadline: gorilla/websocket poisons the whole
+				// Conn on the first read error of any kind (including a deadline
+				// timeout) — every later ReadMessage call returns that same stale
+				// error without doing I/O, and after 1000 such calls it panics with
+				// "repeated read on failed websocket connection". A rolling
+				// SetReadDeadline + "continue on timeout" loop therefore busy-loops
+				// into that panic within moments of the first idle timeout. The
+				// client only sends input/resize messages on demand, so blocking
+				// indefinitely here is correct; the outer caller closes stream.conn
+				// once this function returns (see streamViaControlMode for the same
+				// pattern), which unblocks this call if it's still pending.
 				_, message, err := stream.conn.ReadMessage()
-				stream.conn.SetReadDeadline(time.Time{}) //nolint:errcheck
 				if err != nil {
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 						errChan <- nil
@@ -1279,8 +1755,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					instance.UpdateTerminalTimestamps(string(input.Data), true)
 
 					// Send input to tmux session — errors are non-fatal (stream stays alive).
-					if err := sendInputToTmux(tmuxSessionName, input.Data); err != nil {
-						log.Warn("[streamViaTmuxCapture] error sending input to tmux", "tmux_session", tmuxSessionName, "err", err)
+					// Retry on failure (exec-gate contention or a transient tmux error can
+					// otherwise silently drop keystrokes with no client-visible signal).
+					if err := sendInputToTmuxWithRetry(snap.TmuxServerSocket, tmuxSessionName, input.Data); err != nil {
+						log.Warn("[streamViaTmuxCapture] error sending input to tmux after retries", "tmux_session", tmuxSessionName, "err", err)
 					}
 				}
 
@@ -1291,14 +1769,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					log.ForSession(sessionID).Debug("resize request", "cols", targetCols, "rows", targetRows)
 
 					// Use different resize methods based on session type
-					if snap.IsManaged {
-						// Managed sessions: Use proper PTY resize method
+					if effectiveManaged {
+						// Managed sessions (and shells): Use proper PTY resize method
 						// This handles ioctl, signal propagation, and tmux window resizing
-						if err := instance.ResizePTY(targetCols, targetRows); err != nil {
+						if err := target.ResizePTY(targetCols, targetRows); err != nil {
 							log.Warn("[streamViaTmuxCapture] failed to resize managed session", "session", sessionID, "err", err)
 						} else {
 							// PHASE 1: Verify resize actually succeeded
-							actualCols, actualRows, verifyErr := instance.GetPaneDimensions()
+							actualCols, actualRows, verifyErr := target.GetPaneDimensions()
 							if verifyErr != nil {
 								log.Warn("[streamViaTmuxCapture] failed to verify resize", "session", sessionID, "err", verifyErr)
 							} else if actualCols != targetCols || actualRows != targetRows {
@@ -1311,19 +1789,23 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// External sessions: Use tmux commands (best effort)
 						// External sessions may be attached to other terminals which control the actual size
 						rwCtx, rwCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						resizeCmd := safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
-							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
-						if err := resizeCmd.Run(); err != nil {
-							log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", tmuxSessionName, "err", err)
+						rwErr := runTmuxGatedErr(rwCtx, "", func() error {
+							return safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
+								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						})
+						if rwErr != nil {
+							log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", tmuxSessionName, "err", rwErr)
 						}
 						rwCancel()
 
 						// Also try to resize the pane
 						rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						paneCmd := safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
-							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
-						if err := paneCmd.Run(); err != nil {
-							log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", tmuxSessionName, "err", err)
+						rpErr := runTmuxGatedErr(rpCtx, "", func() error {
+							return safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
+								"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows)).Run()
+						})
+						if rpErr != nil {
+							log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", tmuxSessionName, "err", rpErr)
 						}
 						rpCancel()
 
@@ -1351,7 +1833,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						targetRows := int(*currentPaneReq.TargetRows)
 
 						// Check current dimensions to see if resize is actually needed
-						currentCols, currentRows, dimensionErr := instance.GetPaneDimensions()
+						currentCols, currentRows, dimensionErr := target.GetPaneDimensions()
 						if dimensionErr != nil {
 							log.Warn("[streamViaTmuxCapture] failed to get current pane dimensions", "err", dimensionErr)
 						}
@@ -1362,7 +1844,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 								"from", fmt.Sprintf("%dx%d", currentCols, currentRows),
 								"to", fmt.Sprintf("%dx%d", targetCols, targetRows))
 
-							if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr != nil {
+							if resizeErr := target.ResizePTY(targetCols, targetRows); resizeErr != nil {
 								log.Error("[streamViaTmuxCapture] failed to resize tmux before capture", "err", resizeErr)
 								// Continue anyway - better to send content with wrong dimensions than no content
 							} else {
@@ -1371,7 +1853,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 								// Sending multiple refresh signals gives it multiple chances to correct itself.
 								// See: https://github.com/anthropics/claude-code/issues (pending bug report)
 								for i := 0; i < 3; i++ {
-									if refreshErr := instance.RefreshTmuxClient(); refreshErr != nil {
+									if refreshErr := target.RefreshTmuxClient(); refreshErr != nil {
 										log.Warn("[streamViaTmuxCapture] failed to send refresh signal", "signal", i+1, "err", refreshErr)
 									}
 									// Small delay between signals to allow processing
@@ -1387,7 +1869,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 								time.Sleep(250 * time.Millisecond)
 
 								// PHASE 1: Verify resize succeeded before capture
-								verifiedCols, verifiedRows, verifyErr := instance.GetPaneDimensions()
+								verifiedCols, verifiedRows, verifyErr := target.GetPaneDimensions()
 								if verifyErr != nil {
 									log.Warn("[streamViaTmuxCapture] failed to verify resize before capture", "err", verifyErr)
 								} else if verifiedCols != targetCols || verifiedRows != targetRows {
@@ -1401,7 +1883,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					}
 
 					// Force a fresh capture from tmux pane (bypasses streamer cache)
-					content, captureErr := instance.CapturePaneContent()
+					content, captureErr := target.CapturePaneContent()
 					if captureErr != nil {
 						log.Error("[streamViaTmuxCapture] failed to capture fresh pane content", "err", captureErr)
 						// Fallback to streamer content
@@ -1410,7 +1892,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					fullContent := clearAndHome + content
 
 					// PHASE 1: Log final captured dimensions for diagnostics
-					finalCols, finalRows, finalErr := instance.GetPaneDimensions()
+					finalCols, finalRows, finalErr := target.GetPaneDimensions()
 					if finalErr != nil {
 						log.Warn("[streamViaTmuxCapture] failed to get final dimensions after capture", "err", finalErr)
 					} else {
@@ -1471,22 +1953,78 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 // sendInputToTmux sends input bytes to a tmux session using tmux send-keys.
 // Each byte is sent individually using -H (hex) format to handle special characters properly.
-func sendInputToTmux(tmuxSessionName string, data []byte) error {
+// serverSocket must be the same socket the target session's tmux server is bound to
+// (e.g. instance.TmuxServerSocket) — an empty string targets the default socket.
+// Without routing through ResolveSocket/Args here, send-keys unconditionally hits the
+// default tmux server, silently missing any session running on an isolated socket.
+func sendInputToTmux(serverSocket, tmuxSessionName string, data []byte) error {
 	// Build send-keys command with hex-encoded bytes
 	// Using -H flag to send hex bytes, which handles all special characters correctly
-	args := make([]string, 0, 4+len(data))
-	args = append(args, "send-keys", "-t", tmuxSessionName, "-H")
+	baseArgs := make([]string, 0, 4+len(data))
+	baseArgs = append(baseArgs, "send-keys", "-t", tmuxSessionName, "-H")
 	for _, b := range data {
-		args = append(args, fmt.Sprintf("%02x", b))
+		baseArgs = append(baseArgs, fmt.Sprintf("%02x", b))
 	}
+	args := tmux.ResolveSocket(serverSocket).Args(baseArgs...)
 
-	skCtx, skCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer skCancel()
-	cmd := safeexec.CommandContext(skCtx, "tmux", args...)
-	if err := cmd.Run(); err != nil {
+	gateCtx, gateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer gateCancel()
+	err := runTmuxGatedErr(gateCtx, serverSocket, func() error {
+		// Use a fresh context for the command itself, not gateCtx. Gate
+		// acquisition can consume most of gateCtx's budget under contention,
+		// leaving the exec below racing an already-expiring deadline: if
+		// tmux send-keys reaches the server just before cancellation kills
+		// the client process, the caller sees an error and retries
+		// (sendInputToTmuxWithRetry), re-sending keystrokes that already
+		// landed — producing duplicated input in the pane. A fresh timeout
+		// here guarantees the command always gets its full run budget.
+		cmdCtx, cmdCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cmdCancel()
+		return safeexec.CommandContext(cmdCtx, tmux.Binary(), args...).Run()
+	})
+	if err != nil {
 		return fmt.Errorf("tmux send-keys failed: %w", err)
 	}
 	return nil
+}
+
+// sendInputToTmuxInputRetries bounds how many times sendInputToTmux is retried
+// on failure before the input is given up on. Failures here are almost always
+// transient exec-gate contention (the 5s acquire timeout in sendInputToTmux
+// expiring under concurrent tmux subprocess load) rather than a real tmux
+// error, so a short bounded retry recovers keystrokes that would otherwise be
+// silently dropped with no client-visible signal.
+const sendInputToTmuxInputRetries = 2
+
+// sendInputToTmuxRetryBackoff is the delay between retries of sendInputToTmux.
+const sendInputToTmuxRetryBackoff = 100 * time.Millisecond
+
+// sendInputToTmuxWithRetry calls sendInputToTmux, retrying a bounded number of
+// times on failure. See sendInputToTmuxInputRetries for why this exists.
+func sendInputToTmuxWithRetry(serverSocket, tmuxSessionName string, data []byte) error {
+	var err error
+	for attempt := 0; attempt <= sendInputToTmuxInputRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(sendInputToTmuxRetryBackoff)
+		}
+		if err = sendInputToTmux(serverSocket, tmuxSessionName, data); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// runTmuxGatedErr acquires a tmux exec-gate slot for serverSocket (bounded by
+// ctx), runs fn, then releases the slot. These 3 call sites are the only
+// direct tmux subprocess spawns in this file that don't already route through
+// a gated TmuxSession method (see session/tmux's runGated, which this mirrors).
+func runTmuxGatedErr(ctx context.Context, serverSocket string, fn func() error) error {
+	release, err := tmux.AcquireExecSlot(ctx, serverSocket)
+	if err != nil {
+		return fmt.Errorf("exec gate: %w", err)
+	}
+	defer release()
+	return fn()
 }
 
 // parseConnectHeaders parses HTTP headers from ConnectRPC format (key: value\r\n)

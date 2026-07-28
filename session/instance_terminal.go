@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -117,21 +118,40 @@ func (i *Instance) previewBlocked() bool {
 }
 
 // Preview returns the current visible terminal content.
-// Prefers the in-memory PTY buffer from ClaudeController; falls back to capture-pane.
+// Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
+// instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
 func (i *Instance) Preview() (string, error) {
 	if i.previewBlocked() {
 		return "", nil
 	}
 
-	// Prefer the in-memory PTY buffer from ClaudeController (no subprocess).
+	// tmux performs real terminal emulation (cursor movement, redraws, screen
+	// clears), so capture-pane returns the actual current screen rather than an
+	// approximation reconstructed from a raw byte stream. CapturePaneContent has
+	// a 1s TTL cache (see TmuxProcessManager), so preferring it here does not add
+	// a subprocess spawn on every poll tick.
+	if tb, ok := i.processManager.(*TmuxBackend); ok {
+		if content, err := tb.CapturePaneContent(); err == nil {
+			return content, nil
+		}
+	}
+
+	// Native backend (capture-pane not yet implemented there) or tmux capture
+	// failed: fall back to the in-memory PTY buffer.
+	// GetRecentOutput(0) would return the ENTIRE 10MB session-lifetime buffer
+	// (PTYAccess.GetRecentOutput treats n<=0 as "give me everything"), not the
+	// current screen — a dialog answered minutes ago would still scan as
+	// "visible" to callers like isStartupDialog/shouldApprovePrompt for as
+	// long as it takes 10MB of subsequent output to evict it. Bound the read
+	// to the same tail window the working status-detection path already uses.
 	if ctrl := i.GetController(); ctrl != nil {
-		raw := ctrl.GetRecentOutput(0)
+		raw := ctrl.GetRecentOutput(detection.StatusDetectionTailBytes)
 		return string(raw), nil
 	}
 
-	// Fallback for external/attached sessions: use capture-pane subprocess.
-	// Skip the TmuxAlive() pre-check (which spawns a subprocess); let CapturePaneContent
-	// handle the "session doesn't exist" case via its own error path.
+	// No controller at all (e.g. external/attached sessions): try capture-pane
+	// directly. Skip the TmuxAlive() pre-check (which spawns a subprocess); let
+	// CapturePaneContent handle the "session doesn't exist" case via its own error path.
 	content, err := i.pm().CapturePaneContent()
 	if err != nil {
 		return "", nil
@@ -162,6 +182,18 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // CaptureCurrentState records the pane's current working directory into WorkingDir.
 // Called during graceful shutdown so cold restore can restart in the right directory.
 // No-op if the session is not started, paused, or the tmux session is dead.
+//
+// For a worktree session, a captured path outside the worktree is refused rather
+// than persisted (BUG-033): live-confirmed on an autonomous backlog session whose
+// own isolated worktree was created successfully and never touched, while its agent
+// ran real work — two feature commits and a branch checkout — directly in the
+// shared parent repo checkout instead, apparently after `cd`-ing there mid-task.
+// resolveStartPath already had a read-side backstop against a stale out-of-worktree
+// WorkingDir, but that guard only fires when i.gitManager.HasWorktree() happens to
+// already be true at the moment a session (re)starts — not guaranteed on every
+// restart ordering — so a bad path could still be captured here, persisted, and
+// later used unguarded. Gating the write itself closes the gap at its source
+// instead of only defending against it on read.
 func (i *Instance) CaptureCurrentState() error {
 	if !i.started.Load() || i.Paused() {
 		return nil
@@ -185,6 +217,12 @@ func (i *Instance) CaptureCurrentState() error {
 	}
 	if path == "" {
 		return nil
+	}
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
+			log.Warn("refusing to persist working dir outside worktree", "session", i.Title, "path", path, "worktree", worktreePath)
+			return nil
+		}
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -289,6 +327,10 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 	var result prUpdateResult
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		inst := s.inst
+		// i.mu guards the writes + buildSnapshot together: legacy setters
+		// (MarkViewed & co.) mutate other fields directly under i.mu.Lock() from
+		// outside the actor — see runActor's doc comment in actor.go.
+		inst.mu.Lock()
 		result.PriorityChanged = priority != inst.GitHubPRPriority
 		inst.GitHubPRState = state
 		inst.GitHubPRPriority = priority
@@ -298,7 +340,9 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		inst.GitHubCheckConclusion = checkConclusion
 		inst.GitHubPRStatusTerminal = terminal
 		inst.LastPRStatusCheck = time.Now()
-		inst.snapshot.Store(buildSnapshot(inst))
+		snap := buildSnapshot(inst)
+		inst.mu.Unlock()
+		inst.snapshot.Store(snap)
 		return nil
 	})
 	return result

@@ -278,11 +278,21 @@ func (i *Instance) HasClaudeSession() bool {
 func (i *Instance) ClearConversationState() {
 	i.claudeSessionMu.Lock()
 	defer i.claudeSessionMu.Unlock()
+	// claudeSessionMu protects claudeSession from concurrent SetHistoryInfo-style
+	// writers, but HistoryFilePath and buildSnapshot's read of every mutable
+	// field also need to be ordered against legacy setters (MarkViewed & co.)
+	// that mutate fields directly under i.mu.Lock() from outside the actor.
+	// Take i.mu too (nested inside claudeSessionMu, the only lock order used
+	// anywhere for these two locks) around the writes AND the buildSnapshot
+	// call, not just the read — see runActor's doc comment in actor.go.
+	i.mu.Lock()
 	if i.claudeSession != nil {
 		i.claudeSession.ConversationUUID = ""
 	}
 	i.HistoryFilePath = ""
-	i.snapshot.Store(buildSnapshot(i))
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 }
 
 // tryExtractConversationUUID attempts to detect the Claude conversation UUID
@@ -457,11 +467,18 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 		return
 	}
 
+	// See ClearConversationState's comment: nest i.mu inside claudeSessionMu,
+	// around the writes AND the buildSnapshot call, so this is ordered against
+	// legacy direct-lock setters (MarkViewed & co.) that mutate fields under
+	// i.mu.Lock() from outside the actor.
+	i.mu.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
-	i.snapshot.Store(buildSnapshot(i))
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
 }

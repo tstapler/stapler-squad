@@ -14,6 +14,9 @@ import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { routes } from "@/lib/routes";
 import { CommitPushModal } from "./CommitPushModal";
 import { WorktreeDiffModal } from "./WorktreeDiffModal";
+import { VcsWidget } from "@/components/shared/VcsWidget";
+import { fromUnfinishedWorktree } from "@/lib/vcs/adapters";
+import { GitHubBadge } from "@/components/sessions/GitHubBadge";
 import * as styles from "./UnfinishedItemDetail.css";
 
 interface UnfinishedItemDetailProps {
@@ -52,9 +55,6 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
   });
   const client = createClient(UnfinishedWorkService, transport);
 
-  const hasStats = worktree.changedFiles > 0 || worktree.linesAdded > 0 || worktree.linesRemoved > 0;
-  const noChanges = !worktree.hasUncommitted && worktree.commitsAhead === 0;
-
   const handleOpenSession = useCallback(() => {
     if (worktree.sessionIds.length > 1) {
       setShowSessionPicker((v) => !v);
@@ -86,41 +86,17 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
 
   return (
     <div className={styles.detail}>
-      {/* Diff stats */}
-      {noChanges ? (
-        <p className={styles.noChanges}>No uncommitted changes</p>
-      ) : (
-        <div className={styles.statsRow}>
-          {hasStats && (
-            <>
-              <span className={styles.statItem}>
-                {worktree.changedFiles} file{worktree.changedFiles !== 1 ? "s" : ""} changed
-              </span>
-              {worktree.linesAdded > 0 && (
-                <span className={`${styles.statItem} ${styles.added}`}>
-                  +{worktree.linesAdded}
-                </span>
-              )}
-              {worktree.linesRemoved > 0 && (
-                <span className={`${styles.statItem} ${styles.removed}`}>
-                  -{worktree.linesRemoved}
-                </span>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Ahead commit messages */}
-      {worktree.aheadCommitMessages.length > 0 && (
-        <ul className={styles.commitList} aria-label="Commits ahead of default branch">
-          {worktree.aheadCommitMessages.map((msg, i) => (
-            <li key={i} className={styles.commitItem} title={msg}>
-              {msg}
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* VCS status: diff stats + ahead commits, compact mode */}
+      <div className={styles.vcsRow}>
+        <VcsWidget data={fromUnfinishedWorktree(worktree)} mode="compact" />
+        <GitHubBadge
+          prNumber={worktree.githubPrNumber}
+          prUrl={worktree.githubPrUrl}
+          prState={worktree.githubPrState}
+          prPriority={worktree.githubPrPriority}
+          compact
+        />
+      </div>
 
       {/* Action buttons */}
       <div className={styles.actionRow}>

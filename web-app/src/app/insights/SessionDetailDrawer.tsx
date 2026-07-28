@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
+import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
 import {
   overlay,
   drawer,
@@ -25,15 +26,17 @@ import {
   skillBadge,
   emptyState,
   srOnly,
+  backlogLink,
 } from "./SessionDetailDrawer.css";
 import { fmtCost, fmtPct, fmtDate, shortId } from "./insightsFormatters";
 
 interface Props {
   session: SessionTokenSummary | null;
   onClose: () => void;
+  backlogEntry?: BacklogIndexEntry;
 }
 
-export function SessionDetailDrawer({ session, onClose }: Props) {
+export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
   useEffect(() => {
     if (!session) return;
     function handleKey(e: KeyboardEvent) {
@@ -106,6 +109,29 @@ export function SessionDetailDrawer({ session, onClose }: Props) {
             <dd className={metaValue}>{session.conversationId || "—"}</dd>
           </dl>
         </div>
+
+        {backlogEntry && (
+          <div className={section} data-testid="backlog-item-section">
+            <h3 className={sectionTitle}>Backlog Item</h3>
+            <dl className={metaGrid}>
+              <dt className={metaLabel}>Title</dt>
+              <dd className={metaValue}>
+                <a
+                  href={`/backlog?item=${backlogEntry.itemId}`}
+                  className={backlogLink}
+                >
+                  {backlogEntry.itemTitle}
+                </a>
+              </dd>
+
+              <dt className={metaLabel}>Status</dt>
+              <dd className={metaValue}>{backlogEntry.itemStatus}</dd>
+
+              <dt className={metaLabel}>Role</dt>
+              <dd className={metaValue}>{backlogEntry.sessionRole}</dd>
+            </dl>
+          </div>
+        )}
 
         <div className={section}>
           <h3 className={sectionTitle}>Tools Breakdown</h3>

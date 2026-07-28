@@ -76,6 +76,11 @@ func TriggeredBy(v string) predicate.BacklogStatusEvent {
 	return predicate.BacklogStatusEvent(sql.FieldEQ(FieldTriggeredBy, v))
 }
 
+// Note applies equality check predicate on the "note" field. It's identical to NoteEQ.
+func Note(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldEQ(FieldNote, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.BacklogStatusEvent {
 	return predicate.BacklogStatusEvent(sql.FieldEQ(FieldCreatedAt, v))
@@ -294,6 +299,81 @@ func TriggeredByEqualFold(v string) predicate.BacklogStatusEvent {
 // TriggeredByContainsFold applies the ContainsFold predicate on the "triggered_by" field.
 func TriggeredByContainsFold(v string) predicate.BacklogStatusEvent {
 	return predicate.BacklogStatusEvent(sql.FieldContainsFold(FieldTriggeredBy, v))
+}
+
+// NoteEQ applies the EQ predicate on the "note" field.
+func NoteEQ(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldEQ(FieldNote, v))
+}
+
+// NoteNEQ applies the NEQ predicate on the "note" field.
+func NoteNEQ(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldNEQ(FieldNote, v))
+}
+
+// NoteIn applies the In predicate on the "note" field.
+func NoteIn(vs ...string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldIn(FieldNote, vs...))
+}
+
+// NoteNotIn applies the NotIn predicate on the "note" field.
+func NoteNotIn(vs ...string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldNotIn(FieldNote, vs...))
+}
+
+// NoteGT applies the GT predicate on the "note" field.
+func NoteGT(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldGT(FieldNote, v))
+}
+
+// NoteGTE applies the GTE predicate on the "note" field.
+func NoteGTE(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldGTE(FieldNote, v))
+}
+
+// NoteLT applies the LT predicate on the "note" field.
+func NoteLT(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldLT(FieldNote, v))
+}
+
+// NoteLTE applies the LTE predicate on the "note" field.
+func NoteLTE(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldLTE(FieldNote, v))
+}
+
+// NoteContains applies the Contains predicate on the "note" field.
+func NoteContains(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldContains(FieldNote, v))
+}
+
+// NoteHasPrefix applies the HasPrefix predicate on the "note" field.
+func NoteHasPrefix(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldHasPrefix(FieldNote, v))
+}
+
+// NoteHasSuffix applies the HasSuffix predicate on the "note" field.
+func NoteHasSuffix(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldHasSuffix(FieldNote, v))
+}
+
+// NoteIsNil applies the IsNil predicate on the "note" field.
+func NoteIsNil() predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldIsNull(FieldNote))
+}
+
+// NoteNotNil applies the NotNil predicate on the "note" field.
+func NoteNotNil() predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldNotNull(FieldNote))
+}
+
+// NoteEqualFold applies the EqualFold predicate on the "note" field.
+func NoteEqualFold(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldEqualFold(FieldNote, v))
+}
+
+// NoteContainsFold applies the ContainsFold predicate on the "note" field.
+func NoteContainsFold(v string) predicate.BacklogStatusEvent {
+	return predicate.BacklogStatusEvent(sql.FieldContainsFold(FieldNote, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

@@ -14,6 +14,7 @@ import { ConfigPageContent } from "@/app/config/ConfigPageContent";
 import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { usePageView } from "@/lib/analytics/usePageView";
 import { useOnboardingContext } from "@/lib/contexts/OnboardingContext";
+import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 import { routes } from "@/lib/routes";
 import Link from "next/link";
 import * as styles from "./settings.css";
@@ -21,6 +22,7 @@ import * as styles from "./settings.css";
 function SettingsPageInner() {
   usePageView();
   const { triggerOnboarding } = useOnboardingContext();
+  const { flags } = useFeatureFlags();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const validTabs = ["general", "config-files", "appearance", "keyboard-shortcuts"];
@@ -31,20 +33,34 @@ function SettingsPageInner() {
       <h1 className={styles.pageTitle}>Settings</h1>
 
       <Tabs.Root defaultValue={defaultValue}>
-        <Tabs.List className={styles.tabList} aria-label="Settings tabs">
-          <Tabs.Trigger value="general" className={styles.tab({})}>
-            General
-          </Tabs.Trigger>
-          <Tabs.Trigger value="config-files" className={styles.tab({})}>
-            Config Files
-          </Tabs.Trigger>
-          <Tabs.Trigger value="appearance" className={styles.tab({})}>
-            Appearance
-          </Tabs.Trigger>
-          <Tabs.Trigger value="keyboard-shortcuts" className={styles.tab({})}>
-            Keyboard Shortcuts
-          </Tabs.Trigger>
-        </Tabs.List>
+        <div className={styles.tabRow}>
+          <Tabs.List className={styles.tabList} aria-label="Settings tabs">
+            <Tabs.Trigger value="general" className={styles.tab({})}>
+              General
+            </Tabs.Trigger>
+            <Tabs.Trigger value="config-files" className={styles.tab({})}>
+              Config Files
+            </Tabs.Trigger>
+            <Tabs.Trigger value="appearance" className={styles.tab({})}>
+              Appearance
+            </Tabs.Trigger>
+            <Tabs.Trigger value="keyboard-shortcuts" className={styles.tab({})}>
+              Keyboard Shortcuts
+            </Tabs.Trigger>
+          </Tabs.List>
+          {/* Pipeline Modes is a standalone route (its own list/create/edit
+              management UI), not tab-panel content — linked here rather than
+              embedded so it keeps its own page identity, same as Backlog
+              Sources' link inside the General tab below. Previously the only
+              way to reach it was typing the URL directly. */}
+          <Link
+            href={routes.settingsPipelineModes}
+            className={styles.externalTabLink}
+            data-testid="settings-pipeline-modes-tab-link"
+          >
+            Pipeline Modes ↗
+          </Link>
+        </div>
 
         {/* General tab */}
         <Tabs.Content value="general" className={styles.tabPanel}>
@@ -61,9 +77,16 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <AliasesManager />
             </section>
+            {flags["backlog"] && (
+              <section className={styles.section}>
+                <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
+                  Backlog Sources (GitHub sync) →
+                </Link>
+              </section>
+            )}
             <section className={styles.section}>
-              <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
-                Backlog Sources (GitHub sync) →
+              <Link href={routes.settingsPipelineModes} className={styles.helpLink}>
+                Pipeline Modes →
               </Link>
             </section>
             {/* Help subsection */}

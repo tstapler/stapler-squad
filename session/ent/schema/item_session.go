@@ -33,9 +33,18 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("ac_snapshot").
 			Optional().
 			Comment("JSON []AcCriterion at spawn time"),
+		field.String("pipeline_mode_snapshot").
+			Default("").
+			Comment("The PipelineMode slug resolved and in effect when this session first started — snapshotted so later edits to the item's live pipeline_mode don't retroactively change what this session is shown to have run. Mirrors ac_snapshot's discipline."),
+		field.String("pipeline_mode_snapshot_hash").
+			Default("").
+			Comment("SHA-256 (hex, truncated to 16 chars) of the resolved mode's 9 raw content-template field values, concatenated in fixed order, computed at the moment this session started. Empty for the default mode (code-backed, can't drift) or an already-unresolved slug. Compared against the live mode's current hash by the \"what ran\" UI (Story 3.4.1) to detect the referenced mode's content having been edited since — the slug alone cannot detect this."),
 		field.String("triage_result").
 			Optional().
 			Comment("JSON triage suggestions"),
+		field.String("verification_notes").
+			Optional().
+			Comment("Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff"),
 		field.String("last_commit_sha").
 			Optional(),
 		field.Time("last_commit_at").
@@ -54,6 +63,10 @@ func (ItemSession) Fields() []ent.Field {
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),
+		field.Float("estimated_cost_usd").
+			Default(0).
+			Optional().
+			Comment("Cost in USD; populated for headless sessions from claude -p output"),
 	}
 }
 

@@ -209,6 +209,16 @@ export const listItemSelected = style({
   background: `${vars.color.hoverBackground} !important`,
 });
 
+export const listItemDisabled = style({
+  opacity: 0.5,
+  cursor: "default",
+  selectors: {
+    "&:hover": {
+      background: "transparent",
+    },
+  },
+});
+
 export const historyDivider = style({
   height: "1px",
   background: vars.color.borderColor,
@@ -267,4 +277,124 @@ export const relativeDate = style({
   flex: "0 0 auto",
   marginLeft: "auto",
   fontVariantNumeric: "tabular-nums",
+});
+
+export const issueRowWrapper = style({
+  display: "flex",
+  flexDirection: "column",
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+    },
+  },
+});
+
+export const issueCheckbox = style({
+  flex: "0 0 auto",
+  cursor: "pointer",
+});
+
+export const issueMainCol = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+  flex: "1 1 auto",
+  minWidth: 0,
+});
+
+export const issueSubMeta = style({
+  display: "flex",
+  gap: vars.space[2],
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+});
+
+export const issueAuthor = style({
+  color: vars.color.textSecondary,
+  fontWeight: 500,
+  flex: "0 0 auto",
+});
+
+export const expandToggle = style({
+  flex: "0 0 auto",
+  background: "transparent",
+  border: "none",
+  color: vars.color.textMuted,
+  cursor: "pointer",
+  fontSize: vars.fontSize.sm,
+  padding: `0 ${vars.space[1]}`,
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const openLink = style({
+  flex: "0 0 auto",
+  fontSize: vars.fontSize.sm,
+  textDecoration: "none",
+  opacity: 0.7,
+  padding: `0 ${vars.space[1]}`,
+  selectors: {
+    "&:hover": {
+      opacity: 1,
+    },
+  },
+});
+
+export const issueExpandedPanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space[1],
+  padding: `0 ${vars.space[3]} ${vars.space[2]} calc(${vars.space[3]} + 20px + ${vars.space[2]})`,
+  background: vars.color.hoverBackground,
+});
+
+export const issueExpandedLabels = style({
+  display: "flex",
+  flexWrap: "wrap",
+  gap: vars.space[1],
+});
+
+export const issueExpandedBody = style({
+  margin: 0,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "break-word",
+  maxHeight: "160px",
+  overflowY: "auto",
+});
+
+export const importBar = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: vars.space[2],
+});
+
+export const importBarHint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+});
+
+export const importButton = style({
+  padding: `${vars.space[1]} ${vars.space[3]}`,
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  border: "none",
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  selectors: {
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
 });

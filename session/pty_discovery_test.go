@@ -551,3 +551,35 @@ func assertInvocationsUseIsolatedSocket(t *testing.T, logPath string, wantSubcom
 		t.Fatalf("expected an invocation containing %q, got: %v", wantSubcommand, lines)
 	}
 }
+
+// TestPTYDiscovery_SkipsTickWhenPreviousStillRunning is a regression test for
+// monitorLoop's "skip this tick if the previous one is still running" guard:
+// this poller fires every refreshRate (default 5s) forever regardless of
+// session count, and without the guard, a slow tmux call (server under load)
+// would let ticks pile up as concurrent Refresh() calls instead of backing off.
+func TestPTYDiscovery_SkipsTickWhenPreviousStillRunning(t *testing.T) {
+	pd := NewPTYDiscovery()
+
+	// Simulate a refresh already in flight (as if a previous tick's Refresh()
+	// hadn't returned yet).
+	pd.refreshing.Store(true)
+
+	ran, err := pd.tryRefreshOnce()
+	if ran {
+		t.Fatal("tryRefreshOnce ran Refresh() while a previous call was still marked in-flight")
+	}
+	if err != nil {
+		t.Fatalf("skipped tick should return a nil error, got: %v", err)
+	}
+
+	// Once the in-flight refresh "finishes" (guard cleared), the next call must
+	// actually run Refresh() again -- proves this isn't just permanently stuck.
+	pd.refreshing.Store(false)
+	ran, _ = pd.tryRefreshOnce()
+	if !ran {
+		t.Fatal("tryRefreshOnce should run Refresh() once the guard is clear")
+	}
+	if pd.refreshing.Load() {
+		t.Fatal("tryRefreshOnce must clear the in-flight guard after Refresh() returns")
+	}
+}

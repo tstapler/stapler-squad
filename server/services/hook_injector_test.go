@@ -2,7 +2,10 @@ package services
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -282,6 +285,161 @@ func Test_hookEndpoints_should_ReflectCurrentBaseURLFn_When_CalledTwiceWithDiffe
 	for name, url := range second {
 		if strings.Contains(url, "localhost:0") {
 			t.Fatalf("expected hookEndpoints to be rebuilt fresh per call, but %s endpoint leaked the first call's stale address: %q", name, url)
+		}
+	}
+}
+
+// TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent
+// (git-drift-check steering hook, symmetric add/remove): RemoveHooksConfig removes
+// only the hook(s) named, leaving every other hook (ours or the user's own) intact —
+// including other entries under the same PostToolUse event key.
+func TestRemoveHooksConfig_should_StripOnlyTheNamedHook_When_MultipleHooksPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Inject both PostToolUse-mapped hooks plus an unrelated event.
+	if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookPostToolLogging, HookGitDriftCheck, HookStopNotification}); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+
+	if err := RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("RemoveHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+
+	var postToolGroups []hookMatcherGroup
+	if err := json.Unmarshal(hooksMap["PostToolUse"], &postToolGroups); err != nil {
+		t.Fatalf("parse PostToolUse groups: %v", err)
+	}
+	foundDrift, foundLogging := false, false
+	for _, g := range postToolGroups {
+		for _, h := range g.Hooks {
+			if strings.Contains(h.Command, "/api/hooks/post-tool-use-drift-check") {
+				foundDrift = true
+			}
+			if strings.Contains(h.Command, "/api/hooks/post-tool-use") && !strings.Contains(h.Command, "drift-check") {
+				foundLogging = true
+			}
+		}
+	}
+	if foundDrift {
+		t.Error("git-drift-check hook command still present after RemoveHooksConfig")
+	}
+	if !foundLogging {
+		t.Error("unrelated post_tool_logging hook was removed along with git-drift-check")
+	}
+
+	// Stop and PermissionRequest (always injected) must be untouched.
+	if _, ok := hooksMap["Stop"]; !ok {
+		t.Error("Stop hook was removed even though it wasn't named in RemoveHooksConfig")
+	}
+	if _, ok := hooksMap["PermissionRequest"]; !ok {
+		t.Error("PermissionRequest hook was removed even though it wasn't named in RemoveHooksConfig")
+	}
+}
+
+// TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON
+// guards against the fixed-tmp-filename hazard writeSettingsAtomic previously had:
+// tmpPath was settingsPath+".tmp" (not unique per call), so two concurrent writers
+// targeting the same rootDir — e.g. InjectHooksConfig and RemoveHooksConfig racing
+// from two goroutines on the same session's worktree, or two backlog spawns hitting
+// the same reused branch — could clobber each other's temp file mid-write and leave
+// a truncated/corrupt settings.local.json after rename (observed in CI as "parse
+// PostToolUse groups: unexpected end of JSON input" on this package's other tests).
+// internal/claudehooks/claudehooks.go's mutate() already documents this exact
+// failure mode and uses a unique os.CreateTemp name for the same reason.
+func TestWriteSettingsAtomic_ConcurrentWritesToSameSettingsPath_NeverProduceCorruptJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			hooks := []HookName{HookPostToolLogging, HookGitDriftCheck}
+			_ = InjectHooksConfig(tmpDir, "sess", hooks)
+			_ = RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck})
+		}(i)
+	}
+	wg.Wait()
+
+	settingsPath := filepath.Join(tmpDir, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings after concurrent writes: %v", err)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("settings.local.json is corrupt after concurrent writes: %v\ncontent: %s", err, data)
+	}
+	if _, ok := parsed["hooks"]; !ok {
+		t.Error("expected a \"hooks\" key to survive concurrent InjectHooksConfig/RemoveHooksConfig calls")
+	}
+}
+
+// TestRemoveHooksConfig_should_BeNoOp_When_HookWasNeverInjected covers the common
+// case: a freshly-created (or always-manual) worktree that never had the hook, so
+// every backlog spawn's "reconcile in both directions" call is a no-op there.
+func TestRemoveHooksConfig_should_BeNoOp_When_HookWasNeverInjected(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// No settings file at all.
+	if err := RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("RemoveHooksConfig on missing settings file: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(tmpDir, ".claude", "settings.local.json")); statErr == nil {
+		t.Error("RemoveHooksConfig created a settings file where none existed")
+	}
+
+	// A settings file exists but has unrelated hooks only.
+	if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookStopNotification}); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+	before := readSettings(t, tmpDir)
+	if err := RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("RemoveHooksConfig: %v", err)
+	}
+	after := readSettings(t, tmpDir)
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		t.Errorf("settings changed even though the named hook was never present:\nbefore=%s\nafter=%s", beforeJSON, afterJSON)
+	}
+}
+
+// TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice mirrors
+// TestInjectHooksIdempotent for the removal direction.
+func TestRemoveHooksConfig_should_BeIdempotent_When_CalledTwice(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := InjectHooksConfig(tmpDir, "sess", []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("InjectHooksConfig: %v", err)
+	}
+	if err := RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("first RemoveHooksConfig: %v", err)
+	}
+	if err := RemoveHooksConfig(tmpDir, []HookName{HookGitDriftCheck}); err != nil {
+		t.Fatalf("second RemoveHooksConfig: %v", err)
+	}
+
+	top := readSettings(t, tmpDir)
+	var hooksMap map[string]json.RawMessage
+	if err := json.Unmarshal(top["hooks"], &hooksMap); err != nil {
+		t.Fatalf("parse hooks: %v", err)
+	}
+	if raw, ok := hooksMap["PostToolUse"]; ok {
+		var groups []hookMatcherGroup
+		_ = json.Unmarshal(raw, &groups)
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				if strings.Contains(h.Command, "drift-check") {
+					t.Error("git-drift-check hook still present after two RemoveHooksConfig calls")
+				}
+			}
 		}
 	}
 }

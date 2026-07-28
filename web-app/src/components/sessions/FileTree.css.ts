@@ -1,5 +1,5 @@
 import { style, keyframes, globalStyle } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 const spin = keyframes({
   to: { transform: "rotate(360deg)" },
@@ -62,6 +62,11 @@ export const node = style({
   selectors: {
     "&:hover": {
       background: vars.color.terminalHoverBg,
+    },
+  },
+  "@media": {
+    "(max-width: 767px)": {
+      minHeight: "44px",
     },
   },
 });
@@ -227,3 +232,24 @@ export const searchTruncated = style({
   background: vars.color.terminalTabsBg,
   borderBottom: `1px solid ${vars.color.borderColor}`,
 });
+
+export const searchOverlay = style({
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: vars.color.overlayBackground,
+  zIndex: zIndex.raised,
+});
+
+export const lineStats = style({
+  flexShrink: 0,
+  display: "flex",
+  gap: 4,
+  fontSize: 10,
+  marginLeft: 4,
+});
+
+export const lineStatsAdd = style({ color: vars.color.gitAdded });
+export const lineStatsDel = style({ color: vars.color.gitDeleted });

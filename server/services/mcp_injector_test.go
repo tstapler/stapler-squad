@@ -7,35 +7,31 @@ import (
 	"testing"
 )
 
-// writeSettings writes content to <dir>/.claude/settings.local.json, creating the directory.
-func writeSettings(t *testing.T, dir, content string) {
+// writeMCPJSON writes content to <dir>/.mcp.json.
+func writeMCPJSON(t *testing.T, dir, content string) {
 	t.Helper()
-	claudeDir := filepath.Join(dir, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("writeSettings: mkdir %s: %v", claudeDir, err)
-	}
-	path := filepath.Join(claudeDir, "settings.local.json")
+	path := filepath.Join(dir, ".mcp.json")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("writeSettings: write %s: %v", path, err)
+		t.Fatalf("writeMCPJSON: write %s: %v", path, err)
 	}
 }
 
-// readSettings reads and top-level-parses <dir>/.claude/settings.local.json.
-func readSettings(t *testing.T, dir string) map[string]json.RawMessage {
+// readMCPJSON reads and top-level-parses <dir>/.mcp.json.
+func readMCPJSON(t *testing.T, dir string) map[string]json.RawMessage {
 	t.Helper()
-	path := filepath.Join(dir, ".claude", "settings.local.json")
+	path := filepath.Join(dir, ".mcp.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("readSettings: read %s: %v", path, err)
+		t.Fatalf("readMCPJSON: read %s: %v", path, err)
 	}
 	var result map[string]json.RawMessage
 	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("readSettings: parse JSON: %v", err)
+		t.Fatalf("readMCPJSON: parse JSON: %v", err)
 	}
 	return result
 }
 
-// TestInjectMCPConfigCreatesFile (U-3.1): InjectMCPConfig creates the settings file
+// TestInjectMCPConfigCreatesFile (U-3.1): InjectMCPConfig creates .mcp.json
 // with the correct MCP server entry when it does not exist.
 func TestInjectMCPConfigCreatesFile(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -44,11 +40,11 @@ func TestInjectMCPConfigCreatesFile(t *testing.T) {
 		t.Fatalf("InjectMCPConfig returned unexpected error: %v", err)
 	}
 
-	top := readSettings(t, tmpDir)
+	top := readMCPJSON(t, tmpDir)
 
 	mcpRaw, ok := top["mcpServers"]
 	if !ok {
-		t.Fatal("expected mcpServers key in settings.local.json, not found")
+		t.Fatal("expected mcpServers key in .mcp.json, not found")
 	}
 
 	var servers map[string]json.RawMessage
@@ -81,25 +77,19 @@ func TestInjectMCPConfigCreatesFile(t *testing.T) {
 	}
 }
 
-// TestInjectMCPConfigMerges (U-3.2): InjectMCPConfig preserves an existing hooks section
-// while adding mcpServers.stapler-squad.
+// TestInjectMCPConfigMerges (U-3.2): InjectMCPConfig preserves existing mcpServers
+// entries while adding stapler-squad.
 func TestInjectMCPConfigMerges(t *testing.T) {
 	tmpDir := t.TempDir()
-	existing := `{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"existing-hook","timeout":10}]}]}}`
-	writeSettings(t, tmpDir, existing)
+	existing := `{"mcpServers":{"other-tool":{"type":"stdio","command":"/usr/bin/other","args":[]}}}`
+	writeMCPJSON(t, tmpDir, existing)
 
 	if err := InjectMCPConfig(tmpDir, "/usr/bin/ss"); err != nil {
 		t.Fatalf("InjectMCPConfig: %v", err)
 	}
 
-	top := readSettings(t, tmpDir)
+	top := readMCPJSON(t, tmpDir)
 
-	// hooks section must still be present.
-	if _, ok := top["hooks"]; !ok {
-		t.Error("hooks section was removed after InjectMCPConfig")
-	}
-
-	// mcpServers.stapler-squad must be present.
 	mcpRaw, ok := top["mcpServers"]
 	if !ok {
 		t.Fatal("mcpServers not present after InjectMCPConfig")
@@ -108,6 +98,11 @@ func TestInjectMCPConfigMerges(t *testing.T) {
 	if err := json.Unmarshal(mcpRaw, &servers); err != nil {
 		t.Fatalf("parse mcpServers: %v", err)
 	}
+	// existing entry must still be present
+	if _, ok := servers["other-tool"]; !ok {
+		t.Error("existing other-tool entry was removed after InjectMCPConfig")
+	}
+	// stapler-squad must be added
 	if _, ok := servers["stapler-squad"]; !ok {
 		t.Error("mcpServers.stapler-squad not found")
 	}
@@ -125,7 +120,7 @@ func TestInjectMCPConfigIdempotent(t *testing.T) {
 		t.Fatalf("second call: %v", err)
 	}
 
-	top := readSettings(t, tmpDir)
+	top := readMCPJSON(t, tmpDir)
 	mcpRaw, ok := top["mcpServers"]
 	if !ok {
 		t.Fatal("mcpServers not found")
@@ -153,13 +148,13 @@ func TestInjectMCPConfigUpdatesPath(t *testing.T) {
 
 	// Pre-seed with old path.
 	old := `{"mcpServers":{"stapler-squad":{"type":"stdio","command":"/old/path","args":["--mcp"]}}}`
-	writeSettings(t, tmpDir, old)
+	writeMCPJSON(t, tmpDir, old)
 
 	if err := InjectMCPConfig(tmpDir, "/new/path"); err != nil {
 		t.Fatalf("InjectMCPConfig: %v", err)
 	}
 
-	top := readSettings(t, tmpDir)
+	top := readMCPJSON(t, tmpDir)
 	mcpRaw := top["mcpServers"]
 	var servers map[string]json.RawMessage
 	if err := json.Unmarshal(mcpRaw, &servers); err != nil {
@@ -179,7 +174,7 @@ func TestInjectMCPConfigUpdatesPath(t *testing.T) {
 // TestInjectMCPConfigMalformedJSON (U-3.5): InjectMCPConfig must not panic on truncated JSON.
 func TestInjectMCPConfigMalformedJSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	writeSettings(t, tmpDir, `{"hooks": {`)
+	writeMCPJSON(t, tmpDir, `{"mcpServers": {`)
 
 	var callErr error
 	func() {
@@ -197,7 +192,7 @@ func TestInjectMCPConfigMalformedJSON(t *testing.T) {
 	}
 
 	// If no error, the written file must be valid JSON containing our entry.
-	top := readSettings(t, tmpDir)
+	top := readMCPJSON(t, tmpDir)
 	mcpRaw, ok := top["mcpServers"]
 	if !ok {
 		t.Fatal("no error returned but mcpServers also not present")
@@ -224,10 +219,10 @@ func TestRemoveMCPConfig(t *testing.T) {
 	}
 
 	// File should exist but have no mcpServers.stapler-squad key.
-	path := filepath.Join(tmpDir, ".claude", "settings.local.json")
+	path := filepath.Join(tmpDir, ".mcp.json")
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read settings after remove: %v", err)
+		t.Fatalf("read .mcp.json after remove: %v", err)
 	}
 	if len(data) == 0 {
 		// File removed entirely — acceptable.
@@ -235,7 +230,7 @@ func TestRemoveMCPConfig(t *testing.T) {
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
-		t.Fatalf("parse settings after remove: %v", err)
+		t.Fatalf("parse .mcp.json after remove: %v", err)
 	}
 	if mcpRaw, ok := top["mcpServers"]; ok {
 		var servers map[string]json.RawMessage

@@ -16,7 +16,11 @@ export interface BrowserLogEntry {
 }
 
 export interface UseBrowserLogStreamOptions {
-  /** Whether log streaming is active. Hook is a no-op when false. */
+  /**
+   * Whether verbose debug-level console output also streams to the server.
+   * log/warn/error (and window.onerror/unhandledrejection) always stream
+   * regardless of this flag — it only gates the noisy `console.debug` level.
+   */
   enabled: boolean;
   /** Optional session ID to tag entries. */
   sessionId?: string;
@@ -54,7 +58,9 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
   useEffect(() => {
     // SSR guard
     if (typeof window === "undefined") return;
-    if (!options.enabled) return;
+    // Always install interceptors — log/warn/error and uncaught errors stream to the
+    // server unconditionally (see enqueue()); only console.debug is gated behind
+    // options.enabled, since that's the noisy, opt-in-only level.
 
     const apiBase = baseUrlRef.current ?? getApiBaseUrl();
     const client = createClient(SessionService, getConnectTransport());
@@ -88,7 +94,8 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
     }
 
     function enqueue(level: BrowserLogEntry["level"], args: unknown[]): void {
-      if (!enabledRef.current) return;
+      // console.debug is opt-in only (noisy); log/warn/error always stream.
+      if (level === "debug" && !enabledRef.current) return;
       if (intercepting) return; // reentrancy guard
       intercepting = true;
       try {
@@ -215,5 +222,8 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
       // data preservation on actual page unload.
       buffer.length = 0;
     };
-  }, [options.enabled]); // re-run only when enabled changes
+    // Install once per mount — options.enabled is read live via enabledRef inside
+    // enqueue(), so toggling it doesn't need to reinstall the console interceptors.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }

@@ -23,6 +23,8 @@ const (
 	FieldToStatus = "to_status"
 	// FieldTriggeredBy holds the string denoting the triggered_by field in the database.
 	FieldTriggeredBy = "triggered_by"
+	// FieldNote holds the string denoting the note field in the database.
+	FieldNote = "note"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// EdgeItem holds the string denoting the item edge name in mutations.
@@ -45,6 +47,7 @@ var Columns = []string{
 	FieldFromStatus,
 	FieldToStatus,
 	FieldTriggeredBy,
+	FieldNote,
 	FieldCreatedAt,
 }
 
@@ -93,6 +96,11 @@ func ByToStatus(opts ...sql.OrderTermOption) OrderOption {
 // ByTriggeredBy orders the results by the triggered_by field.
 func ByTriggeredBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriggeredBy, opts...).ToFunc()
+}
+
+// ByNote orders the results by the note field.
+func ByNote(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNote, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

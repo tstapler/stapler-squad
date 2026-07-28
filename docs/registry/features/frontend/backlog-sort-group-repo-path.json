@@ -1,0 +1,18 @@
+{
+  "id": "backlog-sort-group-repo-path",
+  "type": "frontend",
+  "name": "Backlog table sort/group by repository path",
+  "component": "BacklogPage",
+  "path": "web-app/src/app/backlog/page.tsx",
+  "filePath": "web-app/src/app/backlog/page.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/backlog.spec.ts",
+    "e2e:backlog-sort-by-repository-path-toggles-direction",
+    "e2e:backlog-group-by-repository-buckets-items",
+    "compareByRepoPath",
+    "groupByRepoPath"
+  ],
+  "lastModified": "2026-07-17T00:00:00Z"
+}

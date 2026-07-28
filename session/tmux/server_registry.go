@@ -278,7 +278,12 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// immediate %exit on some tmux versions.
 	baseArgs := []string{"-C", "attach-session", "-t", keepaliveName}
 	args := prependSocket(r.serverSocket, baseArgs)
-	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
+	// lifecycle managed by caller via r.ctx (see reconnectLoop) — but ctx
+	// cancellation never runs if this process is SIGKILLed (e.g. a
+	// `--mcp` invocation killed by its parent), so EnsurePdeathsig backs
+	// that up at the kernel level.
+	cmd := exec.CommandContext(r.ctx, Binary(), args...) //nolint:norawexec long-running cmd.Start() process
+	safeexec.EnsurePdeathsig(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

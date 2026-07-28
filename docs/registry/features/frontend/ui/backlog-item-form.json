@@ -8,7 +8,13 @@
   "testIds": [
     "BacklogItemForm — Repository Path help",
     "BacklogItemForm — checkbox help text",
-    "BacklogItemForm — cloning busy state"
+    "BacklogItemForm — cloning busy state",
+    "BacklogItemForm — auto-create-pr toggle",
+    "BacklogItemForm — description write/preview",
+    "BacklogItemForm — image attachment upload",
+    "e2e:backlog-rich-text-preview",
+    "e2e:backlog-rich-text-upload",
+    "e2e:backlog-rich-text-mobile-fallback"
   ],
-  "lastModified": "2026-07-01T00:00:00Z"
+  "lastModified": "2026-07-18T00:00:00Z"
 }

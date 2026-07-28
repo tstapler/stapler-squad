@@ -8,12 +8,26 @@ export const container = style({
 });
 
 export const heading = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  width: "100%",
   fontSize: 11,
   textTransform: "uppercase",
   padding: "4px 8px 2px",
   color: vars.color.textMuted,
   letterSpacing: "0.05em",
   userSelect: "none",
+  cursor: "pointer",
+  background: "transparent",
+  border: "none",
+  textAlign: "left",
+});
+
+export const chevron = style({
+  flexShrink: 0,
+  fontSize: 10,
+  lineHeight: 1,
 });
 
 export const entry = style({

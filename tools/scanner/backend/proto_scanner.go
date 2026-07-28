@@ -137,7 +137,6 @@ var methodToID = map[string]string{
 	"ListBacklogItems":            "backlog:list-items",
 	"UpdateBacklogItem":           "backlog:update-item",
 	"ArchiveBacklogItem":          "backlog:archive-item",
-	"DeleteBacklogItem":           "backlog:delete-item",
 	"TransitionBacklogItemStatus": "backlog:transition-status",
 	"SpawnSessionFromItem":        "backlog:spawn-session",
 	"AttachSessionToItem":         "backlog:attach-session",
@@ -147,12 +146,28 @@ var methodToID = map[string]string{
 	"SuggestNextItem":             "backlog:suggest-next",
 	"OverrideVerdict":             "backlog:override-verdict",
 	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerShipPR":               "backlog:trigger-ship-pr",
 	"TriggerSync":                 "backlog:trigger-sync",
 	"CreateItemSource":            "backlog:create-source",
 	"ListItemSources":             "backlog:list-sources",
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"GetBacklogItemDiff":          "backlog:get-item-diff",
+	"GetBacklogItemCost":          "backlog:get-item-cost",
+	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",
+	"GetSessionBacklogIndex":      "backlog:get-session-index",
+	"SubmitManualReview":          "backlog:submit-manual-review",
+	"ListStuckBacklogItems":       "backlog:list-stuck",
+	"SnoozeStuckItem":             "backlog:snooze-stuck",
+	"ResetStuckRemediation":       "backlog:reset-stuck-remediation",
+	"BulkResetStuckRemediation":   "backlog:bulk-reset-stuck-remediation",
+	"TriggerRemediationNow":       "backlog:trigger-remediation-now",
+	"CreatePipelineMode":          "backlog:create-pipeline-mode",
+	"UpdatePipelineMode":          "backlog:update-pipeline-mode",
+	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
+	"GetPipelineMode":             "backlog:get-pipeline-mode",
+	"ListPipelineModes":           "backlog:list-pipeline-modes",
 	// GitHub issue import RPCs (BacklogService) - mapped to the method name
 	// itself, not a kebab-case backlog:* id: origin/main already has
 	// committed registry files under docs/registry/features/backend/{method
@@ -212,6 +227,10 @@ var methodToID = map[string]string{
 	// Config file rules RPCs (stub implementations in RulesService)
 	"GetConfigFileRules":    "rules:get-config-file",
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
+	// Backlog item lifecycle RPCs
+	"DeleteBacklogItem": "backlog:delete-item",
+	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
+	"WatchBacklogItems": "backlog:watch",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

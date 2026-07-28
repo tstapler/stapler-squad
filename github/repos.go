@@ -23,10 +23,12 @@ type RepoResult struct {
 	Private     bool
 }
 
-// IssueResult is the domain return type for ListRepoIssues.
+// IssueResult is the domain return type for ListRepoIssues and GetIssue.
 type IssueResult struct {
 	Number    int
 	Title     string
+	Body      string
+	Author    string
 	State     string
 	URL       string
 	Labels    []string
@@ -37,9 +39,9 @@ type IssueResult struct {
 
 // ghRepoJSON matches the GitHub REST API /user/repos and /search/repositories item shape.
 type ghRepoJSON struct {
-	FullName    string `json:"full_name"`
-	Name        string `json:"name"`
-	Owner       struct {
+	FullName string `json:"full_name"`
+	Name     string `json:"name"`
+	Owner    struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 	Description string `json:"description"`
@@ -53,14 +55,20 @@ type ghSearchReposResponse struct {
 }
 
 // ghIssueListJSON matches the GitHub REST API /repos/{owner}/{repo}/issues item shape.
+// The GitHub API includes the full body on both the list and single-issue
+// endpoints, so this shape is also reused (embedded) by ghIssueDetailJSON.
 type ghIssueListJSON struct {
-	Number    int             `json:"number"`
-	Title     string          `json:"title"`
-	State     string          `json:"state"`
-	HTMLURL   string          `json:"html_url"`
-	CreatedAt string          `json:"created_at"`
-	UpdatedAt string          `json:"updated_at"`
-	Labels    []struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	State     string `json:"state"`
+	HTMLURL   string `json:"html_url"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	// PullRequest is non-null in the GitHub API response when the item is a PR.
@@ -98,11 +106,26 @@ func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult
 		return nil, fmt.Errorf("repos request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	_ = checkRateLimitHeaders(resp)
 
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+	if resp.StatusCode == 401 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 403 {
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 429 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("GitHub API: rate limited (429)")
 	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -173,11 +196,26 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 		return nil, fmt.Errorf("issues request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	_ = checkRateLimitHeaders(resp)
 
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+	if resp.StatusCode == 401 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 403 {
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 429 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("GitHub API: rate limited (429)")
 	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -214,6 +252,8 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 		results = append(results, IssueResult{
 			Number:    item.Number,
 			Title:     item.Title,
+			Body:      item.Body,
+			Author:    item.User.Login,
 			State:     item.State,
 			URL:       item.HTMLURL,
 			Labels:    labels,
@@ -223,4 +263,84 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 		})
 	}
 	return results, nil
+}
+
+// GetIssue fetches a single issue (including its body) by number.
+// Returns ErrNotAuthenticated when no token is configured.
+func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult, error) {
+	if getGHToken(ctx) == "" {
+		return nil, ErrNotAuthenticated
+	}
+
+	apiPath := fmt.Sprintf("repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, fmt.Errorf("build issue request: %w", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("issue request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 401 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("GitHub API: issue not found (404)")
+	}
+	if resp.StatusCode == 403 {
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode == 429 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("GitHub API: rate limited (429)")
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read issue response: %w", err)
+	}
+
+	var item ghIssueListJSON
+	if err := json.Unmarshal(body, &item); err != nil {
+		return nil, fmt.Errorf("parse issue response: %w", err)
+	}
+
+	labels := make([]string, len(item.Labels))
+	for i, l := range item.Labels {
+		labels[i] = l.Name
+	}
+	createdAt, _ := time.Parse(time.RFC3339, item.CreatedAt)
+	updatedAt, _ := time.Parse(time.RFC3339, item.UpdatedAt)
+	isPR := len(item.PullRequest) > 0 && string(item.PullRequest) != "null"
+
+	return &IssueResult{
+		Number:    item.Number,
+		Title:     item.Title,
+		Body:      item.Body,
+		Author:    item.User.Login,
+		State:     item.State,
+		URL:       item.HTMLURL,
+		Labels:    labels,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		IsPR:      isPR,
+	}, nil
 }

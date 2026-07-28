@@ -39,6 +39,9 @@ const (
 	// BacklogServiceGetBacklogItemProcedure is the fully-qualified name of the BacklogService's
 	// GetBacklogItem RPC.
 	BacklogServiceGetBacklogItemProcedure = "/session.v1.BacklogService/GetBacklogItem"
+	// BacklogServiceGetBacklogItemShipStatusProcedure is the fully-qualified name of the
+	// BacklogService's GetBacklogItemShipStatus RPC.
+	BacklogServiceGetBacklogItemShipStatusProcedure = "/session.v1.BacklogService/GetBacklogItemShipStatus"
 	// BacklogServiceListBacklogItemsProcedure is the fully-qualified name of the BacklogService's
 	// ListBacklogItems RPC.
 	BacklogServiceListBacklogItemsProcedure = "/session.v1.BacklogService/ListBacklogItems"
@@ -78,6 +81,9 @@ const (
 	// BacklogServiceTriggerReReviewProcedure is the fully-qualified name of the BacklogService's
 	// TriggerReReview RPC.
 	BacklogServiceTriggerReReviewProcedure = "/session.v1.BacklogService/TriggerReReview"
+	// BacklogServiceTriggerShipPRProcedure is the fully-qualified name of the BacklogService's
+	// TriggerShipPR RPC.
+	BacklogServiceTriggerShipPRProcedure = "/session.v1.BacklogService/TriggerShipPR"
 	// BacklogServiceTriggerSyncProcedure is the fully-qualified name of the BacklogService's
 	// TriggerSync RPC.
 	BacklogServiceTriggerSyncProcedure = "/session.v1.BacklogService/TriggerSync"
@@ -96,6 +102,21 @@ const (
 	// BacklogServiceGetSyncHistoryProcedure is the fully-qualified name of the BacklogService's
 	// GetSyncHistory RPC.
 	BacklogServiceGetSyncHistoryProcedure = "/session.v1.BacklogService/GetSyncHistory"
+	// BacklogServiceCreatePipelineModeProcedure is the fully-qualified name of the BacklogService's
+	// CreatePipelineMode RPC.
+	BacklogServiceCreatePipelineModeProcedure = "/session.v1.BacklogService/CreatePipelineMode"
+	// BacklogServiceUpdatePipelineModeProcedure is the fully-qualified name of the BacklogService's
+	// UpdatePipelineMode RPC.
+	BacklogServiceUpdatePipelineModeProcedure = "/session.v1.BacklogService/UpdatePipelineMode"
+	// BacklogServiceDeletePipelineModeProcedure is the fully-qualified name of the BacklogService's
+	// DeletePipelineMode RPC.
+	BacklogServiceDeletePipelineModeProcedure = "/session.v1.BacklogService/DeletePipelineMode"
+	// BacklogServiceGetPipelineModeProcedure is the fully-qualified name of the BacklogService's
+	// GetPipelineMode RPC.
+	BacklogServiceGetPipelineModeProcedure = "/session.v1.BacklogService/GetPipelineMode"
+	// BacklogServiceListPipelineModesProcedure is the fully-qualified name of the BacklogService's
+	// ListPipelineModes RPC.
+	BacklogServiceListPipelineModesProcedure = "/session.v1.BacklogService/ListPipelineModes"
 	// BacklogServiceImportGitHubIssueProcedure is the fully-qualified name of the BacklogService's
 	// ImportGitHubIssue RPC.
 	BacklogServiceImportGitHubIssueProcedure = "/session.v1.BacklogService/ImportGitHubIssue"
@@ -105,6 +126,36 @@ const (
 	// BacklogServiceListGitHubIssuesProcedure is the fully-qualified name of the BacklogService's
 	// ListGitHubIssues RPC.
 	BacklogServiceListGitHubIssuesProcedure = "/session.v1.BacklogService/ListGitHubIssues"
+	// BacklogServiceGetBacklogItemDiffProcedure is the fully-qualified name of the BacklogService's
+	// GetBacklogItemDiff RPC.
+	BacklogServiceGetBacklogItemDiffProcedure = "/session.v1.BacklogService/GetBacklogItemDiff"
+	// BacklogServiceGetBacklogItemCostProcedure is the fully-qualified name of the BacklogService's
+	// GetBacklogItemCost RPC.
+	BacklogServiceGetBacklogItemCostProcedure = "/session.v1.BacklogService/GetBacklogItemCost"
+	// BacklogServiceGetSessionBacklogIndexProcedure is the fully-qualified name of the BacklogService's
+	// GetSessionBacklogIndex RPC.
+	BacklogServiceGetSessionBacklogIndexProcedure = "/session.v1.BacklogService/GetSessionBacklogIndex"
+	// BacklogServiceSubmitManualReviewProcedure is the fully-qualified name of the BacklogService's
+	// SubmitManualReview RPC.
+	BacklogServiceSubmitManualReviewProcedure = "/session.v1.BacklogService/SubmitManualReview"
+	// BacklogServiceListStuckBacklogItemsProcedure is the fully-qualified name of the BacklogService's
+	// ListStuckBacklogItems RPC.
+	BacklogServiceListStuckBacklogItemsProcedure = "/session.v1.BacklogService/ListStuckBacklogItems"
+	// BacklogServiceSnoozeStuckItemProcedure is the fully-qualified name of the BacklogService's
+	// SnoozeStuckItem RPC.
+	BacklogServiceSnoozeStuckItemProcedure = "/session.v1.BacklogService/SnoozeStuckItem"
+	// BacklogServiceResetStuckRemediationProcedure is the fully-qualified name of the BacklogService's
+	// ResetStuckRemediation RPC.
+	BacklogServiceResetStuckRemediationProcedure = "/session.v1.BacklogService/ResetStuckRemediation"
+	// BacklogServiceBulkResetStuckRemediationProcedure is the fully-qualified name of the
+	// BacklogService's BulkResetStuckRemediation RPC.
+	BacklogServiceBulkResetStuckRemediationProcedure = "/session.v1.BacklogService/BulkResetStuckRemediation"
+	// BacklogServiceTriggerRemediationNowProcedure is the fully-qualified name of the BacklogService's
+	// TriggerRemediationNow RPC.
+	BacklogServiceTriggerRemediationNowProcedure = "/session.v1.BacklogService/TriggerRemediationNow"
+	// BacklogServiceWatchBacklogItemsProcedure is the fully-qualified name of the BacklogService's
+	// WatchBacklogItems RPC.
+	BacklogServiceWatchBacklogItemsProcedure = "/session.v1.BacklogService/WatchBacklogItems"
 )
 
 // BacklogServiceClient is a client for the session.v1.BacklogService service.
@@ -113,6 +164,11 @@ type BacklogServiceClient interface {
 	CreateBacklogItem(context.Context, *connect.Request[v1.CreateBacklogItemRequest]) (*connect.Response[v1.CreateBacklogItemResponse], error)
 	// GetBacklogItem retrieves a single backlog item by ID.
 	GetBacklogItem(context.Context, *connect.Request[v1.GetBacklogItemRequest]) (*connect.Response[v1.GetBacklogItemResponse], error)
+	// GetBacklogItemShipStatus answers "did this item's code actually ship" from
+	// repo_path + the most recent work session's commit — works even once the
+	// work session's own worktree has been cleaned up (e.g. a "done" item),
+	// unlike the live per-session VCSStatus widget.
+	GetBacklogItemShipStatus(context.Context, *connect.Request[v1.GetBacklogItemShipStatusRequest]) (*connect.Response[v1.GetBacklogItemShipStatusResponse], error)
 	// ListBacklogItems returns backlog items with optional filtering and sorting.
 	ListBacklogItems(context.Context, *connect.Request[v1.ListBacklogItemsRequest]) (*connect.Response[v1.ListBacklogItemsResponse], error)
 	// UpdateBacklogItem modifies the properties of an existing backlog item.
@@ -139,6 +195,11 @@ type BacklogServiceClient interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -151,12 +212,65 @@ type BacklogServiceClient interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// CreatePipelineMode registers a new runtime-definable pipeline mode.
+	CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error)
+	// UpdatePipelineMode modifies an existing pipeline mode's fields.
+	UpdatePipelineMode(context.Context, *connect.Request[v1.UpdatePipelineModeRequest]) (*connect.Response[v1.UpdatePipelineModeResponse], error)
+	// DeletePipelineMode removes a pipeline mode definition.
+	DeletePipelineMode(context.Context, *connect.Request[v1.DeletePipelineModeRequest]) (*connect.Response[v1.DeletePipelineModeResponse], error)
+	// GetPipelineMode retrieves a single pipeline mode by slug.
+	GetPipelineMode(context.Context, *connect.Request[v1.GetPipelineModeRequest]) (*connect.Response[v1.GetPipelineModeResponse], error)
+	// ListPipelineModes returns all pipeline modes, including disabled ones.
+	ListPipelineModes(context.Context, *connect.Request[v1.ListPipelineModesRequest]) (*connect.Response[v1.ListPipelineModesResponse], error)
 	// ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
 	ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error)
 	// SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
 	SearchGitHubRepos(context.Context, *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error)
 	// ListGitHubIssues returns issues for a specific GitHub repo.
 	ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error)
+	// GetBacklogItemDiff returns the committed diff for a backlog item's work sessions
+	// (from the earliest work session base SHA to the current HEAD).
+	GetBacklogItemDiff(context.Context, *connect.Request[v1.GetBacklogItemDiffRequest]) (*connect.Response[v1.GetBacklogItemDiffResponse], error)
+	// GetBacklogItemCost returns the estimated token cost for all sessions linked to an item.
+	GetBacklogItemCost(context.Context, *connect.Request[v1.GetBacklogItemCostRequest]) (*connect.Response[v1.GetBacklogItemCostResponse], error)
+	// GetSessionBacklogIndex returns all item sessions mapped to their backlog item metadata.
+	// Used by the Insights dashboard to annotate sessions with backlog context.
+	GetSessionBacklogIndex(context.Context, *connect.Request[v1.GetSessionBacklogIndexRequest]) (*connect.Response[v1.GetSessionBacklogIndexResponse], error)
+	// SubmitManualReview allows a user to submit a review verdict directly,
+	// without running an AI review session.
+	SubmitManualReview(context.Context, *connect.Request[v1.SubmitManualReviewRequest]) (*connect.Response[v1.SubmitManualReviewResponse], error)
+	// ListStuckBacklogItems returns open (unresolved, un-snoozed) stuck backlog
+	// items — items that have stopped progressing toward merge, with a reason,
+	// since-when, and PR context.
+	ListStuckBacklogItems(context.Context, *connect.Request[v1.ListStuckBacklogItemsRequest]) (*connect.Response[v1.ListStuckBacklogItemsResponse], error)
+	// SnoozeStuckItem suppresses a stuck row from the active view and from
+	// re-notification until the given time.
+	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error)
 }
 
 // NewBacklogServiceClient constructs a client for the session.v1.BacklogService service. By
@@ -180,6 +294,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+BacklogServiceGetBacklogItemProcedure,
 			connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItem")),
+			connect.WithClientOptions(opts...),
+		),
+		getBacklogItemShipStatus: connect.NewClient[v1.GetBacklogItemShipStatusRequest, v1.GetBacklogItemShipStatusResponse](
+			httpClient,
+			baseURL+BacklogServiceGetBacklogItemShipStatusProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemShipStatus")),
 			connect.WithClientOptions(opts...),
 		),
 		listBacklogItems: connect.NewClient[v1.ListBacklogItemsRequest, v1.ListBacklogItemsResponse](
@@ -260,6 +380,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
 			connect.WithClientOptions(opts...),
 		),
+		triggerShipPR: connect.NewClient[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerShipPRProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
+			connect.WithClientOptions(opts...),
+		),
 		triggerSync: connect.NewClient[v1.TriggerSyncRequest, v1.TriggerSyncResponse](
 			httpClient,
 			baseURL+BacklogServiceTriggerSyncProcedure,
@@ -296,6 +422,36 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 			connect.WithClientOptions(opts...),
 		),
+		createPipelineMode: connect.NewClient[v1.CreatePipelineModeRequest, v1.CreatePipelineModeResponse](
+			httpClient,
+			baseURL+BacklogServiceCreatePipelineModeProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("CreatePipelineMode")),
+			connect.WithClientOptions(opts...),
+		),
+		updatePipelineMode: connect.NewClient[v1.UpdatePipelineModeRequest, v1.UpdatePipelineModeResponse](
+			httpClient,
+			baseURL+BacklogServiceUpdatePipelineModeProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("UpdatePipelineMode")),
+			connect.WithClientOptions(opts...),
+		),
+		deletePipelineMode: connect.NewClient[v1.DeletePipelineModeRequest, v1.DeletePipelineModeResponse](
+			httpClient,
+			baseURL+BacklogServiceDeletePipelineModeProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("DeletePipelineMode")),
+			connect.WithClientOptions(opts...),
+		),
+		getPipelineMode: connect.NewClient[v1.GetPipelineModeRequest, v1.GetPipelineModeResponse](
+			httpClient,
+			baseURL+BacklogServiceGetPipelineModeProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("GetPipelineMode")),
+			connect.WithClientOptions(opts...),
+		),
+		listPipelineModes: connect.NewClient[v1.ListPipelineModesRequest, v1.ListPipelineModesResponse](
+			httpClient,
+			baseURL+BacklogServiceListPipelineModesProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ListPipelineModes")),
+			connect.WithClientOptions(opts...),
+		),
 		importGitHubIssue: connect.NewClient[v1.ImportGitHubIssueRequest, v1.ImportGitHubIssueResponse](
 			httpClient,
 			baseURL+BacklogServiceImportGitHubIssueProcedure,
@@ -314,6 +470,66 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("ListGitHubIssues")),
 			connect.WithClientOptions(opts...),
 		),
+		getBacklogItemDiff: connect.NewClient[v1.GetBacklogItemDiffRequest, v1.GetBacklogItemDiffResponse](
+			httpClient,
+			baseURL+BacklogServiceGetBacklogItemDiffProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemDiff")),
+			connect.WithClientOptions(opts...),
+		),
+		getBacklogItemCost: connect.NewClient[v1.GetBacklogItemCostRequest, v1.GetBacklogItemCostResponse](
+			httpClient,
+			baseURL+BacklogServiceGetBacklogItemCostProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemCost")),
+			connect.WithClientOptions(opts...),
+		),
+		getSessionBacklogIndex: connect.NewClient[v1.GetSessionBacklogIndexRequest, v1.GetSessionBacklogIndexResponse](
+			httpClient,
+			baseURL+BacklogServiceGetSessionBacklogIndexProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("GetSessionBacklogIndex")),
+			connect.WithClientOptions(opts...),
+		),
+		submitManualReview: connect.NewClient[v1.SubmitManualReviewRequest, v1.SubmitManualReviewResponse](
+			httpClient,
+			baseURL+BacklogServiceSubmitManualReviewProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("SubmitManualReview")),
+			connect.WithClientOptions(opts...),
+		),
+		listStuckBacklogItems: connect.NewClient[v1.ListStuckBacklogItemsRequest, v1.ListStuckBacklogItemsResponse](
+			httpClient,
+			baseURL+BacklogServiceListStuckBacklogItemsProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ListStuckBacklogItems")),
+			connect.WithClientOptions(opts...),
+		),
+		snoozeStuckItem: connect.NewClient[v1.SnoozeStuckItemRequest, v1.SnoozeStuckItemResponse](
+			httpClient,
+			baseURL+BacklogServiceSnoozeStuckItemProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
+			connect.WithClientOptions(opts...),
+		),
+		resetStuckRemediation: connect.NewClient[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		bulkResetStuckRemediation: connect.NewClient[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse](
+			httpClient,
+			baseURL+BacklogServiceBulkResetStuckRemediationProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+			connect.WithClientOptions(opts...),
+		),
+		triggerRemediationNow: connect.NewClient[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse](
+			httpClient,
+			baseURL+BacklogServiceTriggerRemediationNowProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+			connect.WithClientOptions(opts...),
+		),
+		watchBacklogItems: connect.NewClient[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent](
+			httpClient,
+			baseURL+BacklogServiceWatchBacklogItemsProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -321,6 +537,7 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 type backlogServiceClient struct {
 	createBacklogItem           *connect.Client[v1.CreateBacklogItemRequest, v1.CreateBacklogItemResponse]
 	getBacklogItem              *connect.Client[v1.GetBacklogItemRequest, v1.GetBacklogItemResponse]
+	getBacklogItemShipStatus    *connect.Client[v1.GetBacklogItemShipStatusRequest, v1.GetBacklogItemShipStatusResponse]
 	listBacklogItems            *connect.Client[v1.ListBacklogItemsRequest, v1.ListBacklogItemsResponse]
 	updateBacklogItem           *connect.Client[v1.UpdateBacklogItemRequest, v1.UpdateBacklogItemResponse]
 	archiveBacklogItem          *connect.Client[v1.ArchiveBacklogItemRequest, v1.ArchiveBacklogItemResponse]
@@ -334,15 +551,31 @@ type backlogServiceClient struct {
 	suggestNextItem             *connect.Client[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse]
 	overrideVerdict             *connect.Client[v1.OverrideVerdictRequest, v1.OverrideVerdictResponse]
 	triggerReReview             *connect.Client[v1.TriggerReReviewRequest, v1.TriggerReReviewResponse]
+	triggerShipPR               *connect.Client[v1.TriggerShipPRRequest, v1.TriggerShipPRResponse]
 	triggerSync                 *connect.Client[v1.TriggerSyncRequest, v1.TriggerSyncResponse]
 	createItemSource            *connect.Client[v1.CreateItemSourceRequest, v1.CreateItemSourceResponse]
 	listItemSources             *connect.Client[v1.ListItemSourcesRequest, v1.ListItemSourcesResponse]
 	updateItemSource            *connect.Client[v1.UpdateItemSourceRequest, v1.UpdateItemSourceResponse]
 	deleteItemSource            *connect.Client[v1.DeleteItemSourceRequest, v1.DeleteItemSourceResponse]
 	getSyncHistory              *connect.Client[v1.GetSyncHistoryRequest, v1.GetSyncHistoryResponse]
+	createPipelineMode          *connect.Client[v1.CreatePipelineModeRequest, v1.CreatePipelineModeResponse]
+	updatePipelineMode          *connect.Client[v1.UpdatePipelineModeRequest, v1.UpdatePipelineModeResponse]
+	deletePipelineMode          *connect.Client[v1.DeletePipelineModeRequest, v1.DeletePipelineModeResponse]
+	getPipelineMode             *connect.Client[v1.GetPipelineModeRequest, v1.GetPipelineModeResponse]
+	listPipelineModes           *connect.Client[v1.ListPipelineModesRequest, v1.ListPipelineModesResponse]
 	importGitHubIssue           *connect.Client[v1.ImportGitHubIssueRequest, v1.ImportGitHubIssueResponse]
 	searchGitHubRepos           *connect.Client[v1.SearchGitHubReposRequest, v1.SearchGitHubReposResponse]
 	listGitHubIssues            *connect.Client[v1.ListGitHubIssuesRequest, v1.ListGitHubIssuesResponse]
+	getBacklogItemDiff          *connect.Client[v1.GetBacklogItemDiffRequest, v1.GetBacklogItemDiffResponse]
+	getBacklogItemCost          *connect.Client[v1.GetBacklogItemCostRequest, v1.GetBacklogItemCostResponse]
+	getSessionBacklogIndex      *connect.Client[v1.GetSessionBacklogIndexRequest, v1.GetSessionBacklogIndexResponse]
+	submitManualReview          *connect.Client[v1.SubmitManualReviewRequest, v1.SubmitManualReviewResponse]
+	listStuckBacklogItems       *connect.Client[v1.ListStuckBacklogItemsRequest, v1.ListStuckBacklogItemsResponse]
+	snoozeStuckItem             *connect.Client[v1.SnoozeStuckItemRequest, v1.SnoozeStuckItemResponse]
+	resetStuckRemediation       *connect.Client[v1.ResetStuckRemediationRequest, v1.ResetStuckRemediationResponse]
+	bulkResetStuckRemediation   *connect.Client[v1.BulkResetStuckRemediationRequest, v1.BulkResetStuckRemediationResponse]
+	triggerRemediationNow       *connect.Client[v1.TriggerRemediationNowRequest, v1.TriggerRemediationNowResponse]
+	watchBacklogItems           *connect.Client[v1.WatchBacklogItemsRequest, v1.BacklogItemEvent]
 }
 
 // CreateBacklogItem calls session.v1.BacklogService.CreateBacklogItem.
@@ -353,6 +586,11 @@ func (c *backlogServiceClient) CreateBacklogItem(ctx context.Context, req *conne
 // GetBacklogItem calls session.v1.BacklogService.GetBacklogItem.
 func (c *backlogServiceClient) GetBacklogItem(ctx context.Context, req *connect.Request[v1.GetBacklogItemRequest]) (*connect.Response[v1.GetBacklogItemResponse], error) {
 	return c.getBacklogItem.CallUnary(ctx, req)
+}
+
+// GetBacklogItemShipStatus calls session.v1.BacklogService.GetBacklogItemShipStatus.
+func (c *backlogServiceClient) GetBacklogItemShipStatus(ctx context.Context, req *connect.Request[v1.GetBacklogItemShipStatusRequest]) (*connect.Response[v1.GetBacklogItemShipStatusResponse], error) {
+	return c.getBacklogItemShipStatus.CallUnary(ctx, req)
 }
 
 // ListBacklogItems calls session.v1.BacklogService.ListBacklogItems.
@@ -420,6 +658,11 @@ func (c *backlogServiceClient) TriggerReReview(ctx context.Context, req *connect
 	return c.triggerReReview.CallUnary(ctx, req)
 }
 
+// TriggerShipPR calls session.v1.BacklogService.TriggerShipPR.
+func (c *backlogServiceClient) TriggerShipPR(ctx context.Context, req *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return c.triggerShipPR.CallUnary(ctx, req)
+}
+
 // TriggerSync calls session.v1.BacklogService.TriggerSync.
 func (c *backlogServiceClient) TriggerSync(ctx context.Context, req *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error) {
 	return c.triggerSync.CallUnary(ctx, req)
@@ -450,6 +693,31 @@ func (c *backlogServiceClient) GetSyncHistory(ctx context.Context, req *connect.
 	return c.getSyncHistory.CallUnary(ctx, req)
 }
 
+// CreatePipelineMode calls session.v1.BacklogService.CreatePipelineMode.
+func (c *backlogServiceClient) CreatePipelineMode(ctx context.Context, req *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error) {
+	return c.createPipelineMode.CallUnary(ctx, req)
+}
+
+// UpdatePipelineMode calls session.v1.BacklogService.UpdatePipelineMode.
+func (c *backlogServiceClient) UpdatePipelineMode(ctx context.Context, req *connect.Request[v1.UpdatePipelineModeRequest]) (*connect.Response[v1.UpdatePipelineModeResponse], error) {
+	return c.updatePipelineMode.CallUnary(ctx, req)
+}
+
+// DeletePipelineMode calls session.v1.BacklogService.DeletePipelineMode.
+func (c *backlogServiceClient) DeletePipelineMode(ctx context.Context, req *connect.Request[v1.DeletePipelineModeRequest]) (*connect.Response[v1.DeletePipelineModeResponse], error) {
+	return c.deletePipelineMode.CallUnary(ctx, req)
+}
+
+// GetPipelineMode calls session.v1.BacklogService.GetPipelineMode.
+func (c *backlogServiceClient) GetPipelineMode(ctx context.Context, req *connect.Request[v1.GetPipelineModeRequest]) (*connect.Response[v1.GetPipelineModeResponse], error) {
+	return c.getPipelineMode.CallUnary(ctx, req)
+}
+
+// ListPipelineModes calls session.v1.BacklogService.ListPipelineModes.
+func (c *backlogServiceClient) ListPipelineModes(ctx context.Context, req *connect.Request[v1.ListPipelineModesRequest]) (*connect.Response[v1.ListPipelineModesResponse], error) {
+	return c.listPipelineModes.CallUnary(ctx, req)
+}
+
 // ImportGitHubIssue calls session.v1.BacklogService.ImportGitHubIssue.
 func (c *backlogServiceClient) ImportGitHubIssue(ctx context.Context, req *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error) {
 	return c.importGitHubIssue.CallUnary(ctx, req)
@@ -465,12 +733,67 @@ func (c *backlogServiceClient) ListGitHubIssues(ctx context.Context, req *connec
 	return c.listGitHubIssues.CallUnary(ctx, req)
 }
 
+// GetBacklogItemDiff calls session.v1.BacklogService.GetBacklogItemDiff.
+func (c *backlogServiceClient) GetBacklogItemDiff(ctx context.Context, req *connect.Request[v1.GetBacklogItemDiffRequest]) (*connect.Response[v1.GetBacklogItemDiffResponse], error) {
+	return c.getBacklogItemDiff.CallUnary(ctx, req)
+}
+
+// GetBacklogItemCost calls session.v1.BacklogService.GetBacklogItemCost.
+func (c *backlogServiceClient) GetBacklogItemCost(ctx context.Context, req *connect.Request[v1.GetBacklogItemCostRequest]) (*connect.Response[v1.GetBacklogItemCostResponse], error) {
+	return c.getBacklogItemCost.CallUnary(ctx, req)
+}
+
+// GetSessionBacklogIndex calls session.v1.BacklogService.GetSessionBacklogIndex.
+func (c *backlogServiceClient) GetSessionBacklogIndex(ctx context.Context, req *connect.Request[v1.GetSessionBacklogIndexRequest]) (*connect.Response[v1.GetSessionBacklogIndexResponse], error) {
+	return c.getSessionBacklogIndex.CallUnary(ctx, req)
+}
+
+// SubmitManualReview calls session.v1.BacklogService.SubmitManualReview.
+func (c *backlogServiceClient) SubmitManualReview(ctx context.Context, req *connect.Request[v1.SubmitManualReviewRequest]) (*connect.Response[v1.SubmitManualReviewResponse], error) {
+	return c.submitManualReview.CallUnary(ctx, req)
+}
+
+// ListStuckBacklogItems calls session.v1.BacklogService.ListStuckBacklogItems.
+func (c *backlogServiceClient) ListStuckBacklogItems(ctx context.Context, req *connect.Request[v1.ListStuckBacklogItemsRequest]) (*connect.Response[v1.ListStuckBacklogItemsResponse], error) {
+	return c.listStuckBacklogItems.CallUnary(ctx, req)
+}
+
+// SnoozeStuckItem calls session.v1.BacklogService.SnoozeStuckItem.
+func (c *backlogServiceClient) SnoozeStuckItem(ctx context.Context, req *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error) {
+	return c.snoozeStuckItem.CallUnary(ctx, req)
+}
+
+// ResetStuckRemediation calls session.v1.BacklogService.ResetStuckRemediation.
+func (c *backlogServiceClient) ResetStuckRemediation(ctx context.Context, req *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return c.resetStuckRemediation.CallUnary(ctx, req)
+}
+
+// BulkResetStuckRemediation calls session.v1.BacklogService.BulkResetStuckRemediation.
+func (c *backlogServiceClient) BulkResetStuckRemediation(ctx context.Context, req *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return c.bulkResetStuckRemediation.CallUnary(ctx, req)
+}
+
+// TriggerRemediationNow calls session.v1.BacklogService.TriggerRemediationNow.
+func (c *backlogServiceClient) TriggerRemediationNow(ctx context.Context, req *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return c.triggerRemediationNow.CallUnary(ctx, req)
+}
+
+// WatchBacklogItems calls session.v1.BacklogService.WatchBacklogItems.
+func (c *backlogServiceClient) WatchBacklogItems(ctx context.Context, req *connect.Request[v1.WatchBacklogItemsRequest]) (*connect.ServerStreamForClient[v1.BacklogItemEvent], error) {
+	return c.watchBacklogItems.CallServerStream(ctx, req)
+}
+
 // BacklogServiceHandler is an implementation of the session.v1.BacklogService service.
 type BacklogServiceHandler interface {
 	// CreateBacklogItem adds a new item to the backlog.
 	CreateBacklogItem(context.Context, *connect.Request[v1.CreateBacklogItemRequest]) (*connect.Response[v1.CreateBacklogItemResponse], error)
 	// GetBacklogItem retrieves a single backlog item by ID.
 	GetBacklogItem(context.Context, *connect.Request[v1.GetBacklogItemRequest]) (*connect.Response[v1.GetBacklogItemResponse], error)
+	// GetBacklogItemShipStatus answers "did this item's code actually ship" from
+	// repo_path + the most recent work session's commit — works even once the
+	// work session's own worktree has been cleaned up (e.g. a "done" item),
+	// unlike the live per-session VCSStatus widget.
+	GetBacklogItemShipStatus(context.Context, *connect.Request[v1.GetBacklogItemShipStatusRequest]) (*connect.Response[v1.GetBacklogItemShipStatusResponse], error)
 	// ListBacklogItems returns backlog items with optional filtering and sorting.
 	ListBacklogItems(context.Context, *connect.Request[v1.ListBacklogItemsRequest]) (*connect.Response[v1.ListBacklogItemsResponse], error)
 	// UpdateBacklogItem modifies the properties of an existing backlog item.
@@ -497,6 +820,11 @@ type BacklogServiceHandler interface {
 	OverrideVerdict(context.Context, *connect.Request[v1.OverrideVerdictRequest]) (*connect.Response[v1.OverrideVerdictResponse], error)
 	// TriggerReReview re-runs the review gate for a backlog item.
 	TriggerReReview(context.Context, *connect.Request[v1.TriggerReReviewRequest]) (*connect.Response[v1.TriggerReReviewResponse], error)
+	// TriggerShipPR manually runs the same one-shot PR-creation flow the opt-in
+	// AutoCreatePR policy uses, for an item sitting in review (or done with no PR
+	// yet) with no PR of its own — the self-service "Ship PR" action on the item
+	// detail page.
+	TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error)
 	// TriggerSync initiates a sync run for an external item source.
 	TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error)
 	// CreateItemSource registers a new external plugin source.
@@ -509,12 +837,65 @@ type BacklogServiceHandler interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// CreatePipelineMode registers a new runtime-definable pipeline mode.
+	CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error)
+	// UpdatePipelineMode modifies an existing pipeline mode's fields.
+	UpdatePipelineMode(context.Context, *connect.Request[v1.UpdatePipelineModeRequest]) (*connect.Response[v1.UpdatePipelineModeResponse], error)
+	// DeletePipelineMode removes a pipeline mode definition.
+	DeletePipelineMode(context.Context, *connect.Request[v1.DeletePipelineModeRequest]) (*connect.Response[v1.DeletePipelineModeResponse], error)
+	// GetPipelineMode retrieves a single pipeline mode by slug.
+	GetPipelineMode(context.Context, *connect.Request[v1.GetPipelineModeRequest]) (*connect.Response[v1.GetPipelineModeResponse], error)
+	// ListPipelineModes returns all pipeline modes, including disabled ones.
+	ListPipelineModes(context.Context, *connect.Request[v1.ListPipelineModesRequest]) (*connect.Response[v1.ListPipelineModesResponse], error)
 	// ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
 	ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error)
 	// SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
 	SearchGitHubRepos(context.Context, *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error)
 	// ListGitHubIssues returns issues for a specific GitHub repo.
 	ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error)
+	// GetBacklogItemDiff returns the committed diff for a backlog item's work sessions
+	// (from the earliest work session base SHA to the current HEAD).
+	GetBacklogItemDiff(context.Context, *connect.Request[v1.GetBacklogItemDiffRequest]) (*connect.Response[v1.GetBacklogItemDiffResponse], error)
+	// GetBacklogItemCost returns the estimated token cost for all sessions linked to an item.
+	GetBacklogItemCost(context.Context, *connect.Request[v1.GetBacklogItemCostRequest]) (*connect.Response[v1.GetBacklogItemCostResponse], error)
+	// GetSessionBacklogIndex returns all item sessions mapped to their backlog item metadata.
+	// Used by the Insights dashboard to annotate sessions with backlog context.
+	GetSessionBacklogIndex(context.Context, *connect.Request[v1.GetSessionBacklogIndexRequest]) (*connect.Response[v1.GetSessionBacklogIndexResponse], error)
+	// SubmitManualReview allows a user to submit a review verdict directly,
+	// without running an AI review session.
+	SubmitManualReview(context.Context, *connect.Request[v1.SubmitManualReviewRequest]) (*connect.Response[v1.SubmitManualReviewResponse], error)
+	// ListStuckBacklogItems returns open (unresolved, un-snoozed) stuck backlog
+	// items — items that have stopped progressing toward merge, with a reason,
+	// since-when, and PR context.
+	ListStuckBacklogItems(context.Context, *connect.Request[v1.ListStuckBacklogItemsRequest]) (*connect.Response[v1.ListStuckBacklogItemsResponse], error)
+	// SnoozeStuckItem suppresses a stuck row from the active view and from
+	// re-notification until the given time.
+	SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error)
+	// ResetStuckRemediation clears the automated-remediation counters
+	// (remediation_attempts, next_remediation_at, notified_at) on a single open
+	// stuck row, letting a fresh automated attempt/notification cycle fire
+	// immediately instead of waiting on stale backoff/dedup state. Distinct
+	// from TriggerRemediationNow: this never itself invokes a remediation
+	// action, it only un-parks the row.
+	ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error)
+	// BulkResetStuckRemediation applies ResetStuckRemediation's reset to every
+	// open stuck row matching the optional reason filter — the "something
+	// upstream broke a batch of these, give them all a fresh shot" admin
+	// action, e.g. after an OOM-restart storm inflated attempt counts across
+	// many items at once.
+	BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error)
+	// TriggerRemediationNow immediately runs the reason-specific remediation
+	// action for a single open stuck row, bypassing only the next_remediation_at
+	// backoff timer — every other safety gate (the 5-attempt cap, the wrapped
+	// action's own circuit breaker) still applies, and this attempt still
+	// counts toward remediation_attempts like any dispatcher-triggered one.
+	// Rejects with an error (rather than silently un-parking) when the row has
+	// already exhausted its attempt budget — use ResetStuckRemediation first.
+	TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error)
+	// WatchBacklogItems streams real-time backlog item events (status changes,
+	// verdicts, session attachments, updates, archival, removal).
+	// Server-streaming RPC for live backlog updates without polling.
+	WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error
 }
 
 // NewBacklogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -534,6 +915,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		BacklogServiceGetBacklogItemProcedure,
 		svc.GetBacklogItem,
 		connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItem")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceGetBacklogItemShipStatusHandler := connect.NewUnaryHandler(
+		BacklogServiceGetBacklogItemShipStatusProcedure,
+		svc.GetBacklogItemShipStatus,
+		connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemShipStatus")),
 		connect.WithHandlerOptions(opts...),
 	)
 	backlogServiceListBacklogItemsHandler := connect.NewUnaryHandler(
@@ -614,6 +1001,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("TriggerReReview")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceTriggerShipPRHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerShipPRProcedure,
+		svc.TriggerShipPR,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerShipPR")),
+		connect.WithHandlerOptions(opts...),
+	)
 	backlogServiceTriggerSyncHandler := connect.NewUnaryHandler(
 		BacklogServiceTriggerSyncProcedure,
 		svc.TriggerSync,
@@ -650,6 +1043,36 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceCreatePipelineModeHandler := connect.NewUnaryHandler(
+		BacklogServiceCreatePipelineModeProcedure,
+		svc.CreatePipelineMode,
+		connect.WithSchema(backlogServiceMethods.ByName("CreatePipelineMode")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceUpdatePipelineModeHandler := connect.NewUnaryHandler(
+		BacklogServiceUpdatePipelineModeProcedure,
+		svc.UpdatePipelineMode,
+		connect.WithSchema(backlogServiceMethods.ByName("UpdatePipelineMode")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceDeletePipelineModeHandler := connect.NewUnaryHandler(
+		BacklogServiceDeletePipelineModeProcedure,
+		svc.DeletePipelineMode,
+		connect.WithSchema(backlogServiceMethods.ByName("DeletePipelineMode")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceGetPipelineModeHandler := connect.NewUnaryHandler(
+		BacklogServiceGetPipelineModeProcedure,
+		svc.GetPipelineMode,
+		connect.WithSchema(backlogServiceMethods.ByName("GetPipelineMode")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceListPipelineModesHandler := connect.NewUnaryHandler(
+		BacklogServiceListPipelineModesProcedure,
+		svc.ListPipelineModes,
+		connect.WithSchema(backlogServiceMethods.ByName("ListPipelineModes")),
+		connect.WithHandlerOptions(opts...),
+	)
 	backlogServiceImportGitHubIssueHandler := connect.NewUnaryHandler(
 		BacklogServiceImportGitHubIssueProcedure,
 		svc.ImportGitHubIssue,
@@ -668,12 +1091,74 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("ListGitHubIssues")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceGetBacklogItemDiffHandler := connect.NewUnaryHandler(
+		BacklogServiceGetBacklogItemDiffProcedure,
+		svc.GetBacklogItemDiff,
+		connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemDiff")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceGetBacklogItemCostHandler := connect.NewUnaryHandler(
+		BacklogServiceGetBacklogItemCostProcedure,
+		svc.GetBacklogItemCost,
+		connect.WithSchema(backlogServiceMethods.ByName("GetBacklogItemCost")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceGetSessionBacklogIndexHandler := connect.NewUnaryHandler(
+		BacklogServiceGetSessionBacklogIndexProcedure,
+		svc.GetSessionBacklogIndex,
+		connect.WithSchema(backlogServiceMethods.ByName("GetSessionBacklogIndex")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceSubmitManualReviewHandler := connect.NewUnaryHandler(
+		BacklogServiceSubmitManualReviewProcedure,
+		svc.SubmitManualReview,
+		connect.WithSchema(backlogServiceMethods.ByName("SubmitManualReview")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceListStuckBacklogItemsHandler := connect.NewUnaryHandler(
+		BacklogServiceListStuckBacklogItemsProcedure,
+		svc.ListStuckBacklogItems,
+		connect.WithSchema(backlogServiceMethods.ByName("ListStuckBacklogItems")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceSnoozeStuckItemHandler := connect.NewUnaryHandler(
+		BacklogServiceSnoozeStuckItemProcedure,
+		svc.SnoozeStuckItem,
+		connect.WithSchema(backlogServiceMethods.ByName("SnoozeStuckItem")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceResetStuckRemediationProcedure,
+		svc.ResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("ResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceBulkResetStuckRemediationHandler := connect.NewUnaryHandler(
+		BacklogServiceBulkResetStuckRemediationProcedure,
+		svc.BulkResetStuckRemediation,
+		connect.WithSchema(backlogServiceMethods.ByName("BulkResetStuckRemediation")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceTriggerRemediationNowHandler := connect.NewUnaryHandler(
+		BacklogServiceTriggerRemediationNowProcedure,
+		svc.TriggerRemediationNow,
+		connect.WithSchema(backlogServiceMethods.ByName("TriggerRemediationNow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceWatchBacklogItemsHandler := connect.NewServerStreamHandler(
+		BacklogServiceWatchBacklogItemsProcedure,
+		svc.WatchBacklogItems,
+		connect.WithSchema(backlogServiceMethods.ByName("WatchBacklogItems")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.BacklogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BacklogServiceCreateBacklogItemProcedure:
 			backlogServiceCreateBacklogItemHandler.ServeHTTP(w, r)
 		case BacklogServiceGetBacklogItemProcedure:
 			backlogServiceGetBacklogItemHandler.ServeHTTP(w, r)
+		case BacklogServiceGetBacklogItemShipStatusProcedure:
+			backlogServiceGetBacklogItemShipStatusHandler.ServeHTTP(w, r)
 		case BacklogServiceListBacklogItemsProcedure:
 			backlogServiceListBacklogItemsHandler.ServeHTTP(w, r)
 		case BacklogServiceUpdateBacklogItemProcedure:
@@ -700,6 +1185,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceOverrideVerdictHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerReReviewProcedure:
 			backlogServiceTriggerReReviewHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerShipPRProcedure:
+			backlogServiceTriggerShipPRHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerSyncProcedure:
 			backlogServiceTriggerSyncHandler.ServeHTTP(w, r)
 		case BacklogServiceCreateItemSourceProcedure:
@@ -712,12 +1199,42 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceDeleteItemSourceHandler.ServeHTTP(w, r)
 		case BacklogServiceGetSyncHistoryProcedure:
 			backlogServiceGetSyncHistoryHandler.ServeHTTP(w, r)
+		case BacklogServiceCreatePipelineModeProcedure:
+			backlogServiceCreatePipelineModeHandler.ServeHTTP(w, r)
+		case BacklogServiceUpdatePipelineModeProcedure:
+			backlogServiceUpdatePipelineModeHandler.ServeHTTP(w, r)
+		case BacklogServiceDeletePipelineModeProcedure:
+			backlogServiceDeletePipelineModeHandler.ServeHTTP(w, r)
+		case BacklogServiceGetPipelineModeProcedure:
+			backlogServiceGetPipelineModeHandler.ServeHTTP(w, r)
+		case BacklogServiceListPipelineModesProcedure:
+			backlogServiceListPipelineModesHandler.ServeHTTP(w, r)
 		case BacklogServiceImportGitHubIssueProcedure:
 			backlogServiceImportGitHubIssueHandler.ServeHTTP(w, r)
 		case BacklogServiceSearchGitHubReposProcedure:
 			backlogServiceSearchGitHubReposHandler.ServeHTTP(w, r)
 		case BacklogServiceListGitHubIssuesProcedure:
 			backlogServiceListGitHubIssuesHandler.ServeHTTP(w, r)
+		case BacklogServiceGetBacklogItemDiffProcedure:
+			backlogServiceGetBacklogItemDiffHandler.ServeHTTP(w, r)
+		case BacklogServiceGetBacklogItemCostProcedure:
+			backlogServiceGetBacklogItemCostHandler.ServeHTTP(w, r)
+		case BacklogServiceGetSessionBacklogIndexProcedure:
+			backlogServiceGetSessionBacklogIndexHandler.ServeHTTP(w, r)
+		case BacklogServiceSubmitManualReviewProcedure:
+			backlogServiceSubmitManualReviewHandler.ServeHTTP(w, r)
+		case BacklogServiceListStuckBacklogItemsProcedure:
+			backlogServiceListStuckBacklogItemsHandler.ServeHTTP(w, r)
+		case BacklogServiceSnoozeStuckItemProcedure:
+			backlogServiceSnoozeStuckItemHandler.ServeHTTP(w, r)
+		case BacklogServiceResetStuckRemediationProcedure:
+			backlogServiceResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceBulkResetStuckRemediationProcedure:
+			backlogServiceBulkResetStuckRemediationHandler.ServeHTTP(w, r)
+		case BacklogServiceTriggerRemediationNowProcedure:
+			backlogServiceTriggerRemediationNowHandler.ServeHTTP(w, r)
+		case BacklogServiceWatchBacklogItemsProcedure:
+			backlogServiceWatchBacklogItemsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -733,6 +1250,10 @@ func (UnimplementedBacklogServiceHandler) CreateBacklogItem(context.Context, *co
 
 func (UnimplementedBacklogServiceHandler) GetBacklogItem(context.Context, *connect.Request[v1.GetBacklogItemRequest]) (*connect.Response[v1.GetBacklogItemResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetBacklogItem is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) GetBacklogItemShipStatus(context.Context, *connect.Request[v1.GetBacklogItemShipStatusRequest]) (*connect.Response[v1.GetBacklogItemShipStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetBacklogItemShipStatus is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) ListBacklogItems(context.Context, *connect.Request[v1.ListBacklogItemsRequest]) (*connect.Response[v1.ListBacklogItemsResponse], error) {
@@ -787,6 +1308,10 @@ func (UnimplementedBacklogServiceHandler) TriggerReReview(context.Context, *conn
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerReReview is not implemented"))
 }
 
+func (UnimplementedBacklogServiceHandler) TriggerShipPR(context.Context, *connect.Request[v1.TriggerShipPRRequest]) (*connect.Response[v1.TriggerShipPRResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerShipPR is not implemented"))
+}
+
 func (UnimplementedBacklogServiceHandler) TriggerSync(context.Context, *connect.Request[v1.TriggerSyncRequest]) (*connect.Response[v1.TriggerSyncResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerSync is not implemented"))
 }
@@ -811,6 +1336,26 @@ func (UnimplementedBacklogServiceHandler) GetSyncHistory(context.Context, *conne
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetSyncHistory is not implemented"))
 }
 
+func (UnimplementedBacklogServiceHandler) CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.CreatePipelineMode is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) UpdatePipelineMode(context.Context, *connect.Request[v1.UpdatePipelineModeRequest]) (*connect.Response[v1.UpdatePipelineModeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.UpdatePipelineMode is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) DeletePipelineMode(context.Context, *connect.Request[v1.DeletePipelineModeRequest]) (*connect.Response[v1.DeletePipelineModeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.DeletePipelineMode is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) GetPipelineMode(context.Context, *connect.Request[v1.GetPipelineModeRequest]) (*connect.Response[v1.GetPipelineModeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetPipelineMode is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ListPipelineModes(context.Context, *connect.Request[v1.ListPipelineModesRequest]) (*connect.Response[v1.ListPipelineModesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ListPipelineModes is not implemented"))
+}
+
 func (UnimplementedBacklogServiceHandler) ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ImportGitHubIssue is not implemented"))
 }
@@ -821,4 +1366,44 @@ func (UnimplementedBacklogServiceHandler) SearchGitHubRepos(context.Context, *co
 
 func (UnimplementedBacklogServiceHandler) ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ListGitHubIssues is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) GetBacklogItemDiff(context.Context, *connect.Request[v1.GetBacklogItemDiffRequest]) (*connect.Response[v1.GetBacklogItemDiffResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetBacklogItemDiff is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) GetBacklogItemCost(context.Context, *connect.Request[v1.GetBacklogItemCostRequest]) (*connect.Response[v1.GetBacklogItemCostResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetBacklogItemCost is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) GetSessionBacklogIndex(context.Context, *connect.Request[v1.GetSessionBacklogIndexRequest]) (*connect.Response[v1.GetSessionBacklogIndexResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetSessionBacklogIndex is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) SubmitManualReview(context.Context, *connect.Request[v1.SubmitManualReviewRequest]) (*connect.Response[v1.SubmitManualReviewResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.SubmitManualReview is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ListStuckBacklogItems(context.Context, *connect.Request[v1.ListStuckBacklogItemsRequest]) (*connect.Response[v1.ListStuckBacklogItemsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ListStuckBacklogItems is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) SnoozeStuckItem(context.Context, *connect.Request[v1.SnoozeStuckItemRequest]) (*connect.Response[v1.SnoozeStuckItemResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.SnoozeStuckItem is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ResetStuckRemediation(context.Context, *connect.Request[v1.ResetStuckRemediationRequest]) (*connect.Response[v1.ResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) BulkResetStuckRemediation(context.Context, *connect.Request[v1.BulkResetStuckRemediationRequest]) (*connect.Response[v1.BulkResetStuckRemediationResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.BulkResetStuckRemediation is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) TriggerRemediationNow(context.Context, *connect.Request[v1.TriggerRemediationNowRequest]) (*connect.Response[v1.TriggerRemediationNowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerRemediationNow is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) WatchBacklogItems(context.Context, *connect.Request[v1.WatchBacklogItemsRequest], *connect.ServerStream[v1.BacklogItemEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.WatchBacklogItems is not implemented"))
 }

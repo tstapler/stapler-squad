@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
@@ -40,6 +41,16 @@ import (
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
+// createSessionTimeout bounds the synchronous portion of CreateSession (path
+// resolution, GitHub URL clone). It must stay comfortably above the slowest
+// known synchronous sub-operation — GitHub URL resolution can shell out to
+// `git clone`, which research puts at up to ~120s for large repos — so a
+// legitimate slow-but-successful create still completes. NOTE: this is
+// decoupled from the tmux startup poll (~10s), which runs in a background
+// goroutine *after* the RPC returns and is intentionally not bound by this
+// deadline; if that internal bound is retuned, revisit this value too.
+const createSessionTimeout = 150 * time.Second
+
 var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -65,6 +76,11 @@ type SessionService struct {
 	statusManager     *session.InstanceStatusManager
 	reviewQueuePoller *session.ReviewQueuePoller
 
+	// concStorage is the concrete backing store, used for operations (like
+	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
+	// fake InstanceStore (tests) — callers must nil-check.
+	concStorage *session.Storage
+
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
 	searchSvc       *SearchService
@@ -89,6 +105,12 @@ type SessionService struct {
 
 	// databaseSvc handles workspace/database switcher RPCs.
 	databaseSvc *DatabaseService
+
+	// tmuxStreamerManager caches ExternalTmuxStreamer instances per tmux session
+	// name (main sessions and shell siblings alike). Wired in so StopShell can
+	// evict a shell's streamer on close instead of letting a stale/degraded one
+	// persist across shell restarts.
+	tmuxStreamerManager *session.ExternalTmuxStreamerManager
 
 	// fileSvc handles file tree browsing RPCs (ListFiles, GetFileContent).
 	fileSvc *FileService
@@ -324,6 +346,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 
 	svc := &SessionService{
 		storage:           storage,
+		concStorage:       concStorage,
 		eventBus:          eventBus,
 		reviewQueueSvc:    reviewQueueSvc,
 		searchSvc:         NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
@@ -403,7 +426,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		// the Claude process restarts without a session UUID or MCP connection.
 		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
 		if mcpURL := s.resolveMCPServerURL(); inst.MCPServerURL == "" && mcpURL != "" {
-			inst.MCPServerURL = mcpURL
+			inst.SetMCPServerURL(mcpURL)
 		}
 	}
 
@@ -482,6 +505,26 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 	return s.reviewQueuePoller.FindInstance(id)
 }
 
+// ArchiveSessionByUUID satisfies the BacklogService.SessionStopper interface and the
+// session.SessionArchiver interface (implemented here so both BacklogService and
+// session.BacklogLifecycleListener can soft-archive backlog work sessions without
+// reinventing the ArchiveSession RPC's logic — see ArchiveSession above).
+// No-op (not an error) if the session isn't tracked live or is already archived, so
+// callers can invoke this unconditionally from a sweep without extra existence checks.
+func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone / never tracked
+	}
+	if !inst.SetArchivedAtIfNil(time.Now()) {
+		return nil // already archived
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
+	}
+	return nil
+}
+
 // StopSessionByUUID satisfies the BacklogService.SessionStopper interface.
 // It kills the live tmux session identified by UUID (best-effort; errors are non-fatal).
 func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID string) error {
@@ -500,6 +543,37 @@ func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID stri
 // It returns true if the session UUID is currently tracked in the live in-memory poller.
 func (s *SessionService) IsSessionLive(sessionUUID string) bool {
 	return s.FindLiveInstance(sessionUUID) != nil
+}
+
+// TimeSinceLastMeaningfulOutput satisfies the BacklogService.SessionStopper
+// interface. It reports how long it has been since sessionUUID's live
+// Instance last produced meaningful terminal output. ok is false when the
+// session isn't currently tracked live (mirrors IsSessionLive's "not found"
+// case) — callers must not use dur in that case.
+func (s *SessionService) TimeSinceLastMeaningfulOutput(sessionUUID string) (time.Duration, bool) {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return 0, false
+	}
+	return inst.GetTimeSinceLastMeaningfulOutput(), true
+}
+
+// KillTmuxPaneOnly satisfies the BacklogService.SessionStopper interface.
+// It closes the tmux pane only (Instance.KillSession), leaving the worktree
+// intact — unlike StopSessionByUUID (Instance.Kill/Destroy), which also runs
+// CleanupWorktree and would delete a worktree still in use by the next rework
+// round. Best-effort: errors are logged, not returned, since this runs as
+// cleanup alongside a new spawn that should proceed regardless.
+func (s *SessionService) KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error {
+	inst := s.FindLiveInstance(sessionUUID)
+	if inst == nil {
+		return nil // already gone
+	}
+	if err := inst.KillSession(); err != nil {
+		log.Warn("KillTmuxPaneOnly: kill failed", "uuid", sessionUUID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // KillTmuxSessionByTitle satisfies the BacklogService.SessionStopper interface.
@@ -718,11 +792,44 @@ func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycle
 	s.backlogLifecycleListener = l
 }
 
+// GetBacklogLifecycleListener returns the wired BacklogLifecycleListener (nil if
+// SetBacklogLifecycleListener was never called). Exported for the pointer-equality
+// integration test proving BacklogService and BacklogLifecycleListener share a single
+// PipelineEngine instance (Story 1.5.1) — see server/dependencies_test.go.
+func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycleListener {
+	return s.backlogLifecycleListener
+}
+
+// SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
+// service so that completed work sessions immediately kick off headless review.
+func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
+	s.autonomousSvc.SetReviewGateTrigger(t)
+}
+
+// SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
+// service so a turn-cap-stopped work session gets a fresh turn budget instead of
+// being forced into review.
+func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
+	s.autonomousSvc.SetAutonomousStuckRespawner(r)
+}
+
+// TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
+// Satisfies mcp.ReviewTrigger so request_review can spawn a review gate immediately
+// instead of waiting for the next ReconcileStuck tick.
+func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
+	s.autonomousSvc.TriggerReviewForSession(sessionUUID)
+}
+
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
-func (s *SessionService) SpawnReviewSession(ctx context.Context, item *ent.BacklogItem, itemSessionID string, prompt string) (*session.Instance, error) {
-	return s.CreateDirectorySession(ctx, "review:"+item.ID.String()[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
+	inst, err := s.CreateDirectorySession(ctx, "review:"+item.ID[:8], item.RepoPath, prompt, []string{"backlog:review"}, true, true)
+	if err != nil {
+		return nil, err
+	}
+	inst.SetCategory(session.CategoryBacklog)
+	return inst, nil
 }
 
 // CreateDirectorySession satisfies the services.SessionCreator interface so that
@@ -736,7 +843,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		Title:           title,
 		Path:            path,
 		Program:         resolved.Program,
-		AutoYes:         true, // automated sessions must not block on permission prompts
+		PermissionMode:  session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
 		SessionType:     session.SessionTypeDirectory,
 		Prompt:          prompt,
 		Tags:            tags,
@@ -763,6 +870,55 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
+	}
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.AddInstance(instance)
+	}
+	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+	if s.backlogLifecycleListener != nil {
+		s.backlogLifecycleListener.WireToInstance(instance)
+	}
+	return instance, nil
+}
+
+// CreateWorktreeSession satisfies the services.SessionCreator interface.
+// It spawns a session that uses an already-created git worktree at worktreePath.
+// repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
+func (s *SessionService) CreateWorktreeSession(ctx context.Context, title, repoPath, worktreePath, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error) {
+	cfg := config.LoadConfig()
+	resolved := config.ResolveDefaults(cfg, repoPath, "")
+	opts := session.InstanceOptions{
+		Title:            title,
+		Path:             repoPath,
+		Program:          resolved.Program,
+		PermissionMode:   session.PermissionModeAuto,
+		SessionType:      session.SessionTypeExistingWorktree,
+		ExistingWorktree: worktreePath,
+		Prompt:           prompt,
+		Tags:             tags,
+		OneShot:          oneShot,
+		Hidden:           hidden,
+		MCPServerURL:     s.resolveMCPServerURL(),
+		CreateIfMissing:  false,
+	}
+	instance, err := session.NewInstance(opts)
+	if err != nil {
+		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
+	}
+	if err := instance.Start(true); err != nil {
+		return nil, fmt.Errorf("CreateWorktreeSession start: %w", err)
+	}
+	if s.statusManager != nil {
+		instance.SetStatusManager(s.statusManager)
+		if ctrlErr := instance.StartController(); ctrlErr != nil {
+			log.Warn("[CreateWorktreeSession] failed to start controller after wiring", "session", title, "err", ctrlErr)
+		}
+	}
+	session.StartSessionDriver(instance, repoPath)
+	s.wireCallbacks(instance)
+	if err := s.storage.AddInstance(instance); err != nil {
+		_ = instance.Destroy()
+		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
 	}
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
@@ -861,6 +1017,13 @@ func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSession
 	s.externalDiscovery = discovery
 	s.checkpointSvc.SetExternalDiscovery(discovery)
 	s.terminalSvc.SetExternalDiscovery(discovery)
+}
+
+// SetTmuxStreamerManager wires the shared ExternalTmuxStreamerManager so StopShell
+// can evict a shell's streamer when the shell closes. Must be called during server
+// startup with the same instance passed to NewConnectRPCWebSocketHandler.
+func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreamerManager) {
+	s.tmuxStreamerManager = mgr
 }
 
 // SetNotificationStore sets the notification history store for the notification history RPCs
@@ -1031,12 +1194,25 @@ func (s *SessionService) GetSession(
 	return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 }
 
+// workspacePeersBlockFor returns a one-time "other active sessions in this workspace"
+// nudge for a new session being created at repoPath, or "" on any detection/lookup
+// failure, when there's no concrete storage backing this service, or when there are no
+// peers (AC5). Best-effort: this is a convenience nudge, not required session context.
+// Delegates to session.WorkspacePeersBlockForPath, shared with BacklogService's
+// initialPromptFor so the two callers can't drift on how the nudge is built.
+func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
+	return session.WorkspacePeersBlockForPath(ctx, s.concStorage, repoPath)
+}
+
 // CreateSession initializes a new AI agent session with tmux and git worktree.
 // +api: session:create
 func (s *SessionService) CreateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateSessionRequest],
 ) (*connect.Response[sessionv1.CreateSessionResponse], error) {
+	ctx, cancel := context.WithTimeout(ctx, createSessionTimeout)
+	defer cancel()
+
 	// Validate required fields
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
@@ -1101,8 +1277,16 @@ func (s *SessionService) CreateSession(
 
 	if session.IsGitHubURL(req.Msg.Path) {
 		log.Info("[CreateSession] detected GitHub URL", "path", req.Msg.Path)
-		localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
+
+		// ResolveGitHubInputCtx threads ctx down to the underlying git
+		// clone/fetch subprocess via safeexec.CommandContext, so the RPC's
+		// timeout genuinely cancels the subprocess instead of abandoning it
+		// to keep running in the background after the RPC returns.
+		localPath, ref, err := session.ResolveGitHubInputCtx(ctx, req.Msg.Path)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("resolving GitHub URL timed out: %w", ctx.Err()))
+			}
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
 		}
 		resolvedPath = localPath
@@ -1110,8 +1294,8 @@ func (s *SessionService) CreateSession(
 		clonedRepoPath = localPath
 
 		// Use branch from GitHub URL if not explicitly provided
-		if branch == "" && ref.Branch != "" {
-			branch = ref.Branch
+		if branch == "" && gitHubRef.Branch != "" {
+			branch = gitHubRef.Branch
 		}
 
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
@@ -1238,6 +1422,13 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// One-time workspace-peers nudge for genuinely new sessions (not resumes) — AC5.
+	// Best-effort: any detection/lookup failure just omits the nudge.
+	initialPrompt := req.Msg.InitialPrompt
+	if req.Msg.ResumeId == "" {
+		initialPrompt += s.workspacePeersBlockFor(ctx, resolvedPath)
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -1247,7 +1438,7 @@ func (s *SessionService) CreateSession(
 		Program:          program,
 		AutoYes:          autoYes,
 		Prompt:           req.Msg.Prompt,
-		InitialPrompt:    req.Msg.InitialPrompt,
+		InitialPrompt:    initialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
@@ -1505,37 +1696,20 @@ func (s *SessionService) UpdateSession(
 	}
 
 	// Handle program update. Empty string means "System default" — resolve to the
-	// configured default so the DB NotEmpty constraint is satisfied.
+	// configured default so the DB NotEmpty constraint is satisfied. Consolidated with
+	// the capacity-monitor auto-fallback path (UpdateSessionProgram below) via
+	// Instance.SwitchProgram so the two entry points can't drift or double-restart.
 	if req.Msg.Program != nil {
-		oldProgram := instance.Program
-		newProgram := *req.Msg.Program
-		if newProgram == "" {
-			newProgram = config.LoadConfig().DefaultProgram
-		}
-		if instance.Program != newProgram {
-			instance.SetProgram(newProgram)
+		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
+			instances[instanceIndex] = instance
+			return s.storage.SaveInstances(instances)
+		})
+		if changed {
 			updatedFields = append(updatedFields, "program")
-
-			// Port history if switching between Claude and Antigravity
-			if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
-				((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
-				if err := session.PortSessionHistory(ctx, oldProgram, newProgram, instance); err != nil {
-					log.Error("[UpdateSession] failed to port session history during program switch", "session", instance.Title, "old", oldProgram, "new", newProgram, "err", err)
-				}
-			}
-
-			// If the session is running, restart it with the new program.
-			// Save before restarting so the new program is persisted even if Restart fails.
-			if instance.Status == session.Active {
-				instances[instanceIndex] = instance
-				if saveErr := s.storage.SaveInstances(instances); saveErr != nil {
-					log.Warn("[UpdateSession] failed to pre-save before program restart", "session", instance.Title, "err", saveErr)
-				}
-				if err := instance.Restart(true); err != nil {
-					log.Error("[UpdateSession] failed to restart session after program change", "session", instance.Title, "err", err)
-					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", err))
-				}
-			}
+		}
+		if switchErr != nil {
+			log.Error("[UpdateSession] failed to restart session after program change", "session", instance.Title, "err", switchErr)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", switchErr))
 		}
 	}
 
@@ -1830,20 +2004,6 @@ func (s *SessionService) DeleteSession(
 		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
 	}
 
-	// Cancel any pending approvals BEFORE deleting from storage, so blocked
-	// approval-hook goroutines can exit cleanly while the session still exists.
-	// Non-fatal: log at warn and continue even if there are no pending approvals.
-	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
-		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
-	}
-
-	// Cancel any pending approvals BEFORE deleting from storage, so blocked
-	// approval-hook goroutines can exit cleanly while the session still exists.
-	// Non-fatal: log at warn and continue even if there are no pending approvals.
-	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
-		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
-	}
-
 	// Delete from storage using Title (the storage key), not the client-supplied ID which may be a UUID.
 	if err := s.storage.DeleteInstance(sessionTitle); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
@@ -2078,6 +2238,27 @@ func (s *SessionService) StreamTerminal(
 	// real PTY-backed StreamTerminal test.
 	var wg sync.WaitGroup
 
+	// sendMu serializes every stream.Send() call across the two goroutines
+	// below. connect-go's BidiStream.Send() is documented as unsafe for
+	// concurrent use from multiple goroutines: goroutine 1 continuously sends
+	// PTY output while goroutine 2 can, on error, send an error message back
+	// to the client (WRITE_ERROR / RESIZE_ERROR) — those two goroutines are
+	// otherwise independent (one pumps PTY->client, the other pumps
+	// client->PTY), so without a shared lock a PTY-output Send() and an
+	// input-goroutine error-reply Send() can execute at the same instant on
+	// the same stream. Caught by -race under a real PTY-backed StreamTerminal
+	// test. Single-writer-via-channel was considered but would require
+	// funneling ALL sends (including the hot PTY-output path) through an
+	// extra hop; a mutex is the minimal change here since sends are already
+	// synchronous, best-effort calls with no ordering requirements beyond
+	// mutual exclusion.
+	var sendMu sync.Mutex
+	sendLocked := func(msg *sessionv1.TerminalData) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(msg)
+	}
+
 	// Flow control state for backpressure management
 	// Reference: https://xtermjs.org/docs/guides/flowcontrol/
 	pauseCh := make(chan bool, 1) // Buffered channel for pause/resume signals
@@ -2146,7 +2327,7 @@ func (s *SessionService) StreamTerminal(
 							},
 						},
 					}
-					if sendErr := stream.Send(outputMsg); sendErr != nil {
+					if sendErr := sendLocked(outputMsg); sendErr != nil {
 						errCh <- fmt.Errorf("failed to send output: %w", sendErr)
 						return
 					}
@@ -2225,7 +2406,7 @@ func (s *SessionService) StreamTerminal(
 								},
 							},
 						}
-						_ = stream.Send(errorMsg) // Best effort
+						_ = sendLocked(errorMsg) // Best effort
 						errCh <- writeErr
 						return
 					}
@@ -2253,7 +2434,7 @@ func (s *SessionService) StreamTerminal(
 								},
 							},
 						}
-						_ = stream.Send(errorMsg) // Best effort
+						_ = sendLocked(errorMsg) // Best effort
 						// Don't return on resize errors, they're not fatal
 					} else {
 						log.Info("resized terminal", "cols", cols, "rows", rows, "session", msg.SessionId)
@@ -2298,31 +2479,34 @@ func (s *SessionService) StreamTerminal(
 		}
 	}()
 
-	// Wait for either context cancellation or error, then wait (bounded) for
-	// both goroutines to actually stop before returning. Returning early lets
-	// Connect close the underlying HTTP/2 stream; if either goroutine is
-	// still mid-Send/Receive when that happens, the concurrent writes to the
-	// same connection race. Goroutine 1 is now reliably bounded (its dup'd
+	// Wait for either context cancellation or error, then wait for both
+	// goroutines to actually stop before returning. Returning early lets
+	// Connect close the underlying HTTP/2 stream (write trailers/end-stream);
+	// if either goroutine is still mid-Send/Receive when that happens, the
+	// concurrent writes to the same connection race — caught by -race even
+	// with sendLocked in place, because sendLocked only serializes OUR two
+	// goroutines against each other, not against Connect's own teardown write
+	// once this function returns. Goroutine 1 is reliably bounded (its dup'd
 	// fd's 250ms read deadline means it notices streamCtx.Done() promptly
-	// regardless of PTY activity), so in practice this resolves almost
-	// immediately. The timeout remains as a safety net for goroutine 2's
-	// stream.Receive(), which could still block if it's mid-read on a client
-	// connection that outlives streamCtx without actually disconnecting
-	// (e.g. the error came from goroutine 1, not a real client hangup).
-	const shutdownWaitTimeout = 2 * time.Second
+	// regardless of PTY activity). Goroutine 2's stream.Receive() has no
+	// equivalent deadline (connect-go's BidiStream doesn't expose one), so it
+	// can genuinely still be blocked here — an earlier version of this code
+	// gave up waiting after a short timeout and returned anyway, which is
+	// exactly what let the race happen. logSlowShutdown never gives up: it
+	// blocks until wg is actually done (so the race is structurally
+	// impossible), merely logging if that's taking unusually long so a client
+	// that never disconnects is still visible in logs rather than silently
+	// leaking the goroutine.
+	const shutdownWarnAfter = 2 * time.Second
 	select {
 	case <-streamCtx.Done():
 		log.Info("StreamTerminal: context done", "session", initialMsg.SessionId)
-		if !waitWithTimeout(&wg, shutdownWaitTimeout) {
-			log.Warn("StreamTerminal: goroutines did not exit within timeout after context done", "session", initialMsg.SessionId)
-		}
+		logSlowShutdown(&wg, shutdownWarnAfter, initialMsg.SessionId, "context done")
 		return nil // Clean shutdown
 	case err := <-errCh:
 		log.Error("StreamTerminal error", "session", initialMsg.SessionId, "err", err)
 		cancel() // streamCtx.Done() wasn't otherwise closed on this path; signal both goroutines to stop.
-		if !waitWithTimeout(&wg, shutdownWaitTimeout) {
-			log.Warn("StreamTerminal: goroutines did not exit within timeout after error", "session", initialMsg.SessionId)
-		}
+		logSlowShutdown(&wg, shutdownWarnAfter, initialMsg.SessionId, "error")
 		return connect.NewError(connect.CodeInternal, err)
 	}
 }
@@ -2334,6 +2518,11 @@ func (s *SessionService) StreamTerminal(
 // tracked goroutines may still be running and may still touch shared state
 // (e.g. a stream) after this function returns false. Callers on the false
 // path must treat that as a real, logged condition, not a no-op.
+//
+// StreamTerminal itself does NOT use this — see logSlowShutdown below for why
+// "give up and return anyway" is unsafe there. Kept for its own direct test
+// coverage (TestWaitWithTimeout) and as a building block other bounded-wait
+// callers can use where returning on timeout doesn't race a shared resource.
 func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
@@ -2348,6 +2537,35 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	}
 }
 
+// logSlowShutdown blocks until wg completes — unconditionally, with no
+// give-up. StreamTerminal's two goroutines both call stream.Send()/Receive();
+// once this function's caller returns, Connect writes the stream's
+// end-of-stream trailers on the same connection, which races with either
+// goroutine if it's still mid-Send/Receive. The only way to make that
+// structurally impossible is to never return while wg is incomplete — unlike
+// waitWithTimeout, this cannot give up and let the caller proceed anyway.
+//
+// warnAfter only controls a one-time log line so a client that never
+// disconnects (holding goroutine 2's stream.Receive() open indefinitely,
+// since connect-go's BidiStream has no per-call read deadline to bound it)
+// is visible in logs as a real leak, rather than either silently hanging
+// forever unnoticed or racing the stream teardown.
+func logSlowShutdown(wg *sync.WaitGroup, warnAfter time.Duration, sessionID, reason string) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(warnAfter):
+		log.Warn("StreamTerminal: goroutines still running past warn threshold, waiting for them before returning (not giving up, to avoid racing Connect's stream teardown)",
+			"session", sessionID, "reason", reason)
+		<-done
+	}
+}
+
 // GetSessionDiff retrieves the current git diff for a session.
 func (s *SessionService) GetSessionDiff(
 	ctx context.Context,
@@ -2357,39 +2575,55 @@ func (s *SessionService) GetSessionDiff(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
+	var diffStats *git.DiffStats
+
 	instance := s.findInstance(req.Msg.Id)
-	if instance == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	if instance != nil {
+		// Live session: update and read cached diff.
+		if err := instance.UpdateDiffStats(); err != nil {
+			log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
+		}
+		diffStats = instance.GetDiffStats()
+	} else {
+		// Completed session: reconstruct worktree from DB and compute diff on-demand.
+		allData, err := s.storage.ListInstanceData()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sessions: %w", err))
+		}
+		var found *session.InstanceData
+		for i := range allData {
+			if allData[i].MatchesID(req.Msg.Id) {
+				found = &allData[i]
+				break
+			}
+		}
+		if found == nil {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+		}
+		if found.Worktree.WorktreePath != "" {
+			wt := git.NewGitWorktreeFromStorage(
+				found.Worktree.RepoPath,
+				found.Worktree.WorktreePath,
+				found.Worktree.SessionName,
+				found.Worktree.BranchName,
+				found.Worktree.BaseCommitSHA,
+			)
+			diffStats = wt.Diff()
+		}
 	}
 
-	// Update diff stats to get fresh data (the cached version may be stale or nil)
-	if err := instance.UpdateDiffStats(); err != nil {
-		log.Warn("failed to update diff stats", "session", req.Msg.Id, "err", err)
-		// Continue anyway - we'll return empty stats if unavailable
-	}
-
-	// Get diff stats from the instance
-	diffStats := instance.GetDiffStats()
 	if diffStats == nil {
-		// Return empty diff stats if none available
 		return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
-			DiffStats: &sessionv1.DiffStats{
-				Added:   0,
-				Removed: 0,
-				Content: "",
-			},
+			DiffStats: &sessionv1.DiffStats{},
 		}), nil
 	}
 
-	// Convert to proto message
-	protoDiffStats := &sessionv1.DiffStats{
-		Added:   int32(diffStats.Added),
-		Removed: int32(diffStats.Removed),
-		Content: diffStats.Content,
-	}
-
 	return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
-		DiffStats: protoDiffStats,
+		DiffStats: &sessionv1.DiffStats{
+			Added:   int32(diffStats.Added),
+			Removed: int32(diffStats.Removed),
+			Content: diffStats.Content,
+		},
 	}), nil
 }
 
@@ -3060,6 +3294,23 @@ func (s *SessionService) UpdateGlobalDefaults(ctx context.Context, req *connect.
 	return s.defaultsSvc.UpdateGlobalDefaults(ctx, req)
 }
 
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save (server/dependencies.go uses this to
+// trigger an immediate backlog-queue dequeue sweep when the concurrency limit
+// is raised).
+func (s *SessionService) SetOnGlobalDefaultsUpdated(fn func()) {
+	s.defaultsSvc.SetOnGlobalDefaultsUpdated(fn)
+}
+
+// SetSharedBacklogConfig wires the *config.Config instance (and its guarding
+// mutex) BacklogService reads its concurrency fields from into this
+// SessionService's DefaultsService, so UpdateGlobalDefaults can propagate a
+// Settings change into BacklogService's live view without a process restart
+// (PR #199 review F1). See DefaultsService.SetSharedBacklogConfig.
+func (s *SessionService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	s.defaultsSvc.SetSharedBacklogConfig(cfg, mu)
+}
+
 // UpsertProfile creates or updates a named profile.
 func (s *SessionService) UpsertProfile(ctx context.Context, req *connect.Request[sessionv1.UpsertProfileRequest]) (*connect.Response[sessionv1.UpsertProfileResponse], error) {
 	return s.defaultsSvc.UpsertProfile(ctx, req)
@@ -3323,7 +3574,7 @@ func (s *SessionService) RunOneShot(
 	if s.headlessPool != nil {
 		// Use headless pool for improved streaming and session reuse.
 		var callErr error
-		outputStr, callErr = s.headlessPool.CallBlockingWithOptions(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
+		outputStr, _, callErr = s.headlessPool.CallBlocking(runCtx, headless.FeatureKeyCustom, "", req.Msg.Prompt, headless.CallOptions{WorkDir: workDir})
 		if callErr != nil {
 			errMsg = callErr.Error()
 			exitCode = 1
@@ -3364,6 +3615,18 @@ func (s *SessionService) RunOneShot(
 		} else {
 			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url", "github_pr_number"}))
 		}
+
+		// This RunOneShot call may have been the Review Queue's manual "Create
+		// PR" button for a backlog-linked session — that flow creates the PR
+		// entirely outside the automated pushAndCreatePR path, which is the
+		// only other place that ever moves a backlog item to pr_pending. Without
+		// this call the item is silently left in "review" forever, invisible to
+		// ReconcilePRPending (see RecordPRCreatedOutOfBand's doc comment in
+		// session/backlog_lifecycle.go for the full root-cause trace). No-op for
+		// non-backlog sessions.
+		if s.backlogLifecycleListener != nil {
+			s.backlogLifecycleListener.RecordPRCreatedOutOfBand(ctx, inst.UUID, prURL, prNumber)
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.RunOneShotResponse{
@@ -3373,6 +3636,27 @@ func (s *SessionService) RunOneShot(
 		PrUrl:                  prURL,
 		BranchDivergedFromBase: branchDiverged,
 	}), nil
+}
+
+// RunOneShotForSession runs a one-shot prompt against a session's worktree without
+// the ConnectRPC request/response wrapper, for automation callers. It reuses
+// RunOneShot's exact logic (same PR-URL extraction, same PR persistence) so
+// automated and manual PR creation share one code path — currently used by the
+// opt-in AutoCreatePR review-queue policy (server.ReactiveQueueManager).
+// Returns the extracted PR URL, or an error if the prompt failed.
+func (s *SessionService) RunOneShotForSession(ctx context.Context, sessionID, prompt string, timeoutSeconds int32) (string, error) {
+	resp, err := s.RunOneShot(ctx, connect.NewRequest(&sessionv1.RunOneShotRequest{
+		SessionId:      sessionID,
+		Prompt:         prompt,
+		TimeoutSeconds: timeoutSeconds,
+	}))
+	if err != nil {
+		return "", err
+	}
+	if resp.Msg.Error != "" {
+		return "", fmt.Errorf("one-shot prompt failed: %s", resp.Msg.Error)
+	}
+	return resp.Msg.PrUrl, nil
 }
 
 // extractPRURL scans the last 10 non-empty lines of output for a GitHub PR URL
@@ -4046,40 +4330,34 @@ func (s *SessionService) GetProviderLimits(
 	}), nil
 }
 
-// UpdateSessionProgram handles switching programs for a session, doing the history porting, DB save, and PTY restart.
+// UpdateSessionProgram handles switching programs for a session, doing the history
+// porting, DB save, and PTY restart. Shares its implementation with the UpdateSession RPC
+// handler via Instance.SwitchProgram (see session/instance_program.go) so the two
+// program-switch entry points — this auto-fallback path and the manual RPC — can't drift.
 func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
 	inst := s.findInstance(sessionID)
 	if inst == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	if inst.Program == newProgram {
+	changed, _, err := inst.SwitchProgram(ctx, newProgram, func() error {
+		return s.storage.SaveInstances([]*session.Instance{inst})
+	})
+	if !changed {
 		return nil
 	}
-
-	oldProgram := inst.Program
-	inst.SetProgram(newProgram)
-
-	if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
-		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
-		if err := session.PortSessionHistory(ctx, oldProgram, newProgram, inst); err != nil {
-			log.Error("failed to port session history during program switch in auto-transition", "session", inst.Title, "err", err)
-		}
-	}
-
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
-		log.Error("failed to save instance program update in auto-transition", "session", inst.Title, "err", err)
-	}
-
-	if inst.Status == session.Active {
-		if err := inst.Restart(true); err != nil {
-			return fmt.Errorf("failed to restart session: %w", err)
-		}
+	if err != nil {
+		return fmt.Errorf("failed to restart session: %w", err)
 	}
 
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
 
 	return nil
+}
+
+// SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver into the search service.
+func (s *SessionService) SetResolveConversationUUID(fn func(ctx context.Context, tmuxUUID string) (string, error)) {
+	s.searchSvc.SetResolveConversationUUID(fn)
 }
 
 // SetTokenStoreReader wires the global parsed token store into the capacity monitor.

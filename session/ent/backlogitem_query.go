@@ -14,7 +14,9 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogprogressnote"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -24,15 +26,17 @@ import (
 // BacklogItemQuery is the builder for querying BacklogItem entities.
 type BacklogItemQuery struct {
 	config
-	ctx              *QueryContext
-	order            []backlogitem.OrderOption
-	inters           []Interceptor
-	predicates       []predicate.BacklogItem
-	withItemSessions *ItemSessionQuery
-	withSessions     *SessionQuery
-	withStatusEvents *BacklogStatusEventQuery
-	withSource       *ItemSourceQuery
-	withFKs          bool
+	ctx               *QueryContext
+	order             []backlogitem.OrderOption
+	inters            []Interceptor
+	predicates        []predicate.BacklogItem
+	withItemSessions  *ItemSessionQuery
+	withSessions      *SessionQuery
+	withStatusEvents  *BacklogStatusEventQuery
+	withStuckStates   *BacklogStuckStateQuery
+	withProgressNotes *BacklogProgressNoteQuery
+	withSource        *ItemSourceQuery
+	withFKs           bool
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -128,6 +132,50 @@ func (_q *BacklogItemQuery) QueryStatusEvents() *BacklogStatusEventQuery {
 			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
 			sqlgraph.To(backlogstatusevent.Table, backlogstatusevent.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.StatusEventsTable, backlogitem.StatusEventsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryStuckStates chains the current query on the "stuck_states" edge.
+func (_q *BacklogItemQuery) QueryStuckStates() *BacklogStuckStateQuery {
+	query := (&BacklogStuckStateClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
+			sqlgraph.To(backlogstuckstate.Table, backlogstuckstate.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.StuckStatesTable, backlogitem.StuckStatesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryProgressNotes chains the current query on the "progress_notes" edge.
+func (_q *BacklogItemQuery) QueryProgressNotes() *BacklogProgressNoteQuery {
+	query := (&BacklogProgressNoteClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, selector),
+			sqlgraph.To(backlogprogressnote.Table, backlogprogressnote.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ProgressNotesTable, backlogitem.ProgressNotesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -344,15 +392,17 @@ func (_q *BacklogItemQuery) Clone() *BacklogItemQuery {
 		return nil
 	}
 	return &BacklogItemQuery{
-		config:           _q.config,
-		ctx:              _q.ctx.Clone(),
-		order:            append([]backlogitem.OrderOption{}, _q.order...),
-		inters:           append([]Interceptor{}, _q.inters...),
-		predicates:       append([]predicate.BacklogItem{}, _q.predicates...),
-		withItemSessions: _q.withItemSessions.Clone(),
-		withSessions:     _q.withSessions.Clone(),
-		withStatusEvents: _q.withStatusEvents.Clone(),
-		withSource:       _q.withSource.Clone(),
+		config:            _q.config,
+		ctx:               _q.ctx.Clone(),
+		order:             append([]backlogitem.OrderOption{}, _q.order...),
+		inters:            append([]Interceptor{}, _q.inters...),
+		predicates:        append([]predicate.BacklogItem{}, _q.predicates...),
+		withItemSessions:  _q.withItemSessions.Clone(),
+		withSessions:      _q.withSessions.Clone(),
+		withStatusEvents:  _q.withStatusEvents.Clone(),
+		withStuckStates:   _q.withStuckStates.Clone(),
+		withProgressNotes: _q.withProgressNotes.Clone(),
+		withSource:        _q.withSource.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -389,6 +439,28 @@ func (_q *BacklogItemQuery) WithStatusEvents(opts ...func(*BacklogStatusEventQue
 		opt(query)
 	}
 	_q.withStatusEvents = query
+	return _q
+}
+
+// WithStuckStates tells the query-builder to eager-load the nodes that are connected to
+// the "stuck_states" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *BacklogItemQuery) WithStuckStates(opts ...func(*BacklogStuckStateQuery)) *BacklogItemQuery {
+	query := (&BacklogStuckStateClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withStuckStates = query
+	return _q
+}
+
+// WithProgressNotes tells the query-builder to eager-load the nodes that are connected to
+// the "progress_notes" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *BacklogItemQuery) WithProgressNotes(opts ...func(*BacklogProgressNoteQuery)) *BacklogItemQuery {
+	query := (&BacklogProgressNoteClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withProgressNotes = query
 	return _q
 }
 
@@ -482,10 +554,12 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		nodes       = []*BacklogItem{}
 		withFKs     = _q.withFKs
 		_spec       = _q.querySpec()
-		loadedTypes = [4]bool{
+		loadedTypes = [6]bool{
 			_q.withItemSessions != nil,
 			_q.withSessions != nil,
 			_q.withStatusEvents != nil,
+			_q.withStuckStates != nil,
+			_q.withProgressNotes != nil,
 			_q.withSource != nil,
 		}
 	)
@@ -531,6 +605,20 @@ func (_q *BacklogItemQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*
 		if err := _q.loadStatusEvents(ctx, query, nodes,
 			func(n *BacklogItem) { n.Edges.StatusEvents = []*BacklogStatusEvent{} },
 			func(n *BacklogItem, e *BacklogStatusEvent) { n.Edges.StatusEvents = append(n.Edges.StatusEvents, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withStuckStates; query != nil {
+		if err := _q.loadStuckStates(ctx, query, nodes,
+			func(n *BacklogItem) { n.Edges.StuckStates = []*BacklogStuckState{} },
+			func(n *BacklogItem, e *BacklogStuckState) { n.Edges.StuckStates = append(n.Edges.StuckStates, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withProgressNotes; query != nil {
+		if err := _q.loadProgressNotes(ctx, query, nodes,
+			func(n *BacklogItem) { n.Edges.ProgressNotes = []*BacklogProgressNote{} },
+			func(n *BacklogItem, e *BacklogProgressNote) { n.Edges.ProgressNotes = append(n.Edges.ProgressNotes, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -650,6 +738,66 @@ func (_q *BacklogItemQuery) loadStatusEvents(ctx context.Context, query *Backlog
 	}
 	query.Where(predicate.BacklogStatusEvent(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(backlogitem.StatusEventsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ItemID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "item_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *BacklogItemQuery) loadStuckStates(ctx context.Context, query *BacklogStuckStateQuery, nodes []*BacklogItem, init func(*BacklogItem), assign func(*BacklogItem, *BacklogStuckState)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*BacklogItem)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(backlogstuckstate.FieldItemID)
+	}
+	query.Where(predicate.BacklogStuckState(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(backlogitem.StuckStatesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ItemID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "item_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *BacklogItemQuery) loadProgressNotes(ctx context.Context, query *BacklogProgressNoteQuery, nodes []*BacklogItem, init func(*BacklogItem), assign func(*BacklogItem, *BacklogProgressNote)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*BacklogItem)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(backlogprogressnote.FieldItemID)
+	}
+	query.Where(predicate.BacklogProgressNote(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(backlogitem.ProgressNotesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

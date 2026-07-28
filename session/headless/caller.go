@@ -22,6 +22,21 @@ type CallOptions struct {
 	Model string
 	// TimeoutSecs is unused by Pool directly — callers wrap ctx with WithTimeout.
 	TimeoutSecs int
+	// AllowedTools scopes a WorkDir-bearing call to a specific comma-separated
+	// tool list (e.g. "Read,Grep,Glob"), mirroring session.InstanceOptions.AllowedTools.
+	// Only applied when WorkDir is also set; ignored otherwise.
+	AllowedTools string
+	// PermissionMode scopes a WorkDir-bearing call to a specific --permission-mode
+	// value, mirroring session.InstanceOptions.PermissionMode. Only applied when
+	// WorkDir is also set; ignored otherwise.
+	PermissionMode string
+	// DisallowedTools scopes a WorkDir-bearing call to an explicit denylist
+	// (comma-separated, e.g. "Bash(rm:*),Write,Edit"), passed through to the
+	// claude CLI's --disallowedTools flag. Mirrors AllowedTools/PermissionMode:
+	// only applied when WorkDir is also set; ignored otherwise. Used alongside
+	// AllowedTools as belt-and-suspenders — an explicit denylist of destructive
+	// Bash prefixes and write-capable tools on top of a scoped allowlist.
+	DisallowedTools string
 }
 
 // firstCallJSONResult is the JSON schema returned by claude -p --output-format json.
@@ -281,6 +296,20 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 			}
 		}
 
+		// sendFinal delivers a terminal chunk (typically a ctx-cancellation error)
+		// from a code path where ctx is already Done — send() above cannot be used
+		// there since its own select would immediately take the <-ctx.Done() branch
+		// and silently discard the chunk instead of delivering it. ch is buffered
+		// (16) and this is always the single terminal chunk on its path, so the
+		// buffered send below never blocks in practice; the default case is a
+		// safety net, not an expected outcome.
+		sendFinal := func(chunk StreamChunk) {
+			select {
+			case ch <- chunk:
+			default:
+			}
+		}
+
 		if isFirstCall {
 			// First call: accumulate all output in a helper goroutine so that ctx
 			// cancellation can terminate the subprocess and unblock the read.
@@ -299,6 +328,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 				// Kill subprocess to unblock the ReadAll goroutine, then wait.
 				_ = stop()
 				<-readDone
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 
@@ -312,6 +342,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 
 			// Guard against a ctx cancellation race after ReadAll completes.
 			if ctx.Err() != nil {
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 
@@ -358,6 +389,7 @@ func (p *Pool) call(ctx context.Context, key FeatureKey, systemPrompt, userPromp
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			if ctx.Err() != nil {
+				sendFinal(StreamChunk{Err: fmt.Errorf("headless call ended: %w", ctx.Err()), Done: true})
 				return
 			}
 			line := scanner.Text()
@@ -407,6 +439,9 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 
 		dirRunner := pr.WithWorkDir(opts.WorkDir)
+		if opts.AllowedTools != "" || opts.PermissionMode != "" || opts.DisallowedTools != "" {
+			dirRunner = dirRunner.WithToolAccess(opts.AllowedTools, opts.PermissionMode, opts.DisallowedTools)
+		}
 		oneShot := NewPoolWithRunner(PoolConfig{MaxCallsPerSession: 1, MaxConcurrentSessions: 1, DefaultModel: opts.Model}, dirRunner)
 		innerCh, err := oneShot.Call(ctx, key, systemPrompt, userPrompt)
 		if err != nil {
@@ -415,16 +450,19 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 		}
 
 		// Proxy the inner channel, releasing the parent semaphore when done.
+		// A plain blocking send (not a select racing ctx.Done()) is deliberate:
+		// drainChannelWithCost's reader always ranges over outCh until it's
+		// closed, regardless of ctx state, so this never blocks in practice —
+		// and once ctx is Done, a racing select would have a real chance of
+		// picking the ctx.Done() case over a ready send and silently dropping
+		// the inner goroutine's terminal error chunk (see call()'s sendFinal),
+		// which is exactly the failure this proxy must not reintroduce.
 		outCh := make(chan StreamChunk, 16)
 		go func() {
 			defer close(outCh)
 			defer func() { <-p.concurrencySem }()
 			for chunk := range innerCh {
-				select {
-				case outCh <- chunk:
-				case <-ctx.Done():
-					return
-				}
+				outCh <- chunk
 			}
 		}()
 		return outCh, nil
@@ -434,41 +472,37 @@ func (p *Pool) CallWithOptions(ctx context.Context, key FeatureKey, systemPrompt
 	return p.call(ctx, key, systemPrompt, userPrompt, opts.Model, p.runner)
 }
 
-// CallBlockingWithOptions is like CallBlocking but supports WorkDir and Model overrides.
-func (p *Pool) CallBlockingWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, error) {
+// CallBlocking makes a single blocking headless call and returns the result text,
+// the cost in USD reported by claude, and any error. opts is the single place to
+// pass WorkDir/Model/AllowedTools/PermissionMode; the zero value reproduces the
+// simplest call shape. Cost is always parsed from the JSON result at no extra cost
+// to callers that ignore it via `_`.
+func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, float64, error) {
 	ch, err := p.CallWithOptions(ctx, key, systemPrompt, userPrompt, opts)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return drainChannel(ch)
+	return drainChannelWithCost(ch)
 }
 
-// CallBlocking runs a headless LLM call and blocks until the result is complete.
-// Returns the concatenated text from all chunks and the first non-nil error.
-func (p *Pool) CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string) (string, error) {
-	ch, err := p.Call(ctx, key, systemPrompt, userPrompt)
-	if err != nil {
-		return "", err
-	}
-	return drainChannel(ch)
-}
-
-// drainChannel collects all StreamChunk text from ch until Done=true or Err!=nil.
-func drainChannel(ch <-chan StreamChunk) (string, error) {
+// drainChannelWithCost collects all StreamChunk text from ch until Done=true or
+// Err!=nil, along with the CostUSD reported on the Done chunk.
+func drainChannelWithCost(ch <-chan StreamChunk) (string, float64, error) {
 	var sb strings.Builder
+	var costUSD float64
 	for chunk := range ch {
 		if chunk.Err != nil {
-			return sb.String(), chunk.Err
+			return sb.String(), costUSD, chunk.Err
 		}
 		if chunk.Text != "" {
 			sb.WriteString(chunk.Text)
 		}
 		if chunk.Done {
+			costUSD = chunk.CostUSD
 			break
 		}
 	}
-	// Drain remaining chunks in case the channel has extras.
 	for range ch {
 	}
-	return sb.String(), nil
+	return sb.String(), costUSD, nil
 }

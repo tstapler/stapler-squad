@@ -32,6 +32,13 @@ type EntRepository struct {
 	client        *ent.Client
 	dbPath        string
 	migrationMode bool // When true, enables dual-write mode for migration
+
+	// itemChangePublisher is nil-safe — every hooked backlog mutation method
+	// nil-checks before calling it (publish is best-effort and never blocks
+	// or fails the underlying mutation). Wired via SetItemChangePublisher,
+	// typically by Storage.SetItemChangePublisher's forwarding call in
+	// server/dependencies.go.
+	itemChangePublisher ItemChangePublisher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -682,6 +689,26 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	return nil
 }
 
+// GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
+// for the session whose title (tmux session name) matches sessionUUID.
+// Returns "" if the session has no associated ClaudeSession.
+func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(sessionUUID)).
+		WithClaudeSession().
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("GetClaudeConversationUUIDBySessionUUID: %w", err)
+	}
+	if sess.Edges.ClaudeSession == nil {
+		return "", nil
+	}
+	return sess.Edges.ClaudeSession.ClaudeSessionID, nil
+}
+
 // Get retrieves a single session by title
 func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, error) {
 	// Find session with all relationships eagerly loaded
@@ -977,6 +1004,16 @@ func nilIfEmpty(s string) *string {
 	if s == "" {
 		return nil
 	}
+	return &s
+}
+
+// nilIfEmptyJSON returns nil if j is empty, otherwise a *string containing the JSON.
+// Used at the ent boundary where AcceptanceCriteria is stored as a plain string.
+func nilIfEmptyJSON(j AcCriteriaJSON) *string {
+	if j == "" {
+		return nil
+	}
+	s := string(j)
 	return &s
 }
 

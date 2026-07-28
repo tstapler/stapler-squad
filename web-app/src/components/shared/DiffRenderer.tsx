@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState } from "react";
 import { parseDiff, type DiffLine } from "@/lib/utils/parseDiff";
 import {
   container,
@@ -11,6 +12,12 @@ import {
   viewModeToggle,
   viewModeButton,
   viewModeButtonActive,
+  body,
+  fileTree,
+  fileTreeItem,
+  fileTreeItemActive,
+  fileTreeFilename,
+  fileTreeStats,
   diffContent,
   file,
   fileHeader,
@@ -28,6 +35,8 @@ import {
   loading as loadingClass,
   empty as emptyClass,
   emptyHint,
+  errorState,
+  errorRetryButton,
 } from "./DiffRenderer.css";
 
 export interface DiffRendererProps {
@@ -36,13 +45,21 @@ export interface DiffRendererProps {
   added: number;
   removed: number;
   loading?: boolean;
-  /** Called when the user clicks the refresh button. */
+  /**
+   * Set when the diff fetch itself failed (as opposed to succeeding with a
+   * genuinely empty diff). Rendered as a distinct error state with a retry
+   * button instead of the ambiguous "No changes to display" empty state.
+   */
+  error?: string | null;
+  /** Called when the user clicks the refresh button, or the error state's retry button. */
   onRefresh?: () => void;
 }
 
 /** Pure diff display component — no context coupling, no data fetching. */
-export function DiffRenderer({ content, added, removed, loading = false, onRefresh }: DiffRendererProps) {
+export function DiffRenderer({ content, added, removed, loading = false, error, onRefresh }: DiffRendererProps) {
   const diff = parseDiff(content);
+  const fileRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [activeFileIndex, setActiveFileIndex] = useState<number | null>(null);
 
   const getLineClass = (type: DiffLine["type"]) => {
     if (type === "add") return lineAdd;
@@ -50,10 +67,31 @@ export function DiffRenderer({ content, added, removed, loading = false, onRefre
     return lineContext;
   };
 
+  const jumpToFile = (fi: number) => {
+    setActiveFileIndex(fi);
+    fileRefs.current[fi]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   if (loading) {
     return (
       <div className={container}>
         <div className={loadingClass}>Loading diff…</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={container}>
+        <div className={errorState}>
+          <p>Failed to load changes</p>
+          <p className={emptyHint}>{error}</p>
+          {onRefresh && (
+            <button className={errorRetryButton} onClick={onRefresh}>
+              Retry
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -96,34 +134,56 @@ export function DiffRenderer({ content, added, removed, loading = false, onRefre
         </div>
       </div>
 
-      <div className={diffContent}>
-        {diff.map((diffFile, fi) => (
-          <div key={fi} className={file}>
-            <div className={fileHeader}>
-              <span className={filename}>{diffFile.filename}</span>
-              <span className={fileStats}>
-                <span className={additions}>+{diffFile.additions}</span>
-                <span className={deletions}>-{diffFile.deletions}</span>
-              </span>
-            </div>
-            {diffFile.changes.map((h, hi) => (
-              <div key={hi} className={hunk}>
-                <div className={hunkHeader}>
-                  @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
-                </div>
-                <div className={lines}>
-                  {h.lines.map((l, li) => (
-                    <div key={li} className={`${line} ${getLineClass(l.type)}`}>
-                      <span className={lineNumber}>{l.oldLineNumber ?? " "}</span>
-                      <span className={lineNumber}>{l.newLineNumber ?? " "}</span>
-                      <span className={lineContent}>{l.content}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+      <div className={body}>
+        {diff.length > 1 && (
+          <nav className={fileTree} aria-label="Changed files">
+            {diff.map((diffFile, fi) => (
+              <button
+                key={fi}
+                type="button"
+                className={`${fileTreeItem} ${activeFileIndex === fi ? fileTreeItemActive : ""}`}
+                onClick={() => jumpToFile(fi)}
+                title={diffFile.filename}
+              >
+                <span className={fileTreeFilename}>{diffFile.filename}</span>
+                <span className={fileTreeStats}>
+                  <span className={additions}>+{diffFile.additions}</span>
+                  <span className={deletions}>-{diffFile.deletions}</span>
+                </span>
+              </button>
             ))}
-          </div>
-        ))}
+          </nav>
+        )}
+
+        <div className={diffContent}>
+          {diff.map((diffFile, fi) => (
+            <div key={fi} ref={(el) => { fileRefs.current[fi] = el; }} className={file}>
+              <div className={fileHeader}>
+                <span className={filename}>{diffFile.filename}</span>
+                <span className={fileStats}>
+                  <span className={additions}>+{diffFile.additions}</span>
+                  <span className={deletions}>-{diffFile.deletions}</span>
+                </span>
+              </div>
+              {diffFile.changes.map((h, hi) => (
+                <div key={hi} className={hunk}>
+                  <div className={hunkHeader}>
+                    @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
+                  </div>
+                  <div className={lines}>
+                    {h.lines.map((l, li) => (
+                      <div key={li} className={`${line} ${getLineClass(l.type)}`}>
+                        <span className={lineNumber}>{l.oldLineNumber ?? " "}</span>
+                        <span className={lineNumber}>{l.newLineNumber ?? " "}</span>
+                        <span className={lineContent}>{l.content}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

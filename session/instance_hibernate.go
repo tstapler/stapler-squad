@@ -111,8 +111,15 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 			log.Error("hibernation resume: failed to start session",
 				"session", i.Title, "err", err.Error())
 			i.send(func(s *instanceState) {
+				// Hold i.mu across the write and buildSnapshot so this is ordered
+				// against the legacy direct-lock setters (MarkViewed & co.) that
+				// read every field via buildSnapshot under i.mu.Lock() from
+				// outside the actor. See runActor's doc comment in actor.go.
+				s.inst.mu.Lock()
 				s.inst.loadStatus(Hibernated)
-				s.inst.snapshot.Store(buildSnapshot(s.inst))
+				snap := buildSnapshot(s.inst)
+				s.inst.mu.Unlock()
+				s.inst.snapshot.Store(snap)
 			})
 			return
 		}

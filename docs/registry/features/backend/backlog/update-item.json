@@ -5,8 +5,11 @@
   "method": "UpdateBacklogItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",
+    "TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest"
+  ],
+  "lastModified": "2026-07-17T00:00:00-07:00"
 }

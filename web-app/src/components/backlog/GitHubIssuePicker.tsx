@@ -41,7 +41,7 @@ function relativeTime(iso?: string): string {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface GitHubIssuePickerProps {
-  onSelect: (owner: string, repo: string, issue: GitHubIssue) => void;
+  onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void;
   onCancel: () => void;
 }
 
@@ -223,6 +223,38 @@ function IssuePhase({
   searchRef: React.RefObject<HTMLInputElement | null>;
 }) {
   const states: Array<"open" | "closed" | "all"> = ["open", "closed", "all"];
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  // Selections/expansions don't carry across a repo or filter change.
+  useEffect(() => {
+    setSelected(new Set());
+    setExpanded(new Set());
+  }, [picker.selectedRepo, picker.issueState, picker.issueSearch]);
+
+  const toggleSelected = useCallback((number: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(number)) next.delete(number);
+      else next.add(number);
+      return next;
+    });
+  }, []);
+
+  const toggleExpanded = useCallback((number: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(number)) next.delete(number);
+      else next.add(number);
+      return next;
+    });
+  }, []);
+
+  const selectedIssues = picker.issues.filter((i) => selected.has(i.number));
+
+  const handleImport = useCallback(() => {
+    if (selectedIssues.length > 0) picker.selectIssues(selectedIssues);
+  }, [picker, selectedIssues]);
 
   return (
     <>
@@ -270,7 +302,7 @@ function IssuePhase({
         </div>
       </div>
 
-      <div role="listbox" aria-label="GitHub issues" className={styles.listContainer}>
+      <div role="listbox" aria-label="GitHub issues" aria-multiselectable="true" className={styles.listContainer}>
         {picker.issuesLoading ? (
           <div className={styles.loadingText}>Loading…</div>
         ) : picker.issues.length === 0 ? (
@@ -279,9 +311,32 @@ function IssuePhase({
           </div>
         ) : (
           picker.issues.map((issue) => (
-            <IssueRow key={issue.number} issue={issue} onSelect={picker.selectIssue} />
+            <IssueRow
+              key={issue.number}
+              issue={issue}
+              selected={selected.has(issue.number)}
+              expanded={expanded.has(issue.number)}
+              onToggleSelected={() => toggleSelected(issue.number)}
+              onToggleExpanded={() => toggleExpanded(issue.number)}
+            />
           ))
         )}
+      </div>
+
+      <div className={styles.importBar}>
+        <span className={styles.importBarHint}>
+          {selectedIssues.length > 0
+            ? `${selectedIssues.length} selected`
+            : "Check issues to import, then Import."}
+        </span>
+        <button
+          type="button"
+          className={styles.importButton}
+          disabled={selectedIssues.length === 0}
+          onClick={handleImport}
+        >
+          Import{selectedIssues.length > 0 ? ` (${selectedIssues.length})` : ""}
+        </button>
       </div>
     </>
   );
@@ -289,29 +344,108 @@ function IssuePhase({
 
 // ─── Issue row ────────────────────────────────────────────────────────────────
 
-function IssueRow({ issue, onSelect }: { issue: GitHubIssue; onSelect: (i: GitHubIssue) => void }) {
+function IssueRow({
+  issue,
+  selected,
+  expanded,
+  onToggleSelected,
+  onToggleExpanded,
+}: {
+  issue: GitHubIssue;
+  selected: boolean;
+  expanded: boolean;
+  onToggleSelected: () => void;
+  onToggleExpanded: () => void;
+}) {
   const age = relativeTime(issue.updatedAt || issue.createdAt);
+  const bodyPreview = issue.body?.trim();
+  // ImportGitHubIssue only accepts real issue URLs (ParseGitHubRef categorizes
+  // /pull/N URLs as RefTypePR, not RefTypeIssue) — a PR can never be imported
+  // as a backlog item, so don't offer a selection that's guaranteed to fail.
+  const importable = !issue.isPR;
+
   return (
-    <div
-      role="option"
-      aria-selected={false}
-      className={styles.listItem}
-      onMouseDown={(e) => {
-        e.preventDefault();
-        onSelect(issue);
-      }}
-    >
-      <span className={issue.isPR ? styles.prTypeBadge : styles.issueTypeBadge}>
-        {issue.isPR ? "PR" : "#"}
-      </span>
-      <span className={styles.issueNumber}>{issue.number}</span>
-      <span className={styles.listItemName}>{issue.title}</span>
-      {issue.labels.slice(0, 2).map((label) => (
-        <span key={label} className={styles.labelBadge} title={label}>
-          {label}
+    <div className={styles.issueRowWrapper}>
+      <div
+        role="option"
+        aria-selected={selected}
+        aria-disabled={!importable}
+        className={
+          (selected ? `${styles.listItem} ${styles.listItemSelected}` : styles.listItem) +
+          (importable ? "" : ` ${styles.listItemDisabled}`)
+        }
+        title={importable ? undefined : "Pull requests can't be imported as backlog items — open it on GitHub instead."}
+        onClick={importable ? onToggleSelected : undefined}
+      >
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={!importable}
+          onChange={onToggleSelected}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={
+            importable
+              ? `Select issue #${issue.number}: ${issue.title}`
+              : `Issue #${issue.number} is a pull request and can't be imported: ${issue.title}`
+          }
+          className={styles.issueCheckbox}
+        />
+        <span className={issue.isPR ? styles.prTypeBadge : styles.issueTypeBadge}>
+          {issue.isPR ? "PR" : "#"}
         </span>
-      ))}
-      {age && <span className={styles.relativeDate}>{age}</span>}
+        <span className={styles.issueNumber}>{issue.number}</span>
+        <div className={styles.issueMainCol}>
+          <span className={styles.listItemName}>{issue.title}</span>
+          <span className={styles.issueSubMeta}>
+            {issue.author && <span className={styles.issueAuthor}>@{issue.author}</span>}
+            {age && <span>{age}</span>}
+            {issue.labels.length > 0 && (
+              <span>
+                {issue.labels.length} label{issue.labels.length > 1 ? "s" : ""}
+              </span>
+            )}
+          </span>
+        </div>
+        {bodyPreview && (
+          <button
+            type="button"
+            className={styles.expandToggle}
+            aria-label={expanded ? "Collapse details" : "Expand details"}
+            aria-expanded={expanded}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpanded();
+            }}
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+        )}
+        <a
+          href={issue.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={styles.openLink}
+          aria-label={`Open issue #${issue.number} on GitHub`}
+          title="Open on GitHub"
+          onClick={(e) => e.stopPropagation()}
+        >
+          👁
+        </a>
+      </div>
+      {expanded && (
+        <div className={styles.issueExpandedPanel}>
+          {issue.labels.length > 0 && (
+            <div className={styles.issueExpandedLabels}>
+              {issue.labels.map((label) => (
+                <span key={label} className={styles.labelBadge} title={label}>
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+          {bodyPreview && <p className={styles.issueExpandedBody}>{bodyPreview}</p>}
+        </div>
+      )}
     </div>
   );
 }

@@ -85,6 +85,26 @@ func (_u *BacklogStatusEventUpdate) SetNillableTriggeredBy(v *string) *BacklogSt
 	return _u
 }
 
+// SetNote sets the "note" field.
+func (_u *BacklogStatusEventUpdate) SetNote(v string) *BacklogStatusEventUpdate {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *BacklogStatusEventUpdate) SetNillableNote(v *string) *BacklogStatusEventUpdate {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *BacklogStatusEventUpdate) ClearNote() *BacklogStatusEventUpdate {
+	_u.mutation.ClearNote()
+	return _u
+}
+
 // SetItem sets the "item" edge to the BacklogItem entity.
 func (_u *BacklogStatusEventUpdate) SetItem(v *BacklogItem) *BacklogStatusEventUpdate {
 	return _u.SetItemID(v.ID)
@@ -156,6 +176,12 @@ func (_u *BacklogStatusEventUpdate) sqlSave(ctx context.Context) (_node int, err
 	}
 	if value, ok := _u.mutation.TriggeredBy(); ok {
 		_spec.SetField(backlogstatusevent.FieldTriggeredBy, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(backlogstatusevent.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(backlogstatusevent.FieldNote, field.TypeString)
 	}
 	if _u.mutation.ItemCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -262,6 +288,26 @@ func (_u *BacklogStatusEventUpdateOne) SetNillableTriggeredBy(v *string) *Backlo
 	return _u
 }
 
+// SetNote sets the "note" field.
+func (_u *BacklogStatusEventUpdateOne) SetNote(v string) *BacklogStatusEventUpdateOne {
+	_u.mutation.SetNote(v)
+	return _u
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_u *BacklogStatusEventUpdateOne) SetNillableNote(v *string) *BacklogStatusEventUpdateOne {
+	if v != nil {
+		_u.SetNote(*v)
+	}
+	return _u
+}
+
+// ClearNote clears the value of the "note" field.
+func (_u *BacklogStatusEventUpdateOne) ClearNote() *BacklogStatusEventUpdateOne {
+	_u.mutation.ClearNote()
+	return _u
+}
+
 // SetItem sets the "item" edge to the BacklogItem entity.
 func (_u *BacklogStatusEventUpdateOne) SetItem(v *BacklogItem) *BacklogStatusEventUpdateOne {
 	return _u.SetItemID(v.ID)
@@ -363,6 +409,12 @@ func (_u *BacklogStatusEventUpdateOne) sqlSave(ctx context.Context) (_node *Back
 	}
 	if value, ok := _u.mutation.TriggeredBy(); ok {
 		_spec.SetField(backlogstatusevent.FieldTriggeredBy, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Note(); ok {
+		_spec.SetField(backlogstatusevent.FieldNote, field.TypeString, value)
+	}
+	if _u.mutation.NoteCleared() {
+		_spec.ClearField(backlogstatusevent.FieldNote, field.TypeString)
 	}
 	if _u.mutation.ItemCleared() {
 		edge := &sqlgraph.EdgeSpec{

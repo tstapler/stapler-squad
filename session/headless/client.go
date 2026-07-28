@@ -5,7 +5,7 @@ import "context"
 // PoolClient is the narrow interface BacklogService uses for headless triage calls.
 // Satisfied by *Pool; allows test injection without needing FakeRunner WorkDir support.
 type PoolClient interface {
-	CallBlockingWithOptions(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, error)
+	CallBlocking(ctx context.Context, key FeatureKey, systemPrompt, userPrompt string, opts CallOptions) (string, float64, error)
 }
 
 // compile-time check that *Pool satisfies PoolClient.

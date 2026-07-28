@@ -3,27 +3,50 @@ package services
 import (
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 const sessionIDHeader = "X-CS-Session-ID"
 
 // HookReceiver handles inbound Claude Code hook callbacks for non-approval events.
 // These are fire-and-forget: Claude does not block on the response.
-type HookReceiver struct{}
+type HookReceiver struct {
+	// driftMu guards driftLastChecked, the per-worktree rate limiter used by
+	// HandlePostToolUseDriftCheck (see hook_receiver_drift.go).
+	driftMu          sync.Mutex
+	driftLastChecked map[string]time.Time
+
+	// driftCheckMinInterval overrides defaultDriftCheckMinInterval; zero means "use
+	// the default". Overridable via SetDriftCheckMinInterval for tests.
+	driftCheckMinInterval time.Duration
+	// driftThreshold overrides git.SteeringBranchDriftThreshold; zero means "use the
+	// default". Overridable via SetDriftThreshold for tests.
+	driftThreshold int
+	// driftCheckFn computes how many commits worktreePath is behind origin/mainBranch.
+	// Defaults to git.BehindOriginMain; overridable via SetDriftCheckFn so tests can
+	// exercise HandlePostToolUseDriftCheck without a real git repo/network fetch.
+	driftCheckFn func(worktreePath, mainBranch string) (int, error)
+}
 
 // NewHookReceiver creates a HookReceiver.
 func NewHookReceiver() *HookReceiver {
-	return &HookReceiver{}
+	return &HookReceiver{
+		driftLastChecked: make(map[string]time.Time),
+		driftCheckFn:     git.BehindOriginMain,
+	}
 }
 
-// RegisterRoutes registers the four non-approval hook endpoints on mux.
+// RegisterRoutes registers the non-approval hook endpoints on mux.
 func (h *HookReceiver) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hooks/stop", h.HandleStop)
 	mux.HandleFunc("/api/hooks/pre-tool-use", h.HandlePreToolUse)
 	mux.HandleFunc("/api/hooks/post-tool-use", h.HandlePostToolUse)
 	mux.HandleFunc("/api/hooks/prompt-submit", h.HandlePromptSubmit)
+	mux.HandleFunc("/api/hooks/post-tool-use-drift-check", h.HandlePostToolUseDriftCheck)
 }
 
 // HandleStop receives the Claude Code Stop hook.

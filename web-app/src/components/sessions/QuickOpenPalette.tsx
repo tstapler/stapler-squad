@@ -165,6 +165,11 @@ export function QuickOpenPalette({
     };
   }, [query, sessionId, baseUrl, recentPaths]);
 
+  // Clear stale DOM refs when the results list changes length
+  useEffect(() => {
+    resultRefs.current = [];
+  }, [results]);
+
   // Scroll active item into view
   useEffect(() => {
     const el = resultRefs.current[activeIndex];

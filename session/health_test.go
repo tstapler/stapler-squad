@@ -126,6 +126,88 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	}
 }
 
+// deadPaneMock wraps mockTmuxManager to simulate the real TmuxProcessManager's
+// state transition on Close(): a real KillSession() makes DoesSessionExist()
+// (and therefore IsAlive()) start returning false. The shared mockTmuxManager
+// has static return fields and can't model that transition, which is exactly
+// the distinction this regression test needs: recovery is only genuine if
+// Start(false) is called AFTER the stale session is torn down (so it takes
+// the cold-restore path and relaunches the program), not before (which would
+// just reattach to the still-"alive" dead pane via RestoreWithWorkDir).
+type deadPaneMock struct {
+	*mockTmuxManager
+	killed bool
+}
+
+func (d *deadPaneMock) Close() error {
+	d.killed = true
+	return d.mockTmuxManager.Close()
+}
+
+func (d *deadPaneMock) IsAlive() bool {
+	if d.killed {
+		return false
+	}
+	return d.mockTmuxManager.IsAlive()
+}
+
+// TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRespawn
+// is the regression test for the "all my panes show as dead and haven't
+// respawned" bug: remain-on-exit keeps the tmux session object alive as a
+// "Pane is dead (signal N, ...)" placeholder after the wrapped program is
+// killed (e.g. OOM SIGKILL) or crashes. TmuxAlive() only checks session
+// existence, so it reported this state as healthy forever and the health
+// checker never attempted recovery. This pins two fixed behaviors:
+//  1. checkSingleSession must flag the session unhealthy once PaneProcessDead()
+//     is true, even though TmuxAlive() is true.
+//  2. Recovery must kill the stale session (Close()) BEFORE calling Start(false)
+//     -- otherwise Start(false) sees an existing tmux session and just
+//     reattaches to the same dead pane via RestoreWithWorkDir() instead of
+//     actually relaunching the wrapped program.
+func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRespawn(t *testing.T) {
+	checker := NewSessionHealthChecker(nil)
+
+	inner := &mockTmuxManager{
+		hasSessionReturn: true,
+		isAliveReturn:    true, // tmux session object still exists
+		paneExitCode:     137,
+		paneExitSignal:   "SIGKILL",
+		paneExitDead:     true, // but the wrapped program has exited
+	}
+	mock := &deadPaneMock{mockTmuxManager: inner}
+	inst := &Instance{
+		Title:  "pane-dead-test",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	inst.processManager = NewTmuxBackend(mock)
+
+	// First failure: below threshold, no recovery attempted yet.
+	result1 := checker.checkSingleSession(inst)
+	if result1.IsHealthy {
+		t.Error("first failure: expected IsHealthy=false when pane process has exited")
+	}
+	if result1.RecoveryAttempted {
+		t.Error("first failure: expected RecoveryAttempted=false (below threshold)")
+	}
+	if mock.closeCalls != 0 {
+		t.Errorf("first failure: expected no Close() calls yet, got %d", mock.closeCalls)
+	}
+
+	// Second failure: threshold reached, recovery attempted. The stale session
+	// must be torn down (Close()) before Start() is retried.
+	result2 := checker.checkSingleSession(inst)
+	if !result2.RecoveryAttempted {
+		t.Error("second failure: expected RecoveryAttempted=true (threshold reached)")
+	}
+	if mock.closeCalls == 0 {
+		t.Error("expected KillSession() to call Close() on the stale dead-pane session before Start()")
+	}
+	if mock.startCalls == 0 {
+		t.Error("expected Start() to be retried after killing the stale session")
+	}
+}
+
 // --- checkInstances multi-socket regression tests ---
 //
 // CheckAllSessions previously derived a single socket from the first instance that

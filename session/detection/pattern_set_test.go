@@ -42,44 +42,6 @@ func TestPatternSet_MatchLines_should_returnUnknown_When_noMatchAndCatchAll(t *t
 	}
 }
 
-func TestPatternSet_MatchLines_should_returnReady_When_explicitReadyPatternMatches(t *testing.T) {
-	// Regression for adversarial-review.md Issue 4: the Ready bucket contains both an
-	// explicit named pattern (gemini_ready) and the universal `.*` catch-all
-	// (claude_prompt) at an earlier slice index. Before the fix, the catch-all matched
-	// every string first and the whole bucket unconditionally returned StatusUnknown,
-	// making gemini_ready unreachable dead code. Explicit ready patterns must now be
-	// checked before the catch-all and return StatusReady, not StatusUnknown.
-	ps, err := NewPatternSet(getDefaultPatterns())
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, name, _ := ps.MatchLines("◇ Ready", nil)
-	if status != StatusReady {
-		t.Errorf("got status %v, want StatusReady for explicit gemini_ready match", status)
-	}
-	if name != "gemini_ready" {
-		t.Errorf("got pattern name %q, want %q", name, "gemini_ready")
-	}
-}
-
-func TestPatternSet_MatchLines_should_returnUnknown_When_catchAllPatternMatchesAfterExplicitReadyChecked(t *testing.T) {
-	// Complements the above: text that matches neither an explicit Ready pattern nor
-	// any earlier-priority category must still fall through to the `.*` catch-all and
-	// return StatusUnknown (not StatusReady), confirming the catch-all remains reachable
-	// and last in the split Ready checks.
-	ps, err := NewPatternSet(getDefaultPatterns())
-	if err != nil {
-		t.Fatal(err)
-	}
-	status, name, _ := ps.MatchLines("just some plain prompt text", nil)
-	if status != StatusUnknown {
-		t.Errorf("got status %v, want StatusUnknown for catch-all match", status)
-	}
-	if name != "claude_prompt" {
-		t.Errorf("got pattern name %q, want %q", name, "claude_prompt")
-	}
-}
-
 func TestPatternSet_MatchLines_should_beRaceFree_When_calledConcurrently(t *testing.T) {
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {

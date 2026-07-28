@@ -79,7 +79,6 @@ type controllerLifecycle struct {
 	cancel context.CancelFunc
 }
 
-
 // ClaudeController provides a high-level API for controlling Claude instances.
 // It orchestrates all the underlying components (queue, executor, history, streams).
 //

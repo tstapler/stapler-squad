@@ -283,7 +283,11 @@ func (m *Multiplexer) Start() error {
 
 	// Attach to the tmux session - this is what we wrap in PTY for the local terminal
 	// Use m.ctx so the attach process is killed when the multiplexer shuts down.
-	m.cmd = exec.CommandContext(m.ctx, tmux.Binary(), m.serverSocket.Args("attach-session", "-t", m.tmuxSession)...) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
+	// EnsurePdeathsig backs that up at the kernel level in case this process is
+	// SIGKILLed before ctx cancellation can run (see safeexec_pdeathsig_linux.go).
+	// Must be set before pty.Start(), which fills in the rest of SysProcAttr.
+	m.cmd = exec.CommandContext(m.ctx, tmux.Binary(), m.serverSocket.Args("attach-session", "-t", m.tmuxSession)...) //nolint:norawexec long-running cmd.Start() process
+	safeexec.EnsurePdeathsig(m.cmd)
 
 	// Start attach command in PTY
 	ptmx, err := pty.Start(m.cmd)

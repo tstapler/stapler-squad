@@ -26,6 +26,10 @@ make setup-codesign
 
 The script is idempotent — running it a second time prints "StaplerSquadDev cert already present." and exits without creating a duplicate.
 
+### Troubleshooting: "MAC verification failed during PKCS12 import (wrong password?)"
+
+OpenSSL 3.x's PKCS12 export produces a MAC that macOS's `security import` cannot verify when the export password is empty — a known OpenSSL 3.x/macOS incompatibility. `setup-codesign.sh` works around this by generating a random throwaway password with `openssl rand -base64 24` and using it for both the `pkcs12 -export` and `security import` steps (the password only protects the `.p12` file in transit between those two commands and is discarded immediately after). If you still see this error, confirm `$OPENSSL_BIN` (or `openssl` on `PATH`) is real OpenSSL and not a stale/patched build — `openssl version` should print `OpenSSL 3.x`, not `LibreSSL`.
+
 ## Verifying the setup
 
 After `make install-service`, run:

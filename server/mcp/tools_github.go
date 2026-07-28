@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -243,6 +244,40 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 		MCPResult: MCPResult{Success: true},
 		Session:   &detail,
 	}), nil
+}
+
+// VerifyPRMatchesBranch confirms a PR number self-reported to
+// report_pr_created (tools_backlog.go, Epic 3.1 of "PR Metadata Capture
+// Fix" — project_plans/backlog-agent-communication) genuinely exists on
+// GitHub and its head branch matches the item's own branch, before that
+// self-report is trusted and persisted. A hallucinated, stale, or mistyped
+// PR reference would otherwise silently poison the item record — a class of
+// bad data the mechanical pushAndCreatePR path (session/backlog_lifecycle.go)
+// never has to guard against, since it only ever writes PR data it itself
+// just created.
+//
+// Reuses githubpkg.GetPRForBranch — the same branch->PR lookup
+// list_github_prs's own plumbing is built on — instead of string-matching
+// gh CLI error text, so "no PR for this branch" is a typed, unambiguous
+// signal (githubpkg.ErrNoPR) distinct from a transient lookup failure.
+//
+// Returns:
+//   - (true, nil): expectedBranch has an existing PR and its number matches prNumber.
+//   - (false, nil): a definitive mismatch — no PR exists for expectedBranch at
+//     all, or its PR has a different number. Callers must NOT persist on this
+//     result; re-asking GitHub the same question will not change the answer.
+//   - (false, err): the lookup itself failed (rate limit, network, auth) —
+//     transient. Callers should surface a retryable error to the caller
+//     rather than treating this as a confirmed mismatch.
+func VerifyPRMatchesBranch(ctx context.Context, owner, repo string, prNumber int, expectedBranch string) (bool, error) {
+	info, err := githubpkg.GetPRForBranch(ctx, owner, repo, expectedBranch)
+	if err != nil {
+		if errors.Is(err, githubpkg.ErrNoPR) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.Number == prNumber, nil
 }
 
 // detectRepoPath looks for an existing session or worktree that belongs to owner/repo

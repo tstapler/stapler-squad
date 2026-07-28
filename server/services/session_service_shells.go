@@ -135,8 +135,18 @@ func (s *SessionService) StopShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
+	// Capture the shell's tmux session name before stopping so a stale streamer
+	// for it can be evicted below; StopShell doesn't return this itself.
+	tmuxSessionName, hasTmuxName := inst.GetShellTmuxSessionName(req.Msg.ShellId)
+
 	if stopErr := inst.StopShell(ctx, req.Msg.ShellId); stopErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("StopShell failed: %w", stopErr))
+	}
+
+	// Evict this shell's ExternalTmuxStreamer so a reopened shell with the same ID
+	// gets a fresh streamer instead of replaying a degraded/stale one indefinitely.
+	if hasTmuxName && s.tmuxStreamerManager != nil {
+		s.tmuxStreamerManager.Remove(tmuxSessionName)
 	}
 
 	return connect.NewResponse(&sessionv1.StopShellResponse{
@@ -166,6 +176,14 @@ func (s *SessionService) RestartShell(
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
+	}
+
+	// shellTmuxSessionName is deterministic per shell ID, so RestartShell reuses the
+	// same tmux session name — evict any existing streamer first so the new session
+	// gets a fresh one rather than a streamer still caching content from before the restart.
+	tmuxSessionName, hasTmuxName := inst.GetShellTmuxSessionName(req.Msg.ShellId)
+	if hasTmuxName && s.tmuxStreamerManager != nil {
+		s.tmuxStreamerManager.Remove(tmuxSessionName)
 	}
 
 	if restartErr := inst.RestartShell(ctx, req.Msg.ShellId); restartErr != nil {
@@ -235,8 +253,14 @@ func (s *SessionService) DeleteShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
+	tmuxSessionName, hasTmuxName := inst.GetShellTmuxSessionName(req.Msg.ShellId)
+
 	if delErr := inst.DeleteShell(ctx, req.Msg.ShellId); delErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("DeleteShell failed: %w", delErr))
+	}
+
+	if hasTmuxName && s.tmuxStreamerManager != nil {
+		s.tmuxStreamerManager.Remove(tmuxSessionName)
 	}
 
 	return connect.NewResponse(&sessionv1.DeleteShellResponse{

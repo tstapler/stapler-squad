@@ -105,8 +105,8 @@ func (i *Instance) StartController() error {
 	return nil
 }
 
-// RegisterLifecycleListener adds a listener that will receive EventStarted and
-// EventExited notifications for this instance.
+// RegisterLifecycleListener adds a listener that will receive EventStarted,
+// EventExited, and EventStopped notifications for this instance.
 // The listener is called synchronously on the goroutine that fires the event;
 // implementations must return quickly (no long blocking operations).
 func (i *Instance) RegisterLifecycleListener(l LifecycleListener) {

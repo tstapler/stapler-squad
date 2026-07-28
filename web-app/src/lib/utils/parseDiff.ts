@@ -76,3 +76,31 @@ export function parseDiff(diffContent: string): DiffFile[] {
   if (currentFile) files.push(currentFile);
   return files;
 }
+
+export type GutterMarkType = "add" | "delete" | "modify";
+
+/**
+ * Build a map of new-file line number → change type, for gutter decorations
+ * on an open file. Pure deletions (no matching added line in the hunk) are
+ * marked on the line immediately following the deletion point (hunk.newStart),
+ * matching common diff-gutter UX (e.g. VS Code's "removed above" indicator).
+ */
+export function buildGutterMarks(diffContent: string, filePath: string): Map<number, GutterMarkType> {
+  const marks = new Map<number, GutterMarkType>();
+  const file = parseDiff(diffContent).find((f) => f.filename === filePath);
+  if (!file) return marks;
+
+  for (const hunk of file.changes) {
+    const hasAdd = hunk.lines.some((l) => l.type === "add");
+    const hasDelete = hunk.lines.some((l) => l.type === "delete");
+    for (const l of hunk.lines) {
+      if (l.type === "add" && l.newLineNumber !== undefined) {
+        marks.set(l.newLineNumber, hasDelete ? "modify" : "add");
+      }
+    }
+    if (hasDelete && !hasAdd) {
+      marks.set(Math.max(1, hunk.newStart), "delete");
+    }
+  }
+  return marks;
+}

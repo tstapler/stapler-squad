@@ -177,3 +177,13 @@ export const srOnly = style({
   whiteSpace: "nowrap",
   border: 0,
 });
+
+export const backlogLink = style({
+  color: vars.color.primary,
+  textDecoration: "none",
+  fontSize: vars.fontSize.sm,
+  wordBreak: "break-all",
+  ":hover": {
+    textDecoration: "underline",
+  },
+});

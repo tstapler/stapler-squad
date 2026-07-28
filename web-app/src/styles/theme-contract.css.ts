@@ -40,6 +40,7 @@ export const vars = createThemeContract({
     // Status
     success: null,
     successBg: null,
+    successText: null,
     warning: null,
     warningBg: null,
     warningText: null,
@@ -51,6 +52,11 @@ export const vars = createThemeContract({
     // Accent tints
     accentBg: null,
     accentHover: null,
+    // Text/icon color for controls rendered on accentBg (e.g. InlineNotice's
+    // icon and "Reload"-style action button) — needs its own tuned value
+    // per theme because `primary` alone doesn't reliably hit 4.5:1 against
+    // accentBg in every theme (see theme.css.ts for per-theme contrast notes).
+    accentText: null,
 
     // Inputs
     inputBackground: null,
@@ -67,6 +73,10 @@ export const vars = createThemeContract({
     terminalTextMuted: null,
     terminalHoverBg: null,
 
+    // Header (always dark backdrop — same value in every theme, mirrors Terminal above)
+    headerTextPrimary: null,
+    headerTextSecondary: null,
+
     // Log level badge colors (semantic colors for log-level chips/rows)
     logError: null,   // ERROR badge background
     logWarn: null,    // WARN badge background
@@ -76,6 +86,14 @@ export const vars = createThemeContract({
     logOnDark: null,  // text on dark log badges (error/info/debug/trace)
     logOnAmber: null, // text on amber log badge (warn)
     logLive: null,    // live indicator dot / success accent
+
+    // Git status colors (file-tree badges)
+    gitModified: null,
+    gitAdded: null,
+    gitDeleted: null,
+    gitRenamed: null,
+    gitUntracked: null,
+    gitConflict: null,
 
     // Cyberpunk / glow tokens
     glowPrimary: null,

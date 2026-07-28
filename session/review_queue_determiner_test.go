@@ -216,7 +216,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 				IsControllerActive: false,
 			},
 			instSetup: func(inst *Instance) {
-				// Set LastMeaningfulOutput far in the past (beyond StalenessThreshold=2m)
+				// Set LastMeaningfulOutput far in the past (beyond StalenessThreshold=5m,
+				// recalibrated from an undocumented 2m — ADR-001-staleness-threshold-recalibration.md)
 				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 				inst.UpdatedAt = time.Now().Add(-10 * time.Minute)
 			},
@@ -226,20 +227,41 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			wantPriority: PriorityLow,
 		},
 		{
-			name: "high_priority_reason_not_overridden_by_staleness",
+			// ADR-001 boundary case: 3 min since output must NOT be flagged stale
+			// under the recalibrated 5-minute threshold (would have been flagged
+			// under the old 2-minute threshold — this is the exact false-positive
+			// shape the recalibration fixes). UpdatedAt is kept fresh so the
+			// separate idle check (basicIdleThreshold=5s) doesn't also fire and
+			// mask what this case is actually testing.
+			name:    "session_stale_under_new_5min_threshold_does_not_flag",
+			content: "",
 			statusInfo: InstanceStatusInfo{
-				IsControllerActive: true,
-				ClaudeStatus:       detection.StatusError,
+				IsControllerActive: false,
 			},
 			instSetup: func(inst *Instance) {
-				// Beyond StalenessThreshold, but the Urgent-priority error reason
-				// must NOT be downgraded to a Low-priority Stale reason.
-				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
+				inst.LastMeaningfulOutput = time.Now().Add(-3 * time.Minute)
+				inst.UpdatedAt = time.Now()
+			},
+			checkAction: true,
+			wantAction:  DetectionActionSkip,
+		},
+		{
+			// ADR-001 boundary case: 6 min since output must be flagged stale
+			// (just past the recalibrated 5-minute threshold). UpdatedAt kept
+			// fresh for the same reason as above.
+			name:    "session_stale_over_new_5min_threshold_flags",
+			content: "",
+			statusInfo: InstanceStatusInfo{
+				IsControllerActive: false,
+			},
+			instSetup: func(inst *Instance) {
+				inst.LastMeaningfulOutput = time.Now().Add(-6 * time.Minute)
+				inst.UpdatedAt = time.Now()
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonErrorState,
-			wantPriority: PriorityUrgent,
+			wantReason:   ReasonStale,
+			wantPriority: PriorityLow,
 		},
 		{
 			name:    "acknowledged_stale_session_skips_stale",
@@ -280,6 +302,12 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			if tt.instSetup != nil {
 				tt.instSetup(inst)
 			}
+			// Keep the lock-free atomic shadows (lastMeaningfulOutputNs, lastAcknowledgedNs)
+			// in sync with the plain fields set directly above — production writers always
+			// update both together (UpdateTimestamps, MarkAcknowledged); this test bypasses
+			// that discipline via direct field assignment, so it must sync explicitly before
+			// calling Determine(), which reads the atomic-only accessors on the live Instance.
+			inst.SyncAtomicTimestamps()
 
 			result := determiner.Determine(inst, tt.content, tt.statusInfo, detector)
 
@@ -307,6 +335,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -333,6 +362,7 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	customContext := "tool use blocked by policy xyz"
 	statusInfo := InstanceStatusInfo{
@@ -357,6 +387,7 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -379,6 +410,7 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -406,6 +438,7 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -435,6 +468,7 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 	inst.started.Store(true)
 	// Fresh output — below staleness threshold and idle threshold
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	statusInfo := InstanceStatusInfo{
 		IsControllerActive: true,
@@ -459,6 +493,7 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
 	statusInfo := InstanceStatusInfo{

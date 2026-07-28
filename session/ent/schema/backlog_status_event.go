@@ -24,6 +24,10 @@ func (BacklogStatusEvent) Fields() []ent.Field {
 		field.String("to_status"),
 		field.String("triggered_by").
 			Default("user"),
+		field.String("note").
+			Optional().
+			Nillable().
+			Comment("Human-readable reason stored alongside the transition, e.g. 'auto-reopened after FAIL verdict'."),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable(),

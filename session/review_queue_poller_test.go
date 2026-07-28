@@ -19,6 +19,11 @@ func makeAcknowledgedInstance(title string) *Instance {
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 	inst.LastAcknowledged = time.Now().Add(-5 * time.Minute) // acked AFTER output
+	// Keep the lock-free atomic shadows in sync with the plain fields set directly above —
+	// IsAcknowledgedAfterOutput() reads only the atomic shadows (lastMeaningfulOutputNs,
+	// lastAcknowledgedNs), not the plain time.Time fields, so tests that bypass the normal
+	// write paths (UpdateTimestamps/MarkAcknowledged) must sync explicitly.
+	inst.SyncAtomicTimestamps()
 	return inst
 }
 
@@ -471,6 +476,20 @@ func TestReviewQueuePoller_IsRunning_InitiallyFalse(t *testing.T) {
 	}
 }
 
+// TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When_Called
+// is a regression guard for ADR-001-staleness-threshold-recalibration.md: the
+// StalenessThreshold default was silently reduced from 5min to 2min with no
+// documented rationale (see the ADR's git-archaeology section), causing a
+// 37/41 false-positive "Stale" badge rate live. This pins the recalibrated
+// value so a future edit can't silently drift it again without updating the
+// ADR.
+func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When_Called(t *testing.T) {
+	cfg := DefaultReviewQueuePollerConfig()
+	if cfg.StalenessThreshold != 5*time.Minute {
+		t.Errorf("DefaultReviewQueuePollerConfig().StalenessThreshold = %s, want 5m", cfg.StalenessThreshold)
+	}
+}
+
 // TestReviewQueuePoller_StartStop verifies that Start() transitions the poller to
 // running and Stop() cleanly shuts it down.
 func TestReviewQueuePoller_StartStop(t *testing.T) {
@@ -569,6 +588,7 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 
 	// Simulate new output arriving AFTER the acknowledgment.
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second) // newer than LastAcknowledged
+	inst.SyncAtomicTimestamps()                                  // re-sync atomic shadow after direct field write
 
 	// IsAcknowledgedAfterOutput should now return false — new output supersedes ack.
 	if inst.IsAcknowledgedAfterOutput() {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -20,11 +21,61 @@ import (
 var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
 
 // DefaultsService handles session defaults RPC methods.
-type DefaultsService struct{}
+type DefaultsService struct {
+	// onGlobalDefaultsUpdated, if set, is called (in a goroutine) after every
+	// successful UpdateGlobalDefaults save. Wired in server/dependencies.go to
+	// trigger an immediate backlog-queue dequeue sweep when the concurrency
+	// limit is raised, rather than waiting up to 60s for the next
+	// ReconcileStuck tick (AC: raising the limit dequeues eligible items
+	// without a manual retry). Fires unconditionally rather than only when the
+	// limit increased — DequeueNextQueuedItems is a cheap no-op when there's
+	// nothing to dequeue.
+	onGlobalDefaultsUpdated func()
+
+	// sharedBacklogCfg and sharedBacklogCfgMu, when wired via
+	// SetSharedBacklogConfig, are the SAME *config.Config instance (and
+	// guarding mutex) BacklogService reads MaxConcurrentBacklogWorkItems /
+	// MaxAutoReworkIterations from at request time. UpdateGlobalDefaults
+	// otherwise follows the same lock-free load-modify-save pattern as every
+	// other handler in this file (a fresh config.LoadConfig() per call,
+	// last-write-wins across handlers — the accepted project tradeoff
+	// documented on UpsertAlias). That pattern alone is why BacklogService's
+	// long-lived cfg pointer (loaded once at process start, see
+	// server/dependencies.go) never observed a raised WIP cap until a
+	// restart: nothing ever wrote back into BacklogService's instance
+	// (PR #199 review F1). Rather than switching this whole handler onto the
+	// shared instance (which would make it lose track of concurrent writes
+	// from OTHER handlers — aliases, profiles, directory rules — between
+	// calls), UpdateGlobalDefaults keeps its existing fresh-load flow and
+	// additionally copies just the two backlog-relevant fields onto the
+	// shared instance, under the mutex, right after a successful save. Both
+	// fields are nil-safe to leave unwired: every test that doesn't call
+	// SetSharedBacklogConfig keeps this handler's pre-existing behavior.
+	sharedBacklogCfg   *config.Config
+	sharedBacklogCfgMu *sync.RWMutex
+}
 
 // NewDefaultsService creates a DefaultsService.
 func NewDefaultsService() *DefaultsService {
 	return &DefaultsService{}
+}
+
+// SetOnGlobalDefaultsUpdated wires in the callback invoked after every
+// successful UpdateGlobalDefaults save.
+func (d *DefaultsService) SetOnGlobalDefaultsUpdated(fn func()) {
+	d.onGlobalDefaultsUpdated = fn
+}
+
+// SetSharedBacklogConfig wires the live *config.Config instance (and its
+// guarding mutex) that BacklogService reads MaxConcurrentBacklogWorkItems /
+// MaxAutoReworkIterations from — see sharedBacklogCfg's doc comment for why
+// this is needed and what it does and does not change about
+// UpdateGlobalDefaults's existing behavior. Called once from
+// server/dependencies.go with the exact same *config.Config pointer and
+// *sync.RWMutex passed to services.NewBacklogService / BacklogService.ConfigMu.
+func (d *DefaultsService) SetSharedBacklogConfig(cfg *config.Config, mu *sync.RWMutex) {
+	d.sharedBacklogCfg = cfg
+	d.sharedBacklogCfgMu = mu
 }
 
 // GetSessionDefaults returns the full session defaults configuration.
@@ -76,6 +127,8 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.SessionDefaults.CLIFlags = req.Msg.CliFlags
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
 	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
+	cfg.MaxAutoReworkIterations = int(req.Msg.MaxAutoReworkIterations)
+	cfg.MaxConcurrentBacklogWorkItems = int(req.Msg.MaxConcurrentBacklogWorkItems)
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -86,7 +139,23 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
+	// Propagate the two backlog-concurrency fields onto BacklogService's live
+	// config instance so a raised cap takes effect on the very next
+	// SpawnSessionFromItem/DequeueNextQueuedItems call instead of requiring a
+	// process restart — see sharedBacklogCfg's doc comment (PR #199 review F1).
+	if d.sharedBacklogCfg != nil {
+		d.sharedBacklogCfgMu.Lock()
+		d.sharedBacklogCfg.MaxAutoReworkIterations = cfg.MaxAutoReworkIterations
+		d.sharedBacklogCfg.MaxConcurrentBacklogWorkItems = cfg.MaxConcurrentBacklogWorkItems
+		d.sharedBacklogCfgMu.Unlock()
+	}
+
 	log.Info("updated global session defaults", "program", cfg.SessionDefaults.Program, "tags", cfg.SessionDefaults.Tags)
+
+	if d.onGlobalDefaultsUpdated != nil {
+		go d.onGlobalDefaultsUpdated()
+	}
+
 	return connect.NewResponse(&sessionv1.UpdateGlobalDefaultsResponse{
 		Defaults: sessionDefaultsToProto(cfg),
 	}), nil
@@ -427,14 +496,16 @@ func (d *DefaultsService) DeleteDirectoryRule(
 func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig {
 	sd := cfg.SessionDefaults
 	proto := &sessionv1.SessionDefaultsConfig{
-		Program:        sd.Program,
-		AutoYes:        sd.AutoYes,
-		Tags:           sd.Tags,
-		EnvVars:        sd.EnvVars,
-		CliFlags:       sd.CLIFlags,
-		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:  cfg.OneOffBaseDir,
+		Program:                       sd.Program,
+		AutoYes:                       sd.AutoYes,
+		Tags:                          sd.Tags,
+		EnvVars:                       sd.EnvVars,
+		CliFlags:                      sd.CLIFlags,
+		Profiles:                      make(map[string]*sessionv1.ProfileDefaultsProto),
+		DirectoryRules:                make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:                 cfg.OneOffBaseDir,
+		MaxAutoReworkIterations:       int32(cfg.MaxAutoReworkIterationsOrDefault()),
+		MaxConcurrentBacklogWorkItems: int32(cfg.MaxConcurrentBacklogWorkItemsOrDefault()),
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

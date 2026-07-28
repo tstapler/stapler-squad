@@ -1,6 +1,7 @@
 "use client";
 
 import { SubStatus } from "@/gen/session/v1/types_pb";
+import { assertNever } from "@/lib/utils/assertNever";
 import {
   chipNeedsApproval,
   chipInputRequired,
@@ -85,7 +86,6 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
         <span
           className={chipError}
           role="status"
-          // eslint-disable-next-line no-restricted-syntax -- aria-label copy, not a DetectedStatus/AttentionReason literal; overlap is coincidental
           aria-label="Error"
           title="Session encountered an error"
         >
@@ -155,15 +155,8 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
 
     case SubStatus.UNSPECIFIED:
       return null;
-    default: {
-      // Proto enums are forward-compatible: a newer server can send a
-      // SubStatus value this deployed client bundle doesn't know about yet.
-      // Render nothing rather than throwing, so one unrecognized wire value
-      // can't crash the sessions UI. `_exhaustive: never` still gives a
-      // compile error if a new case is added without also being handled here.
-      const _exhaustive: never = subStatus;
-      console.warn("SubStatusChip: unrecognized SubStatus value", _exhaustive);
+    default:
+      assertNever(subStatus);
       return null;
-    }
   }
 }

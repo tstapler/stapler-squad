@@ -2,13 +2,12 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 
 	"github.com/stretchr/testify/require"
 )
@@ -26,8 +26,8 @@ func TestMain(m *testing.M) {
 	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
 
-	reapLeakedTestServers()
-	startWatchdog(os.Getpid())
+	tmuxreap.ReapLeakedTestServers()
+	tmuxreap.StartTestServerWatchdog(os.Getpid())
 
 	// Periodic goroutine dump so hangs produce visible output rather than silence.
 	stop := make(chan struct{})
@@ -61,86 +61,6 @@ func dumpGoroutines(reason string) {
 	buf := make([]byte, 1<<20)
 	n := runtime.Stack(buf, true)
 	fmt.Fprintf(os.Stderr, "\n=== goroutine dump (%s) ===\n%s\n", reason, buf[:n])
-}
-
-// reapLeakedTestServers kills test_coldrestore_* tmux sockets from dead test
-// processes.  Sockets owned by a live PID (concurrent runner) are left alone.
-func reapLeakedTestServers() {
-	myPID := os.Getpid()
-	socketDir := fmt.Sprintf("/tmp/tmux-%d", os.Getuid())
-	entries, err := os.ReadDir(socketDir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "test_coldrestore_") {
-			continue
-		}
-		ownerPID, ok := extractSessionTestSocketPID(name)
-		if ok {
-			if ownerPID == myPID {
-				continue
-			}
-			if isSessionTestProcessAlive(ownerPID) {
-				continue
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
-		cancel()
-	}
-}
-
-// extractSessionTestSocketPID finds the PID embedded in a test socket name.
-// PID range [2, 4194304) is distinct from nanosecond timestamps (>> pidMax).
-func extractSessionTestSocketPID(name string) (int, bool) {
-	const pidMax = 4194304
-	for _, part := range strings.Split(name, "_") {
-		n, err := strconv.Atoi(part)
-		if err == nil && n >= 2 && n < pidMax {
-			return n, true
-		}
-	}
-	return 0, false
-}
-
-func isSessionTestProcessAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
-}
-
-// startWatchdog spawns a detached shell process that kills test_coldrestore_*
-// sockets bearing ownerPID when that process exits (handles SIGKILL).
-func startWatchdog(ownerPID int) {
-	uid := os.Getuid()
-	scriptPath := fmt.Sprintf("/tmp/tmux-test-watchdog-session-%d.sh", ownerPID)
-	script := fmt.Sprintf(`#!/bin/sh
-SOCKDIR=/tmp/tmux-%d
-PID=%d
-while kill -0 "$PID" 2>/dev/null; do
-    sleep 1
-done
-if [ -d "$SOCKDIR" ]; then
-    for f in "$SOCKDIR"/test_coldrestore_*; do
-        [ -S "$f" ] || continue
-        name=$(basename "$f")
-        case "$name" in
-            *_${PID}_*) tmux -L "$name" kill-server 2>/dev/null; true ;;
-        esac
-    done
-fi
-rm -f "$0"
-`, uid, ownerPID)
-	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
-		return
-	}
-	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	_ = cmd.Start()
 }
 
 // Test utilities for waiting without static sleeps
@@ -233,8 +153,8 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 		testSessionRecoveryWithExistingChanges(t)
 	})
 
-	t.Run("FallbackBehaviorWhenWorktreePathMissing", func(t *testing.T) {
-		testFallbackBehaviorWhenWorktreePathMissing(t)
+	t.Run("FailsLoudlyWhenWorktreePathMissing", func(t *testing.T) {
+		testFailsLoudlyWhenWorktreePathMissing(t)
 	})
 
 	t.Run("ExistingSessionResumption", func(t *testing.T) {
@@ -519,11 +439,13 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 	require.NoError(t, err, "Test file should exist in worktree")
 }
 
-// testFallbackBehaviorWhenWorktreePathMissing tests backward compatibility
-func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
-	tempRepo := setupTestRepository(t)
-	defer os.RemoveAll(tempRepo)
-
+// testFailsLoudlyWhenWorktreePathMissing verifies RestoreWithWorkDir("") hard-fails
+// with tmux.ErrWorkDirMissing instead of silently falling back to the server
+// process's own cwd (which for a long-running server resolves to $HOME) -- see
+// commit 6fc7ce96 ("fail sessions loudly instead of silently landing in $HOME").
+// This test previously asserted the opposite (silent fallback + success); that
+// behavior was deliberately removed, so the test now asserts the new contract.
+func testFailsLoudlyWhenWorktreePathMissing(t *testing.T) {
 	// Create a tmux session without specifying worktree path (using test prefix for isolation)
 	session, cleanup := tmux.NewTmuxSessionWithPrefixAndCleanup("test-fallback-session", "bash", "staplersquad_test_")
 	defer func() {
@@ -532,26 +454,12 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 		}
 	}()
 
-	// Test fallback behavior - should use current directory
-	originalDir, _ := os.Getwd()
-
-	// Change to temp directory
-	err := os.Chdir(tempRepo)
-	require.NoError(t, err)
-	defer os.Chdir(originalDir)
-
-	// Use RestoreWithWorkDir with empty path (should fallback to current dir)
-	err = session.RestoreWithWorkDir("")
-	require.NoError(t, err)
-
-	// Wait for session to be ready and contain temp repo basename in prompt
-	tempRepoBasename := filepath.Base(tempRepo)
-	content := waitForContent(t,
-		func() (string, error) { return session.CapturePaneContent() },
-		tempRepoBasename,
-		10*time.Second,
-		"session to have content containing temp repo basename")
-	require.NotEmpty(t, content, "Captured content should not be empty")
+	// RestoreWithWorkDir with an empty path must fail loudly, not silently fall
+	// back to whatever directory the test process happens to be in.
+	err := session.RestoreWithWorkDir("")
+	require.Error(t, err, "RestoreWithWorkDir(\"\") must fail instead of falling back to a guessed directory")
+	require.True(t, errors.Is(err, tmux.ErrWorkDirMissing),
+		"expected error to match tmux.ErrWorkDirMissing, got: %v", err)
 }
 
 // setupTestRepository creates a temporary git repository for testing

@@ -4,8 +4,16 @@
   "service": "BacklogService",
   "method": "ImportGitHubIssue",
   "protoFile": "proto/session/v1/backlog.proto",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-07T08:50:35.878485731-07:00"
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_sync.go",
+  "tested": true,
+  "testIds": [
+    "TestImportGitHubIssue_NilStorage",
+    "TestImportGitHubIssue_EmptyURL",
+    "TestImportGitHubIssue_NotAnIssueURL",
+    "TestImportGitHubIssue_FetchError",
+    "TestImportGitHubIssue_CreatesItemFromIssue",
+    "TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided"
+  ],
+  "lastModified": "2026-07-23T14:24:01.97033608-07:00"
 }

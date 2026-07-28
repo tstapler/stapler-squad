@@ -25,10 +25,17 @@ import (
 // callers (e.g. GetEffectiveRootDir) don't consistently hold stateMutex, so
 // GitWorktreeManager protects its own fields directly.
 type GitWorktreeManager struct {
-	mu        deadlock.RWMutex
-	worktree  *git.GitWorktree
-	diffStats *git.DiffStats
+	mu         deadlock.RWMutex
+	worktree   *git.GitWorktree
+	diffStats  *git.DiffStats
+	dirBaseSHA string
 }
+
+// SetDirBaseSHA sets the base commit SHA for directory-mode diff computation.
+func (gm *GitWorktreeManager) SetDirBaseSHA(sha string) { gm.dirBaseSHA = sha }
+
+// GetDirBaseSHA returns the base commit SHA for directory-mode diff computation.
+func (gm *GitWorktreeManager) GetDirBaseSHA() string { return gm.dirBaseSHA }
 
 // HasWorktree reports whether a git worktree has been initialized.
 func (gm *GitWorktreeManager) HasWorktree() bool {

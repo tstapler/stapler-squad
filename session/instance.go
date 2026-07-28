@@ -77,6 +77,14 @@ const (
 	// EventExited fires when the underlying program exits unexpectedly (not via an
 	// operator-initiated Kill/Stop). Callers may use this to drive auto-restart logic.
 	EventExited
+	// EventStopped fires when Destroy() tears down the instance via an explicit
+	// operator-initiated Kill/Stop (e.g. the stop_session MCP tool, DeleteSession
+	// RPC, or backlog stale-work remediation). Kept distinct from EventExited so a
+	// future auto-restart listener can still ignore deliberate stops, while
+	// listeners that only care "is this session now gone" (e.g.
+	// BacklogLifecycleListener's ItemSession.EndedAt bookkeeping) can subscribe to
+	// both.
+	EventStopped
 )
 
 // LifecycleListener is implemented by any component that wants to receive Instance
@@ -375,6 +383,11 @@ type Instance struct {
 	recentRestartTimes []time.Time
 	restartMu          deadlock.Mutex
 
+	// programSwitchMu serializes SwitchProgram calls so a manual program-switch
+	// request and an automatic capacity-monitor fallback can't race on the same
+	// instance and double-restart or double-port history.
+	programSwitchMu deadlock.Mutex
+
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
 	lifecycleListenersMu deadlock.Mutex
@@ -408,6 +421,14 @@ const (
 	PauseReasonAutoInactivity = "auto:inactivity"
 	PauseReasonAutoLimit      = "auto:session_limit"
 	PauseReasonAutoResource   = "auto:resource"
+)
+
+// PermissionMode constants for the --permission-mode Claude Code flag.
+const (
+	PermissionModeAuto              = "auto"
+	PermissionModeBypassPermissions = "bypassPermissions"
+	PermissionModeAcceptEdits       = "acceptEdits"
+	PermissionModeManual            = "manual"
 )
 
 // SessionType is an alias for config.SessionType so callers can use either package.
@@ -879,6 +900,14 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 				i.claudeSession.ConversationUUID = ""
 				i.HistoryFilePath = ""
 			}
+			// Re-detect immediately from the freshly-started process's open files rather
+			// than leaving these blank until some unrelated caller happens to trigger
+			// detection later (ClaudeAdapter.Import, SwitchWorkspace, ...). Left blank, a
+			// second crash/restart before that lazy trigger fires would fall into the "no
+			// conversation UUID, starting fresh" branch above and lose the conversation
+			// entirely — even though the resumed process (or its jsonl history file) is
+			// right there to detect from.
+			i.tryExtractConversationUUID()
 		} else {
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
@@ -896,11 +925,14 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	} else {
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
-			log.Info("setting up git worktree", "session", i.Title)
-			if err := i.gitManager.Setup(); err != nil {
-				log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
-				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
-				return setupErr
+			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
+			if i.SessionType != SessionTypeExistingWorktree {
+				log.Info("setting up git worktree", "session", i.Title)
+				if err := i.gitManager.Setup(); err != nil {
+					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
+					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
+					return setupErr
+				}
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
@@ -944,7 +976,15 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		}
 	}
 	i.started.Store(true)
-	i.snapshot.Store(buildSnapshot(i))
+	// buildSnapshot reads every mutable field; take i.mu here (even though this
+	// runs inside an actor command with no OTHER actor writers to worry about)
+	// because legacy setters (MarkViewed & co.) mutate fields directly under
+	// i.mu.Lock() from outside the actor — see runActor's doc comment in
+	// actor.go for the full explanation.
+	i.mu.Lock()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	i.fireLifecycleEvent(EventStarted, "")
 
 	i.startVNCServer(context.Background())
@@ -1068,6 +1108,12 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				i.claudeSession.ConversationUUID = ""
 				i.HistoryFilePath = ""
 			}
+			// Re-detect immediately (see the identical comment in startLocked's cold
+			// restore path) instead of leaving these blank until some unrelated lazy
+			// caller triggers detection — otherwise a second crash before that happens
+			// loses conversation resumability entirely, even though the resumed
+			// process/jsonl file is right there to detect from right now.
+			i.tryExtractConversationUUID()
 		} else {
 			// Hot restore: tmux session is alive — attach to it.
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.
@@ -1093,11 +1139,14 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	} else {
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
-			log.Info("setting up git worktree", "session", i.Title)
-			if err := i.gitManager.Setup(); err != nil {
-				log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
-				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
-				return setupErr
+			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
+			if i.SessionType != SessionTypeExistingWorktree {
+				log.Info("setting up git worktree", "session", i.Title)
+				if err := i.gitManager.Setup(); err != nil {
+					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
+					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
+					return setupErr
+				}
 			}
 			basePath = i.gitManager.GetWorktreePath()
 		}
@@ -1190,8 +1239,13 @@ func (i *Instance) Kill() error {
 	return i.Destroy()
 }
 
-// Destroy completely destroys the instance - both tmux session and worktree
+// Destroy completely destroys the instance - both tmux session and worktree.
+// Fires EventStopped unconditionally (even if the instance was never started)
+// so listeners tracking "is this session now gone" — e.g. BacklogLifecycleListener's
+// ItemSession.EndedAt bookkeeping — see every deliberate stop, not just natural exits.
 func (i *Instance) Destroy() error {
+	defer i.fireLifecycleEvent(EventStopped, "operator-destroy")
+
 	if !i.started.Load() {
 		// If instance was never started, just return success
 		return nil

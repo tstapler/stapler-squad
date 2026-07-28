@@ -8,6 +8,7 @@ export const pageRoot = style({
   padding: "2rem 1.5rem",
   height: "100%",
   overflowY: "auto",
+  overflowX: "hidden",
 });
 
 export const pageTitle = style({
@@ -17,11 +18,39 @@ export const pageTitle = style({
   marginBottom: "1.5rem",
 });
 
+export const tabRow = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  marginBottom: "2rem",
+});
+
 export const tabList = style({
   display: "flex",
-  borderBottom: `1px solid ${vars.color.borderColor}`,
   gap: 0,
-  marginBottom: "2rem",
+});
+
+/**
+ * Styled to match `tab` (same tab-strip look) but rendered outside the Radix
+ * `Tabs.List`/role="tablist" region: this links to a standalone route
+ * (/settings/pipeline-modes) rather than switching an in-page panel, so it
+ * must not claim the ARIA `tab` role a screen reader would expect to behave
+ * like the real Tabs.Trigger siblings.
+ */
+export const externalTabLink = style({
+  padding: "0.625rem 1rem",
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  color: vars.color.textMuted,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  transition: vars.transition.fast,
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+    },
+  },
 });
 
 export const tab = recipe({
@@ -63,6 +92,7 @@ export const tab = recipe({
 export const tabPanel = style({
   padding: "0",
   overflowY: "auto",
+  overflowX: "hidden",
 });
 
 export const sectionGroup = style({

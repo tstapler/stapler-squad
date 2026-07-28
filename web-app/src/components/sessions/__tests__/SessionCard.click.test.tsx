@@ -58,6 +58,19 @@ jest.mock("@/components/ui/Modal", () => ({
   ModalFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+jest.mock("@/lib/hooks/useSessionActions", () => ({
+  useSessionActions: () => ({
+    pause: jest.fn(),
+    resume: jest.fn(),
+    delete: jest.fn(),
+    rename: jest.fn(),
+    restart: jest.fn(),
+    createCheckpoint: jest.fn(),
+    updateTags: jest.fn(),
+    update: jest.fn(),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Minimal session fixture
 // ---------------------------------------------------------------------------

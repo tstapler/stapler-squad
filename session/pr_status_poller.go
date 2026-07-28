@@ -62,13 +62,14 @@ type PRStatusPoller struct {
 	// authState stores pollerAuthResult atomically; readers are lock-free.
 	authState atomic.Value //nolint:exhaustruct
 
-	// Pause polling when rate limited.
-	rateLimitedUntil time.Time
-
 	// noPRPollAfter tracks the earliest time at which we should re-check a
 	// session that had no PR on the previous poll. Keyed by session title.
 	// Guarded by mu.
 	noPRPollAfter map[string]time.Time
+
+	// listEtags stores ETags for the branch→PR list endpoint, keyed by
+	// "owner/repo/branch". Allows 304 responses during PR discovery.
+	listEtags sync.Map
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -186,16 +187,15 @@ func (p *PRStatusPoller) pollLoop() {
 
 // checkAllSessions iterates all monitored instances and updates PR status concurrently.
 func (p *PRStatusPoller) checkAllSessions() {
+	if limited, until := github.DefaultRateLimiter.IsLimited(); limited {
+		log.Info("PR status poller: rate limited, skipping tick", "until", until)
+		return
+	}
+
 	p.mu.RLock()
 	instances := make([]*Instance, len(p.instances))
 	copy(instances, p.instances)
-	rateLimitedUntil := p.rateLimitedUntil
 	p.mu.RUnlock()
-
-	if time.Now().Before(rateLimitedUntil) {
-		log.Info("PR status poller: rate limited, skipping tick", "until", rateLimitedUntil)
-		return
-	}
 
 	if !p.isAuthOK() {
 		return
@@ -285,15 +285,31 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if branch == "" {
 			return
 		}
-		prInfo, err := github.GetPRForBranch(ctx, owner, repo, branch)
+		listKey := owner + "/" + repo + "/" + branch
+		var listEtag string
+		if v, ok := p.listEtags.Load(listKey); ok {
+			listEtag = v.(string)
+		}
+		prInfo, newEtag, changed, err := github.GetPRForBranchConditional(ctx, owner, repo, branch, listEtag)
+		if newEtag != "" {
+			p.listEtags.Store(listKey, newEtag)
+		}
+		if !changed {
+			// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+			if p.config.NoPRBackoff > 0 {
+				p.mu.Lock()
+				p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+				p.mu.Unlock()
+			}
+			return
+		}
 		if err != nil {
 			if errors.Is(err, github.ErrNoPR) {
-				// No PR exists yet for this branch
 				p.applyNoPR(inst)
 				return
 			}
 			if p.handleFetchError(err) {
-				return // rate limit or auth error handled
+				return
 			}
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
 			return
@@ -331,15 +347,15 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	p.applyPRUpdate(inst, prInfo)
 }
 
-// handleFetchError inspects an error and updates poller state for rate limits / auth failures.
-// Returns true if the error requires aborting the current session fetch.
+// handleFetchError inspects an error for rate limits and auth failures.
+// Returns true if the error was handled (caller should not log separately).
+// Rate-limit state is managed by github.DefaultRateLimiter (updated by the
+// transport); this method only needs to detect the error type and signal auth
+// cache invalidation.
 func (p *PRStatusPoller) handleFetchError(err error) bool {
 	msg := err.Error()
 	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "429") {
-		log.Warn("PR status poller: github rate limit hit, pausing for 60s")
-		p.mu.Lock()
-		p.rateLimitedUntil = time.Now().Add(60 * time.Second)
-		p.mu.Unlock()
+		log.Warn("PR status poller: github rate limit hit")
 		return true
 	}
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {

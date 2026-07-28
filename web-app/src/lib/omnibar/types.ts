@@ -81,7 +81,7 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
   [InputType.SpawnShell]: {
     label: "Spawn Shell",
     icon: ">_",
-    description: "Open the new shell dialog",
+    description: "Open a terminal session, optionally in a directory or running a command",
   },
   [InputType.Workflow]: {
     label: "Workflow",

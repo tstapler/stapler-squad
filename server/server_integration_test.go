@@ -33,6 +33,32 @@ func findFreePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+// installFakeClaudeBinary puts a fake `claude` executable at the front of PATH
+// for the duration of the test (t.Setenv restores the original PATH on cleanup).
+//
+// classifyProgram (session/instance_tmux.go) matches on the literal "claude"
+// basename to decide whether to build the --mcp-config flag these tests assert
+// on, so Program must stay "claude" -- but CI runners don't have the real
+// claude CLI installed. Without a stand-in, the tmux-spawned shell exits
+// instantly ("claude: command not found"), and depending on a startup race for
+// tmux's remain-on-exit default, that can kill the session before Start()'s
+// own readiness check observes it -- CreateSession's async goroutine then
+// returns early on that error, before ever calling InjectHookConfig, so
+// waitForPermissionRequestHookCommand times out no matter how long its budget
+// is (observed: failed at both 30s and 60s). The fake binary only needs to
+// stay alive long enough for the session to be detected as live and for
+// InjectHookConfig to run -- it does nothing else and is never invoked with
+// real Claude Code behavior in mind.
+func installFakeClaudeBinary(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 60\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatalf("installFakeClaudeBinary: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // Server_should_ServeHealthCheck_When_StartedWithPortZero (REQ-1 test #4).
 //
 // Real net.Listen("tcp","localhost:0"), real Serve(ln), real
@@ -253,6 +279,8 @@ func TestServer_should_KeepSingleOriginAllowlist_When_ExtraOriginsEnvVarUnset(t 
 // threaded into NewApprovalHandler and SetHookBaseURLFn, each re-evaluated lazily against
 // srv.GetAddr() at hook-injection time (never snapshotted before Start() resolves the port).
 func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated(t *testing.T) {
+	installFakeClaudeBinary(t)
+
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -279,8 +307,18 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 	// Wait for the real bound address to be resolved (mirrors the PORT=0 tests above).
 	addr := waitForResolvedAddr(t, srv, 10*time.Second)
 
+	// The session title must be unique per invocation, not just per test: config
+	// test-mode state (config.GetConfigDir()) is keyed by os.Getpid(), and
+	// DeleteSession's cleanup tears the tmux session down via an unawaited
+	// goroutine, so every test in this binary (across `-count` repeats, or
+	// simply within one CI run of the full suite) shares process-scoped state.
+	// A hardcoded title lets a later run collide with a still-tearing-down
+	// session from an earlier one (CodeAlreadyExists, or a stall behind stale
+	// state that can exceed this test's 15s wait) -- observed as intermittent
+	// "timed out waiting for tmux session" CI failures.
+	title := fmt.Sprintf("hook-url-port-zero-test-%d", time.Now().UnixNano())
 	resp, err := deps.SessionService.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:   "hook-url-port-zero-test",
+		Title:   title,
 		Path:    t.TempDir(),
 		Program: "claude",
 	}))
@@ -288,15 +326,14 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := resp.Msg.Session.Id
+	var inst *session.Instance
 	t.Cleanup(func() {
 		_, _ = deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: sessionID}))
+		waitForTmuxTeardown(t, inst, 5*time.Second)
 	})
 
 	// CreateSession starts the instance and injects hook config asynchronously; wait for both.
-	// Timeouts are generous (vs. the sub-second local case) because CI runs this under
-	// `go test -race` alongside the rest of the server/session/config suite, which can
-	// push tmux session startup + hook injection close to a tighter deadline under load.
-	inst := waitForLiveInstance(t, deps, sessionID, 30*time.Second)
+	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
 	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
 
@@ -334,6 +371,8 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 // http://localhost:<port>/api/hooks/permission-request -- proving Epic 1.3's lazy
 // baseURLFn switch didn't regress the default/production instance.
 func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testing.T) {
+	installFakeClaudeBinary(t)
+
 	deps, err := BuildDependencies()
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
@@ -346,8 +385,12 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 		t.Fatalf("expected GetAddr() to report the configured explicit address before Start(), got %q, want %q", got, addr)
 	}
 
+	// Unique per invocation -- see the comment on the equivalent line in
+	// TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated
+	// above for why a hardcoded title causes intermittent CI flakiness.
+	title := fmt.Sprintf("hook-url-explicit-port-test-%d", time.Now().UnixNano())
 	resp, err := deps.SessionService.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:   "hook-url-explicit-port-test",
+		Title:   title,
 		Path:    t.TempDir(),
 		Program: "claude",
 	}))
@@ -355,11 +398,13 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := resp.Msg.Session.Id
+	var inst *session.Instance
 	t.Cleanup(func() {
 		_, _ = deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: sessionID}))
+		waitForTmuxTeardown(t, inst, 5*time.Second)
 	})
 
-	inst := waitForLiveInstance(t, deps, sessionID, 30*time.Second)
+	inst = waitForLiveInstance(t, deps, sessionID, 30*time.Second)
 	settingsPath := filepath.Join(inst.GetEffectiveRootDir(), ".claude", "settings.local.json")
 	hookCmd := waitForPermissionRequestHookCommand(t, settingsPath, 30*time.Second)
 
@@ -409,6 +454,12 @@ func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID strin
 // waitForPermissionRequestHookCommand polls settingsPath until CreateSession's asynchronous
 // InjectHookConfig call (server/services/approval_handler.go) has written a PermissionRequest
 // command-type hook entry, then returns its command string. Fails the test on timeout.
+//
+// Callers pass 60s, not the ~instant time InjectHookConfig itself takes: the write only
+// happens after instance.Start(true) (real tmux session + process spawn) returns, and on a
+// contended CI runner running the full `-race` suite in parallel that can take much longer
+// than the file write itself. Observed CI flakiness at 30s (this test intermittently timed
+// out waiting on scheduling, not on a real hang) motivated the wider budget.
 func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -447,4 +498,43 @@ func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, time
 	}
 	t.Fatalf("expected %s to contain a PermissionRequest command hook within %s", settingsPath, timeout)
 	return ""
+}
+
+// waitForTmuxTeardown polls inst.TmuxSessionExists() until the underlying tmux
+// session is confirmed gone, or timeout elapses.
+//
+// Root cause this addresses: DeleteSession (server/services/session_service.go)
+// intentionally destroys tmux/git resources in an unawaited goroutine so the RPC
+// returns immediately -- correct for production UX, but it means a test's
+// t.Cleanup(DeleteSession) can return before the real teardown finishes. Every
+// integration test in this package shares one process-scoped, PID-keyed tmux
+// server socket (session/tmux.testSocketOnce, gated by config.IsTestMode()) --
+// by design, so isolated test tmux calls within one `go test` binary land on the
+// same server. Without waiting here, a still-tearing-down session from an earlier
+// test can pile up on that shared socket, and CI observed exactly this: repeated,
+// intermittent "timed out waiting for tmux session" failures that got WORSE
+// (monotonically increasing latency) the more CreateSession/DeleteSession cycles
+// ran in the same process (reproduced locally with `go test -race -count=10`,
+// and confirmed via bisection this predates PR #144's actual changes -- it's a
+// pre-existing gap between DeleteSession's fire-and-forget teardown contract and
+// these tests' assumption that cleanup is synchronous).
+//
+// Deliberately does not fail the test on timeout (t.Logf, not t.Fatalf/t.Errorf):
+// this runs inside t.Cleanup, where the test's own PASS/FAIL verdict is already
+// decided -- a slow-but-eventually-successful teardown shouldn't retroactively
+// fail a test that otherwise passed. It still meaningfully reduces cross-test
+// accumulation by not returning from Cleanup while teardown is still in flight.
+func waitForTmuxTeardown(t *testing.T, inst *session.Instance, timeout time.Duration) {
+	t.Helper()
+	if inst == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !inst.TmuxSessionExists() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Logf("tmux session for %q still reported alive %s after DeleteSession; teardown may still be in flight", inst.Title, timeout)
 }

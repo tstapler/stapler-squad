@@ -21,12 +21,13 @@ web/src/gen/
 web-app/src/gen/
 .proto-gen.stamp
 
-# ent ORM generated code — regenerate with: go generate ./session/ent/
+# ent ORM generated code — regenerate with: make ent-gen (or go generate ./session/ent/)
 # schema/ and generate.go are hand-written and must remain tracked.
 session/ent/*.go
 !session/ent/generate.go
 session/ent/*/
 !session/ent/schema/
+.ent-gen.stamp
 /web-app/.next
 /web-app/node_modules/
 /web-app/out/
@@ -71,10 +72,8 @@ benchmark_results.txt
 # Build artifacts
 build/
 
-# Pinned tmux submodule source — cloned by scripts/build-tmux.sh at build time.
-# Only BUILD.bazel is tracked; the rest is fetched on demand.
-third_party/tmux/*
-!third_party/tmux/BUILD.bazel
+# Pinned tmux build stamp (third_party/tmux itself is a real git submodule now,
+# so its contents don't need ignore rules).
 .tmux-build.stamp
 
 # Scanner build artifacts
@@ -94,6 +93,12 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+
+# Benchmark baselines — persisted via GitHub Actions cache (see
+# .github/workflows/benchmark.yml / build.yml's benchmark-gate job), not
+# committed. A prior version committed these on every push to main, which
+# flooded the commit history for very little value.
+benchmarks/
 
 # Backlog context files injected into worktrees — never source files
 .backlog-context.md

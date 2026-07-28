@@ -128,7 +128,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 		}
 		result.Success = true
 		result.ChangesHandled = "none (directory change only)"
-		i.snapshot.Store(buildSnapshot(i))
+		i.mu.Lock()
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
 		return result, nil
 	}
 
@@ -162,7 +165,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 			i.started.Store(false)
 
 			log.Info("restarting session in new directory", "path", repoPath)
-			i.snapshot.Store(buildSnapshot(i))
+			i.mu.Lock()
+			snap := buildSnapshot(i)
+			i.mu.Unlock()
+			i.snapshot.Store(snap)
 			if err := startLocked(s, false); err != nil {
 				result.Error = fmt.Errorf("failed to restart session: %w", err)
 				return result, result.Error
@@ -203,7 +209,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 
 	if switchErr != nil {
 		log.Warn("switch failed, attempting recovery", "err", switchErr)
-		i.snapshot.Store(buildSnapshot(i))
+		i.mu.Lock()
+		snap := buildSnapshot(i)
+		i.mu.Unlock()
+		i.snapshot.Store(snap)
 		if err := startLocked(s, false); err != nil {
 			log.Error("recovery failed", "err", err)
 		}
@@ -212,7 +221,10 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	}
 
 	log.Info("restarting session with claude --resume")
-	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Lock()
+	snap := buildSnapshot(i)
+	i.mu.Unlock()
+	i.snapshot.Store(snap)
 	if err := startLocked(s, false); err != nil {
 		result.Error = fmt.Errorf("failed to restart session: %w", err)
 		return result, result.Error

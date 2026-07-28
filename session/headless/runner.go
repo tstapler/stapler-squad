@@ -4,9 +4,11 @@
 package headless
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -45,14 +47,40 @@ var (
 
 // ProcessRunner implements ClaudeRunner using executor.StartProcess.
 type ProcessRunner struct {
-	claudeBin string
-	workDir   string // optional working directory; empty = inherit from parent
+	claudeBin       string
+	workDir         string // optional working directory; empty = inherit from parent
+	allowedTools    string // optional --allowedTools value; empty = not passed
+	permissionMode  string // optional --permission-mode value; empty = not passed
+	disallowedTools string // optional --disallowedTools value; empty = not passed
 }
 
 // WithWorkDir returns a copy of this ProcessRunner that sets the subprocess working
-// directory to workDir. Used by CallBlockingWithOptions for per-call directory override.
+// directory to workDir, preserving any existing allowedTools/permissionMode/
+// disallowedTools. Used by CallBlocking for per-call directory override.
 func (r *ProcessRunner) WithWorkDir(workDir string) *ProcessRunner {
-	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir}
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: workDir, allowedTools: r.allowedTools, permissionMode: r.permissionMode, disallowedTools: r.disallowedTools}
+}
+
+// WithToolAccess returns a copy of this ProcessRunner with allowedTools/permissionMode/
+// disallowedTools set, preserving any existing workDir.
+func (r *ProcessRunner) WithToolAccess(allowedTools, permissionMode, disallowedTools string) *ProcessRunner {
+	return &ProcessRunner{claudeBin: r.claudeBin, workDir: r.workDir, allowedTools: allowedTools, permissionMode: permissionMode, disallowedTools: disallowedTools}
+}
+
+// toolAccessArgs returns the --allowedTools/--permission-mode/--disallowedTools flag
+// pairs for r's configured values, in that order.
+func (r *ProcessRunner) toolAccessArgs() []string {
+	var extra []string
+	if r.allowedTools != "" {
+		extra = append(extra, "--allowedTools", r.allowedTools)
+	}
+	if r.permissionMode != "" {
+		extra = append(extra, "--permission-mode", r.permissionMode)
+	}
+	if r.disallowedTools != "" {
+		extra = append(extra, "--disallowedTools", r.disallowedTools)
+	}
+	return extra
 }
 
 // claudeAllowedEnvPrefixes lists the env-var prefixes that are forwarded to the
@@ -85,9 +113,12 @@ func filteredEnv() []string {
 // /proc/<pid>/cmdline. The stop function terminates the subprocess and must
 // always be called.
 func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader) (io.ReadCloser, func() error, error) {
+	args = append(args, r.toolAccessArgs()...)
+	var stderrBuf bytes.Buffer
 	opts := []executor.ProcessOption{
 		executor.WithNewSession(),
 		executor.WithProcessReplaceEnv(filteredEnv()),
+		executor.WithConsumeStderr(&stderrBuf),
 	}
 	if r.workDir != "" {
 		opts = append(opts, executor.WithProcessDir(r.workDir))
@@ -102,7 +133,11 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, stdin io.Reader)
 
 	stdout := proc.Stdout()
 	stop := func() error {
-		return proc.Stop()
+		stopErr := proc.Stop()
+		if s := strings.TrimSpace(stderrBuf.String()); s != "" {
+			log.Printf("ERROR: claude headless stderr: %s", s)
+		}
+		return stopErr
 	}
 	return io.NopCloser(stdout), stop, nil
 }

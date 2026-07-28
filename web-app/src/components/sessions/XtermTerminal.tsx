@@ -164,6 +164,14 @@ export interface XtermTerminalHandle {
   clear: () => void;
   focus: () => void;
   fit: () => void;
+  /**
+   * Directly set the terminal's grid size in cols/rows, bypassing FitAddon's pixel-based
+   * measurement. Used to synchronously match the terminal buffer to a pre-calculated size
+   * (from cached cell metrics) before the initial capture-pane snapshot streams in — otherwise
+   * ANSI cursor-positioning sequences targeting rows beyond the xterm.js default (80x24) are
+   * silently dropped, leaving those rows unpainted until a later resize forces a full repaint.
+   */
+  resize: (cols: number, rows: number) => void;
   search: (term: string) => boolean;
   searchNext: (term: string) => boolean;
   searchPrevious: (term: string) => boolean;
@@ -1188,6 +1196,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     },
     fit: () => {
       fitAddonRef.current?.fit();
+    },
+    resize: (cols: number, rows: number) => {
+      terminalRef.current?.resize(cols, rows);
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;

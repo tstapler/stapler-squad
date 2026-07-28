@@ -194,10 +194,19 @@ func (p *PathCompletionService) ListWorktrees(
 	}
 	expanded = strings.TrimRight(expanded, "/")
 
-	cmd := safeexec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	// Bound the git subprocess so a hung/slow filesystem can't block the
+	// omnibar's "existing worktree" dropdown forever — same guard as
+	// ListPathCompletions' pathCompletionTimeout.
+	listCtx, cancel := context.WithTimeout(ctx, pathCompletionTimeout)
+	defer cancel()
+
+	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = expanded
 	output, err := cmd.Output()
 	if err != nil {
+		if listCtx.Err() != nil {
+			return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("listing worktrees timed out"))
+		}
 		// Not a git repo or git not available — return empty list gracefully.
 		return connect.NewResponse(&sessionv1.ListWorktreesResponse{}), nil
 	}

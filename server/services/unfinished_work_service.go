@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -387,28 +388,39 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 
 	worktreePath := r.WorktreePath
 
-	// git add .
-	addCtx, addCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer addCancel()
-	addCmd := safeexec.CommandContext(addCtx, "git", "-C", worktreePath, "add", ".")
-	addCmd.WaitDelay = 2 * time.Second
-	if out, err := addCmd.CombinedOutput(); err != nil {
+	// Stage everything, then untrack any backlog-scaffolding path that's already
+	// tracked in this branch's history (git.ScaffoldingExcludePatterns) — the same
+	// guard GitWorktree.CommitChanges/PushChanges apply, so a stale-tracked
+	// .backlog-context.md/.claude/commands/backlog/* can never be re-committed here
+	// either, regardless of gitignore/info-exclude state.
+	wt := git.NewGitWorktreeFromStorage(req.Msg.RepoPath, worktreePath, "", req.Msg.Branch, "")
+	if err := wt.StageAllExceptScaffolding(); err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("git add failed: %v\n%s", err, out),
+			ErrorMessage: fmt.Sprintf("git add failed: %v", err),
 		}), nil
 	}
 
-	// git commit -m <message>
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer commitCancel()
-	commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
-	commitCmd.WaitDelay = 2 * time.Second
-	if out, err := commitCmd.CombinedOutput(); err != nil {
+	hasStaged, err := wt.HasStagedChanges()
+	if err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("git commit failed: %v\n%s", err, out),
+			ErrorMessage: fmt.Sprintf("git diff --cached failed: %v", err),
 		}), nil
+	}
+
+	if hasStaged {
+		// git commit -m <message>
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer commitCancel()
+		commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
+		commitCmd.WaitDelay = 2 * time.Second
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("git commit failed: %v\n%s", err, out),
+			}), nil
+		}
 	}
 
 	// git push -u origin <branch> (60s timeout)

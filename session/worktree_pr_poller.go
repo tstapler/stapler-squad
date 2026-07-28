@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,8 @@ import (
 
 // WorktreeScanItem is the minimal worktree info the poller needs from the
 // unfinished-work scanner. Using a local struct avoids an import cycle:
-//   session → session/unfinished → pkg/events → session
+//
+//	session → session/unfinished → pkg/events → session
 //
 // The server layer bridges the two packages via WorktreeSource (adapter pattern).
 type WorktreeScanItem struct {
@@ -36,6 +38,9 @@ type WorktreePRPollerConfig struct {
 	PollInterval      time.Duration
 	CallTimeout       time.Duration
 	AuthCacheDuration time.Duration
+	// NoPRBackoff is how long to skip a branch after its PR list returns empty.
+	// Zero disables the backoff.
+	NoPRBackoff time.Duration
 }
 
 // DefaultWorktreePRPollerConfig returns sensible defaults matching PRStatusPoller.
@@ -44,7 +49,14 @@ func DefaultWorktreePRPollerConfig() WorktreePRPollerConfig {
 		PollInterval:      60 * time.Second,
 		CallTimeout:       10 * time.Second,
 		AuthCacheDuration: 5 * time.Minute,
+		NoPRBackoff:       5 * time.Minute,
 	}
+}
+
+// listCacheEntry records the ETag and last result for a branch→PR list API call.
+type listCacheEntry struct {
+	etag string
+	noPR bool // true if the last list response contained no PRs
 }
 
 // worktreeOnUpdatedFn is a function value stored in an atomic.Value.
@@ -62,17 +74,23 @@ type worktreeOnUpdatedFn struct {
 //   - data cache is a sync.Map — lock-free reads in the steady state
 //   - auth state is an atomic.Value (pollerAuthResult) — same pattern as PRStatusPoller
 //   - onUpdated callback is an atomic.Value — writers Store, readers Load, no lock
+//   - rateLimitedUntil and noPRPollAfter are guarded by mu
 type WorktreePRPoller struct {
 	source       WorktreeSource
 	prPoller     *PRStatusPoller // for session-backed-path exclusion
 	etagCache    *github.ETagCache
 	config       WorktreePRPollerConfig
 	data         sync.Map     // key: worktreeCacheKey(repoPath, branch), value: *github.PRInfo
+	listEtags    sync.Map     // key: worktreeCacheKey, value: listCacheEntry
 	authState    atomic.Value //nolint:exhaustruct // stores pollerAuthResult
 	onUpdatedVal atomic.Value //nolint:exhaustruct // stores worktreeOnUpdatedFn
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+
+	mu            sync.Mutex
+	noPRPollAfter map[string]time.Time // key: worktreeCacheKey
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewWorktreePRPoller creates a WorktreePRPoller with default configuration.
@@ -84,9 +102,10 @@ func NewWorktreePRPoller(etagCache *github.ETagCache, prPoller *PRStatusPoller) 
 // NewWorktreePRPollerWithConfig creates a WorktreePRPoller with custom configuration.
 func NewWorktreePRPollerWithConfig(etagCache *github.ETagCache, prPoller *PRStatusPoller, cfg WorktreePRPollerConfig) *WorktreePRPoller {
 	return &WorktreePRPoller{
-		etagCache: etagCache,
-		prPoller:  prPoller,
-		config:    cfg,
+		etagCache:     etagCache,
+		prPoller:      prPoller,
+		config:        cfg,
+		noPRPollAfter: make(map[string]time.Time),
 	}
 }
 
@@ -165,6 +184,18 @@ func (p *WorktreePRPoller) pollLoop() {
 // pollWorktrees iterates scan results, skips session-backed worktrees, and
 // fetches GitHub PR data for the remainder.
 func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
+	if limited, until := github.DefaultRateLimiter.IsLimited(); limited {
+		log.Info("worktree PR poller: rate limited, skipping tick", "until", until)
+		return
+	}
+
+	p.mu.Lock()
+	noPRPollAfter := make(map[string]time.Time, len(p.noPRPollAfter))
+	for k, v := range p.noPRPollAfter {
+		noPRPollAfter[k] = v
+	}
+	p.mu.Unlock()
+
 	if !p.isAuthOK() {
 		return
 	}
@@ -174,12 +205,18 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5) // match PRStatusPoller default concurrency
 
+	now := time.Now()
 	for _, item := range items {
 		if _, owned := sessionPaths[item.WorktreePath]; owned {
 			continue // PRStatusPoller covers this one
 		}
 		if item.Branch == "" || item.RepoPath == "" {
 			continue
+		}
+
+		key := worktreeCacheKey(item.RepoPath, item.Branch)
+		if pollAfter, ok := noPRPollAfter[key]; ok && now.Before(pollAfter) {
+			continue // no-PR backoff still in effect
 		}
 
 		captured := item
@@ -214,7 +251,9 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {
 		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef.Owner(), repoRef.Repo(), existing.Number, p.etagCache)
 		if fetchErr != nil {
-			p.handleFetchError(fetchErr)
+			if !p.handleFetchError(fetchErr) {
+				log.Warn("worktree PR poller: failed to fetch PR status", "branch", item.Branch, "err", fetchErr)
+			}
 			return
 		}
 		if changed && info != nil {
@@ -224,17 +263,45 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 		return
 	}
 
-	// Discovery: find PR by branch name.
-	info, err := github.GetPRForBranch(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch)
-	if err != nil {
-		if strings.Contains(err.Error(), "no open PR") {
-			return // expected when branch has no PR yet
+	// Discovery: find PR by branch name, using ETag to avoid redundant list calls.
+	var listEtag string
+	if v, ok := p.listEtags.Load(key); ok {
+		listEtag = v.(listCacheEntry).etag
+	}
+
+	info, newEtag, changed, fetchErr := github.GetPRForBranchConditional(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch, listEtag)
+	if changed && newEtag != "" {
+		p.listEtags.Store(key, listCacheEntry{etag: newEtag, noPR: errors.Is(fetchErr, github.ErrNoPR)})
+	}
+	if !changed {
+		// 304 Not Modified: re-apply no-PR backoff if the cached result had no PR.
+		if v, ok := p.listEtags.Load(key); ok && v.(listCacheEntry).noPR {
+			p.setNoPRBackoff(key)
 		}
-		p.handleFetchError(err)
+		return
+	}
+	if fetchErr != nil {
+		if errors.Is(fetchErr, github.ErrNoPR) {
+			p.setNoPRBackoff(key)
+			return
+		}
+		if !p.handleFetchError(fetchErr) {
+			log.Warn("worktree PR poller: PR discovery failed", "branch", item.Branch, "err", fetchErr)
+		}
 		return
 	}
 	p.data.Store(key, info)
 	p.fireOnUpdated(item.RepoPath, item.Branch, info)
+}
+
+// setNoPRBackoff records that a branch has no PR and skips it for NoPRBackoff duration.
+func (p *WorktreePRPoller) setNoPRBackoff(key string) {
+	if p.config.NoPRBackoff <= 0 {
+		return
+	}
+	p.mu.Lock()
+	p.noPRPollAfter[key] = time.Now().Add(p.config.NoPRBackoff)
+	p.mu.Unlock()
 }
 
 // isAuthOK returns true if GitHub auth passes, using a time-based atomic cache.
@@ -253,17 +320,22 @@ func (p *WorktreePRPoller) isAuthOK() bool {
 	return true
 }
 
-// handleFetchError logs rate-limit and auth errors, invalidating auth cache on 401.
-func (p *WorktreePRPoller) handleFetchError(err error) {
+// handleFetchError inspects an error for rate limits and auth failures.
+// Returns true if the error was handled (caller should not log separately).
+// Rate-limit state is managed by github.DefaultRateLimiter (updated by the
+// transport); this method only needs to detect the error type.
+func (p *WorktreePRPoller) handleFetchError(err error) bool {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "rate limit") || strings.Contains(msg, "429"):
 		log.Warn("worktree PR poller: rate limit hit")
+		return true
 	case strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized"):
 		log.Warn("worktree PR poller: auth error, invalidating cache")
 		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
+		return true
 	default:
-		log.Warn("worktree PR poller: fetch error", "err", err)
+		return false
 	}
 }
 

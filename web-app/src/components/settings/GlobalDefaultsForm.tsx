@@ -15,6 +15,7 @@ import {
   label as labelClass,
   select,
   input,
+  hint,
   tagList,
   tag as tagClass,
   tagRemove,
@@ -33,6 +34,8 @@ export function GlobalDefaultsForm() {
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [cliFlags, setCliFlags] = useState("");
+  const [maxAutoReworkIterations, setMaxAutoReworkIterations] = useState(3);
+  const [maxConcurrentBacklogWorkItems, setMaxConcurrentBacklogWorkItems] = useState(2);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +56,8 @@ export function GlobalDefaultsForm() {
         setNewProjectBaseDir(defaults.newProjectBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
+        setMaxAutoReworkIterations(defaults.maxAutoReworkIterations || 3);
+        setMaxConcurrentBacklogWorkItems(defaults.maxConcurrentBacklogWorkItems || 2);
         const vars = Object.entries(defaults.envVars).map(([key, value]) => ({
           key,
           value,
@@ -91,6 +96,8 @@ export function GlobalDefaultsForm() {
         tags,
         envVars: envVarsMap,
         cliFlags,
+        maxAutoReworkIterations,
+        maxConcurrentBacklogWorkItems,
       });
       setSuccess("Global defaults saved.");
       setTimeout(() => setSuccess(null), 3000);
@@ -296,6 +303,51 @@ export function GlobalDefaultsForm() {
             value={cliFlags}
             onChange={(e) => setCliFlags(e.target.value)}
           />
+        </div>
+
+        {/* Max Auto Rework Iterations */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-max-auto-rework-iterations">
+            Max Auto-Rework Iterations
+          </label>
+          <input
+            id="global-max-auto-rework-iterations"
+            type="number"
+            min={1}
+            className={input}
+            value={maxAutoReworkIterations}
+            onChange={(e) =>
+              setMaxAutoReworkIterations(Math.max(1, Number(e.target.value) || 1))
+            }
+          />
+          <p className={hint}>
+            How many times a backlog item can be auto-reopened for rework after a failed
+            review before it&apos;s left in review for manual action.
+          </p>
+        </div>
+
+        {/* Max Concurrent Backlog Work Items */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-max-concurrent-backlog-work-items">
+            Max Concurrent Backlog Work Items
+          </label>
+          <input
+            id="global-max-concurrent-backlog-work-items"
+            type="number"
+            min={1}
+            max={10}
+            className={input}
+            value={maxConcurrentBacklogWorkItems}
+            onChange={(e) =>
+              setMaxConcurrentBacklogWorkItems(
+                Math.min(10, Math.max(1, Number(e.target.value) || 1))
+              )
+            }
+          />
+          <p className={hint}>
+            How many backlog items can have a live work session at once. Items spawned
+            beyond this cap are queued and start automatically as slots free up.
+          </p>
         </div>
 
         {/* Save */}

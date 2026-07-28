@@ -65,9 +65,9 @@ type ApprovalPattern struct {
 // ApprovalDetector detects approval requests in command output.
 type ApprovalDetector struct {
 	mu          sync.RWMutex
-	patterns    []*ApprovalPattern              // +checklocks:mu
-	history     []*ApprovalRequest              // +checklocks:mu
-	maxHistory  int                             // +checklocks:mu
+	patterns    []*ApprovalPattern                 // +checklocks:mu
+	history     []*ApprovalRequest                 // +checklocks:mu
+	maxHistory  int                                // +checklocks:mu
 	subscribers map[string]chan<- *ApprovalRequest // +checklocks:mu
 }
 

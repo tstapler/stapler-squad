@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
 	"github.com/tstapler/stapler-squad/cmd/commands"
@@ -61,17 +62,39 @@ var (
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// MCP mode: initialize logging to stderr, load storage, run MCP server.
+			// MCP mode: initialize logging to stderr, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
+			//
+			// Thin-client fast path: if the main stapler-squad HTTP server is already
+			// running (it almost always is — this binary is spawned per Claude Code
+			// subagent via .mcp.json, once per subagent process), proxy stdio tool
+			// calls to its existing /mcp endpoint instead of opening a second
+			// ent/SQLite connection + EventBus + ReviewQueue in this subprocess. Only
+			// falls back to the fully-local path (buildMCPDeps) when the HTTP server
+			// isn't reachable, e.g. before the daemon has started.
 			if mcpFlag {
 				mcpserver.InitMCPLogging()
 				cfg := config.LoadConfig()
-				_ = cfg // config loaded for side effects (e.g. workspace detection)
+				if proxyURL := mcpProxyURL(cfg.ListenAddress); proxyURL != "" {
+					proxyErr := mcpserver.RunProxyServer(ctx, proxyURL, mcpserver.ProxyHeaders())
+					if proxyErr == nil {
+						return nil
+					}
+					if errors.Is(proxyErr, mcpserver.ErrProxyUnavailable) {
+						log.Warn("mcp: thin-client proxy unavailable, falling back to embedded storage", "err", proxyErr, "url", proxyURL)
+					} else {
+						return proxyErr
+					}
+				}
 				store, svc, sbMgr, storage, mcpErr := buildMCPDeps()
 				if mcpErr != nil {
 					return fmt.Errorf("mcp: init deps: %w", mcpErr)
 				}
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil)
+				// The stdio MCP server is a short-lived subprocess per session, so a
+				// load-time read of the flag (rather than a live BacklogController,
+				// which BuildCoreDeps doesn't construct) is sufficient.
+				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled)
 			}
 
 			// Enable test mode if flag is set
@@ -255,6 +278,18 @@ var (
 						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tmuxReadyErr)
 					}
 					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
+				}
+				// --tmux-keep-server intentionally keeps the tmux server (and anything
+				// attached to it) alive across this restart, but any control-mode client
+				// this process spawns will be brand new -- so any control-mode client
+				// still attached at this exact point is necessarily a leftover from the
+				// previous process instance (BUG-042). Reconcile before restoring any
+				// session, which is the earliest point a fresh control-mode client could
+				// be spawned.
+				if killed, err := tmux.KillOrphanedControlModeClients(""); err != nil {
+					log.Warn("Failed to clean up orphaned control-mode clients", "err", err)
+				} else if killed > 0 {
+					log.Info("Cleaned up orphaned control-mode clients left over from a prior process instance", "count", killed)
 				}
 				// Create a keepalive session so the tmux server does not exit when all user sessions close.
 				if err := tmux.CreateKeepaliveSession(""); err != nil {
@@ -979,6 +1014,23 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 		FileEnabled:    true,
 		FileLevel:      log.DEBUG,
 	}
+}
+
+// mcpProxyURL builds the /mcp endpoint URL for the configured HTTP listen
+// address, normalizing wildcard/empty hosts (used for remote-access mode) to
+// "localhost" since the MCP proxy always dials the server on the same host.
+// Mirrors the URL shape SessionService.SetMCPServerURL builds for the
+// --mcp-config flag passed to newly launched sessions (server/server.go).
+// Returns "" if listenAddr has no parseable host:port.
+func mcpProxyURL(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/mcp"
 }
 
 // buildMCPDeps creates the minimal server dependencies needed by the MCP server.

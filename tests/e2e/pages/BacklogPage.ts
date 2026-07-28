@@ -60,6 +60,30 @@ export class BacklogPage {
     return this.page.locator('[data-testid="backlog-table-row"]');
   }
 
+  // ---------------------------------------------------------------------------
+  // Sort / group by repository
+  // ---------------------------------------------------------------------------
+
+  getRepositoryColumnHeader(): Locator {
+    return this.page.locator('[data-testid="backlog-col-repo-path"]');
+  }
+
+  getGroupBySelect(): Locator {
+    return this.page.locator('[data-testid="backlog-group-by-select"]');
+  }
+
+  async selectGroupBy(value: 'none' | 'repoPath') {
+    await this.getGroupBySelect().selectOption(value);
+  }
+
+  getGroupHeaders(): Locator {
+    return this.page.locator('[data-testid="backlog-group-header"]');
+  }
+
+  async getRowRepoPaths(): Promise<string[]> {
+    return this.getTableRows().locator('[data-testid="backlog-repo-path-cell"]').allTextContents();
+  }
+
   async openEmptyStateForm() {
     await this.emptyCtaButton.click();
     await this.page.waitForSelector('[data-testid="backlog-empty-form"]', { timeout: 5000 });
@@ -161,6 +185,19 @@ export class BacklogPage {
     await submitButton.click();
   }
 
+  /**
+   * Selects a pipeline mode option in the new/edit item form's radio group
+   * (Epic 3.2 — BacklogItemForm.tsx). `slug` is the PipelineMode's slug; use
+   * "default" for the built-in default option.
+   */
+  getPipelineModeOption(slug: string): Locator {
+    return this.page.getByTestId(`backlog-pipeline-mode-${slug}`);
+  }
+
+  async selectPipelineMode(slug: string) {
+    await this.getPipelineModeOption(slug).click();
+  }
+
   async cancelNewItemForm() {
     const cancelButton = this.page.locator('[data-testid="backlog-form-cancel"]');
     await cancelButton.click();
@@ -221,5 +258,35 @@ export class BacklogPage {
     await markReadyBtn.click();
     // Wait for status to update in the detail pane
     await expect(this.getDetailStatusBadge()).toContainText('Ready', { timeout: 10000 });
+  }
+
+  // ---------------------------------------------------------------------------
+  // backlog-event-driven-updates: live-update surfaces (list row, connection
+  // indicator, board columns)
+  // ---------------------------------------------------------------------------
+
+  getConnectionIndicator(): Locator {
+    return this.page.getByTestId('connection-indicator');
+  }
+
+  getRowById(itemId: string): Locator {
+    return this.page.locator(`[data-testid="backlog-table-row"][data-item-id="${itemId}"]`);
+  }
+
+  async gotoBoard() {
+    await this.page.goto('/backlog/board');
+    await this.page.waitForSelector('[data-testid="backlog-board"]', { timeout: 15000 });
+  }
+
+  getColumn(status: string): Locator {
+    return this.page.locator(`[data-testid="backlog-column-${status}"]`);
+  }
+
+  getCardInColumn(status: string, itemId: string): Locator {
+    return this.getColumn(status).locator(`[data-item-id="${itemId}"]`);
+  }
+
+  getExitingCards(): Locator {
+    return this.page.getByTestId('backlog-card-exiting');
   }
 }

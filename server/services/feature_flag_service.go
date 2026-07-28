@@ -11,6 +11,12 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// sddDefaultPipelineFlagName is shared between knownFeatureFlags below and
+// CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
+// so the flag name can't drift between where it's declared and where it's
+// read.
+const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
+
 // knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
 // Moved here from session_service.go (ADR-001: single-concern cluster gets its own file).
 var knownFeatureFlags = []struct {
@@ -28,6 +34,14 @@ var knownFeatureFlags = []struct {
 	{
 		name:        "backlog:conversation-view",
 		description: "Show JSONL conversation messages in the session monitor (default: terminal scrollback view)",
+	},
+	{
+		name:        "unfinished:mmap-index",
+		description: "Use the mmap-backed pack-index loader for the /unfinished scanner's git storage (session/unfinished/gogitstore) instead of the copy-based loader. See session/unfinished/design/mmap-activation-runbook.md before enabling.",
+	},
+	{
+		name:        sddDefaultPipelineFlagName,
+		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorkService } from "@/gen/session/v1/unfinished_pb";
@@ -65,7 +66,7 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleSubmit();
   };
 
-  return (
+  const modalContent = (
     <div
       className={styles.overlay}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -112,4 +113,6 @@ export function CommitPushModal({ repoPath, branch, onClose }: CommitPushModalPr
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }

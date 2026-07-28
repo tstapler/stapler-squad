@@ -4,6 +4,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { addRecentShellCommand, getRecentShellCommands } from "@/lib/omnibar/recentShellCommands";
 import * as styles from "./NewShellDialog.css";
 
 interface NewShellDialogProps {
@@ -18,6 +19,7 @@ export function NewShellDialog({ onSubmit, onCancel, defaultWorkingDir = "" }: N
   const [workingDir, setWorkingDir] = useState(defaultWorkingDir);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recentCommands] = useState(() => getRecentShellCommands());
 
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,9 +42,11 @@ export function NewShellDialog({ onSubmit, onCancel, defaultWorkingDir = "" }: N
     setIsSubmitting(true);
     setError(null);
     try {
+      const trimmedCommand = command.trim();
+      if (trimmedCommand) addRecentShellCommand(trimmedCommand);
       await onSubmit({
         name: name.trim() || undefined,
-        command: command.trim() || undefined,
+        command: trimmedCommand || undefined,
         workingDir: workingDir.trim() || undefined,
       });
     } catch (err) {
@@ -87,6 +91,21 @@ export function NewShellDialog({ onSubmit, onCancel, defaultWorkingDir = "" }: N
               placeholder="Defaults to $SHELL"
               autoComplete="off"
             />
+            {recentCommands.length > 0 && !command && (
+              <div className={styles.suggestions} data-testid="new-shell-recent-commands">
+                {recentCommands.map(cmd => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    className={styles.suggestionChip}
+                    data-testid="new-shell-recent-command"
+                    onClick={() => setCommand(cmd)}
+                  >
+                    {cmd}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className={styles.fieldGroup} style={{ marginTop: "12px" }}>

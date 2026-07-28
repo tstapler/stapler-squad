@@ -201,17 +201,12 @@ func (g *GitHubPRsPlugin) MapToBacklogItem(item ExternalItem, sourceID string) B
 	if len(desc) > 2000 {
 		desc = desc[:2000]
 	}
-	url := item.URL
-	if len(url) > 500 {
-		url = url[:500]
-	}
 	return BacklogItemData{
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
-		ExternalURL: url,
 		SourceID:    sourceID,
 	}
 }

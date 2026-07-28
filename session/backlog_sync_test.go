@@ -42,7 +42,6 @@ func (f *fakeSyncPlugin) MapToBacklogItem(item ExternalItem, sourceID string) Ba
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
-		ExternalURL: item.URL,
 		SourceID:    sourceID,
 	}
 }
@@ -244,131 +243,6 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, "Local", refetched.Title, "all fields locked, so nothing should change")
-}
-
-// TestSyncOne_BackfillsExternalURLOnExistingItem proves AC6's positive case:
-// an existing item with no ExternalURL gets backfilled from the plugin's fetch.
-func TestSyncOne_BackfillsExternalURLOnExistingItem(t *testing.T) {
-	plugin := &fakeSyncPlugin{
-		id: "fake",
-		items: []ExternalItem{
-			{ExternalID: "ext-1", Title: "Remote Title", Description: "Remote Desc", Priority: 3, URL: "https://github.com/acme/widget/issues/1"},
-		},
-	}
-	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
-	defer cleanup()
-
-	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:       "Remote Title",
-		Description: "Remote Desc",
-		Priority:    3,
-		Status:      string(BacklogStatusIdea),
-		ExternalID:  "ext-1",
-		ExternalURL: "",
-		SourceID:    sourceID,
-	})
-	require.NoError(t, err)
-
-	er := storage.repo.(*EntRepository)
-	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
-	require.NoError(t, err)
-	require.NoError(t, sl.SyncOne(ctx, entSrc))
-
-	refetched, err := storage.GetBacklogItem(ctx, created.ID)
-	require.NoError(t, err)
-	require.Equal(t, "https://github.com/acme/widget/issues/1", refetched.ExternalURL)
-
-	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
-	require.NoError(t, err)
-	require.Equal(t, 1, events[0].ItemsUpdated)
-}
-
-// TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified is the
-// exact anyField-independence regression ADR-001 exists to prevent: the
-// ExternalURL backfill must fire even when title/description/priority are all
-// user-locked (which would otherwise leave anyField false and skip the update
-// entirely).
-func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *testing.T) {
-	plugin := &fakeSyncPlugin{
-		id: "fake",
-		items: []ExternalItem{
-			{ExternalID: "ext-1", Title: "Remote", Description: "Remote", Priority: 5, URL: "https://github.com/acme/widget/issues/1"},
-		},
-	}
-	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
-	defer cleanup()
-
-	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:       "Local",
-		Description: "Local",
-		Priority:    2,
-		Status:      string(BacklogStatusIdea),
-		ExternalID:  "ext-1",
-		ExternalURL: "",
-		SourceID:    sourceID,
-	})
-	require.NoError(t, err)
-
-	er := storage.repo.(*EntRepository)
-	createdUUID, err := uuid.Parse(created.ID)
-	require.NoError(t, err)
-	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
-		SetUserModifiedFields(`["title","description","priority"]`).
-		Save(ctx)
-	require.NoError(t, err)
-
-	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
-	require.NoError(t, err)
-	require.NoError(t, sl.SyncOne(ctx, entSrc))
-
-	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
-	require.NoError(t, err)
-	require.Equal(t, 1, events[0].ItemsUpdated, "ExternalURL backfill must fire even with all other fields locked")
-	require.Equal(t, 0, events[0].ItemsSkipped)
-
-	refetched, err := storage.GetBacklogItem(ctx, created.ID)
-	require.NoError(t, err)
-	require.Equal(t, "Local", refetched.Title, "locked title must still not be overwritten")
-	require.Equal(t, "https://github.com/acme/widget/issues/1", refetched.ExternalURL)
-}
-
-// TestSyncOne_DoesNotBackfillExternalURLForItemsNotInFetchResult pins AC6's
-// documented, accepted limitation: an item whose ExternalID is absent from the
-// plugin's Fetch result (e.g. a closed issue no longer returned by state=open)
-// never gets backfilled.
-func TestSyncOne_DoesNotBackfillExternalURLForItemsNotInFetchResult(t *testing.T) {
-	plugin := &fakeSyncPlugin{
-		id: "fake",
-		items: []ExternalItem{
-			// Only ext-1 is returned this tick — ext-2's issue is simulated closed.
-			{ExternalID: "ext-1", Title: "Remote 1", Priority: 3, URL: "https://github.com/acme/widget/issues/1"},
-		},
-	}
-	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
-	defer cleanup()
-
-	ctx := context.Background()
-	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title: "Remote 1", Priority: 3, Status: string(BacklogStatusIdea),
-		ExternalID: "ext-1", ExternalURL: "", SourceID: sourceID,
-	})
-	require.NoError(t, err)
-	created2, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title: "Remote 2", Priority: 3, Status: string(BacklogStatusIdea),
-		ExternalID: "ext-2", ExternalURL: "", SourceID: sourceID,
-	})
-	require.NoError(t, err)
-
-	er := storage.repo.(*EntRepository)
-	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
-	require.NoError(t, err)
-	require.NoError(t, sl.SyncOne(ctx, entSrc))
-
-	refetched2, err := storage.GetBacklogItem(ctx, created2.ID)
-	require.NoError(t, err)
-	require.Equal(t, "", refetched2.ExternalURL, "item absent from Fetch result must never be backfilled (accepted limitation)")
 }
 
 func TestSyncOne_ReturnsErrorForUnregisteredPlugin(t *testing.T) {

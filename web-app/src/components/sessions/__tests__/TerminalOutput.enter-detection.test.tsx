@@ -123,9 +123,6 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     stopRecording: jest.fn(),
     output: "",
     terminalState: "STABLE",
-    requestFullResync: jest.fn(),
-    markResyncComplete: jest.fn(),
-    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }

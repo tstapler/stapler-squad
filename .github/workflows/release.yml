@@ -1,21 +1,44 @@
-name: Release
+name: Release (manual escape hatch)
 
+# This workflow used to also trigger on `push: tags: v*`, on the theory that
+# release-please.yml pushing a `vX.Y.Z` tag would kick this off. That never
+# worked: release-please.yml authenticates with the default GITHUB_TOKEN
+# (no RELEASE_TOKEN secret was ever configured in this repo — verified via
+# `gh secret list`), and GitHub Actions deliberately does not let a push/tag
+# made by the default GITHUB_TOKEN trigger other workflows (anti-recursion
+# protection). Confirmed in practice: `gh run list --workflow=release.yml`
+# shows zero runs, ever, and every existing GitHub "release" (v1.35.0,
+# v1.37.0, etc.) has no attached binaries and never updated the Homebrew
+# formula.
+#
+# The real release build now happens in `release-please.yml`, as a second
+# job in the SAME workflow run that release-please itself runs in (gated on
+# its `release_created` output) — no second triggered workflow run is
+# involved, so the token-recursion problem is structurally impossible there.
+#
+# This workflow is kept only as a manual escape hatch: if a release ever
+# needs to be rebuilt/republished for an existing tag (e.g. GoReleaser
+# failed partway through, or an asset needs regenerating), run it via
+# `workflow_dispatch` with the tag to build.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build and publish (e.g. v1.37.0)'
+        required: true
 
 jobs:
   build:
-    permissions: write-all
+    permissions:
+      contents: write
     name: Build Release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out code into the Go module directory
+      - name: Check out code at the requested tag
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Set up pnpm
@@ -51,7 +74,7 @@ jobs:
       - name: Set up Go 1.23.0
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23.0'
+          go-version: '1.25.0'
           cache: true
 
       - name: Run GoReleaser

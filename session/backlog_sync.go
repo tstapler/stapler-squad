@@ -277,16 +277,6 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// Status is always local-wins once user_modified_status_at is set.
 		// Status transitions are only done via TransitionBacklogItemStatus — no update here.
 
-		// Backfill ExternalURL unconditionally, bypassing local-wins, per the
-		// known limitation documented in requirements.md AC6: this only fires
-		// for items still returned by the plugin's Fetch (state=open) — see
-		// ADR-001 for why anyField must be set here independently of the three
-		// UserModifiedFields-gated blocks above.
-		if existing.ExternalURL == "" && data.ExternalURL != "" {
-			update.ExternalURL = &data.ExternalURL
-			anyField = true
-		}
-
 		if !anyField {
 			skipped++
 			continue

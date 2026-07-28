@@ -86,6 +86,18 @@ func (tm *TmuxProcessManager) IsAlive() bool {
 	return s.DoesSessionExist()
 }
 
+// PaneExitStatus reports the wrapped program's exit code/signal for a dead
+// pane whose tmux session is otherwise still alive (remain-on-exit keeps the
+// placeholder pane around after the wrapped program exits/is killed). Returns
+// dead=false if there is no session, or the pane is still running.
+func (tm *TmuxProcessManager) PaneExitStatus() (code int, signal string, dead bool) {
+	s := tm.session.Load()
+	if s == nil {
+		return 0, "", false
+	}
+	return s.ExitStatus()
+}
+
 // Close terminates the tmux session.
 func (tm *TmuxProcessManager) Close() error {
 	s := tm.session.Load()
@@ -478,6 +490,12 @@ type TmuxManager interface {
 	SubscribeToControlModeUpdates() (string, chan []byte)
 	UnsubscribeFromControlModeUpdates(id string)
 	SendInputViaControlMode(ctx context.Context, data []byte) error
+	// PaneExitStatus reports whether the pane's wrapped program has already
+	// exited even though the tmux session object itself is still alive.
+	// remain-on-exit keeps a "Pane is dead" placeholder pane around after the
+	// wrapped program is killed (e.g. OOM SIGKILL) instead of tearing the
+	// session down, so IsAlive()/HasSession() alone cannot detect this state.
+	PaneExitStatus() (code int, signal string, dead bool)
 }
 
 // compile-time check that *TmuxProcessManager satisfies TmuxManager.

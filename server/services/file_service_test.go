@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -898,6 +899,41 @@ func TestServeFileRaw_SVG(t *testing.T) {
 	// SVG must have CSP sandbox to prevent XSS via embedded scripts.
 	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox" {
 		t.Errorf("expected Content-Security-Policy: sandbox for SVG, got %q", csp)
+	}
+}
+
+func TestServeFileRaw_HTML_RewritesRelativeLinks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "logos", "iterations"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	html := `<html><head></head><body>` +
+		`<img src="iterations/iteration-3.svg">` +
+		`<a href="/absolute.png">abs</a>` +
+		`<a href="https://example.com/x.png">external</a>` +
+		`</body></html>`
+	if err := os.WriteFile(filepath.Join(root, "logos", "preview.html"), []byte(html), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "logos%2Fpreview.html", "")
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+
+	if !strings.Contains(got, `src="/api/files/raw?path=logos%2Fiterations%2Fiteration-3.svg&sessionId=test-session"`) {
+		t.Errorf("relative image src not rewritten correctly, got: %s", got)
+	}
+	if !strings.Contains(got, `href="/api/files/raw?path=absolute.png&sessionId=test-session"`) {
+		t.Errorf("root-relative href not rewritten correctly, got: %s", got)
+	}
+	if !strings.Contains(got, `href="https://example.com/x.png"`) {
+		t.Errorf("external href should be left untouched, got: %s", got)
 	}
 }
 

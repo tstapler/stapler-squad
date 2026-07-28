@@ -28,6 +28,19 @@ const ALT_KEY_MAP: Record<string, string> = {
   '\x1b[5~': '\x1b[5;3~', // Alt+PgUp
   '\x1b[6~': '\x1b[6;3~', // Alt+PgDn
 };
+
+// CSI modifier parameter 2 = Shift.
+const SHIFT_KEY_MAP: Record<string, string> = {
+  '\t':      '\x1b[Z',      // Shift+Tab (backtab / dedent)
+  '\x1b[A':  '\x1b[1;2A',  // Shift+Up
+  '\x1b[B':  '\x1b[1;2B',  // Shift+Down
+  '\x1b[C':  '\x1b[1;2C',  // Shift+Right
+  '\x1b[D':  '\x1b[1;2D',  // Shift+Left
+  '\x1b[H':  '\x1b[1;2H',  // Shift+Home
+  '\x1b[F':  '\x1b[1;2F',  // Shift+End
+  '\x1b[5~': '\x1b[5;2~',  // Shift+PgUp
+  '\x1b[6~': '\x1b[6;2~',  // Shift+PgDn
+};
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useVisibilityResync } from "./useVisibilityResync";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
@@ -190,10 +203,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     return false;
   });
 
-  // Sticky modifier keys — CTRL and ALT arm on first tap, fire+clear on the next key.
-  // Mutually exclusive: arming one disarms the other.
+  // Sticky modifier keys — CTRL, ALT, SHIFT arm on first tap, fire+clear on the next key.
+  // Mutually exclusive: arming one disarms the others.
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
+  const [shiftActive, setShiftActive] = useState(false);
 
   // Transient paste error shown briefly when clipboard access is denied.
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -298,21 +312,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
 
-  // Theme detection
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return "dark";
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleThemeChange = (e: MediaQueryListEvent) => setTheme(e.matches ? "dark" : "light");
-    mediaQuery.addEventListener("change", handleThemeChange);
-    return () => mediaQuery.removeEventListener("change", handleThemeChange);
-  }, []);
+  // The terminal chrome (tabs, header) always uses the dark VS Code-style
+  // palette defined in terminalTokens (styles/theme.css.ts), independent of
+  // the app's selectable UI theme. xterm.js must match that fixed palette —
+  // deriving it from prefers-color-scheme instead caused the terminal canvas
+  // to render solid white whenever the OS/browser preference was light while
+  // the surrounding chrome stayed dark.
+  const theme = "dark" as const;
 
   // Lazily create or get the TerminalStreamManager
   const getOrCreateStreamManager = useCallback((): TerminalStreamManager | null => {
@@ -589,10 +595,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     } else if (altActive) {
       data = ALT_KEY_MAP[keyData] ?? '\x1b' + keyData;
       setAltActive(false);
+    } else if (shiftActive) {
+      data = SHIFT_KEY_MAP[keyData] ?? keyData;
+      setShiftActive(false);
     }
 
     handleTerminalData(data);
-  }, [ctrlActive, altActive, handleTerminalData]);
+  }, [ctrlActive, altActive, shiftActive, handleTerminalData]);
 
   // Handle terminal resize with size stability detection
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
@@ -913,6 +922,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               if (!hasInitiatedConnectionRef.current && !isConnected && isMountedRef.current && !isXtermDefault) {
                 hasInitiatedConnectionRef.current = true;
                 setIsWaitingForStableSize(false);
+                // Grow the xterm buffer to preCols/preRows BEFORE connecting — otherwise the
+                // terminal is still at its 80x24 constructor default and the capture-pane
+                // snapshot's cursor-positioning sequences for rows beyond 24 are silently
+                // dropped, leaving them unpainted until a later resize forces a full repaint.
+                xtermRef.current?.resize(preCols, preRows);
                 connect(preCols, preRows);
               }
             } else {
@@ -1565,11 +1579,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                         track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
                         handleToggleLogStream();
                       }}
-                      title={logStreamEnabled ? "Stop forwarding console logs to server" : "Forward console logs to server (Remote Debug)"}
-                      aria-label={logStreamEnabled ? "Disable remote log streaming" : "Enable remote log streaming"}
+                      title={logStreamEnabled ? "Stop forwarding verbose debug logs to server (info/warn/error always stream)" : "Also forward verbose debug logs to server (info/warn/error already stream automatically)"}
+                      aria-label={logStreamEnabled ? "Disable verbose debug log streaming" : "Enable verbose debug log streaming"}
                       style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
                     >
-                      📡 {logStreamEnabled ? 'Log Stream ON' : 'Log Stream'}
+                      📡 {logStreamEnabled ? 'Debug Log Stream ON' : 'Debug Log Stream'}
                     </button>
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
@@ -1705,8 +1719,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           <div className={styles.mobileKeyRow}>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\t'); }} aria-label="Tab" data-testid="mobile-key">Tab</button>
             <button
+              className={`${styles.mobileKey} ${shiftActive ? styles.mobileKeyActive : ''}`}
+              onPointerDown={(e) => { e.preventDefault(); setShiftActive(p => !p); setCtrlActive(false); setAltActive(false); }}
+              aria-label={shiftActive ? 'Shift active — press next key' : 'Shift modifier'}
+              aria-pressed={shiftActive}
+              data-testid="mobile-key"
+            >
+              Shift
+            </button>
+            <button
               className={`${styles.mobileKey} ${ctrlActive ? styles.mobileKeyActive : ''}`}
-              onPointerDown={(e) => { e.preventDefault(); setCtrlActive(p => !p); setAltActive(false); }}
+              onPointerDown={(e) => { e.preventDefault(); setCtrlActive(p => !p); setAltActive(false); setShiftActive(false); }}
               aria-label={ctrlActive ? 'Ctrl active — press next key' : 'Control modifier'}
               aria-pressed={ctrlActive}
               data-testid="mobile-key"
@@ -1715,7 +1738,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             </button>
             <button
               className={`${styles.mobileKey} ${altActive ? styles.mobileKeyActive : ''}`}
-              onPointerDown={(e) => { e.preventDefault(); setAltActive(p => !p); setCtrlActive(false); }}
+              onPointerDown={(e) => { e.preventDefault(); setAltActive(p => !p); setCtrlActive(false); setShiftActive(false); }}
               aria-label={altActive ? 'Alt active — press next key' : 'Alt modifier'}
               aria-pressed={altActive}
               data-testid="mobile-key"

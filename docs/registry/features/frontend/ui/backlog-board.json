@@ -4,7 +4,15 @@
   "component": "BacklogBoard",
   "path": "web-app/src/components/backlog/BacklogBoard.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "BacklogBoard_should_FadeCardOutOfOriginAndFlashIntoDestination_When_StatusChangesViaGenuineLiveUpdate",
+    "BacklogBoard_should_MoveCardInstantly_When_ColumnChangeIsFromBulkResnapshotNotLiveEvent",
+    "BacklogBoard_should_CollapseToInstantMove_When_ReducedMotionIsPreferred",
+    "BacklogBoard_should_SettleInDestinationColumn_When_ItemFlapsBackToOriginDuringExitTransition",
+    "Backlog item ID + deep link > visiting /backlog/board?item=<id> restores the detail pane on the board itself",
+    "Backlog item ID + deep link > an invalid item ID shows the not-found state on both /backlog and /backlog/board without crashing",
+    "Backlog item ID + deep link > the board page still opens via the list page deep link after a board round-trip (regression: no full-page redirect)"
+  ],
+  "lastModified": "2026-07-24T00:00:00Z"
 }

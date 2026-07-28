@@ -13,10 +13,90 @@ jobs:
   release-please:
     name: Release PR
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          # RELEASE_TOKEN (a PAT with repo+workflow scopes) is required so that
-          # the tag release-please pushes triggers the release.yml workflow.
-          # GITHUB_TOKEN pushes are blocked from triggering other workflows.
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          # Plain GITHUB_TOKEN is fine here: the release build (job below)
+          # runs in THIS SAME workflow run, triggered by the original
+          # `push: branches: [main]` event and gated on the
+          # `release_created` output — it does not depend on a second,
+          # separately-triggered workflow run. GitHub's anti-recursion rule
+          # ("pushes/tags made with the default GITHUB_TOKEN do not trigger
+          # other on:push/on:push-tags workflows") therefore never comes
+          # into play, unlike the old approach in release.yml which relied
+          # on a `push: tags: v*` trigger firing off of a tag pushed by this
+          # action — that never worked and no release binaries were ever
+          # published. See release.yml's header comment for that history.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build Release
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Only what GoReleaser needs: create the GitHub Release + upload
+      # assets, and push a Homebrew formula commit to this same repo's
+      # `main` branch (see .goreleaser.yaml `brews:` — repository owner/name
+      # resolve to this repo, not an external tap, so no separate
+      # cross-repo token is required). No pull-requests/issues access needed
+      # here (that's only for the release-please job above).
+      contents: write
+
+    steps:
+      - name: Check out the tag release-please just created
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        run: cd web-app && pnpm install --frozen-lockfile
+
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: '1.41.0'
+
+      - name: Generate protobuf code
+        run: buf generate
+
+      - name: Build web UI
+        working-directory: web-app
+        run: pnpm run build
+
+      - name: Copy web UI to dist
+        run: cp -r web-app/out server/web/dist
+
+      - name: Set up Go 1.23.0
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO_NAME: ${{ github.event.repository.name }}
+          # GITHUB_REPOSITORY (owner/repo) is set automatically by GitHub Actions

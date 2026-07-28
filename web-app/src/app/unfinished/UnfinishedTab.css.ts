@@ -4,6 +4,7 @@ import { vars } from "@/styles/theme.css";
 export const container = style({
   height: "100%",
   overflowY: "auto",
+  overflowX: "hidden",
   maxWidth: "960px",
   margin: "0 auto",
   padding: `${vars.space["4"]} ${vars.space["4"]}`,
@@ -128,4 +129,19 @@ export const repoList = style({
   display: "flex",
   flexDirection: "column",
   gap: vars.space["6"],
+});
+
+export const groupHeading = style({
+  fontSize: vars.fontSize.sm,
+  fontWeight: 700,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  margin: `${vars.space["2"]} 0 0 0`,
+});
+
+export const group = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["3"],
 });

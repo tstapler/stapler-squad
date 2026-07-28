@@ -10,41 +10,27 @@ import (
 	"unicode/utf8"
 )
 
-// TestShouldAnswerStartupDialog verifies the cooldown guard that prevents
-// re-sending "1\n" within 5 seconds of the first answer. This is the extracted
+// TestShouldAnswerStartupDialog verifies the latch guard that prevents
+// re-sending "1\n" while the dialog we already answered is still visible —
+// regardless of how long the terminal takes to redraw. This is the extracted
 // helper used in runSessionDriverWithPrompt.
 func TestShouldAnswerStartupDialog(t *testing.T) {
-	dialogOutput := `Quick safety check: Is this a project you created or one you trust?
- 1. Yes, I trust this folder
- 2. No, exit`
-
-	t.Run("returns true when dialog present and cooldown has not started", func(t *testing.T) {
-		var zeroTime time.Time
-		got := shouldAnswerStartupDialog(dialogOutput, zeroTime, 5*time.Second)
+	t.Run("returns true when dialog present and not awaiting clear", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(true, false)
 		if !got {
-			t.Error("expected true for fresh dialog with zero lastAnsweredAt")
+			t.Error("expected true for fresh dialog")
 		}
 	})
 
-	t.Run("returns false when within the cooldown window", func(t *testing.T) {
-		recent := time.Now()
-		got := shouldAnswerStartupDialog(dialogOutput, recent, 5*time.Second)
+	t.Run("returns false while awaiting clear, no matter how long it's been", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(true, true)
 		if got {
-			t.Error("expected false within cooldown window")
+			t.Error("expected false while awaiting clear")
 		}
 	})
 
-	t.Run("returns true when cooldown has elapsed", func(t *testing.T) {
-		old := time.Now().Add(-10 * time.Second)
-		got := shouldAnswerStartupDialog(dialogOutput, old, 5*time.Second)
-		if !got {
-			t.Error("expected true after cooldown has elapsed")
-		}
-	})
-
-	t.Run("returns false for non-dialog output regardless of cooldown", func(t *testing.T) {
-		var zeroTime time.Time
-		got := shouldAnswerStartupDialog("> ", zeroTime, 5*time.Second)
+	t.Run("returns false for non-dialog output regardless of latch state", func(t *testing.T) {
+		got := shouldAnswerStartupDialog(false, false)
 		if got {
 			t.Error("expected false for non-dialog output")
 		}
@@ -169,6 +155,33 @@ func TestShouldApprovePrompt(t *testing.T) {
 	}
 }
 
+// TestShouldApprovePromptOnce covers #165: the driver re-checks NeedsApproval
+// every poll tick, and the status can remain NeedsApproval for an arbitrarily
+// long number of ticks after "1\r" is sent while the PTY redraws. A fixed-
+// duration cooldown can still expire before the redraw finishes on a slow
+// terminal, resending "1" into whatever appears next once it does — the latch
+// must stay armed for as long as the dialog is actually still visible, with
+// no time limit.
+func TestShouldApprovePromptOnce(t *testing.T) {
+	t.Run("returns true when dialog present and not awaiting clear", func(t *testing.T) {
+		if !shouldApprovePromptOnce(true, false) {
+			t.Error("expected true for fresh dialog")
+		}
+	})
+
+	t.Run("returns false while awaiting clear, no matter how long it's been", func(t *testing.T) {
+		if shouldApprovePromptOnce(true, true) {
+			t.Error("expected false while awaiting clear — prevents repeated 1s")
+		}
+	})
+
+	t.Run("returns false for non-matching output regardless of latch state", func(t *testing.T) {
+		if shouldApprovePromptOnce(false, false) {
+			t.Error("expected false for non-dialog output")
+		}
+	})
+}
+
 // UT-3: TestIsOneShot — verifies one-shot detection logic.
 func TestIsOneShot(t *testing.T) {
 	cases := []struct {
@@ -291,6 +304,62 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	}
 	if item.Reason != ReasonStale {
 		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, ReasonStale)
+	}
+}
+
+// BUG-041: TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime verifies that a
+// failed SendKeys still produces a non-zero timestamp for the caller to record as
+// nudgeSentAt. Before the fix, nudgeSentAt was only assigned in the success branch, so
+// on failure the driver loop's guard (nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay)
+// stayed true forever and retried the identical send on every subsequent tick — live
+// evidence was 392 consecutive failed sends over ~13 minutes against one dead-pane session.
+func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
+	// An Instance that was never started (SetTmuxSession was never called, so the
+	// internal `started` atomic.Bool is false) makes SendKeys deterministically fail
+	// with "cannot send keys to instance that has not been started or is paused" —
+	// the same shape of permanent, non-retryable failure as a dead tmux pane.
+	inst := &Instance{
+		Title:  "test-nudge-failed-send",
+		Status: Ready,
+	}
+
+	before := time.Now()
+	got := attemptBacklogNudge(inst, 6*time.Minute)
+
+	if got.IsZero() {
+		t.Fatal("attemptBacklogNudge returned zero time on failed send — this reproduces BUG-041: " +
+			"the caller's nudgeSentAt guard would stay zero, causing the identical send to retry every driver tick")
+	}
+	if got.Before(before) {
+		t.Errorf("attemptBacklogNudge returned a time before the call started: got %v, want >= %v", got, before)
+	}
+}
+
+// BUG-041 regression: TestAttemptBacklogNudge_FailedSend_RateLimitsRetry asserts the
+// actual driver-loop guard condition (`nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay`)
+// no longer re-fires on the very next tick after a failed send, since nudgeSentAt is now
+// non-zero regardless of send outcome.
+func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
+	inst := &Instance{
+		Title:  "test-nudge-rate-limit",
+		Status: Ready,
+	}
+
+	var nudgeSentAt time.Time
+	idle := driverBacklogNudgeDelay + time.Minute
+
+	// First tick: guard should be open (no nudge sent yet, idle past the delay).
+	if !nudgeSentAt.IsZero() || idle <= driverBacklogNudgeDelay {
+		t.Fatal("test setup invalid: nudge guard should be open before the first attempt")
+	}
+	nudgeSentAt = attemptBacklogNudge(inst, idle)
+
+	// Second tick (simulating the very next driver poll, "idle" recomputed relative to the
+	// just-set nudgeSentAt so it is effectively ~0): guard must now be closed even though
+	// the send failed, or the driver would retry the identical send immediately — the bug.
+	if nudgeSentAt.IsZero() && idle > driverBacklogNudgeDelay {
+		t.Fatal("nudge guard re-opened immediately after a failed send — the driver would retry " +
+			"the identical SendKeys call on every subsequent tick forever (BUG-041)")
 	}
 }
 

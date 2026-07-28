@@ -82,9 +82,6 @@ function makeStreamMock(overrides = {}) {
     sendFlowControl: jest.fn(),
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
-    requestFullResync: jest.fn(),
-    markResyncComplete: jest.fn(),
-    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }
@@ -236,7 +233,7 @@ describe("toolbar analytics", () => {
 
   it("fires track with button:log-stream state:on when Log Stream enabled", () => {
     renderTerminal();
-    fireEvent.click(screen.getByRole("button", { name: /enable remote log streaming/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enable verbose debug log streaming/i }));
     expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({
       labels: expect.objectContaining({ button: "log-stream", state: "on" }),
     }));

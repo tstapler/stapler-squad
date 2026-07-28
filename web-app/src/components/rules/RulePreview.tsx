@@ -102,7 +102,7 @@ export function RulePreview({ criteria, showSafePythonNotice, subcommandStats, o
       </div>
       {showSafePythonNotice && (
         <p className={notice}>
-          Note: "Safe stdlib imports only" filtering is not shown in preview — save the rule to test it.
+          Note: &ldquo;Safe stdlib imports only&rdquo; filtering is not shown in preview — save the rule to test it.
         </p>
       )}
     </div>

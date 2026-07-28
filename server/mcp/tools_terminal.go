@@ -20,9 +20,30 @@ const (
 	writeRateLimitPerSec = 1.0
 )
 
+// liveInstanceFinder resolves a session ID to its live, already-started
+// in-memory Instance — the one with real PTY handles and controller state,
+// as opposed to a freshly-reconstructed Instance from Storage.LoadInstances(),
+// which always defers Start() (see LoadInstances' doc comment: "so a bulk
+// load (server startup) doesn't block") and is therefore never actually
+// started when called ad hoc, outside that one-time startup path. See
+// BUG-035: every MCP tool that mutates a session's terminal (write_to_session,
+// send_control, run_command, steer_session) went through findInstance, which
+// called LoadInstances() on every single invocation — meaning any Active
+// session's SendKeys call deterministically failed with "instance has not
+// been started" regardless of how long the server had been running, because
+// the Instance object handed back was never the live one at all.
+// services.SessionService.FindLiveInstance already exists and is already the
+// documented "use this instead of LoadInstances()" answer; nil-safe (the mcp
+// package degrades to LoadInstances() if not wired, matching the pre-fix
+// behavior rather than breaking outright).
+type liveInstanceFinder interface {
+	FindLiveInstance(id string) *session.Instance
+}
+
 // terminalHandlers implements terminal I/O and VCS MCP tools.
 type terminalHandlers struct {
 	store      session.InstanceStore
+	live       liveInstanceFinder // may be nil; see findInstance
 	scrollback *scrollback.ScrollbackManager
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
 }
@@ -262,10 +283,10 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 		return errResult_, nil
 	}
 
-	text := input
-	if pressEnter {
-		text += "\n"
-	}
+	// BUG-047: must use session.EnterKeySequence ('\r'), not a bare '\n' —
+	// the Claude Code CLI's raw-mode TUI only recognizes '\r' as submit, so a
+	// trailing '\n' leaves the text sitting unsubmitted in the input buffer.
+	text := session.BuildSubmittableInput(input, pressEnter)
 
 	// Wrap SendKeys in a goroutine with a 5-second timeout to prevent PTY write deadlock.
 	// Use the request context so caller cancellation propagates; add a hard 5s cap.
@@ -521,9 +542,12 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		return errResult_, nil
 	}
 
-	// Send the command.
+	// Send the command. BUG-047: must use session.EnterKeySequence ('\r'),
+	// not a bare '\n' — a raw-mode TUI target (e.g. the Claude Code CLI
+	// itself) only recognizes '\r' as submit, so a trailing '\n' leaves the
+	// command sitting unsubmitted in the input buffer.
 	sendErrCh := make(chan error, 1)
-	go func() { sendErrCh <- inst.SendKeys(command + "\n") }()
+	go func() { sendErrCh <- inst.SendKeys(session.BuildSubmittableInput(command, true)) }()
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer sendCancel()
@@ -684,9 +708,20 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 
 // ---- helpers ----
 
-// findInstance loads all sessions and returns the one matching sessionID.
-// Returns an error result if not found or load fails.
+// findInstance returns the live, already-started Instance for sessionID
+// (BUG-035) — trying th.live first (the real in-memory Instance with PTY/
+// controller state), falling back to a LoadInstances() scan only if th.live
+// is unwired or doesn't have it tracked (e.g. a session outside the review
+// queue poller's scope). The fallback preserves pre-fix behavior for any
+// caller relying on LoadInstances()'s broader "every session in storage"
+// coverage; it just stops being the *first* and only path for a session that
+// IS live.
 func (th *terminalHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+	if th.live != nil {
+		if inst := th.live.FindLiveInstance(sessionID); inst != nil {
+			return inst, nil
+		}
+	}
 	instances, err := th.store.LoadInstances()
 	if err != nil {
 		return nil, errResult(ErrInternalError, "failed to load sessions", "")

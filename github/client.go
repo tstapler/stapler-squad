@@ -236,7 +236,6 @@ func fetchLoginFromRequest(req *http.Request) (string, error) {
 	return u.Login, nil
 }
 
-
 // GetPRInfo fetches metadata for a pull request including review and CI status.
 func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
 	return GetPRInfoCtx(context.Background(), owner, repo, prNumber)
@@ -684,7 +683,6 @@ func GetOwnerRepoFromRemote(repoPath string) (RepoRef, error) {
 	return r, nil
 }
 
-
 // GeneratePRPrompt generates a context prompt from PR information
 // This can be used to initialize a Claude Code session with PR context
 func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
@@ -709,4 +707,85 @@ func GeneratePRPrompt(pr *PRInfo, includeDescription bool) string {
 	}
 
 	return sb.String()
+}
+
+// GetPRForBranchConditional is GetPRForBranch with ETag conditional request support.
+// Pass the previously returned newEtag (empty string for first call).
+// Returns (nil, etag, false, nil) on 304 Not Modified — caller should treat as unchanged.
+func GetPRForBranchConditional(ctx context.Context, owner, repo, branch, etag string) (info *PRInfo, newEtag string, changed bool, err error) {
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
+		url.PathEscape(owner), url.PathEscape(repo),
+		url.QueryEscape(owner+":"+branch))
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("build PR list request: %w", err)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("PR list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, etag, false, nil
+	}
+
+	respEtag := resp.Header.Get("ETag")
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, etag, false, fmt.Errorf("GitHub API: unauthorized (401)")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, etag, false, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, etag, false, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API: forbidden (403)")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API: rate limited (429)")
+	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, etag, false, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, etag, false, fmt.Errorf("read PR list response: %w", err)
+	}
+
+	var prs []struct {
+		Number    int    `json:"number"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.Unmarshal(body, &prs); err != nil {
+		return nil, etag, false, fmt.Errorf("parse PR list: %w", err)
+	}
+	if len(prs) == 0 {
+		return nil, respEtag, true, ErrNoPR
+	}
+
+	sort.Slice(prs, func(i, j int) bool {
+		ti, _ := time.Parse(time.RFC3339, prs[i].UpdatedAt)
+		tj, _ := time.Parse(time.RFC3339, prs[j].UpdatedAt)
+		return ti.After(tj)
+	})
+
+	prInfo, err := GetPRInfoCtx(ctx, owner, repo, prs[0].Number)
+	if err != nil {
+		return nil, respEtag, false, err
+	}
+	return prInfo, respEtag, true, nil
 }

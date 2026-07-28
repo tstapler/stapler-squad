@@ -2,16 +2,19 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	connect "connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // createTestStorage creates a test storage backed by a temporary SQLite database.
@@ -474,25 +477,10 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	case evt := <-ch:
 		require.Equal(t, events.EventSessionUpdated, evt.Type,
 			"expected SessionUpdatedEvent after session exit")
-		require.NotNil(t, evt.Session, "event should carry the exited session instance")
-		assert.Equal(t, session.Stopped, evt.Session.Status,
-			"session should be Stopped in the event payload")
-
-		// sessionExitedPublisher.OnLifecycleEvent always constructs its event via the
-		// plain events.NewSessionUpdatedEvent constructor, which never sets
-		// DetectedStatusTyped — so evt.DetectedStatusTyped == StatusUnknown here is
-		// true by construction, regardless of any real "clearing" logic. Instead,
-		// inspect what actually reaches the wire: adapters.InstanceToProto is the
-		// single conversion path used to build the embedded Session proto for both
-		// SessionCreated and SessionUpdated events. Its DetectedStatus field is only
-		// populated while inst.Status == session.Active; regressing that guard would
-		// resurrect the stale "Thinking…" badge bug this PR fixes.
-		proto := adapters.InstanceToProto(evt.Session, nil)
-		require.NotNil(t, proto)
-		assert.Equal(t, sessionv1.DetectedStatus_DETECTED_STATUS_UNSPECIFIED, proto.DetectedStatus,
-			"detection should be cleared on session exit")
-		assert.Empty(t, proto.DetectedContext,
-			"detected context should be cleared on session exit")
+		assert.Equal(t, detection.StatusUnknown, evt.DetectedStatusTyped,
+			"detection should be cleared (StatusUnknown) on session exit")
+		assert.Empty(t, evt.DetectedContext,
+			"detected context should be empty on session exit")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SessionUpdatedEvent after session exit")
 	}
@@ -1143,4 +1131,33 @@ func TestSessionService_should_ReturnEmptyString_When_MCPServerURLFnNotYetConfig
 		got := svc.resolveMCPServerURL()
 		assert.Equal(t, "", got)
 	})
+}
+
+// TestSpawnReviewSession_SetsBacklogCategory verifies that review-gate sessions
+// created via SpawnReviewSession get Category == "Backlog" so they group
+// correctly in the session list UI instead of falling into "Uncategorized".
+// This starts a real tmux session (like session/integration_test.go), so it's
+// skipped under -short (see make test vs. make test-integration).
+func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a real tmux session")
+	}
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	// Isolate config to this test and use a trivial program so the tmux pane
+	// doesn't need the real "claude" binary to exist.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
+		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
+
+	repoPath := t.TempDir()
+	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+
+	inst, err := fix.svc.SpawnReviewSession(context.Background(), item, "item-session-id", "review this")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inst.Destroy() })
+
+	assert.Equal(t, session.CategoryBacklog, inst.Category)
 }

@@ -88,10 +88,21 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 		if err != nil {
 			continue
 		}
+		isDir := e.IsDir()
+		if info.Mode()&os.ModeSymlink != 0 {
+			// DirEntry.IsDir() reflects the symlink itself, not its target — resolve
+			// it with Stat (follows symlinks) so symlinked directories are navigable.
+			// A dangling/broken symlink falls back to non-navigable rather than erroring.
+			if target, statErr := os.Stat(filepath.Join(dir, e.Name())); statErr == nil {
+				isDir = target.IsDir()
+			} else {
+				isDir = false
+			}
+		}
 		entries = append(entries, localFileEntry{
 			Name:    e.Name(),
 			Path:    filepath.Join(dir, e.Name()),
-			IsDir:   e.IsDir(),
+			IsDir:   isDir,
 			Size:    info.Size(),
 			ModTime: info.ModTime().UTC().Format(time.RFC3339),
 		})
@@ -160,5 +171,6 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 	}
 
 	log.Info("[LocalFileService] serve", "path", filePath)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFile(w, r, filePath)
 }

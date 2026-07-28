@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
 )
@@ -58,7 +59,7 @@ type autoApprovalLogger interface {
 
 // headlessPoolApprover is the narrow interface ApprovalHandler needs from the headless pool.
 type headlessPoolApprover interface {
-	CallBlockingWithOptions(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
 }
 
 // ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
@@ -326,7 +327,7 @@ createApproval:
 		const approvalSystemPrompt = `You are a security reviewer for an autonomous coding session.
 Evaluate the requested tool call and decide if it is safe to approve.
 Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
-		resp, llmErr := h.headlessPool.CallBlockingWithOptions(
+		resp, _, llmErr := h.headlessPool.CallBlocking(
 			r.Context(),
 			headless.FeatureKeyAutonomousApproval,
 			approvalSystemPrompt,
@@ -587,10 +588,9 @@ func matchesIDData(d session.InstanceData, id string) bool {
 	if d.TmuxPrefix == "" {
 		return false
 	}
-	// Replicate tmux name sanitization: strip whitespace, replace . and : with _
-	title := strings.Join(strings.Fields(d.Title), "")
-	title = strings.NewReplacer(".", "_", ":", "_").Replace(title)
-	return d.TmuxPrefix+title == id
+	// Derive via the canonical sanitizer rather than re-implementing it here —
+	// a hand-rolled copy silently drifts from tmux.NewSessionName's rules (#162).
+	return tmux.NewSessionName(d.Title, d.TmuxPrefix).String() == id
 }
 
 // writeDeferDecision returns an empty HTTP 200 with no body.

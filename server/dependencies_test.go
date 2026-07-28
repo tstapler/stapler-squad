@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -82,6 +83,52 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 	}
 }
 
+// TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_ConstructingBacklogServiceAndLifecycleListener
+// is the concrete pointer-equality test Story 1.5.1's own acceptance criteria promises
+// (plan.md Task 1.5.1e): BuildRuntimeDeps must construct exactly one
+// *session.CachingPipelineEngine and inject the SAME instance into both BacklogService
+// and BacklogLifecycleListener (transitively ReviewGateRunner) — never two separately
+// constructed engines that could silently drift in cache state after a write.
+func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_ConstructingBacklogServiceAndLifecycleListener(t *testing.T) {
+	deps, err := BuildDependencies()
+	if err != nil {
+		t.Fatalf("BuildDependencies: %v", err)
+	}
+
+	if deps.BacklogService == nil {
+		t.Fatal("expected BacklogService to be wired")
+	}
+	backlogSvcEngine := deps.BacklogService.PipelineEngine()
+	if backlogSvcEngine == nil {
+		t.Fatal("expected BacklogService.PipelineEngine() to be non-nil")
+	}
+
+	if deps.SessionService == nil {
+		t.Fatal("expected SessionService to be wired")
+	}
+	listener := deps.SessionService.GetBacklogLifecycleListener()
+	if listener == nil {
+		t.Fatal("expected BacklogLifecycleListener to be wired onto SessionService")
+	}
+	listenerEngine := listener.PipelineEngine()
+	if listenerEngine == nil {
+		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
+	}
+
+	backlogCaching, ok := backlogSvcEngine.(*session.CachingPipelineEngine)
+	if !ok {
+		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
+	}
+	listenerCaching, ok := listenerEngine.(*session.CachingPipelineEngine)
+	if !ok {
+		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
+	}
+
+	if backlogCaching != listenerCaching {
+		t.Fatalf("expected BacklogService and BacklogLifecycleListener to share the identical *session.CachingPipelineEngine instance, got distinct pointers %p vs %p", backlogCaching, listenerCaching)
+	}
+}
+
 func TestPrNumFromTitle(t *testing.T) {
 	cases := []struct {
 		title   string
@@ -89,12 +136,12 @@ func TestPrNumFromTitle(t *testing.T) {
 		want    int
 	}{
 		{"pr-1255-actions-spring-boot", true, 1255},
-		{"PR-42-feature", true, 42},   // case-insensitive
-		{"pr-0-foo", true, 0},          // zero is valid match; caller ignores pr 0
-		{"pr-99-", true, 99},           // trailing dash only
-		{"pr-1255", false, 0},          // missing trailing dash
-		{"pr-foo-bar", false, 0},       // non-numeric
-		{"feature-branch", false, 0},   // no prefix
+		{"PR-42-feature", true, 42},  // case-insensitive
+		{"pr-0-foo", true, 0},        // zero is valid match; caller ignores pr 0
+		{"pr-99-", true, 99},         // trailing dash only
+		{"pr-1255", false, 0},        // missing trailing dash
+		{"pr-foo-bar", false, 0},     // non-numeric
+		{"feature-branch", false, 0}, // no prefix
 	}
 	for _, tc := range cases {
 		t.Run(tc.title, func(t *testing.T) {

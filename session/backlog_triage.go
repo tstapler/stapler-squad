@@ -23,9 +23,15 @@ type TriageTask struct {
 
 // HeadlessTriageResult is the parsed output from a headless triage LLM call.
 type HeadlessTriageResult struct {
-	Summary     string             `json:"summary"`
-	Suggestions []TriageSuggestion `json:"suggestions"`
-	Tasks       []TriageTask       `json:"tasks,omitempty"`
+	Title              string             `json:"title"`
+	Summary            string             `json:"summary"`
+	Suggestions        []TriageSuggestion `json:"suggestions"`
+	Tasks              []TriageTask       `json:"tasks,omitempty"`
+	AcceptanceCriteria []AcCriterion      `json:"acceptance_criteria,omitempty"`
+	// Iteration and Feedback are not part of the LLM's JSON output — the caller
+	// sets them after parsing, from server-tracked state, before persisting.
+	Iteration int    `json:"iteration,omitempty"`
+	Feedback  string `json:"feedback,omitempty"`
 }
 
 // maxHeadlessTriageTasks caps the task list to keep the checklist scannable.
@@ -78,11 +84,73 @@ Write %s/validation.md containing:
 
 ### Step 4 — Output
 After all files are written, output ONLY a JSON object (no other text before or after):
-{"summary":"2-3 sentence summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
-- suggestions: AC gaps, open questions, improvement ideas (questions use rationale="question")
+{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","acceptance_criteria":[{"index":0,"text":"Clear, testable criterion","status":"pending"}],"suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
+- title: short kebab-case session name (3-5 words, imperative verb first, e.g. "fix-session-rename" or "add-pr-status-badge")
+- summary: 2-3 sentence executive summary
+- acceptance_criteria: full list of testable acceptance criteria (replace any existing ones). Each has index (0-based), text (one clear testable statement), status ("pending"). Merge with existing criteria: keep unchanged ones, add new ones, update clarified ones.
+- suggestions: additional open questions or improvement ideas beyond the ACs (questions use rationale="question")
 - tasks: implementation task breakdown from plan.md (max 12)
 - Do NOT call submit_triage_result. Do NOT write any source code.
 `, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath)
+
+	return sb.String()
+}
+
+// BuildHeadlessRetriagePrompt constructs a JSON-output prompt that refines a prior
+// triage result using free-text user feedback. artifactAbsPath is the same
+// directory used by the original triage run — research/*.md, plan.md, and
+// validation.md already exist there and are treated as valid context unless the
+// feedback indicates otherwise.
+func BuildHeadlessRetriagePrompt(item *BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
+	fmt.Fprintf(&sb, "item_id: %s\n\n", item.ID)
+	if item.Description != "" {
+		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
+	}
+
+	sb.WriteString("## Prior triage result (iteration ")
+	fmt.Fprintf(&sb, "%d)\n", prior.Iteration)
+	fmt.Fprintf(&sb, "Summary: %s\n", prior.Summary)
+	if len(prior.Suggestions) > 0 {
+		sb.WriteString("Suggestions:\n")
+		for _, s := range prior.Suggestions {
+			fmt.Fprintf(&sb, "- %s\n", s.Text)
+		}
+	}
+	if len(prior.Tasks) > 0 {
+		sb.WriteString("Tasks:\n")
+		for _, t := range prior.Tasks {
+			fmt.Fprintf(&sb, "- [%s, %s] %s\n", t.Category, t.Estimate, t.Text)
+		}
+	}
+
+	researchDir := artifactAbsPath + "/research"
+	fmt.Fprintf(&sb, `
+## User feedback
+%s
+
+## Task
+Revise the triage for this backlog item using the feedback above. The
+existing artifacts at %s/plan.md, %s/validation.md, and %s/*.md remain valid
+context — read and revise them in place; do not start from scratch.
+
+If the feedback indicates the prior research (stack.md, features.md,
+architecture.md, pitfalls.md) was incomplete or wrong, re-run only the
+affected research subagent(s) and rewrite those files before revising the
+plan. Otherwise revise plan.md and validation.md directly using the existing
+research as-is.
+
+After writing all files, output ONLY a JSON object (no other text before or
+after):
+{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
+- title: short kebab-case session name (3-5 words, imperative verb first)
+- summary: 2-3 sentence executive summary of the REVISED plan
+- suggestions: AC gaps, open questions, improvement ideas (questions use rationale="question")
+- tasks: revised implementation task breakdown (max 12)
+- Do NOT call submit_triage_result. Do NOT write any source code.
+`, feedback, artifactAbsPath, artifactAbsPath, researchDir)
 
 	return sb.String()
 }

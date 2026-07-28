@@ -57,6 +57,20 @@ func (_c *BacklogStatusEventCreate) SetNillableTriggeredBy(v *string) *BacklogSt
 	return _c
 }
 
+// SetNote sets the "note" field.
+func (_c *BacklogStatusEventCreate) SetNote(v string) *BacklogStatusEventCreate {
+	_c.mutation.SetNote(v)
+	return _c
+}
+
+// SetNillableNote sets the "note" field if the given value is not nil.
+func (_c *BacklogStatusEventCreate) SetNillableNote(v *string) *BacklogStatusEventCreate {
+	if v != nil {
+		_c.SetNote(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *BacklogStatusEventCreate) SetCreatedAt(v time.Time) *BacklogStatusEventCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -207,6 +221,10 @@ func (_c *BacklogStatusEventCreate) createSpec() (*BacklogStatusEvent, *sqlgraph
 		_spec.SetField(backlogstatusevent.FieldTriggeredBy, field.TypeString, value)
 		_node.TriggeredBy = value
 	}
+	if value, ok := _c.mutation.Note(); ok {
+		_spec.SetField(backlogstatusevent.FieldNote, field.TypeString, value)
+		_node.Note = &value
+	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(backlogstatusevent.FieldCreatedAt, field.TypeTime, value)
 		_node.CreatedAt = value
@@ -328,6 +346,24 @@ func (u *BacklogStatusEventUpsert) UpdateTriggeredBy() *BacklogStatusEventUpsert
 	return u
 }
 
+// SetNote sets the "note" field.
+func (u *BacklogStatusEventUpsert) SetNote(v string) *BacklogStatusEventUpsert {
+	u.Set(backlogstatusevent.FieldNote, v)
+	return u
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *BacklogStatusEventUpsert) UpdateNote() *BacklogStatusEventUpsert {
+	u.SetExcluded(backlogstatusevent.FieldNote)
+	return u
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *BacklogStatusEventUpsert) ClearNote() *BacklogStatusEventUpsert {
+	u.SetNull(backlogstatusevent.FieldNote)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
 // Using this option is equivalent to using:
 //
@@ -432,6 +468,27 @@ func (u *BacklogStatusEventUpsertOne) SetTriggeredBy(v string) *BacklogStatusEve
 func (u *BacklogStatusEventUpsertOne) UpdateTriggeredBy() *BacklogStatusEventUpsertOne {
 	return u.Update(func(s *BacklogStatusEventUpsert) {
 		s.UpdateTriggeredBy()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *BacklogStatusEventUpsertOne) SetNote(v string) *BacklogStatusEventUpsertOne {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *BacklogStatusEventUpsertOne) UpdateNote() *BacklogStatusEventUpsertOne {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *BacklogStatusEventUpsertOne) ClearNote() *BacklogStatusEventUpsertOne {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.ClearNote()
 	})
 }
 
@@ -706,6 +763,27 @@ func (u *BacklogStatusEventUpsertBulk) SetTriggeredBy(v string) *BacklogStatusEv
 func (u *BacklogStatusEventUpsertBulk) UpdateTriggeredBy() *BacklogStatusEventUpsertBulk {
 	return u.Update(func(s *BacklogStatusEventUpsert) {
 		s.UpdateTriggeredBy()
+	})
+}
+
+// SetNote sets the "note" field.
+func (u *BacklogStatusEventUpsertBulk) SetNote(v string) *BacklogStatusEventUpsertBulk {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.SetNote(v)
+	})
+}
+
+// UpdateNote sets the "note" field to the value that was provided on create.
+func (u *BacklogStatusEventUpsertBulk) UpdateNote() *BacklogStatusEventUpsertBulk {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.UpdateNote()
+	})
+}
+
+// ClearNote clears the value of the "note" field.
+func (u *BacklogStatusEventUpsertBulk) ClearNote() *BacklogStatusEventUpsertBulk {
+	return u.Update(func(s *BacklogStatusEventUpsert) {
+		s.ClearNote()
 	})
 }
 

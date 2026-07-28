@@ -16,6 +16,37 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
+// maxInlinePromptBytes bounds how large i.Prompt can be before it is embedded
+// directly (shell-quoted) into the tmux new-session command string, versus
+// written to a temp file and referenced via command substitution (see
+// promptArg). tmux's client/server protocol caps the entire new-session
+// command around 16KB -- measured empirically: `tmux new-session -d -s <name>
+// <command>` succeeds with a ~16KB command string and fails client-side with
+// "command too long" once the string crosses somewhere between 16000 and
+// 16500 bytes -- and that budget also has to cover the rest of the claude
+// invocation (--mcp-config JSON, --allowedTools, --permission-mode, etc.) plus
+// tmux's own session-name/workdir/env args, not just the prompt. 4KB leaves
+// generous headroom for all of that.
+//
+// This is the exact failure that broke backlog review-gate spawns: a large
+// description plus many acceptance criteria (each carrying a verbose
+// self-reported implementation note) pushed the review prompt alone past
+// tmux's limit, so `tmux new-session` rejected the command outright with
+// "command too long" on every single attempt, and
+// BacklogLifecycle.ReconcileStuckReviewGates kept re-spawning the identical,
+// permanently-doomed command every ~8 minutes with no operator-visible signal
+// beyond a repeating log line.
+const maxInlinePromptBytes = 4096
+
+// promptFileCleanupDelay is how long promptArg waits before removing a
+// temp-file-backed prompt (see promptArg). The file only needs to survive
+// long enough for the shell tmux spawns to evaluate the `$(cat ...)` command
+// substitution, which happens as part of exec'ing the claude command --
+// effectively immediately after `tmux new-session` returns successfully. The
+// delay is generous purely to tolerate a slow/loaded box; it is not a
+// correctness requirement, so tests may shrink it to avoid a real sleep.
+var promptFileCleanupDelay = 30 * time.Second
+
 // programKind is a sealed sum type over the kinds of launchable programs.
 // Holding a claudeProgram is proof that isClaude() returned true — downstream
 // code needs no further guards. Parse once at the boundary, trust internally.
@@ -121,7 +152,7 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 		parts = append(parts, "--permission-mode", shellQuote(i.PermissionMode))
 	}
 	if i.AutoYes {
-		parts = append(parts, "--dangerously-skip-permissions")
+		parts = append(parts, "--permission-mode", PermissionModeBypassPermissions)
 	}
 	if i.OneShot {
 		parts = append(parts, "-p", "--output-format", "json")
@@ -129,22 +160,88 @@ func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
 	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
 		// "--" stops claude from parsing a prompt that begins with "--" (e.g. the
 		// backlog prompt's "--- BACKLOG ITEM DATA ---") as CLI flags.
-		parts = append(parts, "--", shellQuote(i.Prompt))
+		parts = append(parts, "--", i.promptArg())
 	}
 	return strings.Join(parts, " ")
 }
 
-// claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value
-// as two separate strings, consistent with all other flag/value pairs in buildClaudeCommand.
-// %q escapes MCPServerURL/UUID as JSON string values; shellQuote then wraps the whole
-// JSON payload for the shell so neither quoting layer re-implements the other.
-func (i *Instance) claudeMCPConfigArgs() (string, string) {
-	var cfg string
-	if i.UUID != "" {
-		cfg = fmt.Sprintf(`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`, i.MCPServerURL, i.UUID)
-	} else {
-		cfg = fmt.Sprintf(`{"mcpServers":{"stapler-squad":{"type":"http","url":%q}}}`, i.MCPServerURL)
+// promptArg returns the shell syntax used to supply i.Prompt as the trailing
+// positional argument to claude. Short prompts are embedded directly
+// (shell-quoted), as before. Prompts at or above maxInlinePromptBytes are
+// written to a temp file and referenced via a `"$(cat '<path>')"` command
+// substitution instead.
+//
+// This distinction matters because tmux's new-session command-length limit
+// (see maxInlinePromptBytes) applies to the literal command string handed to
+// tmux, which tmux inspects before any shell ever runs -- so a large prompt
+// embedded inline blows that budget outright, regardless of how carefully it
+// is quoted. Routing it through a file keeps the string tmux sees short; the
+// substitution -- and the real prompt content -- is only expanded later, by
+// the shell tmux spawns to actually run the command, which is not subject to
+// tmux's own limit. This was verified empirically: a `tmux new-session`
+// command referencing a 20KB file via `$(cat ...)` succeeds and the spawned
+// process receives the full, unmodified 20KB content, while the same 20KB
+// embedded inline is rejected outright with "command too long".
+//
+// On temp-file write failure this falls back to the inline (shell-quoted)
+// form so a filesystem hiccup degrades to the pre-existing behavior (which
+// works fine for prompts under the tmux limit) rather than silently dropping
+// the prompt.
+//
+// Caveat: POSIX command substitution strips ALL trailing newlines from its
+// output, so if i.Prompt ends in one or more "\n" characters, the claude
+// process receives the prompt with that trailing whitespace removed (content
+// is otherwise byte-identical). This is semantically inert for an LLM prompt
+// and is a world apart from the bug being fixed here (the entire tail of the
+// prompt being dropped or the spawn failing outright), so it's accepted
+// rather than worked around with a fragile shell trim-guard hack.
+func (i *Instance) promptArg() string {
+	if len(i.Prompt) < maxInlinePromptBytes {
+		return shellQuote(i.Prompt)
 	}
+	f, err := os.CreateTemp("", "stapler-squad-prompt-*.txt")
+	if err != nil {
+		log.Warn("promptArg: failed to create temp file for large prompt, embedding inline", "err", err, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	path := f.Name()
+	if _, writeErr := f.WriteString(i.Prompt); writeErr != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		log.Warn("promptArg: failed to write temp prompt file, embedding inline", "err", writeErr, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	if closeErr := f.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		log.Warn("promptArg: failed to close temp prompt file, embedding inline", "err", closeErr, "promptBytes", len(i.Prompt))
+		return shellQuote(i.Prompt)
+	}
+	// Captured before spawning: promptFileCleanupDelay is a package var tests
+	// override for the duration of a single call (see
+	// withShortPromptFileCleanupDelay), restoring it via t.Cleanup once the
+	// test returns. Reading the var directly inside the goroutine below would
+	// race that restore — the goroutine can still be asleep, holding a read of
+	// the shared var pending, when t.Cleanup's write lands.
+	delay := promptFileCleanupDelay
+	go func() {
+		time.Sleep(delay)
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Warn("promptArg: failed to clean up temp prompt file", "path", path, "err", rmErr)
+		}
+	}()
+	return fmt.Sprintf(`"$(cat %s)"`, shellQuote(path))
+}
+
+// claudeMCPConfigArgs returns the --mcp-config flag and its shell-quoted JSON value.
+// Uses the Streamable HTTP transport (type "http") pointing at MCPServerURL, with the
+// session UUID passed as a request header. The server middleware at /mcp extracts
+// X-Stapler-Session-UUID and injects it into the request context for tool handlers.
+// Both "http" and "streamable-http" are accepted by the Claude CLI for --mcp-config.
+func (i *Instance) claudeMCPConfigArgs() (string, string) {
+	cfg := fmt.Sprintf(
+		`{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}`,
+		i.MCPServerURL, i.UUID,
+	)
 	return "--mcp-config", shellQuote(cfg)
 }
 
@@ -314,6 +411,30 @@ func (i *Instance) TmuxAlive() bool {
 	return i.pm().IsAlive()
 }
 
+// PaneProcessDead reports whether the tmux session is alive (TmuxAlive()==true)
+// but the wrapped program running in the pane has already exited. remain-on-exit
+// keeps the tmux session/pane around as a "Pane is dead (signal N, ...)"
+// placeholder after the wrapped program is killed (e.g. OOM SIGKILL) or crashes,
+// rather than tearing the session down -- so TmuxAlive() alone reports this
+// session as healthy forever. Health checks must consult this in addition to
+// TmuxAlive() to detect that failure mode. Returns false for non-tmux backends
+// (e.g. native process manager), which have no equivalent placeholder state.
+func (i *Instance) PaneProcessDead() bool {
+	if !i.TmuxAlive() {
+		return false
+	}
+	tb, ok := i.pm().(*TmuxBackend)
+	if !ok {
+		return false
+	}
+	tm := tb.TmuxManager()
+	if tm == nil {
+		return false
+	}
+	_, _, dead := tm.PaneExitStatus()
+	return dead
+}
+
 // GetPTYReader returns the PTY file handle for the tmux session.
 func (i *Instance) GetPTYReader() (*os.File, error) {
 	if !i.started.Load() {
@@ -460,6 +581,33 @@ func (i *Instance) RefreshTmuxClient() error {
 	return i.pm().RefreshClient()
 }
 
+// EnterKeySequence is the byte sequence that submits a line of input to an
+// interactive terminal session, matching what a real terminal sends for a
+// physical Enter keypress in raw/cbreak mode (TapEnter, elsewhere in this
+// package, writes the same 0x0D byte directly to the PTY). Raw-mode TUIs —
+// including the Claude Code CLI's Ink-based interface running inside these
+// tmux panes — read '\r' as submit; a bare '\n' is not recognized as Enter,
+// so text sent with only a trailing '\n' is written into the pane but never
+// actually submitted and sits unactioned in the input buffer indefinitely
+// (BUG-047). Every call site that appends an "Enter" to text sent via
+// SendKeys must use this constant (via BuildSubmittableInput, where
+// applicable) rather than hand-rolling its own terminator.
+const EnterKeySequence = "\r"
+
+// BuildSubmittableInput appends EnterKeySequence to input when pressEnter is
+// true, producing the exact string that must be handed to SendKeys for the
+// receiving program to treat it as a submitted line rather than unsubmitted
+// text sitting in the input buffer. Centralizing this (rather than each
+// caller appending its own terminator) is what BUG-047 was missing: three of
+// six SendKeys-with-enter call sites had independently picked '\n' instead of
+// '\r'.
+func BuildSubmittableInput(input string, pressEnter bool) string {
+	if pressEnter {
+		return input + EnterKeySequence
+	}
+	return input
+}
+
 // SendKeys sends keys to the tmux session.
 func (i *Instance) SendKeys(keys string) error {
 	if !i.started.Load() || i.Status == Paused {
@@ -482,7 +630,10 @@ func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) err
 // The DoesSessionExist guard is omitted here: TmuxSession.GetPanePID already uses
 // the CM fast path (no subprocess) and falls back to display-message which returns
 // an error if the session is gone. Avoiding a separate list-sessions call per instance
-// prevents N concurrent tmux list-sessions subprocesses during HistoryLinker.ScanAll.
+// keeps this cheap for HistoryLinker.ScanAll, which calls this sequentially (not
+// fanned out) per session anyway -- and the display-message subprocess fallback is
+// itself gated (session/tmux's exec gate), so there's no need for a second guard
+// here even if that ever changes.
 func (i *Instance) GetPanePID() (int32, error) {
 	return i.pm().GetPanePID()
 }

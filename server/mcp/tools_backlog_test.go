@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,8 +183,84 @@ func TestReportProgress_SuccessfullyUpdatesAcStatus(t *testing.T) {
 	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Len(t, criteria, 2)
-	require.Equal(t, "done", criteria[0].Status, "criterion 0 should be marked done")
-	require.Equal(t, "pending", criteria[1].Status, "criterion 1 should remain pending")
+	require.Equal(t, session.AcStatusDone, criteria[0].Status, "criterion 0 should be marked done")
+	require.Equal(t, session.AcStatusPending, criteria[1].Status, "criterion 1 should remain pending")
+}
+
+// TestReportProgress_AppendsProgressNoteHistory verifies that reportProgress creates
+// a progress-note history row (AppendProgressNote) alongside the existing
+// overwrite-in-place AC criterion update — the history call is additive, not a
+// replacement for the existing behavior.
+func TestReportProgress_AppendsProgressNoteHistory(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "Test item",
+		Description:        "Item for testing",
+		AcceptanceCriteria: `[{"index":0,"text":"Must work","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	isData := session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}
+	_, err = storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	// First call: in_progress with a note.
+	req1 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "in_progress",
+		"note":           "started investigating",
+	})
+	result1, err := handler.reportProgress(ctxWithUUID, req1)
+	require.NoError(t, err)
+	require.Len(t, result1.Content, 1)
+
+	// Second call: pass with a different note, same criterion — the existing
+	// overwrite behavior replaces the criterion's current note, but the history
+	// must retain BOTH notes.
+	req2 := makeToolReq(map[string]interface{}{
+		"item_id":        item.ID,
+		"criteria_index": float64(0),
+		"status":         "pass",
+		"note":           "implemented successfully",
+	})
+	result2, err := handler.reportProgress(ctxWithUUID, req2)
+	require.NoError(t, err)
+	require.Len(t, result2.Content, 1)
+
+	// The current-note-per-criterion behavior is unchanged: only the latest note
+	// is visible on the AC criterion itself.
+	fetchedItem, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	require.NoError(t, err)
+	require.Len(t, criteria, 1)
+	require.Equal(t, session.AcStatusDone, criteria[0].Status)
+	require.Equal(t, "implemented successfully", criteria[0].Note, "current note is overwritten by the latest call, as before")
+
+	// The new history log must contain BOTH notes, in order.
+	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, notes, 2, "both report_progress calls must be preserved in the history")
+
+	require.Equal(t, "started investigating", notes[0].Note)
+	require.Equal(t, "in_progress", notes[0].Status)
+
+	require.Equal(t, "implemented successfully", notes[1].Note)
+	require.Equal(t, "done", notes[1].Status)
 }
 
 // TestGetBacklogItem_ReturnsItemWithEnvelope verifies that getBacklogItem
@@ -230,6 +307,54 @@ func TestGetBacklogItem_ReturnsItemWithEnvelope(t *testing.T) {
 	require.Contains(t, text, "User can login with email", "should contain AC criterion")
 	require.Contains(t, text, "Password is hashed", "should contain second AC criterion")
 	require.Contains(t, text, "report_progress", "should list available tools")
+}
+
+// TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap
+// verifies the role:work guidance a live work session reads on every
+// get_backlog_item/backlog status poll tells it to run /backlog/ship both
+// immediately on a PASS verdict and as a bounded escape hatch after
+// session.MaxSameSessionReviewAttempts cycles without one — closing the gap
+// where this text previously said "PASS → status becomes done, you're
+// finished" and "Keep looping until PASS" with no mention of /backlog/ship at
+// all (see de6d7878-9d6e-4081-acfa-02ff545c87b4, 2026-07-20). This is the
+// dynamic counterpart to session.taskProtocolBlock and review.md — the text a
+// running session actually re-reads on every poll, not just at session start.
+func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Ship me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+	})
+
+	result, err := handler.getBacklogItem(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	text := tc.Text
+
+	require.Contains(t, text, "Your Role: Work")
+	require.Contains(t, text, "/backlog/ship")
+	require.Contains(t, text, fmt.Sprintf("%d cycles", session.MaxSameSessionReviewAttempts))
+	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
 }
 
 // TestGetBacklogItem_ReturnsNotFoundError verifies that getBacklogItem
@@ -339,7 +464,7 @@ func TestReportProgress_MapsStatusValues(t *testing.T) {
 
 	criteria, err := session.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
-	require.Equal(t, "done", criteria[0].Status, "pass should be mapped to done")
+	require.Equal(t, session.AcStatusDone, criteria[0].Status, "pass should be mapped to done")
 }
 
 // ─── T-11 tests 7 & 8: submitTriageResult notification publishing ─────────────
@@ -414,6 +539,214 @@ func TestSubmitTriageResult_PublishesNotificationOnSuccess(t *testing.T) {
 	}
 }
 
+// TestRequestReview_TransitionsItemToReview verifies that requestReview
+// transitions the item from in_progress to review.
+func TestRequestReview_TransitionsItemToReview(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	// Verify item is now in review status.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled verifies
+// that an item with SkipReviewGate=true never enters "review" via request_review —
+// it must go straight from in_progress to done, matching every other
+// SkipReviewGate-aware code path (session/backlog_lifecycle.go's onSessionExited,
+// TriggerReviewForSession, ReviewGateRunner.Run). Before this fix, request_review
+// always transitioned to review regardless of the flag, and because
+// TriggerReviewForSession also honors the flag (no-op), the item would then sit in
+// review forever with no gate ever spawned to move it forward.
+func TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:          "Skip the gate",
+		Status:         string(session.BacklogStatusInProgress),
+		SkipReviewGate: true,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "SkipReviewGate")
+
+	// Verify item went straight to done, never review.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
+// non-empty verification_notes argument is stored on the caller's ItemSession
+// so the review gate can later surface it in the reviewer's prompt.
+func TestRequestReview_PersistsVerificationNotesOnWorkSession(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	notes := "ran `go test ./session/...` -> ok (41 tests); ran make install-service, confirmed session groups under Category=Backlog"
+	req := makeToolReq(map[string]interface{}{
+		"item_id":            item.ID,
+		"message":            "Implemented the feature, all criteria done.",
+		"verification_notes": notes,
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+
+	fetched, err := storage.GetItemSession(ctx, workIS.ID)
+	require.NoError(t, err)
+	assert.Equal(t, notes, fetched.VerificationNotes)
+}
+
+// TestRequestReview_RejectsVerificationNotesOver4000Chars verifies the length
+// guard on verification_notes mirrors the existing guard on message.
+func TestRequestReview_RejectsVerificationNotesOver4000Chars(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":            item.ID,
+		"message":            "Done.",
+		"verification_notes": strings.Repeat("a", 4001),
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+
+	// Item must remain in_progress — the transition should not have happened.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status)
+}
+
+// TestRequestReview_RejectsWhenSessionNotLinked verifies PERMISSION_DENIED
+// when session is not linked to the item.
+func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Unlinked item",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+	handler := &backlogHandlers{storage: storage}
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
 // TestSubmitTriageResult_NoNotificationWhenEventBusNil verifies that submitTriageResult
 // does not panic when eventBus is nil and still returns a success result.
 func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
@@ -438,4 +771,301 @@ func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
 		require.True(t, ok)
 		assert.Contains(t, tc.Text, "Triage result submitted")
 	})
+}
+
+// --- report_pr_created ---
+
+// setupReportPRCreatedFixture creates a review-status item with a linked
+// work session, returning the item and the session UUID. verifyResult/
+// verifyErr control the injected verifyPRMatchesBranch stub's return value.
+func setupReportPRCreatedFixture(t *testing.T, storage *session.Storage, itemStatus session.BacklogStatus) (*session.BacklogItemData, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Ship it",
+		Status: string(itemStatus),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	return item, sessionUUID
+}
+
+// TestReportPRCreated_should_TransitionToPRPending_When_ValidPR verifies the
+// happy path: a work session reports a PR that verifies against GitHub, and
+// the item transitions review -> pr_pending with pr_url/pr_number persisted.
+func TestReportPRCreated_should_TransitionToPRPending_When_ValidPR(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage:               storage,
+		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature and shipped it via /backlog:ship.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "pr_pending")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, 42, fetched.PrNumber)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/42", fetched.PrURL)
+}
+
+// TestReportPRCreated_should_ReturnError_When_PersistFails mirrors BUG-040's
+// own TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies test
+// shape: force the underlying storage write to fail (by closing the real
+// on-disk SQLite connection right before the call, the same technique
+// BUG-040's regression test uses), and assert the tool call itself surfaces
+// an error rather than silently reporting success.
+func TestReportPRCreated_should_ReturnError_When_PersistFails(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "backlog-persist-fail-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, fmt.Sprintf("test-%d.db", time.Now().UnixNano()))
+	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+	require.NoError(t, err)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	// Close the DB connection now that fixture setup succeeded — every
+	// subsequent storage call inside reportPRCreated (including the primary
+	// PR-field/transition write) will fail.
+	require.NoError(t, repo.Close())
+
+	handler := &backlogHandlers{
+		storage:               storage,
+		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool), "report_pr_created must not silently succeed when the storage write fails")
+}
+
+// TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR verifies the
+// idempotency contract: calling report_pr_created again for a PR already
+// recorded on a pr_pending item is a no-op success, not an error.
+func TestReportPRCreated_should_NoOp_When_AlreadyPRPendingSamePR(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Already shipped",
+		Status: string(session.BacklogStatusPRPending),
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/tstapler/stapler-squad/pull/42"
+	prNum := 42
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	verifyCalled := false
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) {
+			verifyCalled = true
+			return true, nil
+		},
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    prURL,
+		"pr_number": float64(prNum),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "already recorded")
+	assert.False(t, verifyCalled, "idempotent no-op must short-circuit before any GitHub verification call")
+}
+
+// TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork verifies the
+// role guard: a review-role session may not call report_pr_created.
+func TestReportPRCreated_should_RejectCall_When_CallerRoleNotWork(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Review-role caller",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrPermissionDenied, errObj["code"].(string))
+}
+
+// TestReportPRCreated_should_RejectCall_When_BranchMismatch is the
+// GitHub-verification regression test: a self-reported PR whose head branch
+// (per GitHub) does not match this session's own branch must be rejected,
+// not persisted.
+func TestReportPRCreated_should_RejectCall_When_BranchMismatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(_ context.Context, _, _ string, _ int, expectedBranch string) (bool, error) {
+			assert.Equal(t, "backlog/ship-it", expectedBranch)
+			return false, nil // definitive mismatch — a real PR exists, but for a different branch/number
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/999",
+		"pr_number": float64(999),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInvalidArgument, errObj["code"].(string))
+
+	// Item must remain untouched — the mismatch must not be persisted.
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientlyFails
+// verifies that a transient GitHub lookup failure (rate limit, network) is
+// surfaced as a retryable INTERNAL_ERROR, distinct from a definitive
+// mismatch (INVALID_ARGUMENT) — the agent should retry, not correct itself.
+func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientlyFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+
+	handler := &backlogHandlers{
+		storage:              storage,
+		resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) {
+			return false, fmt.Errorf("GitHub API: rate limited (403)")
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":   item.ID,
+		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
+		"pr_number": float64(42),
+		"summary":   "Implemented the feature.",
+	})
+
+	result, err := handler.reportPRCreated(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, ErrInternalError, errObj["code"].(string), "a transient lookup failure must be retryable (INTERNAL_ERROR), not a definitive mismatch (INVALID_ARGUMENT)")
+
+	// Item must remain untouched.
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, 0, fetched.PrNumber)
+}
+
+// TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
+// verifies that the request_review tool description (and its verification_notes
+// field description) instruct the agent to cite an exact file path and
+// function/symbol when claiming an acceptance criterion is already satisfied by
+// existing code, rather than making an unsupported "already implemented" claim.
+func TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement(t *testing.T) {
+	data, err := os.ReadFile("tools_backlog.go")
+	require.NoError(t, err, "read tools_backlog.go")
+
+	content := string(data)
+	assert.Contains(t, content, "already satisfied by existing code",
+		"request_review tool description must instruct agents to flag already-implemented acceptance criteria")
+	assert.Contains(t, content, "cite the exact file path and function/symbol",
+		"request_review tool description must require a file/function citation for already-implemented claims")
+	assert.Contains(t, content, "already implemented",
+		"request_review tool description must call out unsupported \"already implemented\" claims as weak evidence")
 }

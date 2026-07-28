@@ -14,6 +14,13 @@ export const treePane = style({
   flexShrink: 0,
   borderRight: `1px solid ${vars.color.borderColor}`,
   overflow: "hidden",
+  "@media": {
+    "(max-width: 767px)": {
+      // Inline width (panel.width px) would leave a black gap — override to fill.
+      width: "100% !important",
+      borderRight: "none",
+    },
+  },
 });
 
 export const treePaneCollapsed = style({
@@ -159,4 +166,41 @@ export const treeWrapper = style({
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",
+});
+
+// Fix 2: hide collapse/expand panel buttons on mobile — toolbar has too many buttons
+export const toolbarButtonMobileHidden = style({
+  "@media": {
+    "(max-width: 767px)": {
+      display: "none",
+    },
+  },
+});
+
+// Fix 5: search icon button shown only on mobile, in the content pane header
+export const mobileSearchButton = style({
+  display: "none",
+  "@media": {
+    "(max-width: 767px)": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "8px 12px",
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      color: vars.color.primary,
+      fontSize: 16,
+      borderBottom: `1px solid ${vars.color.borderColor}`,
+    },
+  },
+});
+
+// Fix 6: visual separator between ⊟ and ⊠/⊞ buttons
+export const toolbarDivider = style({
+  width: 1,
+  alignSelf: "stretch",
+  background: vars.color.borderColor,
+  flexShrink: 0,
+  margin: "2px 2px",
 });

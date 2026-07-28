@@ -195,4 +195,136 @@ describe("SessionActionsOverflow", () => {
       expect(screen.getByRole("button", { name: /pause session/i })).toBeInTheDocument();
     });
   });
+
+  describe("program picker", () => {
+    function openProgramPicker(overrides: Partial<React.ComponentProps<typeof SessionActionsOverflow>> = {}) {
+      const onChangeProgram = overrides.onChangeProgram ?? jest.fn().mockResolvedValue(undefined);
+      const utils = renderOverflow({ onChangeProgram, ...overrides });
+      openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /change program/i }));
+      return { onChangeProgram, ...utils };
+    }
+
+    it("shows the Change Program menu item when onChangeProgram is provided", () => {
+      renderOverflow({ onChangeProgram: jest.fn() });
+      openMenu();
+      expect(screen.getByRole("menuitem", { name: /change program/i })).toBeInTheDocument();
+    });
+
+    it("omits the Change Program menu item when onChangeProgram is not provided", () => {
+      renderOverflow();
+      openMenu();
+      expect(screen.queryByRole("menuitem", { name: /change program/i })).not.toBeInTheDocument();
+    });
+
+    it("pre-fills the picker with the session's current program", () => {
+      const session = makeSession({ program: "aider" });
+      openProgramPicker({ session });
+      expect(screen.getByRole("dialog", { name: /change program/i })).toBeInTheDocument();
+      expect(screen.getByRole("combobox")).toHaveValue("aider");
+    });
+
+    it("calls onChangeProgram with the session id and picked value when saved (non-Active session)", async () => {
+      const session = makeSession({ status: SessionStatus.PAUSED, program: "claude" });
+      const { onChangeProgram } = openProgramPicker({ session });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(onChangeProgram).toHaveBeenCalledWith("session-1", "aider"));
+    });
+
+    it("sends an empty string when System default is selected", async () => {
+      const session = makeSession({ status: SessionStatus.PAUSED, program: "claude" });
+      const { onChangeProgram } = openProgramPicker({ session });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(onChangeProgram).toHaveBeenCalledWith("session-1", ""));
+    });
+
+    it("shows the restart hint only when the session is Active", () => {
+      const activeSession = makeSession({ status: SessionStatus.ACTIVE });
+      openProgramPicker({ session: activeSession });
+      expect(screen.getByText(/the session will restart/i)).toBeInTheDocument();
+    });
+
+    it("omits the restart hint when the session is not Active", () => {
+      const pausedSession = makeSession({ status: SessionStatus.PAUSED });
+      openProgramPicker({ session: pausedSession });
+      expect(screen.queryByText(/the session will restart/i)).not.toBeInTheDocument();
+    });
+
+    it("shows a confirmation dialog instead of saving immediately on an Active session", () => {
+      const session = makeSession({ status: SessionStatus.ACTIVE });
+      const { onChangeProgram } = openProgramPicker({ session });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      expect(screen.getByRole("dialog", { name: /change program/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /change & restart/i })).toBeInTheDocument();
+      expect(onChangeProgram).not.toHaveBeenCalled();
+    });
+
+    it("does not call onChangeProgram when the confirmation is cancelled", () => {
+      const session = makeSession({ status: SessionStatus.ACTIVE });
+      const { onChangeProgram } = openProgramPicker({ session });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+      expect(onChangeProgram).not.toHaveBeenCalled();
+    });
+
+    it("calls onChangeProgram once the restart confirmation is accepted", async () => {
+      const session = makeSession({ status: SessionStatus.ACTIVE });
+      const { onChangeProgram } = openProgramPicker({ session });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /change & restart/i }));
+
+      await waitFor(() => expect(onChangeProgram).toHaveBeenCalledWith("session-1", "aider"));
+    });
+
+    it("keeps the dialog open and shows an inline error when the save fails (non-Active session)", async () => {
+      const session = makeSession({ status: SessionStatus.PAUSED, program: "claude" });
+      const onChangeProgram = jest.fn().mockRejectedValue(new Error("network down"));
+      openProgramPicker({ session, onChangeProgram });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(screen.getByText("network down")).toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /change program/i })).toBeInTheDocument();
+    });
+
+    it("keeps the restart-confirm dialog open and shows an inline error when the save fails (Active session)", async () => {
+      const session = makeSession({ status: SessionStatus.ACTIVE });
+      const onChangeProgram = jest.fn().mockRejectedValue(new Error("network down"));
+      openProgramPicker({ session, onChangeProgram });
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "aider" } });
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      fireEvent.click(screen.getByRole("button", { name: /change & restart/i }));
+
+      await waitFor(() => expect(screen.getByText("network down")).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: /change & restart/i })).toBeInTheDocument();
+    });
+
+    it("re-syncs the picker value when the session's program changes externally while open", () => {
+      const session = makeSession({ status: SessionStatus.PAUSED, program: "claude" });
+      const { rerender } = openProgramPicker({ session });
+
+      expect(screen.getByRole("combobox")).toHaveValue("claude");
+
+      const updatedSession = makeSession({ status: SessionStatus.PAUSED, program: "agy" });
+      rerender(<SessionActionsOverflow session={updatedSession} onChangeProgram={jest.fn()} />);
+
+      expect(screen.getByRole("combobox")).toHaveValue("agy");
+    });
+  });
 });

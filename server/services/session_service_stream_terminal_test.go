@@ -111,6 +111,46 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	require.NoError(t, stream.Send(&sessionv1.TerminalData{SessionId: sessionID}))
 	t.Cleanup(func() { _ = stream.CloseRequest() })
 
+	// Actively provoke fresh PTY output instead of passively waiting for
+	// whatever's left of bash's one-time startup burst (motd/prompt). The PTY
+	// fd this goroutine reads from is shared with the instance's own internal
+	// consumers (response stream, command executor, claude controller), which
+	// are already reading it concurrently -- a real fd-level race for who
+	// gets each byte, not a broadcast. Under a fast/idle CI runner there's
+	// normally still some of that startup burst in flight by the time this
+	// stream attaches, so the passive wait usually won by luck; but under
+	// heavy load CreateSession's own polling loop above can take much longer,
+	// during which the other consumers fully drain that one-time burst,
+	// leaving a bare interactive bash shell that emits nothing further on its
+	// own. That's what produced CI run 29549848133's exact failure: 60.15s
+	// (the streamCtx deadline) with zero Output frames ever received.
+	// Sending a newline repeatedly makes bash re-prompt for as long as it
+	// takes, giving this reader many independent chances to win the race
+	// instead of exactly one (the leftover startup burst, or nothing).
+	stimulusDone := make(chan struct{})
+	var stimulusWG sync.WaitGroup
+	stimulusWG.Add(1)
+	go func() {
+		defer stimulusWG.Done()
+		ticker := time.NewTicker(300 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			case <-stimulusDone:
+				return
+			case <-ticker.C:
+				_ = stream.Send(&sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_Input{
+						Input: &sessionv1.TerminalInput{Data: []byte("\n")},
+					},
+				})
+			}
+		}
+	}()
+
 	var gotOutput bool
 	for {
 		msg, recvErr := stream.Receive()
@@ -128,6 +168,8 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 			break
 		}
 	}
+	close(stimulusDone)
+	stimulusWG.Wait()
 
 	require.True(t, gotOutput, "expected at least one TerminalData_Output frame from the live PTY")
 }

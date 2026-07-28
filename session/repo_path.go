@@ -184,7 +184,10 @@ func (m *RepoPathManager) GetCloneURL(ref *GitHubRef) string {
 // EnsureRepoCloned ensures the repository is cloned to the local path.
 // If already cloned, it fetches the latest changes.
 // Returns the path to the cloned repository.
-func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
+// ctx bounds the underlying git fetch/clone subprocess (via safeexec.CommandContext)
+// with a hard per-operation timeout, so callers that cancel ctx actually kill the
+// subprocess rather than merely abandoning the RPC while it keeps running.
+func (m *RepoPathManager) EnsureRepoCloned(ctx context.Context, ref *GitHubRef) (string, error) {
 	repoPath := m.GetRepoPath(ref)
 	cloneURL := m.GetCloneURL(ref)
 
@@ -192,10 +195,20 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
 		// Repo exists, fetch latest
 		log.Info("repository exists, fetching latest", "path", repoPath)
-		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
 		defer fetchCancel()
 		cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
 		if output, err := cmd.CombinedOutput(); err != nil {
+			// Only propagate when the caller's own ctx (not the local 60s
+			// fetchCtx timeout) is what killed the fetch — that means the
+			// caller's deadline was actually hit and callers like
+			// CreateSession need to see that as an error rather than
+			// silently proceeding with a possibly-stale repo. A fetch that
+			// merely fails on its own (network blip, no connectivity) still
+			// falls through to "existing repo is still usable" below.
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("failed to fetch repository: %w", ctx.Err())
+			}
 			log.Warn("failed to fetch repository", "err", err, "output", string(output))
 			// Don't fail - the existing repo is still usable
 		}
@@ -210,7 +223,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 
 	// Clone the repository
 	log.Info("cloning repository", "url", cloneURL, "path", repoPath)
-	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	cloneCtx, cloneCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -230,7 +243,24 @@ func (m *RepoPathManager) ResolveGitHubInput(input string) (localPath string, re
 		return "", nil, err
 	}
 
-	localPath, err = m.EnsureRepoCloned(ref)
+	localPath, err = m.EnsureRepoCloned(context.Background(), ref)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return localPath, ref, nil
+}
+
+// ResolveGitHubInputCtx takes a GitHub URL/shorthand and returns a resolved path,
+// threading ctx down to EnsureRepoCloned so the underlying git clone/fetch
+// subprocess is actually cancelled if ctx is cancelled or times out.
+func (m *RepoPathManager) ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
+	ref, err = ParseGitHubURL(input)
+	if err != nil {
+		return "", nil, err
+	}
+
+	localPath, err = m.EnsureRepoCloned(ctx, ref)
 	if err != nil {
 		return "", nil, err
 	}
@@ -244,6 +274,12 @@ var DefaultRepoPathManager = NewRepoPathManager()
 // ResolveGitHubInput is a convenience function using the default manager.
 func ResolveGitHubInput(input string) (localPath string, ref *GitHubRef, err error) {
 	return DefaultRepoPathManager.ResolveGitHubInput(input)
+}
+
+// ResolveGitHubInputCtx is a convenience function using the default manager,
+// threading ctx down to the underlying git clone/fetch subprocess.
+func ResolveGitHubInputCtx(ctx context.Context, input string) (localPath string, ref *GitHubRef, err error) {
+	return DefaultRepoPathManager.ResolveGitHubInputCtx(ctx, input)
 }
 
 // WorktreeInfo contains information about a git worktree
@@ -391,4 +427,33 @@ func GetMainRepoPath(path string) (string, error) {
 		return filepath.Dir(absPath), nil
 	}
 	return absPath, nil
+}
+
+// WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,
+// used to group sibling worktrees/branches of the same repo as peers. Prefers the GitHub
+// owner/repo (stable across worktree paths); falls back to MainRepoPath, then Path.
+// Returns "" when none are set (e.g. a bare one-off session with no git remote).
+func WorkspaceKey(githubOwner, githubRepo, mainRepoPath, path string) string {
+	if githubOwner != "" && githubRepo != "" {
+		return "gh:" + strings.ToLower(githubOwner) + "/" + strings.ToLower(githubRepo)
+	}
+	if mainRepoPath != "" {
+		return "path:" + mainRepoPath
+	}
+	if path != "" {
+		return "path:" + path
+	}
+	return ""
+}
+
+// WorkspaceKey returns this instance's workspace identity. See the package-level
+// WorkspaceKey function for the derivation rules.
+func (i *Instance) WorkspaceKey() string {
+	return WorkspaceKey(i.GitHubOwner, i.GitHubRepo, i.MainRepoPath, i.Path)
+}
+
+// WorkspaceKey returns this instance data's workspace identity. See the package-level
+// WorkspaceKey function for the derivation rules.
+func (d InstanceData) WorkspaceKey() string {
+	return WorkspaceKey(d.GitHubOwner, d.GitHubRepo, d.MainRepoPath, d.Path)
 }

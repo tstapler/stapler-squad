@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
-	"time"
 )
 
 // ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
@@ -72,10 +71,6 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 	}
 	defer resp.Body.Close()
 
-	if backoff := checkRateLimitHeaders(resp); backoff > 0 {
-		time.Sleep(backoff)
-	}
-
 	if resp.StatusCode == http.StatusNotModified {
 		if hasCached {
 			return entry.prInfo, false, nil
@@ -83,8 +78,24 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		return nil, false, nil
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, false, fmt.Errorf("GitHub API: auth error (%d)", resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, false, fmt.Errorf("GitHub API: unauthorized (401)")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		// Retry-After present → secondary rate limit; no Retry-After → auth/permission error.
+		if resp.Header.Get("Retry-After") != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: secondary rate limit (403)")
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil, false, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
+		}
+		return nil, false, fmt.Errorf("GitHub API: forbidden (403)")
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, false, fmt.Errorf("GitHub API: rate limited (429)")
 	}
 
 	if resp.StatusCode != http.StatusOK {

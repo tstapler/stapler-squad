@@ -119,6 +119,50 @@ export const statusChip = style({
   whiteSpace: "nowrap",
 });
 
+// Sweep fix (backlog-event-driven-updates Phase 5 compliance sweep, 2026-07-22):
+// Story 5.4.1's own acceptance criterion ("a verdict recorded shortly after
+// ... BacklogItemPanel reflects the new status and verdict") and ux.md UX
+// AC #14 both require the verdict to appear here, mirroring
+// BacklogItemCard.css.ts's verdict badge variants (same token usage, no
+// hardcoded colors per .claude/rules/css-architecture.md).
+const verdictBadgeBase = style({
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: "700",
+  fontFamily: vars.font.mono,
+  height: "20px",
+  border: "1px solid transparent",
+});
+
+export const verdictBadgePass = style([
+  verdictBadgeBase,
+  { color: vars.color.success, background: vars.color.successBg, borderColor: vars.color.success },
+]);
+
+export const verdictBadgePartial = style([
+  verdictBadgeBase,
+  { color: vars.color.warning, background: vars.color.warningBg, borderColor: vars.color.warning },
+]);
+
+export const verdictBadgeFail = style([
+  verdictBadgeBase,
+  { color: vars.color.errorText, background: vars.color.errorBg, borderColor: vars.color.error },
+]);
+
+export const verdictBadgeUnverifiable = style([
+  verdictBadgeBase,
+  { color: vars.color.textMuted, background: vars.color.cardBackground, borderColor: vars.color.borderMuted },
+]);
+
+export const verdictSummary = style({
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+  lineHeight: 1.4,
+});
+
 export const title = style({
   fontSize: vars.fontSize.sm,
   fontWeight: "600",

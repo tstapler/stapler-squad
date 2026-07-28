@@ -24,6 +24,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { GoalPanel } from "./GoalPanel";
+import { WorkspacePeersPanel } from "./WorkspacePeersPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
@@ -170,7 +171,24 @@ export function SessionDetailView({
   }, [shells]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(null);
+  const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const hash = window.location.hash;
+    if (hash.startsWith("#file=")) return decodeURIComponent(hash.slice(6)) || null;
+    return null;
+  });
+  // Sync file selection to/from URL hash so the user can always navigate back.
+  React.useEffect(() => {
+    if (filesSelectedPath) {
+      history.replaceState(null, "", `#file=${encodeURIComponent(filesSelectedPath)}`);
+    } else {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, [filesSelectedPath]);
+  // Clear file selection when the session changes so stale paths don't leak across sessions.
+  React.useEffect(() => {
+    setFilesSelectedPath(null);
+  }, [session.id]);
   const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
   const availablePrograms = useAvailablePrograms();
   const [isEditingProgram, setIsEditingProgram] = useState(false);
@@ -535,7 +553,7 @@ export function SessionDetailView({
         </ActionBar>
       </div>}
 
-      {!embedded && <div
+      <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
         onKeyDown={(e) => {
@@ -608,7 +626,7 @@ export function SessionDetailView({
         >
           +
         </button>
-      </div>}
+      </div>
 
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {/* Terminal tab: kept mounted but hidden via display:none to preserve xterm.js instances */}
@@ -707,7 +725,6 @@ export function SessionDetailView({
             <BacklogItemPanel
               backlogItemId={backlogItemId}
               sessionId={session.id}
-              isSessionActive={session.status === SessionStatus.RUNNING}
             />
           )}
         </div>
@@ -1215,6 +1232,8 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+            {/* Other sessions sharing this workspace — shown when peers exist */}
+            <WorkspacePeersPanel session={session} />
           </div>
         )}
         {activeTab === "artifacts" && (

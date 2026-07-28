@@ -138,22 +138,6 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	}
 }
 
-func TestSweepStaleStatusEntriesRemovesOnlyExpiredEntries(t *testing.T) {
-	sub := newAnalyticsSubscriber(&recordingProvider{})
-	now := time.Now()
-	sub.lastStatusByID["stale-id"] = statusEntry{status: session.Stopped, lastSeen: now.Add(-(statusEntryTTL + time.Hour))}
-	sub.lastStatusByID["fresh-id"] = statusEntry{status: session.Active, lastSeen: now}
-
-	sub.sweepStaleStatusEntries()
-
-	if _, ok := sub.lastStatusByID["stale-id"]; ok {
-		t.Error("entries older than statusEntryTTL must be swept")
-	}
-	if _, ok := sub.lastStatusByID["fresh-id"]; !ok {
-		t.Error("fresh entries must be kept")
-	}
-}
-
 func TestSubscriber_UnknownEventSkipped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

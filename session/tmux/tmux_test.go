@@ -110,6 +110,36 @@ func TestStartTmuxSession(t *testing.T) {
 	// so we focus on testing the behavioral contract rather than implementation details
 }
 
+func TestStartTmuxSession_IncludesTmuxStderrOnFailure(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+
+	const wantStderr = "tmux: unrecognized option '-e'"
+	cmdExec := MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "new-session") {
+				if cmd.Stderr != nil {
+					_, _ = cmd.Stderr.Write([]byte(wantStderr))
+				}
+				return fmt.Errorf("exit status 1")
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "list-sessions") {
+				return nil, fmt.Errorf("no server running")
+			}
+			return []byte("output"), nil
+		},
+	}
+
+	workdir := t.TempDir()
+	session := newTmuxSessionWithSocket("test-session-fail", "echo", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
+
+	err := session.Start(workdir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), wantStderr)
+}
+
 // --- serverNotRunning detection tests ---
 
 func TestServerNotRunning(t *testing.T) {
@@ -273,6 +303,27 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	createCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
 	require.NoError(t, createCmd.Run(),
 		"should be able to create a session on the newly started server — server must be running")
+}
+
+// TestStartServerSucceededDespiteError covers the flaky-under-load scenario behind
+// TestEnsureServerRunning_NoOp's original failure mode: under heavy concurrent tmux
+// usage, checkServerNotRunning's list-sessions call can itself transiently report
+// "server exited unexpectedly" against a socket that actually has a live server,
+// which sends EnsureServerRunning down the start-server path even though a server
+// is already running -- and that start-server call then hits the same transient
+// failure. Rather than reproduce that real timing race (system-load dependent,
+// not deterministic), this tests the recovery decision in isolation via an
+// injected checker.
+func TestStartServerSucceededDespiteError(t *testing.T) {
+	t.Run("recovers when a recheck shows the server is actually running", func(t *testing.T) {
+		got := startServerSucceededDespiteError(func() bool { return false }) // false = is running
+		require.True(t, got, "a start-server error should be swallowed when the server is actually up")
+	})
+
+	t.Run("does not recover when the server genuinely is not running", func(t *testing.T) {
+		got := startServerSucceededDespiteError(func() bool { return true }) // true = not running
+		require.False(t, got, "a start-server error must still surface when the server really isn't running")
+	})
 }
 
 // TestCreateKeepaliveSession verifies that a keepalive session is created and

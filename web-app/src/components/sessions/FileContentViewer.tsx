@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useGetFileContent } from "@/lib/hooks/useFileService";
 import { darkTheme } from "@/styles/theme.css";
+import { buildGutterMarks, type GutterMarkType } from "@/lib/utils/parseDiff";
 import {
-  container, emptyState, emptyIcon,
+  container, emptyState, emptyIcon, emptyHint,
   loading as loadingClass, error as errorClass, spinner,
   breadcrumb, breadcrumbSegment, breadcrumbCurrent, breadcrumbSep,
   truncationWarning, viewer, shikiOutput, shikiOutputWrap, plainPre, plainPreWrapped, codeMirrorEditor,
@@ -12,7 +13,15 @@ import {
   downloadButton, wrapToggleButton, wrapToggleButtonActive, imageViewer, imagePreview,
   pdfViewer, pdfEmbed,
   videoViewer, videoPlayer, videoMeta,
+  shimmer,
+  gutterMarkerAdd, gutterMarkerDelete, gutterMarkerModify,
 } from "./FileContentViewer.css";
+
+const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
+  add: gutterMarkerAdd,
+  delete: gutterMarkerDelete,
+  modify: gutterMarkerModify,
+};
 
 // Language detection map: file extension → Shiki/CodeMirror language ID.
 const EXT_TO_LANG: Record<string, string> = {
@@ -109,11 +118,12 @@ interface BreadcrumbProps {
   path: string;
   onSegmentClick?: (path: string) => void;
   downloadUrl?: string;
+  openUrl?: string;
   wrapLines?: boolean;
   onToggleWrap?: () => void;
 }
 
-function Breadcrumb({ path, onSegmentClick, downloadUrl, wrapLines, onToggleWrap }: BreadcrumbProps) {
+function Breadcrumb({ path, onSegmentClick, downloadUrl, openUrl, wrapLines, onToggleWrap }: BreadcrumbProps) {
   const segments = path.split("/").filter(Boolean);
   return (
     <div className={breadcrumb}>
@@ -122,13 +132,20 @@ function Breadcrumb({ path, onSegmentClick, downloadUrl, wrapLines, onToggleWrap
         const isLast = i === segments.length - 1;
         return (
           <span key={segPath}>
-            <span
-              className={isLast ? breadcrumbCurrent : breadcrumbSegment}
-              onClick={!isLast && onSegmentClick ? () => onSegmentClick(segPath) : undefined}
-              title={segPath}
-            >
-              {seg}
-            </span>
+            {isLast ? (
+              <span className={breadcrumbCurrent} title={segPath}>
+                {seg}
+              </span>
+            ) : (
+              <button
+                className={breadcrumbSegment}
+                onClick={onSegmentClick ? () => onSegmentClick(segPath) : undefined}
+                title={segPath}
+                type="button"
+              >
+                {seg}
+              </button>
+            )}
             {!isLast && <span className={breadcrumbSep}>/</span>}
           </span>
         );
@@ -141,6 +158,17 @@ function Breadcrumb({ path, onSegmentClick, downloadUrl, wrapLines, onToggleWrap
         >
           ↵ Wrap
         </button>
+      )}
+      {openUrl && (
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={downloadButton}
+          title="Open file in browser"
+        >
+          ↗ Open
+        </a>
       )}
       {downloadUrl && (
         <a
@@ -184,9 +212,10 @@ interface CodeMirrorViewerProps {
   content: string;
   language: string;
   wrapLines?: boolean;
+  gutterMarks?: Map<number, GutterMarkType>;
 }
 
-function CodeMirrorViewer({ content, language, wrapLines }: CodeMirrorViewerProps) {
+function CodeMirrorViewer({ content, language, wrapLines, gutterMarks }: CodeMirrorViewerProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<import("@codemirror/view").EditorView | null>(null);
   const appTheme = useAppTheme();
@@ -198,7 +227,7 @@ function CodeMirrorViewer({ content, language, wrapLines }: CodeMirrorViewerProp
     (async () => {
       if (!editorRef.current) return;
 
-      const { EditorView } = await import("@codemirror/view");
+      const { EditorView, gutter, GutterMarker } = await import("@codemirror/view");
       const { EditorState } = await import("@codemirror/state");
       const { basicSetup } = await import("codemirror");
       const { oneDark } = await import("@codemirror/theme-one-dark");
@@ -211,6 +240,30 @@ function CodeMirrorViewer({ content, language, wrapLines }: CodeMirrorViewerProp
         // Fall back to plain text if language not supported.
       }
 
+      class ChangeGutterMarker extends GutterMarker {
+        constructor(private markType: GutterMarkType) {
+          super();
+        }
+        eq(other: ChangeGutterMarker) {
+          return other.markType === this.markType;
+        }
+        toDOM() {
+          const el = document.createElement("div");
+          el.className = GUTTER_MARKER_CLASS[this.markType];
+          return el;
+        }
+      }
+
+      const changeGutter = gutter({
+        class: "cm-changeGutter",
+        lineMarker(view, block) {
+          if (!gutterMarks || gutterMarks.size === 0) return null;
+          const lineNumber = view.state.doc.lineAt(block.from).number;
+          const markType = gutterMarks.get(lineNumber);
+          return markType ? new ChangeGutterMarker(markType) : null;
+        },
+      });
+
       // readOnly prevents edits; omitting editable.of(false) keeps contenteditable=true
       // so the browser allows text selection and copy.
       const extensions = [
@@ -218,6 +271,7 @@ function CodeMirrorViewer({ content, language, wrapLines }: CodeMirrorViewerProp
         EditorState.readOnly.of(true),
         ...(isDark ? [oneDark] : []),
         ...(wrapLines ? [EditorView.lineWrapping] : []),
+        ...(gutterMarks && gutterMarks.size > 0 ? [changeGutter] : []),
       ];
       if (langExtension) extensions.push(langExtension);
 
@@ -234,7 +288,7 @@ function CodeMirrorViewer({ content, language, wrapLines }: CodeMirrorViewerProp
       view?.destroy();
       viewRef.current = null;
     };
-  }, [content, language, isDark, wrapLines]);
+  }, [content, language, isDark, wrapLines, gutterMarks]);
 
   return <div ref={editorRef} className={codeMirrorEditor} />;
 }
@@ -328,13 +382,18 @@ function ShikiViewer({ content, language, wrapLines }: ShikiViewerProps) {
     return () => { cancelled = true; };
   }, [content, language]);
 
-  if (error || html === null) {
-    // Plain text fallback.
+  if (error) {
+    // Error fallback — render plain text.
     return (
       <pre className={wrapLines ? plainPreWrapped : plainPre}>
         <code>{content}</code>
       </pre>
     );
+  }
+
+  if (html === null) {
+    // Still loading — show shimmer to avoid flash of unstyled plain text.
+    return <div className={shimmer} aria-hidden="true" />;
   }
 
   return (
@@ -380,23 +439,35 @@ interface FileContentViewerProps {
   sessionId: string;
   filePath: string | null;
   baseUrl: string;
+  /** Raw unified diff for the whole session — used to derive gutter markers for the open file. */
+  diffContent?: string;
 }
 
-export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentViewerProps) {
+export function FileContentViewer({ sessionId, filePath, baseUrl, diffContent }: FileContentViewerProps) {
   const { data, loading, error } = useGetFileContent(sessionId, filePath, baseUrl);
   const [wrapLines, setWrapLines] = useState(false);
+  const gutterMarks = useMemo(
+    () => (diffContent && filePath ? buildGutterMarks(diffContent, filePath) : new Map<number, GutterMarkType>()),
+    [diffContent, filePath]
+  );
+
+  useEffect(() => {
+    setWrapLines(false);
+  }, [filePath]);
 
   if (!filePath) {
     return (
       <div className={emptyState}>
         <span className={emptyIcon}>📄</span>
         <p>Select a file to view its contents</p>
+        <p className={emptyHint}>Press ⌘P (or Ctrl+P) to quick-open any file</p>
       </div>
     );
   }
 
   const rawUrl = `/api/files/raw?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`;
   const downloadUrl = `${rawUrl}&download=true`;
+  const openUrl = rawUrl;
 
   if (loading) {
     return (
@@ -428,7 +499,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
   if (isImage) {
     return (
       <div className={container}>
-        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <Breadcrumb path={filePath} openUrl={openUrl} downloadUrl={downloadUrl} />
         <div className={imageViewer}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -445,7 +516,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
   if (isPdf) {
     return (
       <div className={container}>
-        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <Breadcrumb path={filePath} openUrl={openUrl} downloadUrl={downloadUrl} />
         <div className={pdfViewer}>
           <embed
             src={`${rawUrl}#view=FitH&navpanes=0`}
@@ -467,7 +538,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
 
     return (
       <div className={container}>
-        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <Breadcrumb path={filePath} openUrl={openUrl} downloadUrl={downloadUrl} />
         <div className={videoViewer}>
           <video
             src={rawUrl}
@@ -490,7 +561,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
     const sizeKb = Number(data.size) / 1024;
     return (
       <div className={container}>
-        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <Breadcrumb path={filePath} openUrl={openUrl} downloadUrl={downloadUrl} />
         <div className={binaryPlaceholder}>
           <span className={binaryIcon}>🔒</span>
           <p className={binaryTitle}>Binary file — cannot display</p>
@@ -507,12 +578,16 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
 
   const lang = detectLanguage(filePath);
   const lineCount = (data.content.match(/\n/g) || []).length + 1;
-  const useLargeMode = lineCount > LARGE_FILE_LINE_THRESHOLD;
+  const hasGutterMarks = gutterMarks.size > 0;
+  // Files with diff gutter markers use CodeMirror even below the line threshold — Shiki
+  // (used for small/medium files) has no gutter decoration API.
+  const useLargeMode = lineCount > LARGE_FILE_LINE_THRESHOLD || hasGutterMarks;
 
   return (
     <div className={container}>
       <Breadcrumb
         path={filePath}
+        openUrl={openUrl}
         downloadUrl={downloadUrl}
         wrapLines={wrapLines}
         onToggleWrap={() => setWrapLines((w) => !w)}
@@ -524,7 +599,12 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
       )}
       <div className={viewer}>
         {useLargeMode ? (
-          <CodeMirrorViewer content={data.content} language={lang} wrapLines={wrapLines} />
+          <CodeMirrorViewer
+            content={data.content}
+            language={lang}
+            wrapLines={wrapLines}
+            gutterMarks={hasGutterMarks ? gutterMarks : undefined}
+          />
         ) : (
           <ShikiViewer content={data.content} language={lang} wrapLines={wrapLines} />
         )}

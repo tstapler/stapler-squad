@@ -8,7 +8,12 @@
   "testIds": [
     "e2e:backlog-tour-first-visit",
     "e2e:backlog-tour-reopen-button",
-    "e2e:backlog-dev-mode-should-display-a-seeded-backlog-item"
+    "e2e:backlog-dev-mode-should-display-a-seeded-backlog-item",
+    "BacklogPage_should_FadeRowOutThenRemove_When_ItemLeavesFilterViaGenuineLiveUpdate",
+    "BacklogPage_should_RemoveRowInstantly_When_DepartureIsFromBulkResnapshotNotLiveEvent",
+    "BacklogPage_should_SettleInPlace_When_ItemFlapsBackIntoFilterDuringExitTransition",
+    "BacklogPage_should_HideArchivedItems_When_LoadedByDefault",
+    "BacklogPage_should_ShowArchivedItems_When_ShowArchivedToggled"
   ],
-  "lastModified": "2026-07-06T00:00:00Z"
+  "lastModified": "2026-07-22T00:00:00Z"
 }

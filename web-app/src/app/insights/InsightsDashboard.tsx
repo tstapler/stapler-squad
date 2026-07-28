@@ -7,6 +7,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useInsightsSummary } from "@/lib/hooks/useInsightsService";
 import { useProjectedCost } from "@/lib/hooks/useProjectedCost";
 import { useBudgetThreshold } from "@/lib/hooks/useBudgetThreshold";
+import { useBacklogSessionIndex } from "@/lib/hooks/useBacklogService";
 import { SummaryCards } from "./SummaryCards";
 import { TopNTable } from "./TopNTables";
 import { SessionsTable } from "./SessionsTable";
@@ -87,6 +88,8 @@ function InsightsDashboardInner() {
     from: fromDate,
     to: toDate,
   });
+
+  const { index: backlogIndex } = useBacklogSessionIndex();
 
   const projection = useProjectedCost(summary?.daily ?? []);
   const { threshold, setThreshold, isHydrated } = useBudgetThreshold();
@@ -211,6 +214,7 @@ function InsightsDashboardInner() {
             <SessionsTable
               sessions={summary.sessions}
               onSessionClick={(s) => setSelectedSession(s)}
+              backlogIndex={backlogIndex}
             />
           </section>
         </>
@@ -219,6 +223,7 @@ function InsightsDashboardInner() {
       <SessionDetailDrawer
         session={selectedSession}
         onClose={() => setSelectedSession(null)}
+        backlogEntry={selectedSession?.sessionId ? backlogIndex.get(selectedSession.sessionId) : undefined}
       />
     </div>
   );

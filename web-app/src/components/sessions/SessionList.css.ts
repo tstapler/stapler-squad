@@ -260,6 +260,34 @@ export const categoryTitle = style({
   transition: "background 0.15s ease",
 });
 
+export const collapseToggle = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "24px",
+  height: "24px",
+  padding: 0,
+  flexShrink: 0,
+  border: "none",
+  borderRadius: vars.radii.sm,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  transition: "background 0.15s ease, color 0.15s ease",
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+  "@media": {
+    "(max-width: 768px)": {
+      width: "44px",
+      height: "44px",
+    },
+  },
+});
+
 export const categoryContent = style({
   display: "flex",
   flexDirection: "column",

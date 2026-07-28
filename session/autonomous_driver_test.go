@@ -17,13 +17,13 @@ type fakeHeadlessPool struct {
 	capturedKeys []headless.FeatureKey
 }
 
-func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (f *fakeHeadlessPool) CallBlocking(_ context.Context, key headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	idx := int(atomic.AddInt32(&f.callCount, 1)) - 1
 	f.capturedKeys = append(f.capturedKeys, key)
 	if idx < len(f.responses) {
-		return f.responses[idx], nil
+		return f.responses[idx], 0, nil
 	}
-	return "NEXT_MESSAGE: keep going", nil
+	return "NEXT_MESSAGE: keep going", 0, nil
 }
 
 func TestParseOrchestrationResponse_NextMessage(t *testing.T) {
@@ -359,7 +359,7 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 // panicPool panics on the first call to simulate a driver panic.
 type panicPool struct{}
 
-func (p *panicPool) CallBlockingWithOptions(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, error) {
+func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ string, _ headless.CallOptions) (string, float64, error) {
 	panic("simulated panic in headless pool")
 }
 
@@ -479,4 +479,94 @@ func strContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- BUG-031: waitForPaneSettle (paste/submit race regression) ---
+
+// fakePaneSettleChecker is a scripted paneSettleChecker: each call to
+// HasUpdated pops the next value off updates (repeating the last one once
+// exhausted), so a test can script "still changing... still changing...
+// settled" without a real tmux pane.
+type fakePaneSettleChecker struct {
+	updates []bool
+	calls   int
+}
+
+func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
+	idx := f.calls
+	f.calls++
+	if idx >= len(f.updates) {
+		idx = len(f.updates) - 1
+	}
+	return f.updates[idx], false
+}
+
+// withShrunkPaneSettleTimers shrinks the package-level poll/deadline vars for
+// the duration of a test (restored via the returned func), so these tests run
+// in milliseconds instead of waiting out the real 150ms/2s production values.
+func withShrunkPaneSettleTimers(t *testing.T) {
+	t.Helper()
+	origInterval, origMax := paneSettlePollInterval, paneSettleMaxWait
+	paneSettlePollInterval = 5 * time.Millisecond
+	paneSettleMaxWait = 60 * time.Millisecond
+	t.Cleanup(func() {
+		paneSettlePollInterval, paneSettleMaxWait = origInterval, origMax
+	})
+}
+
+// TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly
+// is the regression test for BUG-031's fix: once the pane reports two
+// consecutive unchanged polls, waitForPaneSettle must return promptly rather
+// than always waiting out the full deadline — this is what lets the submit
+// keystroke follow the content write as soon as the TUI has actually
+// finished rendering it, not just eventually.
+func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly(t *testing.T) {
+	withShrunkPaneSettleTimers(t)
+	checker := &fakePaneSettleChecker{updates: []bool{true, true, false, false, false}}
+
+	start := time.Now()
+	waitForPaneSettle(context.Background(), checker)
+	elapsed := time.Since(start)
+
+	if elapsed >= paneSettleMaxWait {
+		t.Errorf("expected early return once settled, took %v (>= deadline %v)", elapsed, paneSettleMaxWait)
+	}
+	if checker.calls < 4 {
+		t.Errorf("expected at least 4 polls (2 changing + 2 stable), got %d", checker.calls)
+	}
+}
+
+// TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles verifies
+// a pane that never stops changing (e.g. a genuinely busy session) does not
+// hang waitForPaneSettle forever — it must still return once paneSettleMaxWait
+// elapses, so the caller's submit keystroke is never permanently blocked.
+func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *testing.T) {
+	withShrunkPaneSettleTimers(t)
+	checker := &fakePaneSettleChecker{updates: []bool{true}} // always "still changing"
+
+	start := time.Now()
+	waitForPaneSettle(context.Background(), checker)
+	elapsed := time.Since(start)
+
+	if elapsed < paneSettleMaxWait {
+		t.Errorf("expected to wait out the full deadline for a never-settling pane, returned early after %v", elapsed)
+	}
+}
+
+// TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled verifies
+// a cancelled context stops the poll loop right away rather than waiting out
+// paneSettleMaxWait.
+func TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled(t *testing.T) {
+	withShrunkPaneSettleTimers(t)
+	checker := &fakePaneSettleChecker{updates: []bool{true}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	waitForPaneSettle(ctx, checker)
+	elapsed := time.Since(start)
+
+	if elapsed >= paneSettlePollInterval {
+		t.Errorf("expected immediate return on cancelled context, took %v", elapsed)
+	}
 }

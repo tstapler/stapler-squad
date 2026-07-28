@@ -149,6 +149,7 @@ export const closeButton = style({
 export const content = style({
   flex: 1,
   overflowY: "auto",
+  overflowX: "hidden",
   padding: 0,
 });
 
@@ -192,6 +193,8 @@ export const item = style({
   borderBottom: `1px solid ${vars.color.borderColor}`,
   borderLeft: "3px solid var(--priority-color)",
   backgroundColor: vars.color.background,
+  overflow: "hidden",
+  minWidth: 0,
   transition: "background-color 0.2s ease",
   selectors: {
     "&:hover": {
@@ -351,6 +354,7 @@ export const itemFooter = style({
   alignItems: "center",
   justifyContent: "space-between",
   gap: "0.5rem",
+  flexWrap: "wrap",
 });
 
 export const timestamp = style({

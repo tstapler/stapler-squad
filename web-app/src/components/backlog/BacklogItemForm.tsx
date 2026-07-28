@@ -1,11 +1,59 @@
 "use client";
 // +feature: backlog:item-form
 
-import { useState, useCallback, useMemo } from "react";
-import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus } from "@/lib/hooks/useBacklogService";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import Link from "next/link";
+import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus, PipelineMode } from "@/lib/hooks/useBacklogService";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { RadioGroup } from "@/components/ui/RadioGroup";
+import type { RadioGroupOption } from "@/components/ui/RadioGroup";
+import { radioBtn, radioBtnActive } from "@/components/ui/RadioGroup.css";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { getApiBaseUrl } from "@/lib/config";
+import { routes } from "@/lib/routes";
 import * as styles from "./BacklogItemForm.css";
+import * as markdownStyles from "./markdownBody.css";
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
+
+// The 9 content-template fields on PipelineMode — used to detect whether the
+// selected mode's rendered content depends on {{repo_path}} (G-1).
+const CONTENT_TEMPLATE_KEYS = [
+  "statusCommandTemplate",
+  "doneCommandTemplate",
+  "failCommandTemplate",
+  "reviewCommandTemplate",
+  "shipCommandTemplate",
+  "helpCommandTemplate",
+  "triagePromptTemplate",
+  "reviewPromptTemplate",
+  "initialPromptTemplate",
+] as const;
+
+const DEFAULT_PIPELINE_MODE_OPTION: RadioGroupOption<string> = {
+  value: "",
+  label: "Default",
+  description: "Built-in default pipeline",
+  dataTestId: "backlog-pipeline-mode-default",
+};
+
+const PIPELINE_MODE_FETCH_ERROR_NOTICE =
+  "Couldn't load pipeline modes — you can still save with Default.";
+
+const PIPELINE_MODE_UNKNOWN_HINT =
+  "This item references a pipeline mode that no longer exists or is disabled. Choosing a different mode below will replace it when you save.";
+
+// Slug of the seeded SDD pipeline mode (session.DefaultSDDPipelineModeSlug on
+// the backend) and the feature flag name (server/services/feature_flag_service.go's
+// sddDefaultPipelineFlagName) gating whether a brand-new item pre-selects it.
+// See project_plans/backlog-sdd-default-pipeline — this pre-selection is a
+// default, not a lock: the user can still pick any other mode before saving.
+const SDD_PIPELINE_MODE_SLUG = "sdd";
+const SDD_DEFAULT_PIPELINE_FLAG = "backlog:sdd-default-pipeline";
 
 interface BacklogItemFormProps {
   initialValues?: Partial<BacklogItem>;
@@ -26,8 +74,6 @@ const AC_STATUS_OPTIONS: { value: AcCriterionStatus; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
-type AcCriterionRow = AcCriterion & { clientKey: string };
-
 export function BacklogItemForm({
   initialValues,
   onSubmit,
@@ -40,13 +86,150 @@ export function BacklogItemForm({
   const [priority, setPriority] = useState<number>(initialValues?.priority ?? 3);
   const [skipPlanning, setSkipPlanning] = useState(initialValues?.skipPlanning ?? false);
   const [skipReviewGate, setSkipReviewGate] = useState(initialValues?.skipReviewGate ?? false);
-  // Lazy initializer: crypto.randomUUID() must only run once per row at mount,
-  // not on every re-render.
-  const [acCriteria, setAcCriteria] = useState<AcCriterionRow[]>(
-    () => (initialValues?.acCriteria ?? []).map((c) => ({ ...c, clientKey: crypto.randomUUID() }))
+  const [autoSpawnSession, setAutoSpawnSession] = useState(initialValues?.autoSpawnSession ?? false);
+  const [autoCreatePR, setAutoCreatePR] = useState(initialValues?.autoCreatePR ?? false);
+  const [acCriteria, setAcCriteria] = useState<AcCriterion[]>(
+    initialValues?.acCriteria ?? []
   );
+  const [pipelineMode, setPipelineMode] = useState(initialValues?.pipelineMode ?? "");
+  // Guards the one-shot SDD default pre-selection below from ever re-firing
+  // after either the user has manually touched the selector, or the
+  // pre-selection has already applied once — see handlePipelineModeChange
+  // and the effect below.
+  const pipelineModeTouchedRef = useRef(!!initialValues?.id);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { listPipelineModes } = useBacklogService();
+  const [availableModes, setAvailableModes] = useState<PipelineMode[]>([]);
+  const [modesLoading, setModesLoading] = useState(true);
+  const [modesError, setModesError] = useState(false);
+
+  // Story 3.2.1 / G-4 / G-3: fetch enabled pipeline modes on mount. While
+  // pending or on failure, the RadioGroup below falls back to only the
+  // hardcoded "Default" option — never blocking the form.
+  useEffect(() => {
+    let cancelled = false;
+    setModesLoading(true);
+    setModesError(false);
+    listPipelineModes()
+      .then((modes) => {
+        if (cancelled) return;
+        setAvailableModes(modes.filter((m) => m.enabled));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setModesError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setModesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listPipelineModes]);
+
+  // Pre-select the seeded "sdd" pipeline mode for a brand-new item once the
+  // operator has opted in via the backlog:sdd-default-pipeline feature flag
+  // (see project_plans/backlog-sdd-default-pipeline). This is purely a
+  // default: pipelineModeTouchedRef.current stays false only until this
+  // effect fires or the user picks a value themselves (handlePipelineModeChange
+  // below), whichever happens first — after that, this effect never touches
+  // pipelineMode again, so it can never fight a manual choice, and it never
+  // runs at all for an existing item (pipelineModeTouchedRef starts true
+  // whenever initialValues?.id is set).
+  const sddDefaultFlagEnabled = useFeatureFlag(SDD_DEFAULT_PIPELINE_FLAG);
+  useEffect(() => {
+    if (pipelineModeTouchedRef.current) return;
+    if (modesLoading || modesError) return;
+    if (!sddDefaultFlagEnabled) return;
+    if (!availableModes.some((m) => m.slug === SDD_PIPELINE_MODE_SLUG)) return;
+    pipelineModeTouchedRef.current = true;
+    setPipelineMode(SDD_PIPELINE_MODE_SLUG);
+  }, [sddDefaultFlagEnabled, modesLoading, modesError, availableModes]);
+
+  const handlePipelineModeChange = useCallback((value: string) => {
+    pipelineModeTouchedRef.current = true;
+    setPipelineMode(value);
+  }, []);
+
+  // Options offered by the RadioGroup: "Default" is always first and always
+  // present. While the fetch is pending or failed, no other options render —
+  // this alone satisfies G-4/G-3's "only Default selectable" requirement.
+  const pipelineModeOptions = useMemo<RadioGroupOption<string>[]>(() => {
+    if (modesLoading || modesError) {
+      return [DEFAULT_PIPELINE_MODE_OPTION];
+    }
+    return [
+      DEFAULT_PIPELINE_MODE_OPTION,
+      ...availableModes.map((m) => ({
+        value: m.slug,
+        label: m.name,
+        description: m.description || undefined,
+        dataTestId: `backlog-pipeline-mode-${m.slug}`,
+      })),
+    ];
+  }, [modesLoading, modesError, availableModes]);
+
+  // The fetch succeeded but no enabled modes exist yet — distinct from
+  // loading/error: without this, a picker with nothing to pick from looks
+  // identical to a picker that's broken or hasn't fetched at all (the exact
+  // "single greyed Default button, clicking it does nothing" confusion
+  // flagged in docs/tasks/backlog-feature-improvement.md's 2026-07-19 audit).
+  const hasNoAvailableModes = !modesLoading && !modesError && availableModes.length === 0;
+
+  // G-2: an item's stored pipelineMode may reference a mode that's since been
+  // deleted or disabled. Only evaluate once the fetch has actually succeeded —
+  // during loading/error we can't yet tell "unresolvable" apart from
+  // "haven't checked yet".
+  const unresolvedPipelineMode = useMemo(() => {
+    if (modesLoading || modesError) return null;
+    if (!pipelineMode) return null;
+    if (pipelineModeOptions.some((o) => o.value === pipelineMode)) return null;
+    return pipelineMode;
+  }, [modesLoading, modesError, pipelineMode, pipelineModeOptions]);
+
+  const pipelineModeHintForValue = useCallback(
+    (v: string) => {
+      if (unresolvedPipelineMode && v === unresolvedPipelineMode) {
+        return PIPELINE_MODE_UNKNOWN_HINT;
+      }
+      return pipelineModeOptions.find((o) => o.value === v)?.description;
+    },
+    [unresolvedPipelineMode, pipelineModeOptions]
+  );
+
+  const unresolvedPipelineModeOption = unresolvedPipelineMode ? (
+    <button
+      type="button"
+      role="radio"
+      aria-checked="true"
+      aria-disabled="true"
+      disabled
+      tabIndex={-1}
+      className={[radioBtn, radioBtnActive].join(" ")}
+      data-testid={`backlog-pipeline-mode-unknown-${unresolvedPipelineMode}`}
+    >
+      {`Unknown mode ('${unresolvedPipelineMode}')`}
+    </button>
+  ) : undefined;
+
+  // G-1: the selected mode's own content-template fields may assume a
+  // repo path is present. Non-blocking — warns, never disables.
+  const selectedPipelineMode = useMemo(
+    () => availableModes.find((m) => m.slug === pipelineMode) ?? null,
+    [availableModes, pipelineMode]
+  );
+  const selectedModeRequiresRepoPath = useMemo(() => {
+    if (!selectedPipelineMode) return false;
+    return CONTENT_TEMPLATE_KEYS.some((key) => selectedPipelineMode[key]?.includes("{{repo_path}}"));
+  }, [selectedPipelineMode]);
+  const showRepoPathPrerequisiteWarning = selectedModeRequiresRepoPath && !repoPath.trim();
 
   const validate = useCallback((): FormErrors => {
     const errs: FormErrors = {};
@@ -80,20 +263,23 @@ export function BacklogItemForm({
           priority,
           skipPlanning,
           skipReviewGate,
-          acCriteria: acCriteria.map(({ clientKey, ...rest }, i) => ({ ...rest, index: i })),
+          autoSpawnSession,
+          autoCreatePR,
+          acCriteria: acCriteria.map((c, i) => ({ ...c, index: i })),
           skipTriage: isVague,
+          pipelineMode,
         });
       } finally {
         setSubmitting(false);
       }
     },
-    [title, description, repoPath, priority, skipPlanning, skipReviewGate, acCriteria, onSubmit, validate]
+    [title, description, repoPath, priority, skipPlanning, skipReviewGate, autoSpawnSession, autoCreatePR, acCriteria, pipelineMode, onSubmit, validate]
   );
 
   const addCriterion = useCallback(() => {
     setAcCriteria((prev) => [
       ...prev,
-      { index: prev.length, text: "", status: "pending" as AcCriterionStatus, clientKey: crypto.randomUUID() },
+      { index: prev.length, text: "", status: "pending" as AcCriterionStatus },
     ]);
   }, []);
 
@@ -112,6 +298,82 @@ export function BacklogItemForm({
       prev.map((c, i) => (i === index ? { ...c, status } : c))
     );
   }, []);
+
+  // Uploads a single image and inserts a markdown image reference at the cursor.
+  // ponytail: cursor position is captured once at upload start, so two uploads
+  // fired back-to-back can land at a stale offset relative to each other —
+  // acceptable for the rare double-paste case; revisit with an insertion-token
+  // queue if that turns out to matter in practice.
+  const uploadAttachment = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/")) {
+        setAttachmentError("Only image files can be attached.");
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachmentError("Image is too large (max 10 MB).");
+        return;
+      }
+      const el = descriptionRef.current;
+      const start = el?.selectionStart ?? description.length;
+      const end = el?.selectionEnd ?? description.length;
+      setAttachmentError(null);
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const resp = await fetch(`${getApiBaseUrl()}/v1/upload-backlog-attachment`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!resp.ok) {
+          const msg =
+            resp.status === 413
+              ? "Image is too large (max 10 MB)."
+              : resp.status === 415
+                ? "Unsupported image type — use PNG, JPEG, GIF, or WebP."
+                : "Upload failed.";
+          setAttachmentError(msg);
+          return;
+        }
+        const data = (await resp.json()) as { path: string; filename: string };
+        const url = encodeURI(`/api/local/serve${data.path}`);
+        const markdown = `![${data.filename}](${url})`;
+        setDescription((prev) => prev.slice(0, start) + markdown + prev.slice(end));
+        requestAnimationFrame(() => {
+          el?.focus();
+          const pos = start + markdown.length;
+          el?.setSelectionRange(pos, pos);
+        });
+      } catch {
+        setAttachmentError("Network error — upload failed.");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [description.length]
+  );
+
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      if (file) void uploadAttachment(file);
+    },
+    [uploadAttachment]
+  );
+
+  const handleDescriptionPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      void uploadAttachment(file);
+    },
+    [uploadAttachment]
+  );
 
   const busy = submitting || isLoading;
   const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
@@ -152,18 +414,80 @@ export function BacklogItemForm({
 
       {/* Description */}
       <div className={styles.fieldGroup}>
-        <label htmlFor="backlog-description" className={styles.label}>
-          Description
-        </label>
-        <textarea
-          id="backlog-description"
-          className={styles.textarea}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Provide more context (optional)"
-          disabled={busy}
-          data-testid="backlog-description-input"
-        />
+        <div className={styles.descriptionHeader}>
+          <label htmlFor="backlog-description" className={styles.label}>
+            Description
+          </label>
+          <div className={styles.descriptionToolbar} role="tablist" aria-label="Description mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={descriptionTab === "write"}
+              className={descriptionTab === "write" ? styles.descriptionTabActive : styles.descriptionTab}
+              onClick={() => setDescriptionTab("write")}
+              data-testid="backlog-description-tab-write"
+            >
+              Write
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={descriptionTab === "preview"}
+              className={descriptionTab === "preview" ? styles.descriptionTabActive : styles.descriptionTab}
+              onClick={() => setDescriptionTab("preview")}
+              data-testid="backlog-description-tab-preview"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={styles.attachButton}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading}
+              data-testid="backlog-attach-image"
+            >
+              {uploading ? "Uploading…" : "📎 Attach image"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className={styles.hiddenFileInput}
+              onChange={handleFileInputChange}
+              disabled={busy || uploading}
+              aria-label="Attach image"
+              data-testid="backlog-attach-image-input"
+            />
+          </div>
+        </div>
+        {descriptionTab === "write" ? (
+          <textarea
+            id="backlog-description"
+            ref={descriptionRef}
+            className={styles.textarea}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onPaste={handleDescriptionPaste}
+            placeholder="Provide more context (optional). Supports markdown — paste or attach a screenshot."
+            disabled={busy}
+            data-testid="backlog-description-input"
+          />
+        ) : (
+          <div className={styles.previewBox} data-testid="backlog-description-preview">
+            {description.trim() ? (
+              <div className={markdownStyles.markdownBody}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
+              </div>
+            ) : (
+              <span className={styles.previewEmpty}>Nothing to preview yet.</span>
+            )}
+          </div>
+        )}
+        {attachmentError && (
+          <span className={styles.errorMessage} role="alert" data-testid="backlog-attach-image-error">
+            {attachmentError}
+          </span>
+        )}
       </div>
 
       {/* Repo path + Priority */}
@@ -212,44 +536,114 @@ export function BacklogItemForm({
         </div>
       </div>
 
-      {/* Flags */}
-      <div className={styles.twoColumn}>
-        <div className={styles.fieldGroup}>
-          <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
-            <input
-              id="backlog-skip-planning"
-              type="checkbox"
-              className={styles.checkboxInput}
-              checked={skipPlanning}
-              onChange={(e) => setSkipPlanning(e.target.checked)}
-              disabled={busy}
-              data-testid="backlog-skip-planning-checkbox"
-            />
-            <span className={styles.checkboxLabel}>Skip planning phase</span>
-          </label>
-          <span className={styles.checkboxHint}>
-            Go straight to triage without a separate planning pass.
+      {/* Pipeline mode selector (Epic 3.2) */}
+      <div className={styles.fieldGroup}>
+        <RadioGroup
+          options={pipelineModeOptions}
+          value={pipelineMode}
+          onChange={handlePipelineModeChange}
+          groupLabel="Pipeline mode"
+          hintForValue={pipelineModeHintForValue}
+          trailingContent={unresolvedPipelineModeOption}
+        />
+        {modesError && (
+          <span role="status" className={styles.checkboxHint} data-testid="backlog-pipeline-mode-fetch-error">
+            {PIPELINE_MODE_FETCH_ERROR_NOTICE}
           </span>
-        </div>
-
-        <div className={styles.fieldGroup}>
-          <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
-            <input
-              id="backlog-skip-review"
-              type="checkbox"
-              className={styles.checkboxInput}
-              checked={skipReviewGate}
-              onChange={(e) => setSkipReviewGate(e.target.checked)}
-              disabled={busy}
-              data-testid="backlog-skip-review-checkbox"
-            />
-            <span className={styles.checkboxLabel}>Skip review gate</span>
-          </label>
-          <span className={styles.checkboxHint}>
-            Mark work done without an automated review pass first.
+        )}
+        {hasNoAvailableModes && (
+          <span className={styles.pipelineModeEmptyHint} data-testid="backlog-pipeline-mode-empty-hint">
+            No custom pipeline modes exist yet.{" "}
+            <Link href={routes.settingsPipelineModes} className={styles.pipelineModeEmptyHintLink}>
+              Create one in Settings →
+            </Link>
           </span>
-        </div>
+        )}
       </div>
+
+      {/* Flags */}
+      <fieldset className={styles.fieldGroup} data-testid="backlog-overrides-fieldset">
+        <legend className={styles.label}>Overrides (independent of pipeline mode)</legend>
+        <div className={styles.twoColumn}>
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
+              <input
+                id="backlog-skip-planning"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={skipPlanning}
+                onChange={(e) => setSkipPlanning(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-skip-planning-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Skip planning phase</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Go straight to triage without a separate planning pass.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
+              <input
+                id="backlog-skip-review"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={skipReviewGate}
+                onChange={(e) => setSkipReviewGate(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-skip-review-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Skip review gate</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Mark work done without an automated review pass first.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-spawn-session">
+              <input
+                id="backlog-auto-spawn-session"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoSpawnSession}
+                onChange={(e) => setAutoSpawnSession(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-spawn-session-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-spawn work session</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual &quot;Spawn Session&quot; click — start work automatically once triage marks the item ready.
+            </span>
+          </div>
+
+          <div className={styles.fieldGroup}>
+            <label className={styles.checkboxRow} htmlFor="backlog-auto-create-pr">
+              <input
+                id="backlog-auto-create-pr"
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={autoCreatePR}
+                onChange={(e) => setAutoCreatePR(e.target.checked)}
+                disabled={busy}
+                data-testid="backlog-auto-create-pr-checkbox"
+              />
+              <span className={styles.checkboxLabel}>Auto-create PR on completion</span>
+            </label>
+            <span className={styles.checkboxHint}>
+              Skip the manual Review Queue &quot;Create PR&quot; click — a PR is opened automatically once a work session finishes. The prompt still runs unattended, so review the diff before merging.
+            </span>
+          </div>
+        </div>
+      </fieldset>
+
+      {showRepoPathPrerequisiteWarning && selectedPipelineMode && (
+        <span role="alert" className={styles.errorMessage} data-testid="backlog-pipeline-mode-repo-path-warning">
+          {`⚠ ${selectedPipelineMode.name} mode requires a repository path — add one above.`}
+        </span>
+      )}
 
       {/* Acceptance Criteria */}
       <div className={styles.acSection}>
@@ -270,7 +664,7 @@ export function BacklogItemForm({
         {acCriteria.length > 0 && (
           <div className={styles.acList} role="list" aria-label="Acceptance criteria list">
             {acCriteria.map((criterion, i) => (
-              <div key={criterion.clientKey} className={styles.acRow} role="listitem">
+              <div key={i} className={styles.acRow} role="listitem">
                 <input
                   type="text"
                   className={styles.acInput}

@@ -66,6 +66,13 @@ export class TestServer {
       env: {
         ...process.env,
         PORT: this.config.port.toString(),
+        // Registers the /api/debug/backlog/{seed,mutate}-* handlers
+        // (server/server.go) that BacklogMutations.ts and the seed helpers
+        // rely on. --test-dir already fully isolates this instance's data
+        // dir (STAPLER_SQUAD_TEST_DIR takes priority over this in
+        // config.GetConfigDirForDir), so this only affects the debug-handler
+        // gate and log prefix, not data isolation.
+        STAPLER_SQUAD_INSTANCE: 'e2e-local',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,14 +93,11 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 		longDesc[i] = 'b'
 	}
 
-	longURL := strings.Repeat("x", 600)
-
 	item := ExternalItem{
 		ExternalID:  "42",
 		Title:       string(longTitle),
 		Description: string(longDesc),
 		Priority:    2,
-		URL:         longURL,
 	}
 	data := p.MapToBacklogItem(item, "src-1")
 	require.Len(t, data.Title, 200)
@@ -109,22 +105,6 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Equal(t, "42", data.ExternalID)
 	require.Equal(t, "src-1", data.SourceID)
 	require.Equal(t, string(BacklogStatusIdea), data.Status)
-	require.Len(t, data.ExternalURL, 500)
-	require.Equal(t, longURL[:500], data.ExternalURL)
-}
-
-// TestGitHubIssuesPlugin_MapToBacklogItem_ExternalURLRoundTrips proves AC1: a
-// normal-length URL (already populated from issue.HTMLURL at Fetch time)
-// round-trips unchanged into ExternalURL.
-func TestGitHubIssuesPlugin_MapToBacklogItem_ExternalURLRoundTrips(t *testing.T) {
-	p := NewGitHubIssuesPlugin()
-	item := ExternalItem{
-		ExternalID: "42",
-		Title:      "Bug",
-		URL:        "https://github.com/acme/widget/issues/42",
-	}
-	data := p.MapToBacklogItem(item, "src-1")
-	require.Equal(t, "https://github.com/acme/widget/issues/42", data.ExternalURL)
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {
@@ -239,25 +219,8 @@ func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	for i := range longTitle {
 		longTitle[i] = 'a'
 	}
-	longURL := strings.Repeat("y", 600)
-	item := ExternalItem{ExternalID: "9", Title: string(longTitle), Priority: 3, URL: longURL}
+	item := ExternalItem{ExternalID: "9", Title: string(longTitle), Priority: 3}
 	data := p.MapToBacklogItem(item, "src-2")
 	require.Len(t, data.Title, 200)
 	require.Equal(t, "9", data.ExternalID)
-	require.Len(t, data.ExternalURL, 500)
-	require.Equal(t, longURL[:500], data.ExternalURL)
-}
-
-// TestGitHubPRsPlugin_MapToBacklogItem_ExternalURLRoundTrips proves AC1: a
-// normal-length URL (already populated from pr.HTMLURL at Fetch time)
-// round-trips unchanged into ExternalURL.
-func TestGitHubPRsPlugin_MapToBacklogItem_ExternalURLRoundTrips(t *testing.T) {
-	p := NewGitHubPRsPlugin()
-	item := ExternalItem{
-		ExternalID: "17",
-		Title:      "Add feature",
-		URL:        "https://github.com/acme/widget/pull/17",
-	}
-	data := p.MapToBacklogItem(item, "src-2")
-	require.Equal(t, "https://github.com/acme/widget/pull/17", data.ExternalURL)
 }

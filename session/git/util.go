@@ -130,6 +130,36 @@ func findGitRepoRoot(path string) (string, error) {
 	}
 }
 
+// findMainRepoPathForWorktree returns the main repository root for an existing git
+// worktree at worktreePath.
+//
+// This must NOT reuse findGitRepoRoot: that function's "no commits found → create an
+// initial commit here" fallback exists for locating or bootstrapping a fresh repo root
+// by walking up parent directories, and is actively harmful for a worktree — a
+// worktree's `.git` is a redirect FILE ("gitdir: /path/to/main/.git/worktrees/<name>"),
+// not a directory to walk up from. This was observed in production and reproduced in a
+// unit test: git.PlainOpen on a worktree path can succeed while the subsequent
+// repo.Head() call errors (go-git struggling to resolve HEAD for a git-CLI-created
+// worktree), which findGitRepoRoot misreads as "no commits" and "fixes" by creating a
+// brand-new, disconnected initial commit directly inside the worktree directory and
+// returning the worktree's own path as if it were the repo root — corrupting the
+// worktree's link to its real branch/history entirely.
+//
+// Resolves via `git rev-parse --git-common-dir`, which is the shared .git directory a
+// worktree and its main repo both point to; the main repo root is its parent.
+func findMainRepoPathForWorktree(worktreePath string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve git-common-dir for worktree %s: %w", worktreePath, err)
+	}
+	commonDir := strings.TrimSpace(string(out))
+	return filepath.Dir(commonDir), nil
+}
+
 // GetCurrentBranchName returns the current branch name for a git repository or worktree.
 // Returns an error if the repo is in detached HEAD state.
 func GetCurrentBranchName(path string) (string, error) {
@@ -155,18 +185,84 @@ func getCurrentBranchName(path string) (string, error) {
 	return ref.Target().Short(), nil
 }
 
+// GetHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree.
+func GetHeadCommitSHA(path string) (string, error) { return getHeadCommitSHA(path) }
+
+// headSHARetryAttempts and headSHARetryDelay bound the go-git torn-read mitigation in
+// getHeadCommitSHA — see its doc comment.
+const (
+	headSHARetryAttempts = 3
+	headSHARetryDelay    = 20 * time.Millisecond
+)
+
 // getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree.
-// Uses go-git to read .git/HEAD directly (no subprocess).
+// Reads via go-git (no subprocess) in the common case for speed — this repo can have
+// many concurrent sessions, and shelling out to git for every SHA lookup adds real
+// process overhead at that scale.
+//
+// go-git was observed to unreliably resolve HEAD for a worktree created via the git
+// CLI's `git worktree add`, in two distinct ways: (1) repo.Head() erroring outright
+// immediately after worktree creation (reproduced deterministically in a unit test,
+// single-threaded, no concurrency involved — a go-git worktree-gitdir-parsing gap, not
+// a race), and (2) in production, repo.Head() returning a syntactically-valid SHA that
+// did not correspond to any real object in the repository at all (failed git cat-file
+// -t, absent from git rev-list --all, git reflog show --all, and git fsck
+// --unreachable) — consistent with go-git's unlocked, direct ref-file read racing a
+// concurrent git operation against the same parent repo, unprotected by git's own
+// atomic-rename ref-update guarantees.
+//
+// So every go-git read here is verified against go-git's own object store
+// (repo.CommitObject, still no subprocess) before being trusted, and a Head() error is
+// treated the same as an invalid result; both retry briefly, and only after repeated
+// failures do we fall back to the git CLI, which is immune to both failure modes.
 func getHeadCommitSHA(path string) (string, error) {
-	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
-	if err != nil {
+	// A failed open (path doesn't exist / isn't a git repo at all) is not retryable —
+	// only the subsequent Head() resolution and object-existence check are, since those
+	// are what were observed to fail transiently for worktrees.
+	if _, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true}); err != nil {
 		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
-	ref, err := repo.Head()
+
+	var lastErr error
+	for attempt := 0; attempt < headSHARetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(headSHARetryDelay)
+		}
+		// Re-open fresh each attempt in case go-git's failure originates in gitdir/ref
+		// parsing at open time, not just in the Repository object's later reads.
+		repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
+		if err != nil {
+			lastErr = fmt.Errorf("failed to open git repo at %s: %w", path, err)
+			continue
+		}
+		ref, err := repo.Head()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read HEAD at %s: %w", path, err)
+			continue
+		}
+		hash := ref.Hash()
+		if _, commitErr := repo.CommitObject(hash); commitErr == nil {
+			return hash.String(), nil
+		}
+		lastErr = fmt.Errorf("go-git resolved HEAD to %s at %s, which is not a real commit object", hash, path)
+	}
+	log.Warn("getHeadCommitSHA: go-git repeatedly resolved HEAD to a nonexistent object, falling back to git CLI", "path", path, "err", lastErr)
+	return getHeadCommitSHAViaCLI(path)
+}
+
+// getHeadCommitSHAViaCLI is the fallback path for getHeadCommitSHA when go-git
+// repeatedly fails to resolve HEAD to a real object. The git CLI relies on atomic-rename
+// ref updates, so it doesn't observe the torn-read race go-git is susceptible to.
+func getHeadCommitSHAViaCLI(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd.Dir = path
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-	return ref.Hash().String(), nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // InitializeProjectDirectory creates a directory and initializes it as a git repository.

@@ -27,6 +27,8 @@ type BacklogStatusEvent struct {
 	ToStatus string `json:"to_status,omitempty"`
 	// TriggeredBy holds the value of the "triggered_by" field.
 	TriggeredBy string `json:"triggered_by,omitempty"`
+	// Human-readable reason stored alongside the transition, e.g. 'auto-reopened after FAIL verdict'.
+	Note *string `json:"note,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -60,7 +62,7 @@ func (*BacklogStatusEvent) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case backlogstatusevent.FieldFromStatus, backlogstatusevent.FieldToStatus, backlogstatusevent.FieldTriggeredBy:
+		case backlogstatusevent.FieldFromStatus, backlogstatusevent.FieldToStatus, backlogstatusevent.FieldTriggeredBy, backlogstatusevent.FieldNote:
 			values[i] = new(sql.NullString)
 		case backlogstatusevent.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -110,6 +112,13 @@ func (_m *BacklogStatusEvent) assignValues(columns []string, values []any) error
 				return fmt.Errorf("unexpected type %T for field triggered_by", values[i])
 			} else if value.Valid {
 				_m.TriggeredBy = value.String
+			}
+		case backlogstatusevent.FieldNote:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field note", values[i])
+			} else if value.Valid {
+				_m.Note = new(string)
+				*_m.Note = value.String
 			}
 		case backlogstatusevent.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -169,6 +178,11 @@ func (_m *BacklogStatusEvent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("triggered_by=")
 	builder.WriteString(_m.TriggeredBy)
+	builder.WriteString(", ")
+	if v := _m.Note; v != nil {
+		builder.WriteString("note=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

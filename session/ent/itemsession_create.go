@@ -80,6 +80,34 @@ func (_c *ItemSessionCreate) SetNillableAcSnapshot(v *string) *ItemSessionCreate
 	return _c
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (_c *ItemSessionCreate) SetPipelineModeSnapshot(v string) *ItemSessionCreate {
+	_c.mutation.SetPipelineModeSnapshot(v)
+	return _c
+}
+
+// SetNillablePipelineModeSnapshot sets the "pipeline_mode_snapshot" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillablePipelineModeSnapshot(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetPipelineModeSnapshot(*v)
+	}
+	return _c
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (_c *ItemSessionCreate) SetPipelineModeSnapshotHash(v string) *ItemSessionCreate {
+	_c.mutation.SetPipelineModeSnapshotHash(v)
+	return _c
+}
+
+// SetNillablePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillablePipelineModeSnapshotHash(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetPipelineModeSnapshotHash(*v)
+	}
+	return _c
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (_c *ItemSessionCreate) SetTriageResult(v string) *ItemSessionCreate {
 	_c.mutation.SetTriageResult(v)
@@ -90,6 +118,20 @@ func (_c *ItemSessionCreate) SetTriageResult(v string) *ItemSessionCreate {
 func (_c *ItemSessionCreate) SetNillableTriageResult(v *string) *ItemSessionCreate {
 	if v != nil {
 		_c.SetTriageResult(*v)
+	}
+	return _c
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (_c *ItemSessionCreate) SetVerificationNotes(v string) *ItemSessionCreate {
+	_c.mutation.SetVerificationNotes(v)
+	return _c
+}
+
+// SetNillableVerificationNotes sets the "verification_notes" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableVerificationNotes(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetVerificationNotes(*v)
 	}
 	return _c
 }
@@ -192,6 +234,20 @@ func (_c *ItemSessionCreate) SetNillableCreatedAt(v *time.Time) *ItemSessionCrea
 	return _c
 }
 
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (_c *ItemSessionCreate) SetEstimatedCostUsd(v float64) *ItemSessionCreate {
+	_c.mutation.SetEstimatedCostUsd(v)
+	return _c
+}
+
+// SetNillableEstimatedCostUsd sets the "estimated_cost_usd" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableEstimatedCostUsd(v *float64) *ItemSessionCreate {
+	if v != nil {
+		_c.SetEstimatedCostUsd(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ItemSessionCreate) SetID(v uuid.UUID) *ItemSessionCreate {
 	_c.mutation.SetID(v)
@@ -271,6 +327,14 @@ func (_c *ItemSessionCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *ItemSessionCreate) defaults() {
+	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
+		v := itemsession.DefaultPipelineModeSnapshot
+		_c.mutation.SetPipelineModeSnapshot(v)
+	}
+	if _, ok := _c.mutation.PipelineModeSnapshotHash(); !ok {
+		v := itemsession.DefaultPipelineModeSnapshotHash
+		_c.mutation.SetPipelineModeSnapshotHash(v)
+	}
 	if _, ok := _c.mutation.CommitCountSinceSpawn(); !ok {
 		v := itemsession.DefaultCommitCountSinceSpawn
 		_c.mutation.SetCommitCountSinceSpawn(v)
@@ -278,6 +342,10 @@ func (_c *ItemSessionCreate) defaults() {
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := itemsession.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
+	}
+	if _, ok := _c.mutation.EstimatedCostUsd(); !ok {
+		v := itemsession.DefaultEstimatedCostUsd
+		_c.mutation.SetEstimatedCostUsd(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := itemsession.DefaultID()
@@ -292,6 +360,12 @@ func (_c *ItemSessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.SessionRole(); !ok {
 		return &ValidationError{Name: "session_role", err: errors.New(`ent: missing required field "ItemSession.session_role"`)}
+	}
+	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
+		return &ValidationError{Name: "pipeline_mode_snapshot", err: errors.New(`ent: missing required field "ItemSession.pipeline_mode_snapshot"`)}
+	}
+	if _, ok := _c.mutation.PipelineModeSnapshotHash(); !ok {
+		return &ValidationError{Name: "pipeline_mode_snapshot_hash", err: errors.New(`ent: missing required field "ItemSession.pipeline_mode_snapshot_hash"`)}
 	}
 	if _, ok := _c.mutation.CommitCountSinceSpawn(); !ok {
 		return &ValidationError{Name: "commit_count_since_spawn", err: errors.New(`ent: missing required field "ItemSession.commit_count_since_spawn"`)}
@@ -358,9 +432,21 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
 		_node.AcSnapshot = value
 	}
+	if value, ok := _c.mutation.PipelineModeSnapshot(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshot, field.TypeString, value)
+		_node.PipelineModeSnapshot = value
+	}
+	if value, ok := _c.mutation.PipelineModeSnapshotHash(); ok {
+		_spec.SetField(itemsession.FieldPipelineModeSnapshotHash, field.TypeString, value)
+		_node.PipelineModeSnapshotHash = value
+	}
 	if value, ok := _c.mutation.TriageResult(); ok {
 		_spec.SetField(itemsession.FieldTriageResult, field.TypeString, value)
 		_node.TriageResult = value
+	}
+	if value, ok := _c.mutation.VerificationNotes(); ok {
+		_spec.SetField(itemsession.FieldVerificationNotes, field.TypeString, value)
+		_node.VerificationNotes = value
 	}
 	if value, ok := _c.mutation.LastCommitSha(); ok {
 		_spec.SetField(itemsession.FieldLastCommitSha, field.TypeString, value)
@@ -389,6 +475,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(itemsession.FieldCreatedAt, field.TypeTime, value)
 		_node.CreatedAt = value
+	}
+	if value, ok := _c.mutation.EstimatedCostUsd(); ok {
+		_spec.SetField(itemsession.FieldEstimatedCostUsd, field.TypeFloat64, value)
+		_node.EstimatedCostUsd = value
 	}
 	if nodes := _c.mutation.BacklogItemIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -553,6 +643,30 @@ func (u *ItemSessionUpsert) ClearAcSnapshot() *ItemSessionUpsert {
 	return u
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (u *ItemSessionUpsert) SetPipelineModeSnapshot(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldPipelineModeSnapshot, v)
+	return u
+}
+
+// UpdatePipelineModeSnapshot sets the "pipeline_mode_snapshot" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdatePipelineModeSnapshot() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldPipelineModeSnapshot)
+	return u
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (u *ItemSessionUpsert) SetPipelineModeSnapshotHash(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldPipelineModeSnapshotHash, v)
+	return u
+}
+
+// UpdatePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdatePipelineModeSnapshotHash() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldPipelineModeSnapshotHash)
+	return u
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (u *ItemSessionUpsert) SetTriageResult(v string) *ItemSessionUpsert {
 	u.Set(itemsession.FieldTriageResult, v)
@@ -568,6 +682,24 @@ func (u *ItemSessionUpsert) UpdateTriageResult() *ItemSessionUpsert {
 // ClearTriageResult clears the value of the "triage_result" field.
 func (u *ItemSessionUpsert) ClearTriageResult() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldTriageResult)
+	return u
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsert) SetVerificationNotes(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldVerificationNotes, v)
+	return u
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateVerificationNotes() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldVerificationNotes)
+	return u
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsert) ClearVerificationNotes() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldVerificationNotes)
 	return u
 }
 
@@ -676,6 +808,30 @@ func (u *ItemSessionUpsert) UpdateLastProgressAt() *ItemSessionUpsert {
 // ClearLastProgressAt clears the value of the "last_progress_at" field.
 func (u *ItemSessionUpsert) ClearLastProgressAt() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldLastProgressAt)
+	return u
+}
+
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (u *ItemSessionUpsert) SetEstimatedCostUsd(v float64) *ItemSessionUpsert {
+	u.Set(itemsession.FieldEstimatedCostUsd, v)
+	return u
+}
+
+// UpdateEstimatedCostUsd sets the "estimated_cost_usd" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateEstimatedCostUsd() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldEstimatedCostUsd)
+	return u
+}
+
+// AddEstimatedCostUsd adds v to the "estimated_cost_usd" field.
+func (u *ItemSessionUpsert) AddEstimatedCostUsd(v float64) *ItemSessionUpsert {
+	u.Add(itemsession.FieldEstimatedCostUsd, v)
+	return u
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (u *ItemSessionUpsert) ClearEstimatedCostUsd() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldEstimatedCostUsd)
 	return u
 }
 
@@ -821,6 +977,34 @@ func (u *ItemSessionUpsertOne) ClearAcSnapshot() *ItemSessionUpsertOne {
 	})
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (u *ItemSessionUpsertOne) SetPipelineModeSnapshot(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetPipelineModeSnapshot(v)
+	})
+}
+
+// UpdatePipelineModeSnapshot sets the "pipeline_mode_snapshot" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdatePipelineModeSnapshot() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdatePipelineModeSnapshot()
+	})
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (u *ItemSessionUpsertOne) SetPipelineModeSnapshotHash(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetPipelineModeSnapshotHash(v)
+	})
+}
+
+// UpdatePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdatePipelineModeSnapshotHash() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdatePipelineModeSnapshotHash()
+	})
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (u *ItemSessionUpsertOne) SetTriageResult(v string) *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
@@ -839,6 +1023,27 @@ func (u *ItemSessionUpsertOne) UpdateTriageResult() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearTriageResult() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearTriageResult()
+	})
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsertOne) SetVerificationNotes(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetVerificationNotes(v)
+	})
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateVerificationNotes() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateVerificationNotes()
+	})
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsertOne) ClearVerificationNotes() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearVerificationNotes()
 	})
 }
 
@@ -965,6 +1170,34 @@ func (u *ItemSessionUpsertOne) UpdateLastProgressAt() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearLastProgressAt() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearLastProgressAt()
+	})
+}
+
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertOne) SetEstimatedCostUsd(v float64) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEstimatedCostUsd(v)
+	})
+}
+
+// AddEstimatedCostUsd adds v to the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertOne) AddEstimatedCostUsd(v float64) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.AddEstimatedCostUsd(v)
+	})
+}
+
+// UpdateEstimatedCostUsd sets the "estimated_cost_usd" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateEstimatedCostUsd() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEstimatedCostUsd()
+	})
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertOne) ClearEstimatedCostUsd() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEstimatedCostUsd()
 	})
 }
 
@@ -1277,6 +1510,34 @@ func (u *ItemSessionUpsertBulk) ClearAcSnapshot() *ItemSessionUpsertBulk {
 	})
 }
 
+// SetPipelineModeSnapshot sets the "pipeline_mode_snapshot" field.
+func (u *ItemSessionUpsertBulk) SetPipelineModeSnapshot(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetPipelineModeSnapshot(v)
+	})
+}
+
+// UpdatePipelineModeSnapshot sets the "pipeline_mode_snapshot" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdatePipelineModeSnapshot() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdatePipelineModeSnapshot()
+	})
+}
+
+// SetPipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field.
+func (u *ItemSessionUpsertBulk) SetPipelineModeSnapshotHash(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetPipelineModeSnapshotHash(v)
+	})
+}
+
+// UpdatePipelineModeSnapshotHash sets the "pipeline_mode_snapshot_hash" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdatePipelineModeSnapshotHash() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdatePipelineModeSnapshotHash()
+	})
+}
+
 // SetTriageResult sets the "triage_result" field.
 func (u *ItemSessionUpsertBulk) SetTriageResult(v string) *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
@@ -1295,6 +1556,27 @@ func (u *ItemSessionUpsertBulk) UpdateTriageResult() *ItemSessionUpsertBulk {
 func (u *ItemSessionUpsertBulk) ClearTriageResult() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearTriageResult()
+	})
+}
+
+// SetVerificationNotes sets the "verification_notes" field.
+func (u *ItemSessionUpsertBulk) SetVerificationNotes(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetVerificationNotes(v)
+	})
+}
+
+// UpdateVerificationNotes sets the "verification_notes" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateVerificationNotes() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateVerificationNotes()
+	})
+}
+
+// ClearVerificationNotes clears the value of the "verification_notes" field.
+func (u *ItemSessionUpsertBulk) ClearVerificationNotes() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearVerificationNotes()
 	})
 }
 
@@ -1421,6 +1703,34 @@ func (u *ItemSessionUpsertBulk) UpdateLastProgressAt() *ItemSessionUpsertBulk {
 func (u *ItemSessionUpsertBulk) ClearLastProgressAt() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearLastProgressAt()
+	})
+}
+
+// SetEstimatedCostUsd sets the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertBulk) SetEstimatedCostUsd(v float64) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEstimatedCostUsd(v)
+	})
+}
+
+// AddEstimatedCostUsd adds v to the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertBulk) AddEstimatedCostUsd(v float64) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.AddEstimatedCostUsd(v)
+	})
+}
+
+// UpdateEstimatedCostUsd sets the "estimated_cost_usd" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateEstimatedCostUsd() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEstimatedCostUsd()
+	})
+}
+
+// ClearEstimatedCostUsd clears the value of the "estimated_cost_usd" field.
+func (u *ItemSessionUpsertBulk) ClearEstimatedCostUsd() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEstimatedCostUsd()
 	})
 }
 

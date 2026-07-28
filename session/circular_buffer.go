@@ -14,12 +14,12 @@ import (
 // when the in-memory buffer fills up. This prevents memory overflow while maintaining
 // a history of PTY output for status detection and debugging.
 type CircularBuffer struct {
-	mu                sync.RWMutex
-	size              int      // immutable after construction; no lock needed
-	data              []byte   // +checklocks:mu
-	head              int      // +checklocks:mu
-	tail              int      // +checklocks:mu
-	count             int      // +checklocks:mu
+	mu       sync.RWMutex
+	size     int      // immutable after construction; no lock needed
+	data     []byte   // +checklocks:mu
+	head     int      // +checklocks:mu
+	tail     int      // +checklocks:mu
+	count    int      // +checklocks:mu
 	diskFile *os.File // +checklocks:mu
 	wrapped  bool     // +checklocks:mu
 
@@ -183,7 +183,7 @@ func (cb *CircularBuffer) GetRecentHash(n int) (uint64, bool) {
 	}
 	// Wrapped: stream over two segments (allocates hasher, ~0.04% of calls for 4KB reads on 10MB buffer).
 	h := murmur3.New64()
-	h.Write(cb.data[startPos:]) //nolint:errcheck
+	h.Write(cb.data[startPos:])    //nolint:errcheck
 	h.Write(cb.data[:n-firstHalf]) //nolint:errcheck
 	return h.Sum64(), true
 }

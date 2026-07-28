@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -303,6 +304,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.ExternalApprovalMonitor.Start()
 	deps.ExternalApprovalMonitor.IntegrateWithDiscoveryTmux(deps.ExternalDiscovery, deps.TmuxStreamerManager)
 
+	// Wire the shared streamer manager into SessionService so StopShell can evict a
+	// shell's streamer on close, before it's handed to the WebSocket handler below.
+	deps.SessionService.SetTmuxStreamerManager(deps.TmuxStreamerManager)
+
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
 	wsHandler := services.NewConnectRPCWebSocketHandler(
 		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager,
@@ -472,10 +477,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
-	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit)
+	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
+	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
+	// into autonomous backlog work sessions by spawnSessionAfterGates)
 	hookReceiver := services.NewHookReceiver()
 	hookReceiver.RegisterRoutes(srv.mux)
-	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit}")
+	log.Info("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit,post-tool-use-drift-check}")
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
 	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
@@ -485,7 +492,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
@@ -518,6 +525,26 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cbHandler := services.NewCircuitBreakerHandler()
 	cbHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
+
+	// Register the backlog debug seed endpoints ONLY for the e2e test server
+	// (STAPLER_SQUAD_INSTANCE=e2e-local) — lets the Playwright suite seed
+	// BacklogStuckState rows and queued backlog items directly, bypassing the
+	// reconciler's real thresholds and the real WIP-cap spawn flow. Never
+	// registered outside that instance.
+	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
+		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
+		backlogSeedHandler.RegisterRoutes(srv.mux)
+		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, and /api/debug/backlog/seed-headless-triage-session (e2e-local only)")
+
+		// Registered for project_plans/backlog-event-driven-updates's Playwright
+		// e2e layer — lets tests mutate a backlog item directly through the
+		// storage layer (create/transition/update/archive/delete), simulating a
+		// second actor (reconciler, another tab) without walking a real
+		// TransitionBacklogItemStatus RPC through its engine/gate checks.
+		backlogMutateHandler := services.NewBacklogDebugMutateHandler(deps.Storage)
+		backlogMutateHandler.RegisterRoutes(srv.mux)
+		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
+	}
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
 	var analyticsProvider analytics.AnalyticsProvider
@@ -585,6 +612,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/local/files/list", localFileSvc.ListLocalDirectory)
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
+
+	// Register backlog attachment upload endpoint — durable image attachments
+	// for backlog item descriptions, served back via /api/local/serve/.
+	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve backlog attachment dir", "err", err)
+	} else if backlogAttachmentHandler, err := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir); err != nil {
+		log.Error("[Server] cannot create backlog attachment upload handler", "dir", backlogAttachmentDir, "err", err)
+	} else {
+		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
+		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
+	}
 
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
@@ -656,6 +694,80 @@ func (s *Server) RegisterHTTPHandler(pattern string, handler http.Handler) {
 	log.Info("Registered HTTP handler", "pattern", pattern)
 }
 
+// listenLoopbackAware binds addr for the HTTP server. When addr's host is
+// "localhost", it binds both loopback address families (127.0.0.1 and ::1)
+// explicitly instead of relying on net.Listen("tcp", "localhost:port"), which
+// only ever binds whichever single address the resolver returns first. On
+// dual-stack machines (macOS resolves "localhost" to both 127.0.0.1 and ::1)
+// that gap means a browser WebSocket upgrade that resolves to the address we
+// didn't bind gets ECONNREFUSED, even though plain HTTP requests succeed by
+// falling back across addresses. Any other host is bound as before.
+func listenLoopbackAware(addr string) (net.Listener, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != "localhost" {
+		return net.Listen("tcp", addr)
+	}
+
+	ln4, err := net.Listen("tcp4", "127.0.0.1:"+port)
+	if err != nil {
+		return nil, err
+	}
+	ln6, err := net.Listen("tcp6", "[::1]:"+port)
+	if err != nil {
+		log.Warn("IPv6 loopback listener unavailable, continuing on IPv4 only", "error", err)
+		return ln4, nil
+	}
+	return &dualStackListener{ln4: ln4, ln6: ln6, accepted: make(chan acceptResult)}, nil
+}
+
+// acceptResult carries the outcome of one net.Listener.Accept call across a
+// goroutine boundary.
+type acceptResult struct {
+	conn net.Conn
+	err  error
+}
+
+// dualStackListener presents two underlying loopback listeners (IPv4 and
+// IPv6) as a single net.Listener, so the http.Server can Serve() over both
+// with one call.
+type dualStackListener struct {
+	ln4, ln6 net.Listener
+	accepted chan acceptResult
+	once     sync.Once
+}
+
+func (d *dualStackListener) relay(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		d.accepted <- acceptResult{conn: conn, err: err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (d *dualStackListener) Accept() (net.Conn, error) {
+	d.once.Do(func() {
+		go d.relay(d.ln4)
+		go d.relay(d.ln6)
+	})
+	res := <-d.accepted
+	return res.conn, res.err
+}
+
+func (d *dualStackListener) Close() error {
+	err4 := d.ln4.Close()
+	err6 := d.ln6.Close()
+	if err4 != nil {
+		return err4
+	}
+	return err6
+}
+
+func (d *dualStackListener) Addr() net.Addr {
+	return d.ln4.Addr()
+}
+
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
@@ -665,6 +777,7 @@ func (s *Server) Start(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
 	})
+	s.registerActuatorRoutes()
 
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
@@ -695,7 +808,7 @@ func (s *Server) Start(ctx context.Context) error {
 			log.Info("Health check", "url", scheme+"://"+s.GetAddr()+"/health")
 			err = s.httpServer.ListenAndServeTLS("", "")
 		} else {
-			ln, lerr := net.Listen("tcp", s.GetAddr())
+			ln, lerr := listenLoopbackAware(s.GetAddr())
 			if lerr != nil {
 				errCh <- lerr
 				return
@@ -723,6 +836,11 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
+// shutdownHooksTimeout bounds how long shutdown hooks (state persistence,
+// pollers, etc.) may run before Shutdown proceeds to stop the HTTP server
+// regardless. Prevents a stuck hook from causing a SIGKILL on restart/stop.
+const shutdownHooksTimeout = 30 * time.Second
+
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown() error {
 	// Cancel the server's BaseContext first so active streaming connections
@@ -733,9 +851,23 @@ func (s *Server) Shutdown() error {
 	}
 
 	// Run registered hooks (e.g. capture pane paths, persist instance state) before
-	// stopping the HTTP server so in-flight requests complete first.
-	for _, hook := range s.shutdownHooks {
-		hook()
+	// stopping the HTTP server so in-flight requests complete first. Bounded by an
+	// overall deadline: a single slow/stuck hook must not be able to block process
+	// exit past systemd's stop timeout, which would trigger a SIGKILL that skips
+	// this cleanup entirely instead of just skipping whatever the slow hook was
+	// doing (systemd's default TimeoutStopSec is ~90s but this app has many
+	// sessions to persist under load, so give hooks a bounded but generous window).
+	hooksDone := make(chan struct{})
+	go func() {
+		defer close(hooksDone)
+		for _, hook := range s.shutdownHooks {
+			hook()
+		}
+	}()
+	select {
+	case <-hooksDone:
+	case <-time.After(shutdownHooksTimeout):
+		log.Warn("[shutdown] shutdown hooks did not complete within deadline, proceeding anyway", "timeout", shutdownHooksTimeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

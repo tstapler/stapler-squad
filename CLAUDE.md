@@ -20,10 +20,9 @@ See `.claude/docs/codesigning.md` for first-time setup and cert backup instructi
 
 STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mode (legacy polling)
 ./stapler-squad --tmux-keep-server                     # Keep tmux server alive after sessions close
-
-# Auto-rebuild on file changes
-fswatch -o web-app/src | xargs -n1 -I{} make install-service
 ```
+
+**WARNING:** `make install-service` restarts the running service, which kills the tmux server and every live tmux session with it — including any session you're currently working in — unless the deployed unit passes `--tmux-keep-server`. See `.claude/rules/tmux-keep-server-on-restart.md`.
 
 ### Profiling
 
@@ -71,7 +70,19 @@ gofmt -w .         # Format before committing
 
 Nil safety and static analysis tool reference: `.claude/docs/nil-safety.md`
 
-### Go Concurrency Patterns
+### Go Skills — Always Invoke for Go Work
+
+When writing, reviewing, or refactoring Go code, invoke the relevant skill(s):
+
+| Task | Skill |
+|---|---|
+| General idioms, error handling, interfaces, naming, project structure | `/go-development` |
+| Concurrency primitive selection (mutex vs atomic vs channel vs lock-free) | `/go-concurrency` |
+| pprof profiling — CPU, memory, goroutine, mutex profiles | `/go-profiling` |
+| Fix a specific pprof hotspot (atomic shadow, RWMutex, TTL cache, etc.) | `/go:optimize` |
+| Goroutine fan-out, singleflight, avoiding mutex contention | `/go:parallelism` |
+
+Invoke proactively — do not wait to be asked. If a task involves any `.go` file, load the appropriate skill before starting.
 
 Subtle patterns (double-checked locking, etc.): `.claude/docs/concurrency-patterns.md`
 
@@ -175,12 +186,15 @@ Markers: `// +api: session:create` in Go handlers; `// +feature: session-list` i
 
 ## E2E Tests
 
-Tests in `tests/e2e/` use Playwright + Allure.
+Tests in `tests/e2e/` use Playwright + Allure. **Do not manually start a server first** — `tests/e2e/global-setup.ts` does this automatically for every run, fully isolated from any already-running instance:
+
+- Spawns `stapler-squad --test-mode --test-dir <dir> --tmux-keep-server` with `PORT=<dynamically-assigned free port>` (`findFreePort()` in `tests/e2e/helpers/test-server.ts`) — never a fixed port, so it can never collide with the live dev instance on `:8543`.
+- `--test-dir` (backed by `STAPLER_SQUAD_TEST_DIR`) points at a PID-scoped temp directory (`/tmp/stapler-squad-test-<pid>` by default, or `TEST_SERVER_DIR` to override) — completely separate from `~/.stapler-squad/`, so it shares no session/backlog state with the deployed service.
+- Playwright's `baseURL` is set dynamically to that port via `TEST_SERVER_URL` (see `playwright.config.ts`); the hardcoded `:8544` fallback there only applies if you set `TEST_SERVER_URL` yourself to point at a server you started by hand.
+- Global teardown (`global-teardown.ts`) kills that isolated server and cleans up its temp dir when the run ends.
 
 ```bash
-# Start test server first
-STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local ./stapler-squad --tmux-keep-server &
-cd tests/e2e && npm test
+cd tests/e2e && npm test                                 # runs the full suite (isolated instance auto-managed)
 cd tests/e2e && npx playwright test session-lifecycle.spec.ts
 make e2e-report
 make e2e-lighthouse
@@ -193,6 +207,22 @@ make e2e-lighthouse
 4. New page helpers go in `tests/e2e/pages/`
 
 **UX analysis CI** runs on PRs touching `web-app/src/`: Axe Core (blocks on WCAG AA violations), Lighthouse CI (warns if score < 70).
+
+### Manual/interactive testing without touching the live deployed instance
+
+Backlog items and other automation depend on the systemd-managed instance at `:8543` staying up — **never use `make install-service` to try out an in-progress change** (it restarts that live service, killing its tmux server and every session/backlog work in flight; see the WARNING above and `.claude/rules/tmux-keep-server-on-restart.md`). To click around a change by hand instead, run a second, fully separate instance:
+
+```bash
+go build -o /tmp/ssq-manual-test .
+PORT=8999 STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test --tmux-keep-server &
+# ...test in a browser at http://localhost:8999...
+kill %1   # stop it when done
+```
+
+- Build to a distinct output path (not `./stapler-squad`) — that path is the live systemd unit's `ExecStart` binary; overwriting it in place is confusing even though a running process keeps its old inode open.
+- `PORT` must differ from `:8543` (and from any other manual/e2e instance you already have running) or the bind will fail.
+- `STAPLER_SQUAD_INSTANCE=<name>` gives it its own state dir under `~/.stapler-squad/instances/<name>/` (see `.claude/docs/state-isolation.md`) — it will not see or affect the live deployed instance's sessions, backlog items, or config.
+- `--tmux-keep-server` still applies here: without it, stopping this manual instance kills its tmux server too (fine for a throwaway instance, but keep the flag if you want to leave sessions running between restarts of it).
 
 ---
 
@@ -217,4 +247,8 @@ make e2e-lighthouse
 | systemd user service (restart, logs, D-Bus issues) | `.claude/rules/systemd-user-service.md` |
 | ent ORM schema generation (`--feature sql/upsert`) | `.claude/rules/ent-schema-generation.md` |
 | Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
+| Interface pollution checklist (leaky abstractions in LLM-generated Go) | `.claude/rules/interface-pollution-checklist.md` |
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
+| Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
+| Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |
+| Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/rules/tmux-keep-server-on-restart.md` |

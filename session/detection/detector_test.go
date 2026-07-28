@@ -399,10 +399,9 @@ error:
 		t.Fatalf("LoadPatterns() failed: %v", err)
 	}
 
-	// Test loaded patterns — explicit named Ready patterns (not the `.*` catch-all)
-	// return StatusReady. Only the literal `.*` catch-all returns StatusUnknown.
-	if status := sd.Detect([]byte("ready>")); status != StatusReady {
-		t.Errorf("Loaded 'ready>' pattern: got status %v, want StatusReady (explicit named ready pattern)", status)
+	// Test loaded patterns — Ready category patterns now return StatusUnknown (no badge).
+	if status := sd.Detect([]byte("ready>")); status != StatusUnknown {
+		t.Errorf("Loaded 'ready>' pattern: got status %v, want StatusUnknown (Ready patterns render no badge)", status)
 	}
 
 	if status := sd.Detect([]byte("test_processing")); status != StatusProcessing {
@@ -444,9 +443,9 @@ error: []
 		t.Fatalf("NewStatusDetectorFromFile() failed: %v", err)
 	}
 
-	// Explicit named Ready patterns (not the `.*` catch-all) return StatusReady.
-	if status := sd.Detect([]byte("custom>")); status != StatusReady {
-		t.Errorf("Pattern from file: got status %v, want StatusReady (explicit named ready pattern)", status)
+	// Ready category patterns now return StatusUnknown (catch-all renders no badge).
+	if status := sd.Detect([]byte("custom>")); status != StatusUnknown {
+		t.Errorf("Pattern from file: got status %v, want StatusUnknown (Ready patterns render no badge)", status)
 	}
 }
 

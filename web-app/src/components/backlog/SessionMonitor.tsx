@@ -3,7 +3,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import * as styles from "./SessionMonitor.css";
 
 interface SessionMonitorProps {
@@ -25,33 +24,53 @@ const TERMINAL_LINES = 60;
 
 export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMonitorProps) {
   const { getTerminalSnapshot, writeToSession, getConversationMessages } = useSessionService();
-  const conversationViewEnabled = useFeatureFlag("backlog:conversation-view");
 
+  const [view, setView] = useState<"terminal" | "history">("terminal");
   const [terminalOutput, setTerminalOutput] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
+  // Distinct from a genuinely empty terminal/history — a fetch failure must not
+  // render as "No output yet…"/"No conversation history yet…", which looks
+  // identical to real emptiness and hides the failure from the viewer.
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
 
   const outputRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchTerminal = useCallback(async () => {
-    const output = await getTerminalSnapshot(sessionId, TERMINAL_LINES);
-    if (output) setTerminalOutput(output);
+    try {
+      const output = await getTerminalSnapshot(sessionId, TERMINAL_LINES);
+      setTerminalError(null);
+      if (output) setTerminalOutput(output);
+    } catch (err) {
+      setTerminalError(err instanceof Error ? err.message : "Could not reach the server.");
+    }
   }, [sessionId, getTerminalSnapshot]);
 
   const fetchConversation = useCallback(async () => {
-    const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
-    if (msgs.length > 0) setMessages(msgs);
+    try {
+      const msgs = await getConversationMessages(sessionId, CONVERSATION_LIMIT);
+      setConversationError(null);
+      setMessages(msgs);
+    } catch (err) {
+      setConversationError(err instanceof Error ? err.message : "Could not reach the server.");
+    }
   }, [sessionId, getConversationMessages]);
 
   const refresh = useCallback(() => {
-    if (conversationViewEnabled) {
-      void fetchConversation();
-    } else {
-      void fetchTerminal();
-    }
-  }, [conversationViewEnabled, fetchConversation, fetchTerminal]);
+    void fetchTerminal();
+    void fetchConversation();
+  }, [fetchTerminal, fetchConversation]);
+
+  // Reset stale state when sessionId changes
+  useEffect(() => {
+    setTerminalOutput("");
+    setMessages([]);
+    setTerminalError(null);
+    setConversationError(null);
+  }, [sessionId]);
 
   // Initial load + polling while running
   useEffect(() => {
@@ -101,6 +120,20 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
         <span className={styles.toolbarTitle}>
           {sessionRole ? `${sessionRole} session` : "session"} · {isRunning ? "running" : "ended"}
         </span>
+        <button
+          className={`${styles.viewToggle} ${view === "terminal" ? styles.viewToggleActive : ""}`}
+          onClick={() => setView("terminal")}
+          title="Show terminal output"
+        >
+          Terminal
+        </button>
+        <button
+          className={`${styles.viewToggle} ${view === "history" ? styles.viewToggleActive : ""}`}
+          onClick={() => setView("history")}
+          title="Show conversation history"
+        >
+          History
+        </button>
         <a
           className={styles.openLink}
           href={`/?session=${sessionId}`}
@@ -112,9 +145,20 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
       </div>
 
       <div className={styles.outputArea} ref={outputRef} aria-label="Session output" aria-live="polite">
-        {conversationViewEnabled ? (
-          messages.length === 0 ? (
-            <div className={styles.emptyState}>No conversation messages yet…</div>
+        {view === "history" ? (
+          conversationError ? (
+            <div className={styles.errorState} data-testid="session-monitor-conversation-error">
+              <span>Failed to load conversation history: {conversationError}</span>
+              <button
+                className={styles.errorRetryButton}
+                onClick={() => void fetchConversation()}
+                data-testid="session-monitor-retry-conversation"
+              >
+                Retry
+              </button>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className={styles.emptyState}>No conversation history yet…</div>
           ) : (
             <div className={styles.messageList}>
               {messages.map((msg, i) => (
@@ -133,6 +177,17 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
               ))}
             </div>
           )
+        ) : terminalError ? (
+          <div className={styles.errorState} data-testid="session-monitor-terminal-error">
+            <span>Failed to load terminal output: {terminalError}</span>
+            <button
+              className={styles.errorRetryButton}
+              onClick={() => void fetchTerminal()}
+              data-testid="session-monitor-retry-terminal"
+            >
+              Retry
+            </button>
+          </div>
         ) : terminalOutput ? (
           <pre className={styles.terminalOutput}>{terminalOutput}</pre>
         ) : (
@@ -147,7 +202,7 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
               key={action}
               className={styles.quickActionButton}
               onClick={() => void handleSend(action)}
-              disabled={sending}
+              disabled={sending || !isRunning}
               aria-label={`Send "${action}"`}
               title={`Send "${action}"`}
             >
@@ -162,14 +217,14 @@ export function SessionMonitor({ sessionId, sessionRole, isRunning }: SessionMon
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Send input to session…"
-          disabled={sending}
+          disabled={sending || !isRunning}
           aria-label="Session input"
           data-testid="session-monitor-input"
         />
         <button
           className={styles.sendButton}
           onClick={() => void handleSend(inputValue)}
-          disabled={sending || !inputValue.trim()}
+          disabled={sending || !inputValue.trim() || !isRunning}
           data-testid="session-monitor-send"
         >
           Send

@@ -25,7 +25,7 @@ export interface UseGitHubIssuePickerOptions {
     repo: string,
     options?: { state?: string; search?: string; limit?: number }
   ) => Promise<GitHubIssue[]>;
-  onSelect: (owner: string, repo: string, issue: GitHubIssue) => void;
+  onSelect: (owner: string, repo: string, issues: GitHubIssue[]) => void;
 }
 
 export interface UseGitHubIssuePickerReturn {
@@ -45,7 +45,7 @@ export interface UseGitHubIssuePickerReturn {
   issuesLoading: boolean;
   setIssueSearch: (s: string) => void;
   setIssueState: (s: "open" | "closed" | "all") => void;
-  selectIssue: (issue: GitHubIssue) => void;
+  selectIssues: (issues: GitHubIssue[]) => void;
   // Two-level Escape: back to repo selection
   goBack: () => void;
   // Auth
@@ -195,10 +195,10 @@ export function useGitHubIssuePicker({
     setPhase("issue");
   }, []);
 
-  const selectIssue = useCallback(
-    (issue: GitHubIssue) => {
-      if (!selectedRepo) return;
-      onSelect(selectedRepo.owner, selectedRepo.repo, issue);
+  const selectIssues = useCallback(
+    (issues: GitHubIssue[]) => {
+      if (!selectedRepo || issues.length === 0) return;
+      onSelect(selectedRepo.owner, selectedRepo.repo, issues);
     },
     [selectedRepo, onSelect]
   );
@@ -283,7 +283,7 @@ export function useGitHubIssuePicker({
     issuesLoading,
     setIssueSearch,
     setIssueState,
-    selectIssue,
+    selectIssues,
     goBack,
     authError,
     reset,

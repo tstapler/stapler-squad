@@ -1,11 +1,13 @@
 package unfinished
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -244,4 +246,145 @@ func TestCircuitBreaker_ResetOnSuccess(t *testing.T) {
 
 	s.resetBreaker(repoPath)
 	assert.True(t, s.shouldScan(repoPath), "should allow scan after reset")
+}
+
+// ---- removeStaleResult ---------------------------------------------------
+
+// staleTestReader lets a single worktree flip from dirty to clean between
+// two scanRepo calls, simulating "the only uncommitted file was deleted".
+type staleTestReader struct {
+	worktreePath   string
+	hasUncommitted bool
+}
+
+func (r *staleTestReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
+	return []WorktreeInfo{{Path: r.worktreePath, Branch: "feature-x"}}, nil
+}
+func (r *staleTestReader) ResolveDefaultBranch(repoPath string) string { return "" }
+func (r *staleTestReader) HasUncommitted(worktreePath string) (bool, error) {
+	return r.hasUncommitted, nil
+}
+func (r *staleTestReader) AheadBehind(worktreePath, base string) (int, int, error) {
+	return 0, 0, nil
+}
+func (r *staleTestReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+	return nil, nil
+}
+func (r *staleTestReader) DiffShortstat(worktreePath string) (DiffStat, error) {
+	return DiffStat{}, nil
+}
+
+func TestScanRepo_RemovesStaleResultWhenWorktreeBecomesClean(t *testing.T) {
+	repoPath := t.TempDir()
+	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
+	bus := pkgevents.NewEventBus(10)
+	s := NewScannerWithReader(bus, nil, reader)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, _ := bus.Subscribe(ctx)
+
+	// First scan: dirty worktree is stored as an unfinished result.
+	results := s.scanRepo(repoPath, false)
+	require.Len(t, results, 1)
+	s.publishResults(results)
+	key := repoPath + "|feature-x"
+	_, ok := s.resultStore.Load(key)
+	require.True(t, ok, "dirty result should be stored")
+
+	// Drain events from the first scan (work_updated + scan_completed) so
+	// only the removal event is left to observe below.
+	drain := true
+	for drain {
+		select {
+		case <-sub:
+		default:
+			drain = false
+		}
+	}
+
+	// The worktree goes clean (e.g. the uncommitted file was deleted).
+	reader.hasUncommitted = false
+	s.InvalidateCache(repoPath)
+
+	results = s.scanRepo(repoPath, false)
+	assert.Empty(t, results, "clean worktree should not be returned")
+
+	_, ok = s.resultStore.Load(key)
+	assert.False(t, ok, "stale result should be removed from resultStore")
+
+	select {
+	case evt := <-sub:
+		assert.Equal(t, EventUnfinishedWorkRemoved, evt.Type)
+		assert.Equal(t, key, evt.Context)
+	case <-time.After(time.Second):
+		t.Fatal("expected EventUnfinishedWorkRemoved to be published")
+	}
+}
+
+// TestScanRepo_ForceBypassesPerWorktreeCache guards against a regression where
+// force=true bypassed EnqueueRepo's repo-level TTL gate but scanWorktree kept
+// reading its own independent per-worktree cache anyway — leaving a
+// user-triggered scan (Refresh button) queued but still returning stale data.
+func TestScanRepo_ForceBypassesPerWorktreeCache(t *testing.T) {
+	repoPath := t.TempDir()
+	reader := &staleTestReader{worktreePath: repoPath, hasUncommitted: true}
+	s := NewScannerWithReader(pkgevents.NewEventBus(10), nil, reader)
+
+	results := s.scanRepo(repoPath, false)
+	require.Len(t, results, 1)
+	require.True(t, results[0].HasUncommitted)
+
+	// Underlying state changes, but the per-worktree cache is still warm —
+	// an unforced scan must keep returning the stale (dirty) cached entry.
+	reader.hasUncommitted = false
+	results = s.scanRepo(repoPath, false)
+	require.Len(t, results, 1, "unforced scan should return the stale cached (still-dirty) entry")
+	assert.True(t, results[0].HasUncommitted)
+
+	// A forced scan must bypass the cache and observe the real clean state
+	// (and refresh the cache to match).
+	results = s.scanRepo(repoPath, true)
+	require.Empty(t, results, "forced scan should re-read live state, which is now clean")
+
+	// Flip back to dirty: an unforced scan should still return the
+	// now-stale clean cache entry the forced call above just wrote.
+	reader.hasUncommitted = true
+	results = s.scanRepo(repoPath, false)
+	require.Empty(t, results, "unforced scan should still return the stale clean cache entry")
+
+	results = s.scanRepo(repoPath, true)
+	require.Len(t, results, 1, "forced scan must bypass the per-worktree cache and observe the new dirty state")
+	assert.True(t, results[0].HasUncommitted)
+}
+
+// TestNewScannerWithReader_RegistersGoGitVCSReaderForDebugSnapshot asserts
+// that constructing a Scanner with a real *GoGitVCSReader registers it as
+// currentReader, so the process-wide /debug/blob-cache endpoint (see
+// profiling.StartProfiling) can reach its BlobCacheStats without the
+// profiling server needing a reference at startup (it starts before the
+// scanner exists — see main.go).
+func TestNewScannerWithReader_RegistersGoGitVCSReaderForDebugSnapshot(t *testing.T) {
+	reader := &GoGitVCSReader{}
+	bus := pkgevents.NewEventBus(10)
+	NewScannerWithReader(bus, nil, reader)
+
+	// Bump this specific reader's counters directly (white-box) and confirm
+	// the package-level snapshot reflects THIS reader, not some other one a
+	// prior test may have registered.
+	reader.blobCacheHits = 3
+	reader.blobCacheMisses = 1
+	reader.blobCacheMissNanos = int64(10 * time.Millisecond)
+
+	stats := BlobCacheStatsSnapshot()
+	assert.Equal(t, int64(3), stats.Hits)
+	assert.Equal(t, int64(1), stats.Misses)
+	assert.Equal(t, 10*time.Millisecond, stats.EstimatedTimeSaved/3)
+
+	// A fake VCSReader (not *GoGitVCSReader) must NOT overwrite the
+	// registration — the debug endpoint should keep pointing at a real
+	// reader instead of silently going stale/zero.
+	NewScannerWithReader(bus, nil, &staleTestReader{})
+	stats = BlobCacheStatsSnapshot()
+	assert.Equal(t, int64(3), stats.Hits, "registering a fake reader must not clear the real one's snapshot")
 }

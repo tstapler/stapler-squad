@@ -1,0 +1,11 @@
+{
+  "id": "backlog:get-item-diff",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "GetBacklogItemDiff",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+}

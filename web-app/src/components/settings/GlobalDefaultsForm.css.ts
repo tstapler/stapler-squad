@@ -18,6 +18,12 @@ export const loadingText = style({
   color: vars.color.textMuted,
 });
 
+export const hint = style({
+  color: vars.color.textMuted,
+  fontSize: "0.8125rem",
+  margin: 0,
+});
+
 export const form = style({
   display: "flex",
   flexDirection: "column",

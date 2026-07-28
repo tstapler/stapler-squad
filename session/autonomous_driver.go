@@ -18,7 +18,7 @@ import (
 // HeadlessPoolClient is the narrow interface AutonomousDriver needs from the headless pool.
 // *headless.Pool satisfies this interface directly.
 type HeadlessPoolClient interface {
-	CallBlockingWithOptions(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, error)
+	CallBlocking(ctx context.Context, key headless.FeatureKey, systemPrompt string, userPrompt string, opts headless.CallOptions) (string, float64, error)
 }
 
 // AutonomousDriverOutcome describes how an autonomous driver run concluded.
@@ -137,7 +137,7 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 }
 
 // Stop cancels the driver goroutine.
-// Context cancellation propagates into CallBlockingWithOptions: the headless pool passes ctx
+// Context cancellation propagates into CallBlocking: the headless pool passes ctx
 // to runner.Run (which kills the subprocess) and the stream reader selects on ctx.Done,
 // so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
 func (d *AutonomousDriver) Stop() {
@@ -187,6 +187,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	startupCancel()
 
 	outcome := AutonomousDriverOutcome{}
+	malformedResponseCount := 0
 
 	for turnCount := 0; turnCount < d.maxTurns; turnCount++ {
 		if ctx.Err() != nil {
@@ -206,7 +207,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			keyLen = len(sessionID)
 		}
 		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:keyLen])
-		resp, err := d.headlessPool.CallBlockingWithOptions(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
+		resp, _, err := d.headlessPool.CallBlocking(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
 			break
@@ -214,6 +215,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		nextMsg, done, reason, parseErr := parseOrchestrationResponse(resp)
 		if parseErr != nil {
+			malformedResponseCount++
 			log.Warn("AutonomousDriver: malformed LLM response, retrying", "session", sessionName, "turn", turnCount+1, "resp", resp)
 			continue
 		}
@@ -231,9 +233,26 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			return
 		}
 
-		_, sendErr := d.controller.SendCommandImmediate(nextMsg + "\r")
-		if sendErr != nil {
-			log.Warn("AutonomousDriver: SendCommandImmediate failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+		// Use SendKeys (raw PTY write) instead of SendCommandImmediate so that only
+		// "\r" is sent. SendCommandImmediate goes through the command executor which
+		// appends "\n", producing "\r\n". In Claude Code's TUI input, "\r\n" inserts
+		// text into the multiline buffer without submitting — identical to steer_session
+		// which uses inst.SendKeys(msg + "\r") directly and is known to work.
+		//
+		// content and "\r" are sent as two SEPARATE writes, not concatenated into one
+		// (BUG-031): a single large write lands its trailing "\r" inside the TUI's
+		// paste-detection window for sufficiently long prompts, folding it into the
+		// pasted block instead of submitting — live-confirmed via a stuck session
+		// showing an unsubmitted "[Pasted text #N +1 lines]" block at the input line.
+		// waitForPaneSettle gives the TUI's paste detector a chance to close before
+		// the submit keystroke arrives as its own write.
+		if sendErr := d.inst.SendKeys(nextMsg); sendErr != nil {
+			log.Warn("AutonomousDriver: SendKeys failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
+			break
+		}
+		waitForPaneSettle(ctx, d.inst)
+		if sendErr := d.inst.SendKeys(EnterKeySequence); sendErr != nil {
+			log.Warn("AutonomousDriver: submit keystroke failed", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			break
 		}
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
@@ -249,9 +268,56 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	}
 
 	if !outcome.Done {
-		outcome = AutonomousDriverOutcome{Stuck: true, Reason: "max turns reached", Turns: d.maxTurns}
+		reason := "max turns reached"
+		if malformedResponseCount > 0 {
+			reason = fmt.Sprintf("max turns reached (%d malformed orchestrator responses)", malformedResponseCount)
+		}
+		outcome = AutonomousDriverOutcome{Stuck: true, Reason: reason, Turns: d.maxTurns}
 	}
 	d.fireCompletion(sessionName, outcome)
+}
+
+// paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
+// by *Instance's existing HasUpdated method.
+type paneSettleChecker interface {
+	HasUpdated() (updated bool, hasPrompt bool)
+}
+
+// paneSettlePollInterval and paneSettleMaxWait are vars (not consts) so tests
+// can shrink them instead of waiting out real timers.
+var (
+	paneSettlePollInterval = 150 * time.Millisecond
+	paneSettleMaxWait      = 2 * time.Second
+)
+
+// waitForPaneSettle polls inst until its pane content stops changing for two
+// consecutive polls, or paneSettleMaxWait elapses — whichever first. Used
+// between writing a turn's content and sending the submit keystroke (BUG-031):
+// a large paste can still be landing/rendering in the TUI's paste-detection
+// window when a follow-up "\r" arrives, so giving the pane a chance to settle
+// first shrinks the race that folds the submit keystroke into the paste block
+// instead of ending it. Best-effort: a pane that never settles (e.g. a
+// permanently busy session) is left alone once the deadline passes — the
+// caller still sends "\r" either way.
+func waitForPaneSettle(ctx context.Context, inst paneSettleChecker) {
+	deadline := time.Now().Add(paneSettleMaxWait)
+	stableCount := 0
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(paneSettlePollInterval):
+		}
+		updated, _ := inst.HasUpdated()
+		if updated {
+			stableCount = 0
+			continue
+		}
+		stableCount++
+		if stableCount >= 2 {
+			return
+		}
+	}
 }
 
 // maxRateLimitWait caps how long waitForRateLimitClear will block in total.

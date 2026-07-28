@@ -66,20 +66,39 @@ describe("useBrowserLogStream", () => {
   });
 
   // UT-F-01
-  it("disabled_should_not_patch_console_methods", () => {
+  it("disabled_should_still_patch_console_but_gate_debug_forwarding", async () => {
     const origLogRef = console.log;
     const origWarnRef = console.warn;
     const origErrorRef = console.error;
     const origDebugRef = console.debug;
 
-    renderHook(() =>
+    const { unmount } = renderHook(() =>
       useBrowserLogStream({ enabled: false, sessionId: "sess-1" })
     );
 
-    expect(console.log).toBe(origLogRef);
-    expect(console.warn).toBe(origWarnRef);
-    expect(console.error).toBe(origErrorRef);
-    expect(console.debug).toBe(origDebugRef);
+    // Interceptors always install now — log/warn/error always stream to the server;
+    // `enabled` only gates whether console.debug calls also forward.
+    expect(console.log).not.toBe(origLogRef);
+    expect(console.warn).not.toBe(origWarnRef);
+    expect(console.error).not.toBe(origErrorRef);
+    expect(console.debug).not.toBe(origDebugRef);
+
+    console.log("info still forwards while disabled");
+    console.debug("debug should not forward while disabled");
+
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockLogClientEvents).toHaveBeenCalled();
+    const entries = mockLogClientEvents.mock.calls[0][0].entries as Array<{ message: string }>;
+    expect(entries.some((e) => e.message.includes("info still forwards"))).toBe(true);
+    expect(entries.some((e) => e.message.includes("debug should not forward"))).toBe(false);
+
+    unmount();
   });
 
   // UT-F-02
@@ -544,12 +563,13 @@ describe("useBrowserLogStream", () => {
   });
 
   // UT-F-20
-  it("disabled_should_not_make_http_calls", async () => {
+  it("disabled_should_not_forward_debug_level_calls", async () => {
     const { unmount } = renderHook(() =>
       useBrowserLogStream({ enabled: false, sessionId: "sess-1" })
     );
 
-    // Even if we somehow enqueue (we can't since hook is disabled), no calls
+    // Only debug-level calls are gated by `enabled`; making none of any level here
+    // means no flush should happen at all.
     act(() => {
       jest.advanceTimersByTime(10000);
     });

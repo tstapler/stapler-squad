@@ -13,6 +13,21 @@ import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
+
+// The launch command always starts with the program string it was last launched
+// with (see Instance.buildLaunchCommand, session/instance_tmux.go). If it no longer
+// starts with the current program, the program was changed since the last launch
+// and won't take effect until the session is next resumed/restarted. Exported as a
+// standalone predicate so it's unit-testable without rendering the full card.
+export function hasPendingProgramChange(session: Pick<Session, "status" | "program" | "launchCommand">): boolean {
+  const isPausedOrStopped = session.status === SessionStatus.PAUSED || session.status === SessionStatus.STOPPED;
+  return (
+    isPausedOrStopped &&
+    !!session.program &&
+    !!session.launchCommand &&
+    !session.launchCommand.startsWith(session.program)
+  );
+}
 import {
   card,
   cardDeleting,
@@ -158,6 +173,7 @@ function SessionCardInner({
   const isSnapshotEnabled = session.status === SessionStatus.ACTIVE && isSnapshotOpen;
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
+  const pendingProgramChange = hasPendingProgramChange(session);
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
     useTerminalSnapshot(session.id, isSnapshotEnabled);
 
@@ -195,7 +211,6 @@ function SessionCardInner({
       case SessionStatus.LOADING:
         return "Loading";
       case SessionStatus.NEEDS_APPROVAL:
-        // eslint-disable-next-line no-restricted-syntax -- SessionStatus (lifecycle), not DetectedStatus/AttentionReason; overlap is coincidental
         return "Needs Approval";
       case SessionStatus.CREATING:
         return "Starting…";
@@ -204,7 +219,6 @@ function SessionCardInner({
       case SessionStatus.HIBERNATED:
         return "Hibernated";
       default:
-        // eslint-disable-next-line no-restricted-syntax -- SessionStatus fallback, unrelated to DetectedStatus/AttentionReason; overlap is coincidental
         return "Unknown";
     }
   };
@@ -221,7 +235,6 @@ function SessionCardInner({
         return "";
       case RateLimitState.WAITING: {
         const resetStr = formatResetTime(session.rateLimitResetTime);
-        // eslint-disable-next-line no-restricted-syntax -- RateLimitState text, unrelated to DetectedStatus/AttentionReason; overlap is coincidental
         return resetStr ? `Rate limited ${resetStr}` : "Rate Limited";
       }
       case RateLimitState.RECOVERING:
@@ -485,6 +498,20 @@ function SessionCardInner({
                   {getStatusText(session.status)}
                 </span>
               </Tooltip>
+            ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
+              // ponytail: reuses creationProgress — the field is only cleared on a
+              // successful start, so a startup/reconnect failure written here (see
+              // instance.SetCreationProgress in health.go / connectrpc_websocket.go)
+              // survives past the Creating phase and doubles as a "why stopped" reason.
+              <Tooltip label={session.creationProgress} side="top">
+                <span
+                  className={`${status} ${getStatusColor(session.status)}`}
+                  role="img"
+                  aria-label={`Session status: ${getStatusText(session.status)} — ${session.creationProgress}`}
+                >
+                  {getStatusText(session.status)}
+                </span>
+              </Tooltip>
             ) : (
               <span
                 className={`${status} ${getStatusColor(session.status)}`}
@@ -595,6 +622,17 @@ function SessionCardInner({
                 data-testid="workflow-badge"
               >
                 <span aria-hidden="true">⚙</span> {session.workflowName || "Workflow"}
+              </span>
+            )}
+            {pendingProgramChange && (
+              <span
+                className={workflowBadge}
+                role="img"
+                data-testid="badge-pending-program"
+                title="Program was changed since this session last launched — takes effect on resume/restart"
+                aria-label="Program change pending: takes effect on resume or restart"
+              >
+                <span aria-hidden="true">⏳</span> Pending program change
               </span>
             )}
           </div>
@@ -841,7 +879,10 @@ function SessionCardInner({
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
-          onChangeProgram={(_id, program) => { void sessionActions.update({ program }); }}
+          onChangeProgram={async (_id, program) => {
+            const result = await sessionActions.update({ program });
+            if (!result) throw new Error("Failed to change program.");
+          }}
         />
       </div>
     </div>
