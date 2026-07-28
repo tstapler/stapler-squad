@@ -344,6 +344,21 @@ export const accountChipEnv = style({
   whiteSpace: "nowrap",
 });
 
+export const hostBadge = style({
+  fontSize: "0.85em",
+  opacity: 0.7,
+});
+
+export const hostInput = style({
+  padding: `2px ${vars.space["2"]}`,
+  border: `1px solid ${vars.color.borderMuted}`,
+  borderRadius: vars.radii.sm,
+  fontSize: vars.fontSize.xs,
+  fontFamily: vars.font.mono,
+  background: vars.color.surfaceSubtle,
+  color: vars.color.textSecondary,
+});
+
 export const disconnectAccountButton = style({
   display: "inline-flex",
   alignItems: "center",

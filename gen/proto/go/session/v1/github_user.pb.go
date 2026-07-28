@@ -82,6 +82,7 @@ type GitHubAccount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	IsEnvToken    bool                   `protobuf:"varint,2,opt,name=is_env_token,json=isEnvToken,proto3" json:"is_env_token,omitempty"` // true when sourced from GITHUB_TOKEN/GH_TOKEN env var
+	Host          string                 `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`                                  // GitHub host, e.g. "github.com" or a GHES hostname; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -128,6 +129,13 @@ func (x *GitHubAccount) GetIsEnvToken() bool {
 		return x.IsEnvToken
 	}
 	return false
+}
+
+func (x *GitHubAccount) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
 }
 
 // GitHubAuthState describes the current GitHub authentication status.
@@ -466,6 +474,7 @@ func (x *GetGitHubAuthStateResponse) GetAuthState() *GitHubAuthState {
 
 type StartGitHubDeviceAuthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"` // GitHub host to authenticate against; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -498,6 +507,13 @@ func (x *StartGitHubDeviceAuthRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use StartGitHubDeviceAuthRequest.ProtoReflect.Descriptor instead.
 func (*StartGitHubDeviceAuthRequest) Descriptor() ([]byte, []int) {
 	return file_session_v1_github_user_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StartGitHubDeviceAuthRequest) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
 }
 
 type StartGitHubDeviceAuthResponse struct {
@@ -683,6 +699,7 @@ func (x *PollGitHubDeviceAuthResponse) GetAuthState() *GitHubAuthState {
 type RevokeGitHubTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"` // if set, remove only this account; otherwise remove the legacy single-account token
+	Host          string                 `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`         // host the account belongs to; empty means github.com
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -720,6 +737,13 @@ func (*RevokeGitHubTokenRequest) Descriptor() ([]byte, []int) {
 func (x *RevokeGitHubTokenRequest) GetUsername() string {
 	if x != nil {
 		return x.Username
+	}
+	return ""
+}
+
+func (x *RevokeGitHubTokenRequest) GetHost() string {
+	if x != nil {
+		return x.Host
 	}
 	return ""
 }
@@ -797,10 +821,13 @@ func (*ListGitHubAccountsRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListGitHubAccountsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accounts      []*GitHubAccount       `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Accounts []*GitHubAccount       `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
+	// enterprise_hosts lists the GHES hostnames configured on the server
+	// (github.com is always implicitly available and not included here).
+	EnterpriseHosts []string `protobuf:"bytes,2,rep,name=enterprise_hosts,json=enterpriseHosts,proto3" json:"enterprise_hosts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListGitHubAccountsResponse) Reset() {
@@ -840,16 +867,24 @@ func (x *ListGitHubAccountsResponse) GetAccounts() []*GitHubAccount {
 	return nil
 }
 
+func (x *ListGitHubAccountsResponse) GetEnterpriseHosts() []string {
+	if x != nil {
+		return x.EnterpriseHosts
+	}
+	return nil
+}
+
 var File_session_v1_github_user_proto protoreflect.FileDescriptor
 
 const file_session_v1_github_user_proto_rawDesc = "" +
 	"\n" +
 	"\x1csession/v1/github_user.proto\x12\n" +
-	"session.v1\x1a\x16session/v1/types.proto\"M\n" +
+	"session.v1\x1a\x16session/v1/types.proto\"a\n" +
 	"\rGitHubAccount\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12 \n" +
 	"\fis_env_token\x18\x02 \x01(\bR\n" +
-	"isEnvToken\"\xa7\x01\n" +
+	"isEnvToken\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\xa7\x01\n" +
 	"\x0fGitHubAuthState\x12\x1c\n" +
 	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12#\n" +
@@ -870,8 +905,9 @@ const file_session_v1_github_user_proto_rawDesc = "" +
 	"\x19GetGitHubAuthStateRequest\"X\n" +
 	"\x1aGetGitHubAuthStateResponse\x12:\n" +
 	"\n" +
-	"auth_state\x18\x01 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"\x1e\n" +
-	"\x1cStartGitHubDeviceAuthRequest\"\xc3\x01\n" +
+	"auth_state\x18\x01 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"2\n" +
+	"\x1cStartGitHubDeviceAuthRequest\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\"\xc3\x01\n" +
 	"\x1dStartGitHubDeviceAuthResponse\x12\x1f\n" +
 	"\vdevice_code\x18\x01 \x01(\tR\n" +
 	"deviceCode\x12\x1b\n" +
@@ -887,13 +923,15 @@ const file_session_v1_github_user_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\x0e2\x1c.session.v1.DeviceAuthStatusR\x06status\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12:\n" +
 	"\n" +
-	"auth_state\x18\x03 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"6\n" +
+	"auth_state\x18\x03 \x01(\v2\x1b.session.v1.GitHubAuthStateR\tauthState\"J\n" +
 	"\x18RevokeGitHubTokenRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\"\x1b\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\"\x1b\n" +
 	"\x19RevokeGitHubTokenResponse\"\x1b\n" +
-	"\x19ListGitHubAccountsRequest\"S\n" +
+	"\x19ListGitHubAccountsRequest\"~\n" +
 	"\x1aListGitHubAccountsResponse\x125\n" +
-	"\baccounts\x18\x01 \x03(\v2\x19.session.v1.GitHubAccountR\baccounts*\xb5\x01\n" +
+	"\baccounts\x18\x01 \x03(\v2\x19.session.v1.GitHubAccountR\baccounts\x12)\n" +
+	"\x10enterprise_hosts\x18\x02 \x03(\tR\x0fenterpriseHosts*\xb5\x01\n" +
 	"\x10DeviceAuthStatus\x12\"\n" +
 	"\x1eDEVICE_AUTH_STATUS_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aDEVICE_AUTH_STATUS_PENDING\x10\x01\x12\x1f\n" +

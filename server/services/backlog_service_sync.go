@@ -178,6 +178,19 @@ func (s *BacklogService) TriggerSync(
 	return connect.NewResponse(&sessionv1.TriggerSyncResponse{}), nil
 }
 
+// enterpriseHosts returns the configured GitHub Enterprise Server hostnames,
+// for passing to host-aware GitHub URL parsing.
+func (s *BacklogService) enterpriseHosts() []string {
+	if s.cfg == nil {
+		return nil
+	}
+	hosts := make([]string, 0, len(s.cfg.GitHubEnterpriseHosts))
+	for _, h := range s.cfg.GitHubEnterpriseHosts {
+		hosts = append(hosts, h.Host)
+	}
+	return hosts
+}
+
 // ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
 // +api: ImportGitHubIssue
 func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Request[sessionv1.ImportGitHubIssueRequest]) (*connect.Response[sessionv1.ImportGitHubIssueResponse], error) {
@@ -188,7 +201,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("issue_url is required"))
 	}
 
-	ref, parseErr := gh.ParseGitHubRef(req.Msg.IssueUrl)
+	ref, parseErr := gh.ParseGitHubRefWithHosts(req.Msg.IssueUrl, s.enterpriseHosts())
 	if parseErr != nil || ref.Type != gh.RefTypeIssue {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid GitHub issue URL %q", req.Msg.IssueUrl))
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -16,14 +18,45 @@ import (
 // Compile-time check: GitHubUserService must implement the generated handler.
 var _ sessionv1connect.GitHubUserServiceHandler = (*GitHubUserService)(nil)
 
+// pendingDeviceAuth stashes the host/clientID for an in-flight device code so
+// PollGitHubDeviceAuth can resolve them without the proto needing to carry
+// them on every poll request.
+type pendingDeviceAuth struct {
+	host     string
+	clientID string
+}
+
 // GitHubUserService implements the ConnectRPC GitHubUserServiceHandler.
 type GitHubUserService struct {
-	cache *githubpkg.UserPRCache
+	cache           *githubpkg.UserPRCache
+	enterpriseHosts []config.GitHubEnterpriseHost
+
+	pendingMu sync.Mutex
+	pending   map[string]pendingDeviceAuth // device_code -> host/clientID
 }
 
 // NewGitHubUserService creates a new service backed by the given cache.
-func NewGitHubUserService(cache *githubpkg.UserPRCache) *GitHubUserService {
-	return &GitHubUserService{cache: cache}
+func NewGitHubUserService(cache *githubpkg.UserPRCache, enterpriseHosts []config.GitHubEnterpriseHost) *GitHubUserService {
+	return &GitHubUserService{
+		cache:           cache,
+		enterpriseHosts: enterpriseHosts,
+		pending:         make(map[string]pendingDeviceAuth),
+	}
+}
+
+// clientIDForHost looks up the registered OAuth App client_id for an
+// enterprise host. Returns "" for github.com (StartDeviceAuth falls back to
+// the default/env-var client_id in that case).
+func (s *GitHubUserService) clientIDForHost(host string) string {
+	if githubpkg.IsGitHubCom(host) {
+		return ""
+	}
+	for _, h := range s.enterpriseHosts {
+		if githubpkg.NormalizeHost(h.Host) == host {
+			return h.ClientID
+		}
+	}
+	return ""
 }
 
 // +api: github-user:list-prs
@@ -101,12 +134,19 @@ func (s *GitHubUserService) GetGitHubAuthState(
 // StartGitHubDeviceAuth initiates the GitHub Device Flow OAuth.
 func (s *GitHubUserService) StartGitHubDeviceAuth(
 	ctx context.Context,
-	_ *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
+	req *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
 ) (*connect.Response[sessionv1.StartGitHubDeviceAuthResponse], error) {
-	da, err := githubpkg.StartDeviceAuth(ctx)
+	host := githubpkg.NormalizeHost(req.Msg.Host)
+	clientID := s.clientIDForHost(host)
+	da, err := githubpkg.StartDeviceAuth(ctx, host, clientID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("start device auth: %w", err))
 	}
+
+	s.pendingMu.Lock()
+	s.pending[da.DeviceCode] = pendingDeviceAuth{host: host, clientID: clientID}
+	s.pendingMu.Unlock()
+
 	return connect.NewResponse(&sessionv1.StartGitHubDeviceAuthResponse{
 		DeviceCode:      da.DeviceCode,
 		UserCode:        da.UserCode,
@@ -127,10 +167,22 @@ func (s *GitHubUserService) PollGitHubDeviceAuth(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("device_code is required"))
 	}
 
-	token, err := githubpkg.PollDeviceAuth(ctx, req.Msg.DeviceCode)
+	s.pendingMu.Lock()
+	pend, ok := s.pending[req.Msg.DeviceCode]
+	s.pendingMu.Unlock()
+	if !ok {
+		// Unknown device_code (e.g. server restarted mid-flow) — fall back to github.com.
+		pend = pendingDeviceAuth{host: githubpkg.NormalizeHost(""), clientID: ""}
+	}
+
+	token, err := githubpkg.PollDeviceAuth(ctx, pend.host, pend.clientID, req.Msg.DeviceCode)
 	if err == nil {
+		s.pendingMu.Lock()
+		delete(s.pending, req.Msg.DeviceCode)
+		s.pendingMu.Unlock()
+
 		// Discover the username and store per-account in the keychain.
-		if storeErr := githubpkg.StoreTokenForDiscoveredUser(ctx, token); storeErr != nil {
+		if storeErr := githubpkg.StoreTokenForDiscoveredUser(ctx, pend.host, token); storeErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token in keychain: %w", storeErr))
 		}
 		s.cache.InvalidateLoginCache()
@@ -147,6 +199,9 @@ func (s *GitHubUserService) PollGitHubDeviceAuth(
 		}), nil
 	}
 	if errors.Is(err, githubpkg.ErrDeviceFlowExpired) {
+		s.pendingMu.Lock()
+		delete(s.pending, req.Msg.DeviceCode)
+		s.pendingMu.Unlock()
 		return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
 			Status: sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_EXPIRED,
 		}), nil
@@ -164,7 +219,7 @@ func (s *GitHubUserService) RevokeGitHubToken(
 	req *connect.Request[sessionv1.RevokeGitHubTokenRequest],
 ) (*connect.Response[sessionv1.RevokeGitHubTokenResponse], error) {
 	if req.Msg.Username != "" {
-		_ = githubpkg.DeleteKeychainTokenForAccount(req.Msg.Username)
+		_ = githubpkg.DeleteKeychainTokenForAccount(req.Msg.Host, req.Msg.Username)
 	} else {
 		_ = githubpkg.DeleteKeychainToken()
 	}
@@ -180,8 +235,13 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	_ *connect.Request[sessionv1.ListGitHubAccountsRequest],
 ) (*connect.Response[sessionv1.ListGitHubAccountsResponse], error) {
 	accounts := s.buildAccountList()
+	hosts := make([]string, 0, len(s.enterpriseHosts))
+	for _, h := range s.enterpriseHosts {
+		hosts = append(hosts, githubpkg.NormalizeHost(h.Host))
+	}
 	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
-		Accounts: accounts,
+		Accounts:        accounts,
+		EnterpriseHosts: hosts,
 	}), nil
 }
 
@@ -203,13 +263,14 @@ func (s *GitHubUserService) resolveAuthState(_ context.Context) *sessionv1.GitHu
 }
 
 func (s *GitHubUserService) buildAccountList() []*sessionv1.GitHubAccount {
-	logins := s.cache.GetCachedLogins()
-	accounts := make([]*sessionv1.GitHubAccount, 0, len(logins))
-	for _, login := range logins {
-		isEnv := login == "env:GITHUB_TOKEN" || login == "env:GH_TOKEN"
+	cached := s.cache.GetCachedAccounts()
+	accounts := make([]*sessionv1.GitHubAccount, 0, len(cached))
+	for _, a := range cached {
+		isEnv := a.Login == "env:GITHUB_TOKEN" || a.Login == "env:GH_TOKEN"
 		accounts = append(accounts, &sessionv1.GitHubAccount{
-			Username:   login,
+			Username:   a.Login,
 			IsEnvToken: isEnv,
+			Host:       a.Host,
 		})
 	}
 	return accounts

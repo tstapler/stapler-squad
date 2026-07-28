@@ -9,24 +9,33 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/github"
 )
 
 const githubIssuesPerPage = 50
 
-// githubAPIBaseURL is overridden in tests (session/backlog_plugin_github_test.go)
+// githubAPIBaseURL is the default base URL used when a plugin config doesn't
+// specify a Host. Overridden in tests (session/backlog_plugin_github_test.go)
 // to point at an httptest server; shared by both the Issues and PRs plugins.
 // Tests that mutate it must not run with t.Parallel() — it's package-level
 // mutable state with no synchronization.
 var githubAPIBaseURL = "https://api.github.com"
 
-// githubAPIURL joins githubAPIBaseURL with a path, tolerating a trailing
-// slash on the base URL so "//repos/..." can't slip in.
-func githubAPIURL(pathAndQuery string) string {
-	return strings.TrimSuffix(githubAPIBaseURL, "/") + "/" + strings.TrimPrefix(pathAndQuery, "/")
+// githubAPIURL joins the REST API base URL for host with a path, tolerating a
+// trailing slash on the base URL so "//repos/..." can't slip in. An empty
+// host resolves to githubAPIBaseURL (github.com, or the test override).
+func githubAPIURL(host, pathAndQuery string) string {
+	base := githubAPIBaseURL
+	if host != "" && !github.IsGitHubCom(host) {
+		base = github.RestBaseURLForHost(host)
+	}
+	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(pathAndQuery, "/")
 }
 
 // githubPluginConfig holds the decoded config for the GitHub Issues plugin.
 type githubPluginConfig struct {
+	Host             string         `json:"host"`
 	Owner            string         `json:"owner"`
 	Repo             string         `json:"repo"`
 	Token            string         `json:"token"`
@@ -78,7 +87,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
 
-	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
 	if cursor != "" {
 		url += "&since=" + cursor
 	}

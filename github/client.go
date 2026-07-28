@@ -201,10 +201,11 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	return fetchLoginFromRequest(req)
 }
 
-// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token.
+// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token
+// on host ("" means github.com).
 // Returns ("", nil) when the token is invalid or unauthenticated.
-func GetCurrentUserLoginWithToken(ctx context.Context, token string) (string, error) {
-	req, err := newGHRequestWithToken(ctx, "user", token)
+func GetCurrentUserLoginWithToken(ctx context.Context, host, token string) (string, error) {
+	req, err := newGHRequestForHostWithToken(ctx, host, "user", token)
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
 	}

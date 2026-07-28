@@ -226,6 +226,15 @@ type AliasConfig struct {
 	NamePrefix string `json:"name_prefix,omitempty"`
 }
 
+// GitHubEnterpriseHost registers a GitHub Enterprise Server instance's OAuth App
+// client ID so device-flow login can target that host in addition to github.com.
+type GitHubEnterpriseHost struct {
+	// Host is the bare hostname (no scheme, no trailing slash), e.g. "github.example.com".
+	Host string `json:"host"`
+	// ClientID is the OAuth App client ID registered on that GHES instance.
+	ClientID string `json:"client_id"`
+}
+
 // TransitionMode controls how the system responds when capacity thresholds are crossed.
 type TransitionMode string
 

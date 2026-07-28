@@ -72,10 +72,11 @@ type loginResult struct {
 	checkedAt time.Time
 }
 
-// connectedAccount is one (token, login) pair resolved during a multi-account fetch.
+// connectedAccount is one (token, login, host) triple resolved during a multi-account fetch.
 type connectedAccount struct {
 	token string
 	login string
+	host  string
 }
 
 // multiLoginState caches the resolved accounts for the multi-account path.
@@ -217,6 +218,26 @@ func (c *UserPRCache) GetCachedLogins() []string {
 	return out
 }
 
+// CachedAccount is a resolved (login, host) pair for the accounts list RPC.
+type CachedAccount struct {
+	Login string
+	Host  string
+}
+
+// GetCachedAccounts returns all connected GitHub accounts with their host.
+func (c *UserPRCache) GetCachedAccounts() []CachedAccount {
+	v := c.multiLogin.Load()
+	s, ok := v.(*multiLoginState)
+	if !ok || s == nil {
+		return nil
+	}
+	out := make([]CachedAccount, len(s.accounts))
+	for i, a := range s.accounts {
+		out[i] = CachedAccount{Login: a.login, Host: a.host}
+	}
+	return out
+}
+
 // Annotate enriches the current snapshot with session IDs and worktree paths.
 // It performs a COW update: load → copy → mutate → store.
 // No-op if the snapshot hasn't been populated yet.
@@ -319,7 +340,7 @@ func (c *UserPRCache) fetch() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prs, fetchErr := c.fetchUserPRsForToken(acc.token)
+			prs, fetchErr := c.fetchUserPRsForToken(acc.host, acc.token)
 			results[i] = prResult{prs: prs, err: fetchErr}
 		}()
 	}
@@ -393,12 +414,12 @@ func (c *UserPRCache) resolveAllLogins() ([]connectedAccount, error) {
 		for _, tok := range tokens {
 			tok := tok
 			go func() {
-				login, err := GetCurrentUserLoginWithToken(ctx, tok.Token)
+				login, err := GetCurrentUserLoginWithToken(ctx, tok.Host, tok.Token)
 				if err != nil || login == "" {
 					ch <- loginRes{err: err}
 					return
 				}
-				ch <- loginRes{acc: connectedAccount{token: tok.Token, login: login}}
+				ch <- loginRes{acc: connectedAccount{token: tok.Token, login: login, host: tok.Host}}
 			}()
 		}
 
@@ -410,8 +431,9 @@ func (c *UserPRCache) resolveAllLogins() ([]connectedAccount, error) {
 			if r.err != nil || r.acc.login == "" {
 				continue
 			}
-			if !seen[r.acc.login] {
-				seen[r.acc.login] = true
+			key := r.acc.host + "/" + r.acc.login
+			if !seen[key] {
+				seen[key] = true
 				accounts = append(accounts, r.acc)
 				logins = append(logins, r.acc.login)
 			}
@@ -546,16 +568,22 @@ type graphQLPRNode struct {
 	} `json:"commits"`
 }
 
-func (c *UserPRCache) fetchUserPRsForToken(token string) ([]UserPR, error) {
+func (c *UserPRCache) fetchUserPRsForToken(host, token string) ([]UserPR, error) {
 	body, err := json.Marshal(map[string]string{"query": userPRGraphQLQuery})
 	if err != nil {
 		return nil, fmt.Errorf("marshal GraphQL query: %w", err)
 	}
 
-	req, err := newGHPostRequestWithToken(c.ctx, "graphql", bytes.NewReader(body), token)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, graphQLURLForHost(host), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build GraphQL request: %w", err)
 	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {

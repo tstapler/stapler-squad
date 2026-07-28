@@ -362,6 +362,18 @@ type Config struct {
 	// Valid values: "tmux" (default), "native" (Phase 2).
 	// Empty string is backwards-compatible and defaults to "tmux".
 	ProcessManagerBackend string `json:"process_manager_backend,omitempty"`
+	// GitHubEnterpriseHosts registers GitHub Enterprise Server instances (beyond
+	// github.com) with their own OAuth App client IDs, enabling device-flow login,
+	// PR polling, and link detection against those hosts. Empty means github.com only.
+	GitHubEnterpriseHosts []GitHubEnterpriseHost `json:"github_enterprise_hosts,omitempty"`
+}
+
+// GetGitHubEnterpriseHosts returns the configured GHES hosts, or nil if c is nil.
+func (c *Config) GetGitHubEnterpriseHosts() []GitHubEnterpriseHost {
+	if c == nil {
+		return nil
+	}
+	return c.GitHubEnterpriseHosts
 }
 
 // DefaultConfig returns the default configuration

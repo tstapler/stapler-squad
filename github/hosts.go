@@ -1,0 +1,49 @@
+package github
+
+import "strings"
+
+// defaultHost is the GitHub.com hostname used when no host is specified.
+const defaultHost = "github.com"
+
+// NormalizeHost returns the canonical form of a GitHub host: no scheme, no
+// trailing slash, and "" mapped to github.com.
+func NormalizeHost(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return defaultHost
+	}
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimSuffix(host, "/")
+	return host
+}
+
+// IsGitHubCom reports whether host (after normalization) is github.com.
+func IsGitHubCom(host string) bool {
+	return NormalizeHost(host) == defaultHost
+}
+
+// RestBaseURLForHost returns the REST API base URL for host, including a
+// trailing slash. For github.com this returns the existing GhBaseURL package
+// var unchanged, preserving the test seam that overrides it directly.
+func RestBaseURLForHost(host string) string {
+	host = NormalizeHost(host)
+	if host == defaultHost {
+		return GhBaseURL
+	}
+	return "https://" + host + "/api/v3/"
+}
+
+// graphQLURLForHost returns the GraphQL endpoint URL for host.
+func graphQLURLForHost(host string) string {
+	host = NormalizeHost(host)
+	if host == defaultHost {
+		return GhBaseURL + "graphql"
+	}
+	return "https://" + host + "/api/graphql"
+}
+
+// webBaseURLForHost returns the web (non-API) base URL for host, no trailing slash.
+func webBaseURLForHost(host string) string {
+	return "https://" + NormalizeHost(host)
+}

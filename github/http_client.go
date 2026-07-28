@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -51,35 +50,21 @@ func getGHToken(_ context.Context) string {
 	return tok
 }
 
-// newGHRequest creates an authenticated GET request to the GitHub REST API.
+// newGHRequest creates an authenticated GET request to the github.com REST API.
 func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
-	return newGHRequestWithToken(ctx, path, getGHToken(ctx))
+	return newGHRequestForHostWithToken(ctx, "", path, getGHToken(ctx))
 }
 
-// newGHRequestWithToken creates a GET request authenticated with an explicit token.
-func newGHRequestWithToken(ctx context.Context, path, token string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, GhBaseURL+path, nil)
+// newGHRequestForHostWithToken creates a GET request to host's REST API
+// authenticated with an explicit token. host "" means github.com.
+func newGHRequestForHostWithToken(ctx context.Context, host, path, token string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, RestBaseURLForHost(host)+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	return req, nil
-}
-
-// newGHPostRequestWithToken creates a POST request authenticated with an explicit token.
-func newGHPostRequestWithToken(ctx context.Context, path string, body io.Reader, token string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, GhBaseURL+path, body)
-	if err != nil {
-		return nil, err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	return req, nil

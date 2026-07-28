@@ -21,6 +21,7 @@ const githubCILabelConcurrency = 5
 
 // githubPRPluginConfig holds the decoded config for the GitHub PRs plugin.
 type githubPRPluginConfig struct {
+	Host  string `json:"host"`
 	Owner string `json:"owner"`
 	Repo  string `json:"repo"`
 	Token string `json:"token"`
@@ -77,7 +78,7 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		return nil, cursor, fmt.Errorf("github_prs: owner and repo are required in config")
 	}
 
-	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/pulls?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubPRsPerPage))
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/pulls?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubPRsPerPage))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -158,7 +159,7 @@ func (g *GitHubPRsPlugin) computeLabels(ctx context.Context, cfg githubPRPluginC
 
 // fetchCILabel calls the check runs API and returns "pr:ci-failing" when any check has failed.
 func (g *GitHubPRsPlugin) fetchCILabel(ctx context.Context, cfg githubPRPluginConfig, sha string) string {
-	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=50", cfg.Owner, cfg.Repo, sha))
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=50", cfg.Owner, cfg.Repo, sha))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""

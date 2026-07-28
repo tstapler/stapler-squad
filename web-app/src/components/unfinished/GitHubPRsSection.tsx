@@ -160,7 +160,7 @@ function StatsBar({ prs }: StatsBarProps) {
 
 interface AccountsBarProps {
   accounts: GitHubAccount[];
-  onDisconnect: (username: string) => void;
+  onDisconnect: (username: string, host: string) => void;
   onAddAccount: () => void;
 }
 
@@ -169,15 +169,18 @@ function AccountsBar({ accounts, onDisconnect, onAddAccount }: AccountsBarProps)
     <div className={styles.accountsRow} data-testid="github-accounts-row">
       {accounts.map((acc) => (
         <span
-          key={acc.username}
+          key={`${acc.host || "github.com"}:${acc.username}`}
           className={acc.isEnvToken ? styles.accountChipEnv : styles.accountChip}
           title={acc.isEnvToken ? "Sourced from environment variable" : undefined}
         >
           @{acc.username}
+          {acc.host && acc.host !== "github.com" && (
+            <span className={styles.hostBadge}>({acc.host})</span>
+          )}
           {!acc.isEnvToken && (
             <button
               className={styles.disconnectAccountButton}
-              onClick={() => onDisconnect(acc.username)}
+              onClick={() => onDisconnect(acc.username, acc.host)}
               aria-label={`Disconnect ${acc.username}`}
               title="Disconnect this account"
             >
@@ -217,6 +220,7 @@ interface DeviceAuthBannerProps {
 function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuthBannerProps) {
   const client = useGitHubUserClient();
   const [flow, setFlow] = useState<DeviceFlowPhase>({ kind: "idle" });
+  const [host, setHost] = useState("");
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef(false);
 
@@ -232,7 +236,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
     setFlow({ kind: "starting" });
     try {
       const res = await client.startGitHubDeviceAuth(
-        create(StartGitHubDeviceAuthRequestSchema, {})
+        create(StartGitHubDeviceAuthRequestSchema, { host: host.trim() })
       );
       if (abortRef.current) return;
       setFlow({
@@ -246,7 +250,7 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
         setFlow({ kind: "error", message: String(err) });
       }
     }
-  }, [client]);
+  }, [client, host]);
 
   const schedulePoll = useCallback(
     (deviceCode: string, userCode: string, verificationUri: string, intervalMs: number) => {
@@ -298,6 +302,14 @@ function DeviceAuthBanner({ errorMessage, onAuthComplete, onCancel }: DeviceAuth
         <span className={styles.authBannerText}>
           {errorMessage || "GitHub authentication not yet configured."}
         </span>
+        <input
+          className={styles.hostInput}
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="github.com"
+          aria-label="GitHub host"
+          data-testid="github-host-input"
+        />
         <button
           className={styles.connectButton}
           onClick={handleConnect}
@@ -602,9 +614,9 @@ export function GitHubPRsSection() {
   };
 
   const handleDisconnect = useCallback(
-    async (username: string) => {
+    async (username: string, host: string) => {
       await client.revokeGitHubToken(
-        create(RevokeGitHubTokenRequestSchema, { username })
+        create(RevokeGitHubTokenRequestSchema, { username, host })
       );
       refresh();
     },

@@ -874,7 +874,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	userPRCache.SetOnUpdated(func(prs []githubpkg.UserPR) {
 		annotateUserPRCache(userPRCache, svc.PRStatusPoller, unfinishedScanner)
 	})
-	githubUserSvc := services.NewGitHubUserService(userPRCache)
+	githubUserSvc := services.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
 
 	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
 	var analyticsClient *ent.Client
