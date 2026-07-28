@@ -28,6 +28,12 @@ import { render, act } from '@testing-library/react';
 const mockXtermHandle = {
   terminal: null as null,
   fit: jest.fn(),
+  // Pre-sizing (fix xterm theme flip and unpainted rows beyond 80x24): grows
+  // the xterm buffer to preCols/preRows before connect() so capture-pane's
+  // cursor-positioning sequences for rows beyond xterm's 80x24 default aren't
+  // silently dropped. Must be present on the mock handle or the pre-sizing
+  // effect in TerminalOutput.tsx throws "resize is not a function".
+  resize: jest.fn(),
   write: jest.fn(),
   writeln: jest.fn(),
   clear: jest.fn(),
@@ -117,6 +123,11 @@ type StreamMock = {
   stopRecording: jest.Mock;
   output: string;
   terminalState: string;
+  isHardFailed: boolean;
+  handleManualReconnect: jest.Mock;
+  requestFullResync: jest.Mock;
+  markResyncComplete: jest.Mock;
+  markPaneResponseReceived: jest.Mock;
 };
 
 function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
@@ -135,6 +146,15 @@ function makeStreamMock(overrides: Partial<StreamMock> = {}): StreamMock {
     stopRecording: jest.fn(),
     output: '',
     terminalState: 'STABLE',
+    isHardFailed: false,
+    handleManualReconnect: jest.fn(),
+    // useVisibilityResync (Story 2.1.x) is wired unconditionally in
+    // TerminalOutput.tsx and calls these on every unmount/session-id change —
+    // must be present even in tests that don't exercise resync behavior
+    // directly, or the cleanup effect throws "not a function".
+    requestFullResync: jest.fn(),
+    markResyncComplete: jest.fn(),
+    markPaneResponseReceived: jest.fn(),
     ...overrides,
   };
 }
