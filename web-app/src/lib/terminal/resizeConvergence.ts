@@ -47,6 +47,12 @@ export interface ResizeEvent extends TerminalSize {
   at: number;
 }
 
+/** Default oscillation-detection window, in ms — single source of truth (also used by callers). */
+export const OSCILLATION_WINDOW_MS = 2000;
+
+/** Default oscillation-detection repeat threshold — single source of truth (also used by callers). */
+export const OSCILLATION_THRESHOLD = 3;
+
 /**
  * AC4 oscillation/burst detector: true iff the most recent `{cols, rows}` entry in `history`
  * recurs `>= threshold` times within `windowMs` of `now`. Entries older than `windowMs` are
@@ -55,8 +61,8 @@ export interface ResizeEvent extends TerminalSize {
 export function shouldAbandonWebgl(
   history: ResizeEvent[],
   now: number,
-  windowMs = 2000,
-  threshold = 3,
+  windowMs = OSCILLATION_WINDOW_MS,
+  threshold = OSCILLATION_THRESHOLD,
 ): boolean {
   const recent = history.filter((e) => now - e.at <= windowMs);
   if (recent.length === 0) return false;

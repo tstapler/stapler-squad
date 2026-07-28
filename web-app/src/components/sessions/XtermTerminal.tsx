@@ -15,7 +15,13 @@ import { TerminalContextMenu } from "./TerminalContextMenu";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
-import { shouldFit, shouldAbandonWebgl, type ResizeEvent } from "@/lib/terminal/resizeConvergence";
+import {
+  shouldFit,
+  shouldAbandonWebgl,
+  OSCILLATION_WINDOW_MS,
+  OSCILLATION_THRESHOLD,
+  type ResizeEvent,
+} from "@/lib/terminal/resizeConvergence";
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 
@@ -227,6 +233,22 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   const handleContextMenuDismiss = useCallback(() => {
     setContextMenuState(null);
+  }, []);
+
+  // AC2 gate: only call fit() when proposeDimensions()'s integer output genuinely differs from
+  // the terminal's live cols/rows — a sub-cell WebGL glyph-metric wobble should not keep
+  // re-triggering the debounce→rAF→fit() cycle. Shared by the ResizeObserver debounce path and
+  // the imperative fit() handle so the gate logic has a single source of truth.
+  const attemptFit = useCallback((logSkip: boolean) => {
+    const term = terminalRef.current;
+    const addon = fitAddonRef.current;
+    if (!term || !addon) return;
+    const proposed = addon.proposeDimensions();
+    if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
+      addon.fit();
+    } else if (logSkip) {
+      console.log('[XtermTerminal] Skipping fit(): proposed dims match current cols/rows');
+    }
   }, []);
 
   // Initialize terminal on mount
@@ -448,8 +470,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // instead of carrying stale burst entries into the new instance. See Domain Glossary
       // ("oscillationHistory") and Pattern Decisions ("Oscillation history storage").
       let oscillationHistory: ResizeEvent[] = [];
-      const OSCILLATION_WINDOW_MS = 2000;
-      const OSCILLATION_THRESHOLD = 3;
 
       const resizeDisposable = terminal.onResize(({ cols, rows }) => {
         if (!terminalRef.current) return; // torn down — never dispose against a dead instance
@@ -531,19 +551,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           resizeTimeout = setTimeout(() => {
             requestAnimationFrame(() => {
               requestAnimationFrame(() => {
-                // AC2 gate: only call fit() when proposeDimensions()'s integer output genuinely
-                // differs from the terminal's live cols/rows — a sub-cell WebGL glyph-metric
-                // wobble should not keep re-triggering the debounce→rAF→fit() cycle.
-                const term = terminalRef.current;
-                const addon = fitAddonRef.current;
-                if (term && addon) {
-                  const proposed = addon.proposeDimensions();
-                  if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
-                    addon.fit();
-                  } else {
-                    console.log('[XtermTerminal] Skipping fit(): proposed dims match current cols/rows');
-                  }
-                }
+                attemptFit(true);
                 // Sync lastContainerSize to the post-fit DOM dimensions so the next
                 // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
                 // is filtered out, breaking the scrollbar-appearance oscillation loop.
@@ -583,6 +591,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         searchAddonRef.current = null;
         serializeAddonRef.current = null;
         webglAddonRef.current = null;
+        webglFallbackTrippedRef.current = false;
       };
     } catch (error) {
       console.error('[XtermTerminal] Terminal initialization failed:', error);
@@ -676,14 +685,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       // AC1/AC7 gate: same shouldFit convergence check as the ResizeObserver path (Epic 2.2),
       // applied here too since tab background/resume routes through this imperative fit()
       // handle rather than the ResizeObserver.
-      const term = terminalRef.current;
-      const addon = fitAddonRef.current;
-      if (term && addon) {
-        const proposed = addon.proposeDimensions();
-        if (shouldFit(proposed, { cols: term.cols, rows: term.rows })) {
-          addon.fit();
-        }
-      }
+      attemptFit(false);
     },
     search: (term: string): boolean => {
       if (!searchAddonRef.current) return false;
@@ -697,7 +699,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       if (!searchAddonRef.current) return false;
       return searchAddonRef.current.findPrevious(term);
     },
-  }), []);
+  }), [attemptFit]);
 
   return (
     <div className={styles.container} data-context="terminal">

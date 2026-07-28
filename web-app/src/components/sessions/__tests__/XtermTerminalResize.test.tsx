@@ -657,3 +657,75 @@ describe("AC4: oscillation burst falls back off WebGL", () => {
     expect(logMessages.some((m) => m.includes("persists after WebGL fallback"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// webglFallbackTrippedRef reset on effect cleanup — regression test for the fix that adds
+// `webglFallbackTrippedRef.current = false;` alongside `webglAddonRef.current = null;` in the
+// mount effect's cleanup. Without the fix, a [scrollback]-triggered remount whose new instance
+// never successfully loads WebGL would carry the stale `true` forward, so a fresh oscillation
+// burst on the new instance would wrongly hit the "persists after WebGL fallback" console.log
+// branch instead of the "no WebGL addon to dispose" console.error backstop.
+// ---------------------------------------------------------------------------
+describe("webglFallbackTrippedRef resets across a scrollback-triggered remount", () => {
+  function runBurst(
+    harness: XtermResizeTestHarness,
+    sequence: Array<{ cols: number; rows: number }>,
+    startWidth: number,
+  ) {
+    let width = startWidth;
+    for (const dims of sequence) {
+      harness.setProposedDimensions(dims.cols, dims.rows);
+      fireResizeObserver(width, 600);
+      width += 40;
+      flushDebounce();
+    }
+  }
+
+  const burstA = [84, 85, 84, 85, 84].map((cols) => ({ cols, rows: 60 }));
+  const burstB = [90, 91, 90, 91, 90].map((cols) => ({ cols, rows: 60 }));
+
+  it("secondInstance_should_logNoWebglAddonBackstop_not_persistsMessage_When_burstOccursAfterRemountWhoseWebglNeverLoaded", async () => {
+    (global as any).WebGL2RenderingContext = class {};
+
+    const harness = getHarness();
+    const onResize = jest.fn();
+    const { rerender } = render(
+      <XtermTerminal onResize={onResize} scrollback={100} />,
+    );
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    flushInitialMount();
+
+    const webglMock = getWebglMock();
+    expect(webglMock.__instances).toHaveLength(1);
+    const firstInstance = webglMock.__instances[0];
+
+    // Trip the fallback on the first instance.
+    runBurst(harness, burstA, 800);
+    expect(firstInstance.dispose).toHaveBeenCalledTimes(1);
+
+    // Simulate the new instance's WebGL failing to load (transient failure) by making
+    // WebGL2RenderingContext unavailable before the [scrollback]-triggered remount — the
+    // mount effect's `else` branch then never constructs a WebglAddon at all.
+    delete (global as any).WebGL2RenderingContext;
+
+    rerender(<XtermTerminal onResize={onResize} scrollback={200} />);
+    flushInitialMount();
+
+    expect(getWebglMock().__instances).toHaveLength(1); // no second WebGL instance was created
+
+    errorSpy.mockClear();
+    logSpy.mockClear();
+
+    // Fresh burst on the new (never-loaded-WebGL) instance.
+    runBurst(harness, burstB, 2000);
+
+    const errorMessages = errorSpy.mock.calls.map((c) => String(c[0]));
+    expect(errorMessages.some((m) => m.includes("no WebGL addon to dispose"))).toBe(true);
+
+    const logMessages = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logMessages.some((m) => m.includes("persists after WebGL fallback"))).toBe(false);
+  });
+});
