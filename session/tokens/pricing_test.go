@@ -206,6 +206,15 @@ func TestPricingTable_WhenIsStale_Expect29DaysReturnFalse(t *testing.T) {
 	assert.False(t, pt.IsStale())
 }
 
+func TestDefaultPricingTable_WhenCalledToday_ExpectNotStale(t *testing.T) {
+	// Regression guard: DefaultPricingTable()'s own entries must never trip
+	// IsStale() the moment they ship, or the startup warning becomes
+	// permanent noise instead of a signal. Every actively-monitored entry's
+	// EffectiveDate must be kept within 30 days of release; frozen/retired
+	// entries must leave EffectiveDate blank (see claude-opus-3/sonnet-3/haiku-3).
+	assert.False(t, DefaultPricingTable().IsStale())
+}
+
 func TestLoadPricingOverride_WhenValidConfigJSON_ExpectOverridesApplied(t *testing.T) {
 	// Write a temp override file.
 	override := map[string]ModelPricing{

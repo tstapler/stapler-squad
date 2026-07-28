@@ -64,37 +64,46 @@ func DefaultPricingTable() *PricingTable {
 				CacheReadPerMTok:   1.00,
 				EffectiveDate:      "2026-07-27",
 			},
+			// Family alias for the actively-served 4.5-4.8 minor releases (variantSuffixPattern
+			// strips "-5".."-8" down to this bucket). Verified 2026-07-27 against
+			// https://platform.claude.com/docs/en/about-claude/pricing — EffectiveDate is kept
+			// current since Anthropic can still revise pricing for actively-served models.
 			"claude-opus-4": {
 				ModelFamily:        "claude-opus-4",
 				InputPricePerMTok:  5.00,
 				OutputPricePerMTok: 25.00,
 				CacheWritePerMTok:  6.25,
 				CacheReadPerMTok:   0.50,
-				EffectiveDate:      "2026-05-15",
+				EffectiveDate:      "2026-07-27",
 			},
+			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
 			"claude-sonnet-4": {
 				ModelFamily:        "claude-sonnet-4",
 				InputPricePerMTok:  3.00,
 				OutputPricePerMTok: 15.00,
 				CacheWritePerMTok:  3.75,
 				CacheReadPerMTok:   0.30,
-				EffectiveDate:      "2026-05-15",
+				EffectiveDate:      "2026-07-27",
 			},
+			// Verified 2026-07-27 against https://platform.claude.com/docs/en/about-claude/pricing
 			"claude-haiku-4": {
 				ModelFamily:        "claude-haiku-4",
 				InputPricePerMTok:  1.00,
 				OutputPricePerMTok: 5.00,
 				CacheWritePerMTok:  1.25,
 				CacheReadPerMTok:   0.10,
-				EffectiveDate:      "2026-05-15",
+				EffectiveDate:      "2026-07-27",
 			},
+			// Claude 3 generation: fully retired, no longer listed on Anthropic's pricing page,
+			// and historical pricing for deprecated models does not change. EffectiveDate is
+			// deliberately left blank (IsStale skips blank dates) so this frozen entry never
+			// trips the staleness warning meant for actively-monitored models.
 			"claude-opus-3": {
 				ModelFamily:        "claude-opus-3",
 				InputPricePerMTok:  15.00,
 				OutputPricePerMTok: 75.00,
 				CacheWritePerMTok:  18.75,
 				CacheReadPerMTok:   1.50,
-				EffectiveDate:      "2026-05-15",
 			},
 			"claude-sonnet-3": {
 				ModelFamily:        "claude-sonnet-3",
@@ -102,7 +111,6 @@ func DefaultPricingTable() *PricingTable {
 				OutputPricePerMTok: 15.00,
 				CacheWritePerMTok:  3.75,
 				CacheReadPerMTok:   0.30,
-				EffectiveDate:      "2026-05-15",
 			},
 			"claude-haiku-3": {
 				ModelFamily:        "claude-haiku-3",
@@ -110,7 +118,6 @@ func DefaultPricingTable() *PricingTable {
 				OutputPricePerMTok: 1.25,
 				CacheWritePerMTok:  0.30,
 				CacheReadPerMTok:   0.03,
-				EffectiveDate:      "2026-05-15",
 			},
 		},
 	}
