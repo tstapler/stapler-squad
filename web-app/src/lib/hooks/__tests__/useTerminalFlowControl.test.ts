@@ -268,6 +268,33 @@ describe('useTerminalFlowControl', () => {
       );
       expect(resizeSendsFinal.length).toBe(2);
     });
+
+    it('should bypass the time-throttle with force=true when within the 200ms throttle window (AC3 force + throttle bypass)', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      // Send #1
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      // Advance by only 50ms — still inside the 200ms THROTTLE_MS window.
+      act(() => {
+        jest.advanceTimersByTime(50);
+      });
+
+      // Send #2: force=true must bypass the time-throttle too, not just the value-dedup.
+      // Without the fix, the throttle's early return fires before the force check is
+      // ever reached and this second send is silently dropped.
+      act(() => {
+        result.current.resize(100, 30, true);
+      });
+
+      const resizeSends = pushMessageFn.mock.calls.filter(
+        (call) => call[0].data.case === 'resize'
+      );
+      expect(resizeSends.length).toBe(2);
+    });
   });
 
   describe('requestFullResync', () => {

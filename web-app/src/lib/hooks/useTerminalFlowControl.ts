@@ -402,6 +402,15 @@ export function useTerminalFlowControl({
     }
   }, [sessionId, enablePredictiveEcho, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
+  /**
+   * Resize the remote terminal.
+   *
+   * @param force - When true, bypasses both the send-throttle and the value-dedup
+   * check, guaranteeing the resize reaches the server even if it repeats the
+   * last-sent value or arrives within the throttle window. Use only for
+   * resync-critical call sites — silently dropping those leaves the server with
+   * stale dimensions with no user-visible signal.
+   */
   const resize = useCallback((cols: number, rows: number, force = false) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {
       console.warn("Cannot resize terminal: stream not connected");
@@ -412,7 +421,7 @@ export function useTerminalFlowControl({
     const timeSinceLastResize = now - lastResizeTimeRef.current;
     const THROTTLE_MS = 200;
 
-    if (timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
+    if (!force && timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
       console.log(`[useTerminalFlowControl] Resize throttled (${timeSinceLastResize}ms since last, need ${THROTTLE_MS}ms)`);
       return;
     }
