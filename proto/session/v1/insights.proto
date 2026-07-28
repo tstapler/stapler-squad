@@ -37,6 +37,8 @@ message SessionTokenSummary {
   bool   is_orphan              = 14; // true = no matching stapler-squad session
   repeated string skill_activations = 15;
   repeated TopToolEntry top_tools   = 16;
+  // unpriced_models lists ModelFamily values with usage but no pricing entry, for this session.
+  repeated string unpriced_models = 17;
 }
 
 // TopToolEntry records a tool name and its call count in a session.
@@ -58,6 +60,8 @@ message DailyTokenBucket {
   map<string, double> cost_by_model   = 7;
   // tokens_by_model maps normalized model family to total token count (input+output) for that day.
   map<string, int64>  tokens_by_model = 8;
+  // unpriced_models is the union of unpriced ModelFamily values across sessions rolled into this day.
+  repeated string unpriced_models = 9;
 }
 
 // ModelBreakdown aggregates token usage by model family.
@@ -68,6 +72,9 @@ message ModelBreakdown {
   int64  cache_read_tokens   = 4;
   double estimated_cost_usd  = 5;
   int32  session_count       = 6;
+  // pricing_unavailable is true when total_input_tokens/total_output_tokens > 0 but no
+  // PricingTable entry exists for model_family.
+  bool   pricing_unavailable = 7;
 }
 
 // TopEntry is a generic name/value pair for top-N tables.
@@ -101,6 +108,8 @@ message GetInsightsSummaryResponse {
   repeated TopEntry top_tools            = 10;
   bool     is_loading                    = 11; // true = background parse still in progress
   google.protobuf.Timestamp pricing_as_of = 12;
+  // unpriced_models is the aggregate union across all sessions in this response, for a dashboard-level banner.
+  repeated string unpriced_models        = 13;
 }
 
 // ListSessionTokensRequest supports paginated session listing.

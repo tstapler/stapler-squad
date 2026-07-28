@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -22,6 +24,15 @@ type InsightsService struct {
 	store      tokens.TokenStoreReader
 	pricing    *tokens.PricingTable
 	associator *tokens.Associator
+
+	// logMu guards loggedUnpricedFamilies.
+	logMu sync.Mutex
+	// loggedUnpricedFamilies tracks which unpriced model families have already
+	// had a warning logged, so a newly-observed family is only logged once
+	// (not on every request). Grows unbounded over the process lifetime, but
+	// bounded in practice by the number of distinct model families ever seen —
+	// safe to leave unbounded (see pre-mortem's minor note).
+	loggedUnpricedFamilies map[string]bool
 }
 
 // NewInsightsService creates a new InsightsService.
@@ -31,9 +42,25 @@ func NewInsightsService(
 	associator *tokens.Associator,
 ) *InsightsService {
 	return &InsightsService{
-		store:      store,
-		pricing:    pricing,
-		associator: associator,
+		store:                  store,
+		pricing:                pricing,
+		associator:             associator,
+		loggedUnpricedFamilies: make(map[string]bool),
+	}
+}
+
+// warnNewUnpricedFamilies logs a warning for each family in families that has
+// not previously been logged, then marks it logged. Deduped across calls so a
+// given unpriced family produces exactly one log line for the life of the
+// process, not one per request.
+func (s *InsightsService) warnNewUnpricedFamilies(families map[string]bool) {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	for family := range families {
+		if !s.loggedUnpricedFamilies[family] {
+			s.loggedUnpricedFamilies[family] = true
+			log.Warn("insights: unpriced model family observed", "family", family)
+		}
 	}
 }
 
@@ -67,6 +94,9 @@ func (s *InsightsService) GetInsightsSummary(
 		modelMap = make(map[string]*sessionv1.ModelBreakdown)   // key = normalized family
 		skillMap = make(map[string]int32)                       // skill name → activation count
 		toolMap  = make(map[string]int64)                       // tool name → call count
+
+		allUnpricedFamilies = make(map[string]bool)            // union of unpriced families across all sessions
+		dailyUnpriced       = make(map[string]map[string]bool) // day → set of unpriced families rolled into that day
 	)
 
 	sessions := make([]*sessionv1.SessionTokenSummary, 0, len(results))
@@ -112,7 +142,13 @@ func (s *InsightsService) GetInsightsSummary(
 			}
 		}
 
-		costUSD := s.pricing.EstimateCost(r)
+		costUSD, unpriced := s.pricing.EstimateCost(r)
+		for _, f := range unpriced {
+			allUnpricedFamilies[f] = true
+		}
+		// Computed once per session and reused below for both the daily rollup
+		// and the model breakdown — avoids walking r.TurnTimeline twice.
+		modelFamilyCosts, unpricedFamilies := s.pricing.ModelFamilyCost(r)
 		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
 
 		// Build top tools list for this session.
@@ -139,6 +175,7 @@ func (s *InsightsService) GetInsightsSummary(
 			IsOrphan:            isOrphan,
 			SkillActivations:    skillNames,
 			TopTools:            topTools,
+			UnpricedModels:      unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -176,8 +213,7 @@ func (s *InsightsService) GetInsightsSummary(
 			b.EstimatedCostUsd += costUSD
 			b.SessionCount++
 			// Per-model breakdown within this day.
-			modelFamilyCostsForDay := s.pricing.ModelFamilyCost(r)
-			for family, cost := range modelFamilyCostsForDay {
+			for family, cost := range modelFamilyCosts {
 				b.CostByModel[family] += cost
 			}
 			for _, turn := range r.TurnTimeline {
@@ -186,13 +222,22 @@ func (s *InsightsService) GetInsightsSummary(
 					b.TokensByModel[family] += turn.Input + turn.Output
 				}
 			}
+			if dailyUnpriced[bucketDay] == nil {
+				dailyUnpriced[bucketDay] = make(map[string]bool)
+			}
+			for family := range unpricedFamilies {
+				dailyUnpriced[bucketDay][family] = true
+			}
 		}
 
 		// Model breakdown.
-		modelFamilyCosts := s.pricing.ModelFamilyCost(r)
 		for _, turn := range r.TurnTimeline {
 			family := tokens.NormalizeModelFamily(turn.Model)
-			if family == "" {
+			// Skip turns with no usage at all across every counter — e.g. Claude
+			// Code's internal "<synthetic>" turns, which the parser already
+			// filters out of TurnTimeline in production. A zero-usage turn has
+			// nothing to break out into its own model-breakdown row.
+			if family == "" || (turn.Input == 0 && turn.Output == 0 && turn.CacheRead == 0 && turn.CacheCreation == 0) {
 				continue
 			}
 			mb := modelMap[family]
@@ -214,6 +259,20 @@ func (s *InsightsService) GetInsightsSummary(
 			mb.EstimatedCostUsd += cost
 			mb.SessionCount++
 		}
+		// Flag families that had usage but no pricing entry. Mirrors the
+		// defensive nil-check idiom used in the loop directly above, and
+		// increments SessionCount the same way so an unpriced-but-heavily-used
+		// family's row doesn't show real nonzero token counts alongside a
+		// contradictory SessionCount: 0 (architecture-review.md's Concerns).
+		for family := range unpricedFamilies {
+			mb := modelMap[family]
+			if mb == nil {
+				mb = &sessionv1.ModelBreakdown{ModelFamily: family}
+				modelMap[family] = mb
+			}
+			mb.PricingUnavailable = true
+			mb.SessionCount++
+		}
 
 		// Skill activations.
 		for _, sa := range r.SkillActivations {
@@ -226,6 +285,11 @@ func (s *InsightsService) GetInsightsSummary(
 		}
 	}
 
+	// Emit a deduped runtime warning for any newly-observed unpriced family
+	// (AC-5 runtime-signal half) — logs each family at most once for the life
+	// of the process, not once per request.
+	s.warnNewUnpricedFamilies(allUnpricedFamilies)
+
 	// Build sorted daily slice.
 	dailyKeys := make([]string, 0, len(dailyMap))
 	for k := range dailyMap {
@@ -234,6 +298,7 @@ func (s *InsightsService) GetInsightsSummary(
 	sort.Strings(dailyKeys)
 	daily := make([]*sessionv1.DailyTokenBucket, 0, len(dailyKeys))
 	for _, k := range dailyKeys {
+		dailyMap[k].UnpricedModels = sortedKeys(dailyUnpriced[k])
 		daily = append(daily, dailyMap[k])
 	}
 
@@ -271,6 +336,7 @@ func (s *InsightsService) GetInsightsSummary(
 		TopTools:             topTools,
 		IsLoading:            s.store.IsLoading(),
 		PricingAsOf:          timestamppb.New(s.pricing.LoadedAt),
+		UnpricedModels:       sortedKeys(allUnpricedFamilies),
 	}
 
 	return connect.NewResponse(resp), nil
@@ -294,6 +360,7 @@ func (s *InsightsService) ListSessionTokens(
 
 	// Build session summaries.
 	summaries := make([]*sessionv1.SessionTokenSummary, 0, len(results))
+	allUnpricedFamilies := make(map[string]bool) // union of unpriced families across all sessions in this call
 	for _, r := range results {
 		if r == nil {
 			continue
@@ -311,7 +378,10 @@ func (s *InsightsService) ListSessionTokens(
 			sessionID, isOrphan = s.associator.Associate(r)
 		}
 
-		costUSD := s.pricing.EstimateCost(r)
+		costUSD, unpriced := s.pricing.EstimateCost(r)
+		for _, f := range unpriced {
+			allUnpricedFamilies[f] = true
+		}
 		cacheHitRate := computeCacheHitRate(r.TotalInput, r.CacheRead)
 		topTools := sessionTopTools(r)
 
@@ -335,6 +405,7 @@ func (s *InsightsService) ListSessionTokens(
 			IsOrphan:            isOrphan,
 			SkillActivations:    skillNames,
 			TopTools:            topTools,
+			UnpricedModels:      unpriced,
 		}
 		if !firstTs.IsZero() {
 			summary.FirstMessageAt = timestamppb.New(firstTs)
@@ -344,6 +415,11 @@ func (s *InsightsService) ListSessionTokens(
 		}
 		summaries = append(summaries, summary)
 	}
+
+	// Emit a deduped runtime warning for any newly-observed unpriced family
+	// (AC-5 runtime-signal half) — logs each family at most once for the life
+	// of the process, not once per request.
+	s.warnNewUnpricedFamilies(allUnpricedFamilies)
 
 	// Sort.
 	sortBy := msg.SortBy
@@ -525,6 +601,16 @@ func sessionTopTools(r *tokens.ParseResult) []*sessionv1.TopToolEntry {
 		})
 	}
 	return result
+}
+
+// sortedKeys returns the true keys of a map[string]bool as a sorted slice.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // buildTopEntries builds a TopEntry slice sorted by activation count (desc).

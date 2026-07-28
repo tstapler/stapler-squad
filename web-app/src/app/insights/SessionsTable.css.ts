@@ -96,6 +96,14 @@ export const orphanBadge = style({
   verticalAlign: "middle",
 });
 
+// Distinct from orphanBadge's warning colors — "unpriced" (cost not
+// computable) and "orphan" (session not matched to a backlog item) are
+// different states and shouldn't be visually indistinguishable.
+export const unpricedBadge = style([
+  orphanBadge,
+  { background: vars.color.accentBg, color: vars.color.accentText },
+]);
+
 export const empty = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.sm,

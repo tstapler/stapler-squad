@@ -5,7 +5,9 @@
   "method": "GetInsightsSummary",
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-17T16:40:58.369884702-07:00"
+  "tested": true,
+  "testIds": [
+    "TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlagged"
+  ],
+  "lastModified": "2026-07-27T00:00:00Z"
 }

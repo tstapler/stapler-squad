@@ -29,3 +29,9 @@ export const emptyChart = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.sm,
 });
+
+export const unpricedFootnote = style({
+  color: vars.color.warningText,
+  fontStyle: "italic",
+  fontSize: vars.fontSize.sm,
+});

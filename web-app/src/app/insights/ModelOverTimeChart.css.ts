@@ -51,3 +51,8 @@ export const legendSwatch = style({
   borderRadius: "2px",
   flexShrink: 0,
 });
+
+export const unpricedLegendLabel = style({
+  color: vars.color.warningText,
+  fontStyle: "italic",
+});

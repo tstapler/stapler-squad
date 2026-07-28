@@ -51,3 +51,8 @@ export const legendDot = style({
   borderRadius: vars.radii.full,
   flexShrink: 0,
 });
+
+export const unpricedLabel = style({
+  color: vars.color.warningText,
+  fontStyle: "italic",
+});

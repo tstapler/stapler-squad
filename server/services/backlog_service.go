@@ -163,7 +163,6 @@ type BacklogService struct {
 	// section.
 	spawnInFlight sync.Map
 
-
 	// headless triage pool and concurrency controls.
 	headlessPool   headless.PoolClient
 	shutdownCtx    context.Context
@@ -426,7 +425,8 @@ func (s *BacklogService) buildCostLookup() func(tmuxUUID string) float64 {
 		if r == nil {
 			return 0
 		}
-		return pt.EstimateCost(r)
+		cost, _ := pt.EstimateCost(r)
+		return cost
 	}
 }
 

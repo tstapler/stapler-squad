@@ -1,0 +1,10 @@
+{
+  "id": "insights-pricing-unavailable-indicator",
+  "type": "frontend",
+  "component": "ModelBreakdownChart",
+  "path": "web-app/src/app/insights/ModelBreakdownChart.tsx",
+  "markerLine": 109,
+  "tested": true,
+  "testIds": ["ModelBreakdownChart > ModelBreakdownChart_should_showUnpricedSuffix_When_pricingUnavailable"],
+  "lastModified": "2026-07-27T00:00:00.000Z"
+}
