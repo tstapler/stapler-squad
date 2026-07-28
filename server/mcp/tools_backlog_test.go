@@ -581,6 +581,55 @@ func TestRequestReview_TransitionsItemToReview(t *testing.T) {
 	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }
 
+// TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled verifies
+// that an item with SkipReviewGate=true never enters "review" via request_review —
+// it must go straight from in_progress to done, matching every other
+// SkipReviewGate-aware code path (session/backlog_lifecycle.go's onSessionExited,
+// TriggerReviewForSession, ReviewGateRunner.Run). Before this fix, request_review
+// always transitioned to review regardless of the flag, and because
+// TriggerReviewForSession also honors the flag (no-op), the item would then sit in
+// review forever with no gate ever spawned to move it forward.
+func TestRequestReview_TransitionsDirectlyToDone_When_SkipReviewGateEnabled(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:          "Skip the gate",
+		Status:         string(session.BacklogStatusInProgress),
+		SkipReviewGate: true,
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Implemented the feature, all criteria done.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "SkipReviewGate")
+
+	// Verify item went straight to done, never review.
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
 // TestRequestReview_PersistsVerificationNotesOnWorkSession verifies that a
 // non-empty verification_notes argument is stored on the caller's ItemSession
 // so the review gate can later surface it in the reviewer's prompt.

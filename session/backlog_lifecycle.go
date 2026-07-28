@@ -112,6 +112,26 @@ type ReviewRespawner interface {
 	AutoRespawnReview(ctx context.Context, itemID string) error
 }
 
+// TriageRespawner can automatically re-trigger triage for a backlog item whose
+// most recent triage-role ItemSession orphaned (StuckReasonOrphanedTriage —
+// reconcileOrphanedTriageItems found the session still open long after it
+// should have finished, tombstoned it, and marked the item stuck). Before this
+// existed, orphaned_triage was detection-and-notify only, exactly like
+// StuckReasonAbandonedReview before ReviewRespawner: a human had to notice the
+// one-time notification and manually re-trigger triage (confirmed live
+// 2026-07-27, docs/tasks/backlog-feature-improvement.md — items 4f03de7b and
+// 505fb733 sat in "idea" for 2 days this way). Implemented outside this
+// package (BacklogService owns TriggerTriage, the RPC-shaped entry point that
+// already knows how to tombstone/re-trigger triage safely) and wired via
+// SetTriageRespawner, mirroring StaleWorkRemediator/ReviewRespawner exactly.
+type TriageRespawner interface {
+	// AutoRespawnTriage re-triggers triage for itemID. No-op (nil error) if
+	// the item already moved off "idea" by the time this runs (e.g. a human
+	// already re-triggered triage manually, or the item was otherwise
+	// resolved) — mirrors AutoRespawnReview's identical staleness guard.
+	AutoRespawnTriage(ctx context.Context, itemID string) error
+}
+
 // QueueDequeuer claims and spawns as many queued backlog items as there are
 // free WIP slots, oldest-queued first. Called the moment a slot frees up
 // (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
@@ -290,6 +310,10 @@ type BacklogLifecycleListener struct {
 	// reviewRespawnMu guards reviewRespawner for concurrent Set/get access.
 	reviewRespawnMu sync.RWMutex
 	reviewRespawner ReviewRespawner
+
+	// triageRespawnMu guards triageRespawner for concurrent Set/get access.
+	triageRespawnMu sync.RWMutex
+	triageRespawner TriageRespawner
 
 	// dequeuerMu guards dequeuer for concurrent Set/get access.
 	dequeuerMu sync.RWMutex
@@ -487,6 +511,21 @@ func (l *BacklogLifecycleListener) getReviewRespawner() ReviewRespawner {
 	return l.reviewRespawner
 }
 
+// SetTriageRespawner wires in the spawner used to automatically re-trigger
+// triage for idea-status items whose triage session orphaned.
+func (l *BacklogLifecycleListener) SetTriageRespawner(r TriageRespawner) {
+	l.triageRespawnMu.Lock()
+	defer l.triageRespawnMu.Unlock()
+	l.triageRespawner = r
+}
+
+// getTriageRespawner returns the current triage respawner under a read lock.
+func (l *BacklogLifecycleListener) getTriageRespawner() TriageRespawner {
+	l.triageRespawnMu.RLock()
+	defer l.triageRespawnMu.RUnlock()
+	return l.triageRespawner
+}
+
 // SetDequeuer wires in the spawner used to dequeue queued backlog items once a
 // WIP slot frees up.
 func (l *BacklogLifecycleListener) SetDequeuer(d QueueDequeuer) {
@@ -623,6 +662,26 @@ func (l *BacklogLifecycleListener) notify(itemID, title, message string, notific
 	if n := l.getNotifier(); n != nil {
 		n.Notify(itemID, title, message, notificationType, priority)
 	}
+}
+
+// notifyTransitionFailed publishes an operator-facing notification when a
+// status-transition write fails AFTER its side effects have already happened
+// — e.g. a PR was confirmed merged, or a commit was confirmed shipped to
+// main — leaving the item's status silently out of sync with reality.
+// Mirrors server/services/backlog_service_triage.go's identical helper (same
+// shape, different package: this package must not import the server layer —
+// see .golangci.yml's no_server_in_core depguard rule). No-op if no notifier
+// is wired. Part of the fix for the recurring "silent status-transition
+// failure" bug shape — see that helper's doc comment for the full history
+// (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
+// sites in reconcileBouncingItems/ReconcilePRPending).
+func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
+	l.notify(itemID,
+		"Status update failed after work completed",
+		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
+		7, // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+		3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+	)
 }
 
 // SetSessionArchiver wires in the archiver used to soft-archive backlog work
@@ -781,7 +840,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 
 	// Record end time for all session roles (triage, review, work).
 	now := time.Now()
-	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil {
+	if err := l.storage.UpdateItemSessionEnded(ctx, is.ID, now); err != nil { //nolint:silenttransition bookkeeping timestamp; the zombie-session detector (reconcileStuckReviewItems) falls back to SessionLivenessChecker rather than relying solely on EndedAt, so a failed write here doesn't fully hide a dead session
 		log.ErrorLog.Printf("[BacklogLifecycle] UpdateItemSessionEnded(%s) error: %v", is.ID, err)
 	}
 
@@ -1274,7 +1333,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	archived := 0
 	for _, item := range items {
 		precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusDone)}
-		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil {
+		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusArchived, precondition, TriggeredBySystem); transErr != nil { //nolint:silenttransition idempotent by construction (see doc comment above) — item stays "done" and reappears in FindDoneItemsOlderThan's result on the next tick, so a failed archive here is retried, not silently dropped
 			log.WarningLog.Printf("[BacklogLifecycle] archiveStaleDoneItems transition item=%s: %v", item.ID, transErr)
 			continue
 		}
@@ -1484,6 +1543,20 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileOrphanedTriageItems(ctx, er)
 	})
 
+	// Retry triage for every open orphaned_triage row still anchored at
+	// "idea" (Phase B of docs/tasks/backlog-stuck-item-auto-remediation.md) —
+	// the periodic counterpart to reconcileOrphanedTriageItems' one-time
+	// MarkStuck+notify above, which never retries on its own once the
+	// orphaned triage session is tombstoned (that session's EndedAt is no
+	// longer nil, so the detector above never re-fires for the same item).
+	// Closes the exact gap confirmed live 2026-07-27
+	// (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and
+	// 505fb733 sat in "idea" for 2 days with only the one notification ever
+	// sent.
+	l.runStuckDetector("orphaned_triage_remediation", &okNames, &panickedNames, func() {
+		l.reconcileOrphanedTriageRemediation(ctx, er)
+	})
+
 	// Flag queued items DequeueNextQueuedItems' planning gate refuses to ever
 	// claim (plan not approved, skip_planning not set) — otherwise silent
 	// forever except for a per-tick WARNING log. See reconcilePlanNotApprovedItems'
@@ -1607,7 +1680,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 				// EndedAt-nil rows as "active" and silently skips the respawn it was
 				// just dispatched to perform — the zombie detection fired for nothing.
 				for _, is := range item.Edges.ItemSessions {
-					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil {
+					if endErr := l.storage.UpdateItemSessionEnded(ctx, is.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; markAbandonedReview below still flags/notifies for this item on this same tick regardless of this specific row's outcome, and a failed tombstone here is retried on the next tick since the item still matches FindZombieReviewItems
 						log.WarningLog.Printf("[BacklogLifecycle] reconcileStuckReviewItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, is.ID, endErr)
 					}
 				}
@@ -1727,7 +1800,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		}
 
 		if latest.EndedAt == nil {
-			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil {
+			if endErr := l.storage.UpdateItemSessionEnded(ctx, latest.ID.String(), time.Now()); endErr != nil { //nolint:silenttransition best-effort bookkeeping; the verdict processing below (handleReviewSessionExited) runs regardless of this write's outcome
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts tombstone item=%s session=%s: %v", item.ID, latest.ID, endErr)
 			}
 		}
@@ -2213,7 +2286,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
 		// (see doc comment above: no liveness checker, headless calls don't run
 		// this long) — nothing left to preserve by keeping the row open.
-		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil {
+		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
 		}
 
@@ -2249,6 +2322,80 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
 	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
+}
+
+// reconcileOrphanedTriageRemediation retries triage for every open
+// orphaned_triage stuck row still anchored at "idea" — the periodic
+// counterpart to reconcileOrphanedTriageItems' detection-and-notify pass
+// above, which only ever fires once per orphaned session (the triage
+// ItemSession it tombstones never reopens, so the detector has nothing left
+// to re-observe on later ticks). Without this, an orphaned_triage row sat
+// open forever once its one notification went unnoticed — confirmed live
+// 2026-07-27 (docs/tasks/backlog-feature-improvement.md): items 4f03de7b and
+// 505fb733 sat in "idea" for 2 days, only recovering once a human manually
+// re-triggered triage. Mirrors reconcilePushFailedItems' shape exactly
+// (Phase B of docs/tasks/backlog-stuck-item-auto-remediation.md).
+// Best-effort: query failures are logged, never returned.
+func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx context.Context, er *EntRepository) {
+	open, err := er.FindOpenStuckStates(ctx)
+	if err != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageRemediation FindOpenStuckStates error: %v", err)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonOrphanedTriage {
+			continue
+		}
+		if row.ItemStatus != BacklogStatusIdea {
+			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea
+		}
+		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
+	}
+}
+
+// retryOrphanedTriageWithBackoffGate dispatches TriageRespawner.AutoRespawnTriage
+// through the shared remediation backoff gate (Storage.RemediationDue,
+// session/backlog_remediation.go) — the "orphaned_triage" reason's remediation
+// action per docs/tasks/backlog-stuck-item-auto-remediation.md Phase B.
+// Mirrors retryPushFailedWithBackoffGate's shape (bare goroutine, no
+// semaphore): AutoRespawnTriage's underlying TriggerTriage call returns
+// immediately after creating an ItemSession — the actual headless triage call
+// runs inside TriggerTriage's own goroutine — so there is no live LLM call
+// here to bound concurrency against, unlike markAbandonedReview's
+// reviewSem-gated respawn (TriggerReReview blocks synchronously for the
+// review call's duration). Best-effort: gate query/write errors are logged,
+// never returned, and fail OPEN (still attempts the retry) rather than
+// silently stranding the item — same rationale as
+// retryPushFailedWithBackoffGate/remediateStaleWorkWithBackoffGate.
+func (l *BacklogLifecycleListener) retryOrphanedTriageWithBackoffGate(ctx context.Context, itemID, itemTitle string) {
+	respawner := l.getTriageRespawner()
+	if respawner == nil {
+		return
+	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonOrphanedTriage)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see retryPushFailedWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-triage paused",
+			fmt.Sprintf("%s — automated triage retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate item=%s: orphaned_triage remediation backoff not yet due, skipping retry", itemID)
+		return
+	}
+
+	go func() {
+		if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] retryOrphanedTriageWithBackoffGate AutoRespawnTriage item=%s: %v", itemID, err)
+		}
+	}()
 }
 
 // planApprovalStaleness is how long a queued item may sit blocked by
@@ -2624,6 +2771,10 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition item=%s: %v", item.ID, transErr)
+					// The PR is already confirmed merged — the item is left
+					// bouncing between in_progress/review with nothing else
+					// surfacing this until the next tick retries it.
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (PR #%d already merged)", item.ID, item.PrNumber)
 					// Best-effort: clear any bouncing row from a prior tick
@@ -2644,6 +2795,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 				precondition := &BacklogItemPrecondition{ExpectedStatus: item.Status}
 				if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 					log.WarningLog.Printf("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) item=%s: %v", item.ID, transErr)
+					// The commit is already confirmed shipped to main — same
+					// silent-stranding risk as the merged-PR branch above.
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, bounceMainBranch), transErr)
 				} else {
 					log.InfoLog.Printf("[BacklogLifecycle] reconcileBouncingItems item=%s → done (commit %s shipped to %s without a PR)", item.ID, sha, bounceMainBranch)
 					// Best-effort: clear any bouncing row from a prior tick
@@ -2954,6 +3108,10 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		// the PASS verdict was delivered relative to other transitions.
 		if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, nil, TriggeredBySystem); transErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] pushAndCreatePR fallback done item=%s: %v", item.ID, transErr)
+			// A PASS verdict already confirmed the work; there was nothing to
+			// ship, so done was the correct terminal state — a failure here
+			// leaves the item stuck with no further signal.
+			l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("%s, so the item should have moved to done, but the transition failed", reason), transErr)
 		}
 	}
 
@@ -3639,6 +3797,10 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusPRPending)}
 			if _, transErr := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), BacklogStatusDone, precondition, TriggeredBySystem); transErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending done transition item=%s: %v", item.ID, transErr)
+				// PR #%d is already confirmed merged — the item is left at
+				// pr_pending with nothing else surfacing this until the next
+				// tick retries it.
+				l.notifyTransitionFailed(item.ID.String(), item.Title, fmt.Sprintf("PR #%d was confirmed merged but the item's transition to done failed", item.PrNumber), transErr)
 			} else {
 				log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → done (PR #%d merged)", item.ID, item.PrNumber)
 				// The item just reached done — resolve pr_ready_unmerged

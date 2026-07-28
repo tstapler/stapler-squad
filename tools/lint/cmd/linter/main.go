@@ -11,6 +11,8 @@
 //   - nocommandpattern: requires //nolint:commandpattern comment on CommandPattern fields
 //   - norawexec: detects direct os/exec.Command calls outside approved wrapper packages
 //   - tmuxsocketscope: detects tmux command construction that bypasses socket resolution
+//   - silenttransition: detects TransitionBacklogItemStatus/UpdateItemSessionEnded
+//     calls whose error is only logged, never surfaced or propagated
 package main
 
 import (
@@ -19,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/tools/lint/hotpolllog"
 	"github.com/tstapler/stapler-squad/tools/lint/nocommandpattern"
 	"github.com/tstapler/stapler-squad/tools/lint/norawexec"
+	"github.com/tstapler/stapler-squad/tools/lint/silenttransition"
 	"github.com/tstapler/stapler-squad/tools/lint/tmuxsocketscope"
 )
 
@@ -27,6 +30,7 @@ func main() {
 		hotpolllog.Analyzer,
 		nocommandpattern.Analyzer,
 		norawexec.Analyzer,
+		silenttransition.Analyzer,
 		tmuxsocketscope.Analyzer,
 	)
 }

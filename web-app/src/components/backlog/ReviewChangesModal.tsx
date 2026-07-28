@@ -1,7 +1,7 @@
 "use client";
 // +feature: backlog:review-changes-modal
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
@@ -30,8 +30,15 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
   const modalRef = useRef<HTMLDivElement>(null);
   const [diff, setDiff] = useState<{ content: string; added: number; removed: number } | null>(null);
   const [loading, setLoading] = useState(true);
+  // Distinct from a genuinely empty diff — a fetch failure must not render as
+  // "No changes to display", which looks identical to real emptiness and hides
+  // exactly the case a reviewer most needs to notice (see
+  // docs/tasks/backlog-feature-improvement.md, Manual Gates section).
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchDiff = useCallback(() => {
+    setLoading(true);
+    setFetchError(null);
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
       interceptors: [createAuthInterceptor()],
@@ -40,10 +47,14 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
 
     client.getBacklogItemDiff({ itemId }).then((resp) => {
       setDiff({ content: resp.diff, added: resp.added, removed: resp.removed });
-    }).catch(() => {
-      setDiff({ content: "", added: 0, removed: 0 });
+    }).catch((err: unknown) => {
+      setFetchError(err instanceof Error ? err.message : "Could not reach the server.");
     }).finally(() => setLoading(false));
   }, [itemId]);
+
+  useEffect(() => {
+    fetchDiff();
+  }, [fetchDiff]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -98,6 +109,8 @@ export function ReviewChangesModal({ itemId, sessionId, sessionTitle, onClose }:
             added={diff?.added ?? 0}
             removed={diff?.removed ?? 0}
             loading={loading}
+            error={fetchError}
+            onRefresh={fetchDiff}
           />
         </div>
       </div>

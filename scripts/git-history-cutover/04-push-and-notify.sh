@@ -19,9 +19,18 @@ fi
 
 cd "$MIRROR"
 
-echo "This will force-push ALL rewritten refs from $MIRROR to:"
-echo "  origin   (as configured when 02-rewrite.sh cloned it)"
-echo "  personal (added below if not already a remote in the mirror)"
+# Remote naming has drifted across machines for this repo -- some treat the
+# fork as "origin" and the work repo as "upstream-fanatics", others use
+# "personal"/"upstream". Push to every canonical name that's actually
+# configured rather than assuming one specific pair.
+REMOTES=()
+for candidate in origin upstream-fanatics personal upstream; do
+  if git remote get-url "$candidate" >/dev/null 2>&1; then
+    REMOTES+=("$candidate")
+  fi
+done
+
+echo "This will force-push ALL rewritten refs from $MIRROR to: ${REMOTES[*]}"
 echo
 echo "Before running this:"
 echo "  - Confirm every branch with unique commits has been replayed via"
@@ -32,50 +41,39 @@ echo "  - Double check nobody is mid-push to the old main right now."
 echo
 
 if [ -z "$CONFIRM" ]; then
-  echo "Dry run only. Would run:"
-  echo "  git push --mirror --force origin"
-  echo "  git remote get-url personal >/dev/null 2>&1 || git remote add personal <url>"
-  echo "  git push --mirror --force personal"
+  echo "Dry run only. Would run, for each of ${REMOTES[*]}:"
+  echo "  git push --mirror --force <remote>"
   echo "Re-run with --i-understand-this-force-pushes to execute."
   exit 0
 fi
 
-echo "=== force-pushing to origin ==="
-git push --mirror --force origin
+for remote in "${REMOTES[@]}"; do
+  echo "=== force-pushing to $remote ==="
+  git push --mirror --force "$remote"
+done
 
-if git remote get-url personal >/dev/null 2>&1; then
-  echo "=== force-pushing to personal ==="
-  git push --mirror --force personal
-else
-  echo "No 'personal' remote configured in this mirror -- add it and push"
-  echo "manually if the fork also needs the rewritten history:"
-  echo "  git remote add personal <personal-fork-url>"
-  echo "  git push --mirror --force personal"
-fi
-
-cat <<'MSG'
+cat <<MSG
 
 === Cutover complete. Message for anyone with an existing local clone/worktree: ===
 
 The stapler-squad history was rewritten to move docs/demos/*.gif and
 benchmarks/**/*.{txt,json} into Git LFS, reclaiming ~15GB. Every commit hash
-changed. To pick up the new history:
+changed. To pick up the new history, run from the repo root:
 
-  If you have NO unpushed local commits on top of main:
-    git fetch origin
-    git reset --hard origin/main
-    # then re-run for any other local branch you still care about:
-    git fetch origin
-    git branch -f <branch> origin/<branch>   # if it was pushed and replayed centrally
+  scripts/git-history-cutover/05-local-resync.sh --i-understand-this-resets-local-history
 
-  If you DO have unpushed local commits (a worktree ahead of main):
-    Someone should have run scripts/git-history-cutover/03-cutover-branch.sh
-    for your branch before this push. Ask if you're not sure, or run it
-    yourself against this mirror before your branch's old base disappears
-    from the remote.
+It backs up your current state first (a tag plus a stash of any uncommitted
+changes -- nothing is discarded silently), then fetches and resyncs. See that
+script's own output for recovery instructions if anything looks wrong
+afterward.
 
-Make sure `git-lfs` is installed locally (`brew install git-lfs`, then
-`git lfs install`) before pulling -- without it, docs/demos/*.gif and
+If you're in one of this machine's 90+ active worktrees instead of a normal
+clone: delete and recreate it if it has no commits unique to it, or use
+03-cutover-branch.sh against this mirror if it does, before the old base
+disappears from the remote.
+
+Make sure \`git-lfs\` is installed locally (\`brew install git-lfs\`, then
+\`git lfs install\`) before pulling -- without it, docs/demos/*.gif and
 benchmarks/**/*.{txt,json} will check out as pointer text instead of real
 content.
 MSG

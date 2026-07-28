@@ -479,6 +479,15 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 							// (~60s) — bookkeeping only, no new actor, no session spawn.
 							if endErr := concreteStorage.UpdateItemSessionEnded(ctx, is.ID, time.Now()); endErr != nil {
 								log.Warn("[AutonomousDriver] onAutonomousDriverComplete: UpdateItemSessionEnded(review, stuck) failed", "item", item.ID, "itemSession", is.ID, "err", endErr)
+								// This bookkeeping write is the exact mechanism BUG-048's
+								// fix added to make a stuck review session visible to
+								// abandoned_review/bouncing — a silent failure here
+								// reproduces BUG-048's original gap one layer underneath
+								// its own fix, and this function returns right below
+								// without ever reaching the generic "Autonomous fix
+								// stuck" notification further down (SessionRoleReview
+								// deliberately skips it, see comment above).
+								a.notifyStuckReviewBookkeepingFailed(item.ID, item.Title, is.ID, endErr)
 							}
 						}
 						log.Info("[AutonomousDriver] skipping status transition for role", "role", is.Role, "item", item.ID)
@@ -493,7 +502,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 					}
 					if toStatus != "" {
 						precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil {
+						if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID, toStatus, precondition, session.TriggeredBySystem); transErr != nil { //nolint:silenttransition surfaced below via statusTransitionErr, which overrides the operator notification title/body ("status update failed") rather than a silent success
 							statusTransitionErr = transErr
 							log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
 						} else {
@@ -556,6 +565,28 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 			title, body, events.SessionScopedMetadata(nil, linkedItemID),
 		))
 	}
+}
+
+// notifyStuckReviewBookkeepingFailed publishes an operator-facing notification
+// when onAutonomousDriverComplete's UpdateItemSessionEnded call — the exact
+// mechanism BUG-048's fix added to make a stuck review session visible to the
+// abandoned_review/bouncing detectors — itself fails. Previously this was
+// only log.Warn'd, and the caller returns immediately afterward without ever
+// reaching any other notification path (SessionRoleReview deliberately skips
+// the generic "Autonomous fix stuck" notification below, see the call site's
+// doc comment), reproducing BUG-048's original silent-stranding gap one layer
+// underneath its own fix. Mirrors the "Auto-rework paused" direct
+// a.bus.Publish call used elsewhere in this same file (SessionRoleWork
+// branch) rather than inventing a new pattern.
+func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(itemID, itemTitle, itemSessionID string, endErr error) {
+	a.bus.Publish(events.NewNotificationEvent(
+		itemID, "", fmt.Sprintf("stuck-review-bookkeeping-failed-%s", itemSessionID),
+		int32(9), // NotificationType_FAILURE
+		int32(3), // NotificationPriority_HIGH
+		"Stuck-review bookkeeping failed",
+		fmt.Sprintf("%s: could not mark the stalled review session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
+		nil,
+	))
 }
 
 // resolveAutonomousStuck best-effort closes any open autonomous_stuck row for

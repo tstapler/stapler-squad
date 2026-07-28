@@ -391,11 +391,30 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
-	// Transition item to review status (from in_progress only).
+	// Determine the target status. Items with SkipReviewGate=true must never
+	// enter "review" — every other path that could route in_progress onward
+	// (session/backlog_lifecycle.go's onSessionExited, TriggerReviewForSession,
+	// ReviewGateRunner.Run) already special-cases this flag and either routes
+	// straight to done or no-ops; this was the one remaining gap: an agent that
+	// proactively calls request_review (per its own protocol instructions)
+	// bypassed all of that and always landed in review, where — because
+	// TriggerReviewForSession also honors the flag and no-ops — no review gate
+	// would ever spawn, leaving the item stuck in review indefinitely with
+	// nothing left to move it forward.
+	item, itemErr := h.storage.GetBacklogItem(ctx, itemID)
+	if itemErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
+	}
+	targetStatus := session.BacklogStatusReview
+	if item.SkipReviewGate {
+		targetStatus = session.BacklogStatusDone
+	}
+
+	// Transition item from in_progress to the target status.
 	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredBySystem); transErr != nil {
-		log.InfoLog.Printf("[mcp:request_review] transition to review failed: %v", transErr)
-		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredBySystem); transErr != nil {
+		log.InfoLog.Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
+		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
 	}
 
 	// Persist verification evidence on the work ItemSession so the review gate can
@@ -407,7 +426,13 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
-	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to review message=%q verification_notes_len=%d", callerUUID, itemID, message, len(verificationNotes))
+	log.InfoLog.Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
+
+	if targetStatus == session.BacklogStatusDone {
+		return mcpgo.NewToolResultText(fmt.Sprintf(
+			"Item %s has SkipReviewGate enabled; marked done directly without a review gate.", itemID,
+		)), nil
+	}
 
 	// Spawn the review gate immediately rather than waiting for the next 60s
 	// ReconcileStuck tick — that tick is meant as a fallback for the rare case this

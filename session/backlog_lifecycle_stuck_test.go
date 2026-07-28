@@ -1122,6 +1122,145 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
 }
 
+// fakeTriageRespawner is a test double implementing TriageRespawner, recording
+// every AutoRespawnTriage call on a buffered channel (not a plain counter)
+// because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
+// mirrors fakeStaleWorkRemediator's identical rationale.
+type fakeTriageRespawner struct {
+	calls chan string
+	err   error
+}
+
+func newFakeTriageRespawner() *fakeTriageRespawner {
+	return &fakeTriageRespawner{calls: make(chan string, 32)}
+}
+
+func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID string) error {
+	f.calls <- itemID
+	return f.err
+}
+
+// TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds
+// verifies the periodic remediation pass (the production entry point wired
+// into ReconcileStuck) retries triage for an open orphaned_triage row still
+// anchored at "idea" — closing the gap where reconcileOrphanedTriageItems'
+// one-time MarkStuck+notify never led anywhere without a human noticing and
+// manually re-triggering triage (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-27 update).
+//
+// Unlike reconcileStaleWorkSessions (which bundles mark/notify and remediate
+// into ONE function with an explicit "not on the first sighting" grace gate,
+// since its work session is still alive and might just be slow), this
+// reason's own detection already required the triage session to sit stale
+// past its full staleness threshold (30m headless / 2h general) AND
+// tombstones it before ever marking stuck — there is nothing further to wait
+// for, so the sibling remediation detector may retry on the very same sweep
+// tick that first opened the row (mirrors reconcilePushFailedItems, whose
+// remediation pass carries no such grace gate either).
+func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newOrphanedTriageTestItem(t, storage, er, 3*time.Hour)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the due row")
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "the dispatched attempt must advance RemediationDue's own accounting")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea verifies
+// an item whose orphaned_triage row is still open but whose status has since moved
+// off "idea" (e.g. a human already re-triggered triage manually, or the row is stale
+// bookkeeping) is never retried by the periodic remediation pass.
+func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Orphaned triage item no longer idea",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "stale triage session")
+	require.NoError(t, err)
+	require.True(t, applied)
+	_, err = er.MarkStuckNotified(ctx, item.ID, domain.StuckReasonOrphanedTriage)
+	require.NoError(t, err)
+
+	// A human already re-triggered triage manually — the item moved off
+	// "idea" while the orphaned_triage row is still open (selfHealStuck would
+	// resolve it on its own next tick, but that must not race this test).
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		t.Fatalf("an item that has moved off idea must not be retried, got call for item %s", itemID)
+	case <-time.After(100 * time.Millisecond):
+		// expected: no remediation dispatched
+	}
+}
+
+// TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
+// verifies the backoff gate itself: 10 back-to-back calls against the same open row
+// must consume exactly one attempt, mirroring
+// TestRetryPushFailedWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly.
+func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Orphaned triage backoff test item",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "stale triage session")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	for i := 0; i < 10; i++ {
+		listener.retryOrphanedTriageWithBackoffGate(ctx, item.ID, item.Title)
+	}
+
+	require.Eventually(t, func() bool {
+		rows, err := er.FindOpenStuckStates(ctx)
+		return err == nil && len(rows) == 1 && rows[0].RemediationAttempts == 1
+	}, time.Second, 10*time.Millisecond, "only the first of 10 back-to-back calls should consume an attempt")
+}
+
 func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1446,6 +1585,30 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 // transitions it to done instead of flagging it STUCK_REASON_BOUNCING.
 // Regression test for the 2026-07-20 live repro: backlog item "Add sorting
 // and grouping by repository path" bounced with remediationAttempts: 4 and a
+// TestNotifyTransitionFailed_should_publishNotification_When_Called is the
+// direct unit test for BacklogLifecycleListener's notifyTransitionFailed —
+// the session-package sibling of server/services/backlog_service_triage.go's
+// identical helper (same shape, different package: this package must not
+// import the server layer). Part of the fix for the recurring "silent
+// status-transition failure" bug shape (BUG-030/040/041/046/048).
+func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.notifyTransitionFailed("item-999", "Ship the PR fix",
+		"PR #42 was confirmed merged but the item's transition to done failed",
+		errors.New("precondition failed: expected status \"in_progress\", got \"review\""))
+
+	require.Len(t, notifier.calls, 1)
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "Ship the PR fix")
+	assert.Contains(t, notifier.calls[0].Message, "PR #42 was confirmed merged")
+}
+
 // remediation scheduled three hours *after* its PR #172 had already merged,
 // because reconcileBouncingItems never checked merge state before MarkStuck.
 func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged(t *testing.T) {
@@ -1493,6 +1656,75 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	require.NoError(t, err)
 	assert.Empty(t, open, "a merged item must never be flagged bouncing")
 	assert.Empty(t, notifier.calls, "no bouncing notification should fire for an already-shipped item")
+}
+
+// TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge
+// is a regression test for one of the sibling "silent status-transition
+// failure" instances found by the silenttransition lint analyzer (same shape
+// as BUG-030/040/041/046/048, and this fix's originally-reported findings):
+// reconcileBouncingItems confirms the linked PR is already merged, then its
+// own TransitionBacklogItemStatus(done) call can fail — previously that
+// failure was only log.WarningLog.Printf'd, leaving the item bouncing forever
+// with code that had already shipped and nothing else surfacing the mismatch.
+//
+// The precondition failure is forced deterministically (not via a real
+// goroutine race) by having the fake PR-pending-checker mutate the item's
+// status directly, bypassing TransitionBacklogItemStatus, at the exact point
+// a genuine concurrent writer would have: after reconcileBouncingItems reads
+// the item's status but before its own done-transition lands.
+func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitionFailsAfterMerge(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:    "Bouncing item with merged PR, concurrent status race",
+		Status:   string(BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 173
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReview, nil, TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	parsedID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	checker := &fakePRPendingChecker{merged: true}
+	checker.onIsPRMerged = func() {
+		// Simulate a concurrent writer moving the item to "review" between
+		// reconcileBouncingItems' own read of item.Status ("in_progress") and
+		// its done-transition call a few lines later — the exact TOCTOU shape
+		// TransitionBacklogItemStatus's precondition exists to catch.
+		_, updErr := er.client.BacklogItem.UpdateOneID(parsedID).SetStatus(string(BacklogStatusReview)).Save(ctx)
+		require.NoError(t, updErr)
+	}
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, checker)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(BacklogStatusReview), fetched.Status,
+		"the failed done-transition must not silently succeed; the item stays at whatever the concurrent writer left it")
+
+	require.Len(t, notifier.calls, 1, "the failed transition must surface an operator notification instead of only being logged")
+	assert.Equal(t, "Status update failed after work completed", notifier.calls[0].Title)
+	assert.Contains(t, notifier.calls[0].Message, "confirmed merged")
 }
 
 // TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged verifies

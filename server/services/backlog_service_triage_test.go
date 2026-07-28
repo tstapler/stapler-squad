@@ -197,6 +197,59 @@ func TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called(t *t
 	}
 }
 
+// --- Systemic fix: silent status-transition/session-bookkeeping write failures ---
+//
+// The 2026-07-27 backlog-feature-improvement audit found four more instances
+// of the exact BUG-030/040/041/046/048 shape: a status-transition (or
+// session-bookkeeping) write fails AFTER its side effects have already
+// happened, the failure is only logged, and nothing else ever surfaces the
+// resulting reality/status mismatch. notifyTransitionFailed is the shared fix
+// (mirrors notifyTriagePersistFailure's notification-only shape), wired into
+// spawnSessionAfterGates and TriggerReReview below and their sibling call
+// sites (SubmitManualReview, AttachSessionToItem,
+// autonomous_orchestration_service.go's onAutonomousDriverComplete,
+// session/backlog_lifecycle.go's reconcileBouncingItems/ReconcilePRPending).
+
+// TestNotifyTransitionFailed_should_publishNotification_When_Called is the
+// direct unit test for the shared helper, at the same fidelity as
+// TestNotifySpawnAndRollbackFailed_should_markStuckAndNotify_When_Called above
+// for BUG-030 — notifyTransitionFailed is notification-only (no durable
+// BacklogStuckState row, unlike notifyReworkCapHit/notifySpawnAndRollbackFailed:
+// there is no single good StuckReason bucket for "a routine write failed").
+func TestNotifyTransitionFailed_should_publishNotification_When_Called(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+
+	svc.notifyTransitionFailed("item-123", "Fix the login bug",
+		"code was confirmed shipped to main but the item's transition to done failed",
+		fmt.Errorf("precondition failed: expected status \"review\", got \"in_progress\""))
+
+	select {
+	case ev := <-ch:
+		require.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, "Status update failed after work completed", ev.NotificationTitle)
+		assert.Contains(t, ev.NotificationMessage, "Fix the login bug")
+		assert.Contains(t, ev.NotificationMessage, "code was confirmed shipped to main")
+		assert.Equal(t, "item-123", ev.NotificationMetadata["item_id"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when a status-transition write fails")
+	}
+}
+
+// TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired verifies the
+// no-op guard — must never panic when no event bus is configured (e.g. a
+// service constructed without one, as in headless/test contexts).
+func TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired(t *testing.T) {
+	svc := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	assert.NotPanics(t, func() {
+		svc.notifyTransitionFailed("item-123", "Some item", "some failure context", errors.New("boom"))
+	})
+}
+
 // --- Backlog work-item queue: DequeueNextQueuedItems ---
 
 // TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst verifies that once a
@@ -1235,6 +1288,70 @@ func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
 		"a PASS verdict from the respawned review should carry the item to done, same as a manual TriggerReReview call")
+}
+
+// --- AutoRespawnTriage: session.TriageRespawner implementation (orphaned_triage
+// remediation) — closes the gap where StuckReasonOrphanedTriage was detected and
+// notified but never automatically retried (docs/tasks/backlog-feature-improvement.md,
+// 2026-07-27 update: items 4f03de7b and 505fb733 sat in "idea" for 2 days). ---
+
+// TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea verifies the happy
+// path: an idea-status item (the only status reconcileOrphanedTriageRemediation ever
+// calls this for) gets triage re-triggered via the same TriggerTriage entry point a
+// manual re-trigger would use.
+func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "Orphaned triage respawn item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
+	require.NoError(t, respawnErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "must actually invoke the headless triage call, not just detect the item")
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after the re-triggered headless triage completes")
+}
+
+// TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea verifies the staleness guard:
+// an item that moved off "idea" between the caller's stuck-row query and this async
+// call running (e.g. a human already re-triggered triage manually) must not be acted
+// on again — mirrors AutoRespawnReview's identical guard for StuckReasonAbandonedReview.
+func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "Already-progressed item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
+	require.NoError(t, respawnErr)
+	assert.Empty(t, pool.calls, "an item that already moved off idea must not have triage re-triggered")
 }
 
 // --- AutoReopenForPRFix: proactive branch sync with main (Task 2.1.6d) ---

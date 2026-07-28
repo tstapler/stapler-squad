@@ -88,11 +88,31 @@ old `main` ref is gone from the remote.
 ./04-push-and-notify.sh --mirror /tmp/stapler-squad-cutover-<timestamp> --i-understand-this-force-pushes
 ```
 Force-pushes the mirror's rewritten `main` (and any replayed branches from
-step 3) to `origin` and `personal`. Prints a copy-pasteable message for anyone
-with an existing local clone/worktree explaining what to run
-(`git fetch && git reset --hard origin/main` for clean worktrees with no
-unpushed work; re-run step 3's rebase locally for anyone with unpushed work
-who didn't get replayed centrally).
+step 3) to both remotes (auto-detects `origin`/`upstream-fanatics`/`personal`/
+`upstream` — whichever exist; remote naming has drifted across machines for
+this repo, see 05-local-resync.sh's comment). Prints a message pointing
+anyone with an existing local clone/worktree at step 5 below.
+
+### 5. Each affected machine/clone runs the resync script
+```bash
+./05-local-resync.sh --i-understand-this-resets-local-history
+```
+Run this on every OTHER machine/clone with this repo (not one of the 90+
+worktrees sharing this machine's object database — see below). Without the
+confirmation flag it only reports what it found. With it:
+- Tags current `HEAD` and stashes any uncommitted changes (by explicit
+  pathspec, never a blanket `-u`) under a timestamped backup name first —
+  nothing is ever silently discarded.
+- Fetches the remote and either fast-forwards (if nothing was rewritten out
+  from under this branch) or hard-resets to the new history.
+- Prints the backup tag/stash name so you can recover anything afterward, and
+  how to discard the backup once you've confirmed nothing was lost.
+
+For one of THIS machine's 90+ active worktrees: if it has no commits unique
+to it (nothing ahead of the old `main`), just delete it and create a fresh
+one — there's nothing to resync. If it has real in-progress commits, use
+step 3's `03-cutover-branch.sh` against the mirror instead of this script,
+before the old base disappears from the remote.
 
 ## What these scripts deliberately do NOT do
 

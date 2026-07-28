@@ -35,6 +35,8 @@ import {
   loading as loadingClass,
   empty as emptyClass,
   emptyHint,
+  errorState,
+  errorRetryButton,
 } from "./DiffRenderer.css";
 
 export interface DiffRendererProps {
@@ -43,12 +45,18 @@ export interface DiffRendererProps {
   added: number;
   removed: number;
   loading?: boolean;
-  /** Called when the user clicks the refresh button. */
+  /**
+   * Set when the diff fetch itself failed (as opposed to succeeding with a
+   * genuinely empty diff). Rendered as a distinct error state with a retry
+   * button instead of the ambiguous "No changes to display" empty state.
+   */
+  error?: string | null;
+  /** Called when the user clicks the refresh button, or the error state's retry button. */
   onRefresh?: () => void;
 }
 
 /** Pure diff display component — no context coupling, no data fetching. */
-export function DiffRenderer({ content, added, removed, loading = false, onRefresh }: DiffRendererProps) {
+export function DiffRenderer({ content, added, removed, loading = false, error, onRefresh }: DiffRendererProps) {
   const diff = parseDiff(content);
   const fileRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [activeFileIndex, setActiveFileIndex] = useState<number | null>(null);
@@ -68,6 +76,22 @@ export function DiffRenderer({ content, added, removed, loading = false, onRefre
     return (
       <div className={container}>
         <div className={loadingClass}>Loading diff…</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={container}>
+        <div className={errorState}>
+          <p>Failed to load changes</p>
+          <p className={emptyHint}>{error}</p>
+          {onRefresh && (
+            <button className={errorRetryButton} onClick={onRefresh}>
+              Retry
+            </button>
+          )}
+        </div>
       </div>
     );
   }

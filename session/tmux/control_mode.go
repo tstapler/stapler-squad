@@ -241,7 +241,13 @@ func (t *TmuxSession) StopControlMode() error {
 //	%session-changed $13 session-name
 //	%exit
 func (t *TmuxSession) readControlModeOutput() {
+	// Capture under RLock — StopControlMode nils/closes controlModeDone under
+	// controlModeSubMu.Lock(), so reading the field without a lock races against
+	// that write. The comment below predates the fix; the snapshot itself (using
+	// a possibly-stale channel value after unlock) remains safe and intentional.
+	t.controlModeSubMu.RLock()
 	doneCh := t.controlModeDone // capture before StopControlMode can nil it
+	t.controlModeSubMu.RUnlock()
 	scanner := bufio.NewScanner(t.controlModeStdout)
 
 	for scanner.Scan() {
@@ -319,7 +325,11 @@ func (t *TmuxSession) readControlModeOutput() {
 
 // monitorControlModeErrors monitors stderr for control mode errors.
 func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
+	// Capture under RLock — see readControlModeOutput for why the raw field
+	// read races against StopControlMode's write under controlModeSubMu.
+	t.controlModeSubMu.RLock()
 	doneCh := t.controlModeDone // capture before StopControlMode can nil it
+	t.controlModeSubMu.RUnlock()
 	defer stderr.Close()
 
 	scanner := bufio.NewScanner(stderr)
