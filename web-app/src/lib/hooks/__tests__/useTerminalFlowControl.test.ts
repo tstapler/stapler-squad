@@ -179,6 +179,95 @@ describe('useTerminalFlowControl', () => {
       const followUp = pushMessageFn.mock.calls[pushMessageFn.mock.calls.length - 1][0];
       expect(followUp.data.case).toBe('currentPaneRequest');
     });
+
+    it('should skip resize when the same value is sent again after the throttle window elapses (AC3 value-dedup)', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(250);
+      });
+
+      const callCountBeforeRepeat = pushMessageFn.mock.calls.length;
+
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      // Repeated identical value must not produce any additional pushMessage calls,
+      // even though the 200ms time-throttle has fully elapsed.
+      expect(pushMessageFn.mock.calls.length).toBe(callCountBeforeRepeat);
+    });
+
+    it('should not dedup a genuinely new value after a prior send (AC3/AC6 no-regression)', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(250);
+      });
+
+      act(() => {
+        result.current.resize(150, 45);
+      });
+
+      const resizeSends = pushMessageFn.mock.calls.filter(
+        (call) => call[0].data.case === 'resize'
+      );
+      expect(resizeSends.length).toBe(2);
+      expect(resizeSends[0][0].data.value.cols).toBe(100);
+      expect(resizeSends[0][0].data.value.rows).toBe(30);
+      expect(resizeSends[1][0].data.value.cols).toBe(150);
+      expect(resizeSends[1][0].data.value.rows).toBe(45);
+    });
+
+    it('should bypass value-dedup with force=true and re-establish lastSentSizeRef for subsequent dedup (AC3 force + reconnect)', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      // Send #1
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      act(() => {
+        jest.advanceTimersByTime(250);
+      });
+
+      // Send #2: same value, force=true bypasses the AC3 value-dedup (reconnect-resync simulation)
+      act(() => {
+        result.current.resize(100, 30, true);
+      });
+
+      const resizeSendsAfterForce = pushMessageFn.mock.calls.filter(
+        (call) => call[0].data.case === 'resize'
+      );
+      expect(resizeSendsAfterForce.length).toBe(2);
+
+      // Advance past the throttle window again so the next assertion isolates the
+      // value-dedup check from the time-throttle (per adversarial-review.md Minor #2).
+      act(() => {
+        jest.advanceTimersByTime(250);
+      });
+
+      // No-force call with the same value should now be deduped: no 3rd send.
+      act(() => {
+        result.current.resize(100, 30);
+      });
+
+      const resizeSendsFinal = pushMessageFn.mock.calls.filter(
+        (call) => call[0].data.case === 'resize'
+      );
+      expect(resizeSendsFinal.length).toBe(2);
+    });
   });
 
   describe('requestFullResync', () => {
