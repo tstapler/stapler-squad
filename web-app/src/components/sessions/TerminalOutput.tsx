@@ -661,7 +661,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       const currentSize = lastResizeRef.current;
       if (currentSize) {
         console.log(`[TerminalOutput] Post-connection resize sync: ${currentSize.cols}x${currentSize.rows}`);
-        resize(currentSize.cols, currentSize.rows);
+        resize(currentSize.cols, currentSize.rows, true);
       }
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
@@ -1157,7 +1157,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         if (isConnected) {
           console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
           lastResizeRef.current = { cols, rows };
-          resize(cols, rows);
+          resize(cols, rows, true);
         }
       }
     }

@@ -5,6 +5,7 @@ import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, T
 import { create } from "@bufbuild/protobuf";
 import { StateApplicator } from "@/lib/terminal/StateApplicator";
 import { EchoOverlay } from "@/lib/terminal/EchoOverlay";
+import { shouldSendResize } from "@/lib/terminal/resizeConvergence";
 import type { Terminal } from '@xterm/xterm';
 
 export interface UseTerminalFlowControlOptions {
@@ -22,7 +23,7 @@ export interface UseTerminalFlowControlOptions {
 export interface UseTerminalFlowControlResult {
   sendInput: (input: string) => void;
   sendInputWithEcho: (input: string) => bigint;
-  resize: (cols: number, rows: number) => void;
+  resize: (cols: number, rows: number, force?: boolean) => void;
   requestScrollback: (fromSequence: number, limit: number) => void;
   sendFlowControl: (paused: boolean, watermark?: number) => void;
   requestFullResync: (urgent?: boolean) => void;
@@ -69,6 +70,7 @@ export function useTerminalFlowControl({
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // StateApplicator (lazy init) - kept in same hook as resync refs per Bug Risk 1
   const stateApplicatorRef = useRef<StateApplicator | null>(null);
@@ -400,7 +402,7 @@ export function useTerminalFlowControl({
     }
   }, [sessionId, enablePredictiveEcho, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
-  const resize = useCallback((cols: number, rows: number) => {
+  const resize = useCallback((cols: number, rows: number, force = false) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {
       console.warn("Cannot resize terminal: stream not connected");
       return;
@@ -415,9 +417,15 @@ export function useTerminalFlowControl({
       return;
     }
 
+    if (!force && !shouldSendResize({ cols, rows }, lastSentSizeRef.current)) {
+      console.log(`[useTerminalFlowControl] Resize skipped: (${cols}x${rows}) matches last sent value`);
+      return;
+    }
+
     try {
       console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
       lastResizeTimeRef.current = now;
+      lastSentSizeRef.current = { cols, rows };
       pushMessage(
         create(TerminalDataSchema, {
           sessionId,

@@ -18,7 +18,7 @@
  */
 
 import React from 'react';
-import { render, act } from '@testing-library/react';
+import { render, act, fireEvent } from '@testing-library/react';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be registered before importing TerminalOutput
@@ -779,6 +779,63 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     expect(saveDimensions).not.toHaveBeenCalledWith(
       expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
     );
+
+    (mockXtermHandle as any).terminal = null;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resize AC3 regression guard (Task 3.1.2c) — the 2 non-standard `resize()`
+// call sites (reconnect-resync, manual force-resize) must pass `force=true`
+// as the literal 3rd argument. If a future edit silently drops it, the
+// hook-level AC3 value-dedup in useTerminalFlowControl would start swallowing
+// these legitimate calls at runtime with no compile error — this test makes
+// that regression fail loudly here instead.
+// ---------------------------------------------------------------------------
+describe('Resize call sites pass force=true (AC3 regression guard)', () => {
+  it('reconnect-resync calls resize(cols, rows, true) when isConnected transitions false→true', async () => {
+    let currentIsConnected = false;
+    const sharedMockFns = makeStreamMock({ isConnected: false });
+
+    (useTerminalStream as jest.Mock).mockImplementation(() => ({
+      ...sharedMockFns,
+      isConnected: currentIsConnected,
+    }));
+
+    const { rerender } = renderTerminalOutput('session-reconnect-force');
+
+    // Establish a known lastResizeRef value via a real onResize event from the terminal.
+    await act(async () => {
+      capturedOnResize?.(100, 30);
+    });
+
+    // Simulate reconnect: isConnected transitions false -> true.
+    currentIsConnected = true;
+    await act(async () => {
+      rerender(<TerminalOutput sessionId="session-reconnect-force" baseUrl="http://localhost:8543" />);
+    });
+
+    expect(sharedMockFns.resize).toHaveBeenCalledWith(100, 30, true);
+  });
+
+  it('manual force-resize (toolbar button) calls resize(cols, rows, true)', async () => {
+    const stream = makeStreamMock({ isConnected: true });
+    (useTerminalStream as jest.Mock).mockReturnValue(stream);
+
+    (mockXtermHandle as any).terminal = { cols: 120, rows: 40 };
+
+    const { getByLabelText, getByTestId } = renderTerminalOutput('session-manual-resize-force');
+
+    // The Resize button lives in the secondary toolbar, which is collapsed by default.
+    await act(async () => {
+      fireEvent.click(getByTestId('toolbar-toggle'));
+    });
+
+    await act(async () => {
+      fireEvent.click(getByLabelText('Resize terminal to fit container'));
+    });
+
+    expect(stream.resize).toHaveBeenCalledWith(120, 40, true);
 
     (mockXtermHandle as any).terminal = null;
   });

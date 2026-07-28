@@ -60,7 +60,7 @@ interface TerminalStreamResult {
   error: Error | null;
   sendInput: (input: string) => void;
   sendInputWithEcho: (input: string) => bigint; // SSP: Send input with predictive echo tracking, returns echo number
-  resize: (cols: number, rows: number) => void;
+  resize: (cols: number, rows: number, force?: boolean) => void;
   connect: (cols?: number, rows?: number) => void; // Optional dimensions to override initial values
   disconnect: () => void;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
