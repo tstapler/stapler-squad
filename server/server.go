@@ -57,6 +57,7 @@ type Server struct {
 	shutdownHooks     []func()                        // called before HTTP server stops
 	connCtxCancel     context.CancelFunc              // cancels BaseContext → closes active streams on shutdown
 	availablePrograms []string                        // cached once at startup; programs change only on system changes
+	startedAt         time.Time                       // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
 }
 
 // newServerBase creates the base Server struct and returns it alongside the
@@ -81,6 +82,7 @@ func newServerBase(addr string) (*Server, context.Context) {
 		},
 	}
 	srv.addr.Store(&addr)
+	srv.startedAt = time.Now()
 	return srv, connCtx
 }
 
@@ -211,6 +213,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			deps.SessionService.SetNotificationStore(notifStore)
 			notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
 			log.Info("NotificationHistoryStore initialized", "path", notifStorePath)
+
+			// Wire the batch-fetch session-existence lookup used by the store's
+			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
+			// See buildSessionExistenceLookup for the uptime-gate rationale.
+			notifStore.SetSessionExistenceLookup(buildSessionExistenceLookup(storage, srv.startedAt))
 		}
 	}
 
@@ -1009,6 +1016,56 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	}()
 
 	return nil
+}
+
+// instanceDataLister is the narrow slice of *session.Storage that
+// buildSessionExistenceLookup needs — defined here (the consuming package) rather
+// than in session, per this repo's interface-pollution convention, so a fake with
+// no real *session.Storage (and no ent-backed repository) can stand in for tests.
+type instanceDataLister interface {
+	ListInstanceData() ([]session.InstanceData, error)
+}
+
+// pruneOrphanedMinUptime gates buildSessionExistenceLookup's returned func so a
+// fresh server (before instance data has had a chance to load) never mistakes
+// "haven't loaded yet" for "no sessions exist" and wipes legitimate
+// session-scoped notification records.
+const pruneOrphanedMinUptime = 5 * time.Minute
+
+// buildSessionExistenceLookup builds the batch-fetch session-existence lookup wired
+// onto NotificationHistoryStore.SetSessionExistenceLookup, consulted by the store's
+// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
+//
+// Return value contract (safety-critical — do not change without updating callers):
+//   - nil: skip this prune pass entirely (either the uptime gate hasn't elapsed yet,
+//     or ListInstanceData errored). This is the fail-closed, safe default.
+//   - non-nil, possibly empty, map: authoritative — "these are all the sessions that
+//     exist right now." An empty-but-non-nil map means zero live sessions, and tells
+//     the pruning sweep it's safe to prune every session-scoped record.
+//
+// Conflating "haven't checked" (nil) with "checked, found nothing" (empty map) would
+// cause the pruning sweep to delete every session-scoped notification record on a
+// fresh start or after a transient ListInstanceData error — hence the explicit nil
+// returns below rather than returning an empty map in those cases.
+func buildSessionExistenceLookup(storage instanceDataLister, startedAt time.Time) func() map[string]struct{} {
+	return func() map[string]struct{} {
+		if time.Since(startedAt) < pruneOrphanedMinUptime {
+			return nil
+		}
+		all, err := storage.ListInstanceData()
+		if err != nil {
+			log.Warn("SetSessionExistenceLookup: ListInstanceData failed; skipping this prune pass", "err", err)
+			return nil
+		}
+		ids := make(map[string]struct{}, len(all)*2)
+		for i := range all {
+			ids[all[i].GetStableID()] = struct{}{}
+			if all[i].Title != "" {
+				ids[all[i].Title] = struct{}{}
+			}
+		}
+		return ids
+	}
 }
 
 // ConnectOptions returns standard ConnectRPC options with OpenTelemetry instrumentation

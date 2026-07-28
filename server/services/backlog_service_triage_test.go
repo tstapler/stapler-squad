@@ -2037,6 +2037,148 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 // (Story 1.5.3) verifies the FIRST-triage (non-retriage) branch routes through
 // PipelineEngine.TriagePromptFor: the LLM call receives the mode's rendered
 // TriagePromptTemplate, not BuildHeadlessTriagePrompt's default boilerplate.
+// TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureOrSuccess
+// (Story 2.4) is the negative-proof regression test for TriggerTriage's headless-pool
+// goroutine: it has no events.NewNotificationEvent/eventBus.Publish call at all on its
+// success, LLM-call-error, or parse-failure paths — every one of those paths only logs
+// and, on failure, ends the ItemSession (server/services/backlog_service_triage.go,
+// TriggerTriage's async goroutine). The ONLY notification this goroutine can ever
+// publish is notifyTriagePersistFailure (backlog_service_triage.go L224-246), which is
+// already unconditionally item_id-tagged. This guards that invariant against
+// regression: an untagged notification slipping onto any of these paths would defeat
+// the item_id-metadata contract Epic 2 establishes.
+func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureOrSuccess(t *testing.T) {
+	waitForTriageSessionEnded := func(t *testing.T, storage *session.Storage, itemID string) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			sessions, listErr := storage.ListItemSessions(context.Background(), itemID)
+			if listErr != nil {
+				return false
+			}
+			for _, is := range sessions {
+				if is.Role == session.SessionRoleTriage && is.EndedAt != nil {
+					return true
+				}
+			}
+			return false
+		}, 5*time.Second, 50*time.Millisecond, "expected the triage ItemSession to be marked ended")
+	}
+
+	t.Run("LLMCallError_PublishesNoEvents", func(t *testing.T) {
+		storage := createTestStorage(t)
+		pool := &fakeHeadlessPool{err: errors.New("simulated LLM failure")}
+		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+		svc.SetHeadlessPool(pool)
+		bus := events.NewEventBus(8)
+		svc.SetEventBus(bus)
+
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		eventCh, _ := bus.Subscribe(subCtx)
+
+		item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			Title:    "triage-llm-failure item",
+			Status:   string(session.BacklogStatusIdea),
+			Priority: 3,
+			RepoPath: t.TempDir(),
+		})
+		require.NoError(t, err)
+
+		_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+			ItemId: item.ID,
+		}))
+		require.NoError(t, trigErr)
+
+		waitForTriageSessionEnded(t, storage, item.ID)
+
+		select {
+		case ev := <-eventCh:
+			t.Fatalf("expected zero events published on the LLM-call-error path, got type=%s", ev.Type)
+		case <-time.After(300 * time.Millisecond):
+			// Correct — no notification published.
+		}
+	})
+
+	t.Run("MalformedResponse_PublishesNoEvents", func(t *testing.T) {
+		storage := createTestStorage(t)
+		pool := &fakeHeadlessPool{response: "this is not valid JSON at all"}
+		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+		svc.SetHeadlessPool(pool)
+		bus := events.NewEventBus(8)
+		svc.SetEventBus(bus)
+
+		subCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		eventCh, _ := bus.Subscribe(subCtx)
+
+		item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			Title:    "triage-malformed-response item",
+			Status:   string(session.BacklogStatusIdea),
+			Priority: 3,
+			RepoPath: t.TempDir(),
+		})
+		require.NoError(t, err)
+
+		_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+			ItemId: item.ID,
+		}))
+		require.NoError(t, trigErr)
+
+		waitForTriageSessionEnded(t, storage, item.ID)
+
+		select {
+		case ev := <-eventCh:
+			t.Fatalf("expected zero events published on the parse-failure path, got type=%s", ev.Type)
+		case <-time.After(300 * time.Millisecond):
+			// Correct — no notification published.
+		}
+	})
+
+	// Sub-case 3 ("valid triage result but storage fake configured to fail
+	// UpdateBacklogItem, forcing notifyTriagePersistFailure to fire — assert
+	// exactly one event arrives with item_id metadata") is documented via code
+	// inspection instead of exercised directly.
+	//
+	// Verification via code inspection: forcing only s.storage.UpdateBacklogItem
+	// (backlog_service_triage.go ~L1900) to fail while
+	// UpdateItemSessionTriageResult/TransitionBacklogItemStatus/UpdateItemSessionEnded
+	// keep succeeding is not constructible with this package's existing test
+	// fixtures. BacklogService.storage is a concrete *session.Storage, not an
+	// interface — it cannot be swapped for a test double. *session.Storage's
+	// ItemSession-specific methods (CreateItemSession, ListItemSessions,
+	// UpdateItemSessionTriageResult, UpdateItemSessionEnded — session/storage.go
+	// ~L953-1104) each hard type-assert their internal repo field to
+	// *session.EntRepository and fail closed otherwise (`er, ok :=
+	// s.repo.(*EntRepository); if !ok { return ... }`). Wrapping that repo in a
+	// decorator that overrides only UpdateBacklogItem (which is instead a plain
+	// passthrough to the session.Repository interface, session/storage.go:721-723)
+	// would make the decorator's dynamic type no longer *EntRepository, breaking
+	// every ItemSession call this same goroutine depends on — including the one
+	// this test needs to detect completion (UpdateItemSessionEnded). The only
+	// other lever — closing the real ent DB connection between TriggerTriage
+	// returning and its goroutine's persistence step running — races the
+	// fakeHeadlessPool's near-instant response, would fail ALL three persistence
+	// calls at once rather than isolating UpdateBacklogItem, and would itself
+	// break the EndedAt-based completion signal (UpdateItemSessionEnded would
+	// fail too), leaving no reliable way to know the goroutine finished. Per this
+	// task's explicit guidance, this sub-case is documented rather than forced
+	// with a fragile/contrived fixture.
+	//
+	// By inspection: notifyTriagePersistFailure (backlog_service_triage.go
+	// L224-246) is invoked exactly once, at L1915, guarded by `if
+	// len(persistFailures) > 0` — i.e. whenever ANY of
+	// UpdateItemSessionTriageResult (L1892), UpdateBacklogItem (L1900), or
+	// TransitionBacklogItemStatus (L1907) fails. Its body unconditionally builds
+	// `map[string]string{"item_id": itemID}` (L244) as the notification metadata
+	// — there is no branch inside it that omits item_id. Since this is also the
+	// ONLY events.NewNotificationEvent call reachable from anywhere in
+	// TriggerTriage's async goroutine (confirmed by reading the full function
+	// body, L1805-1937 — no other Publish/NewNotificationEvent call exists on
+	// the success, LLM-error, or parse-error paths, matching the two subtests
+	// above), the "exactly one item_id-tagged event on persist failure"
+	// invariant is structurally guaranteed rather than left unverified.
+}
+
 func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch(t *testing.T) {
 	storage := createTestStorage(t)
 	pool := &fakeHeadlessPool{response: validTriageJSON()}

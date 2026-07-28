@@ -49,6 +49,12 @@ type NotificationRecord struct {
 	// LastOccurredAt is the timestamp of the most recent occurrence. May differ from
 	// CreatedAt which tracks the first occurrence.
 	LastOccurredAt *time.Time `json:"last_occurred_at,omitempty"`
+	// SessionScoped marks this record as originating from a specific, real session
+	// (as opposed to a backlog-item-level or global notification whose SessionID field
+	// is overloaded to carry a backlog item ID for coalescing purposes). Only records
+	// with SessionScoped==true and no Metadata["item_id"] are eligible for orphan pruning
+	// via PruneOrphaned — see events.MetadataKeySessionScoped.
+	SessionScoped bool `json:"session_scoped,omitempty"`
 }
 
 // notificationsFile is the JSON file format for persisted notifications.
@@ -73,7 +79,21 @@ type NotificationHistoryStore struct {
 	filePath string
 	mu       sync.RWMutex
 	records  []*NotificationRecord
+
+	// existenceChecker, when non-nil, is called at most once per orphanPruneInterval
+	// from enforceRetention to batch-fetch the set of currently-existing session IDs
+	// for orphan pruning. See SetSessionExistenceLookup and PruneOrphaned.
+	existenceChecker func() map[string]struct{}
+	// lastOrphanPruneAt tracks the last time the orphan-pruning sweep ran, gating it
+	// to at most once per orphanPruneInterval even though enforceRetention runs on
+	// every Append().
+	lastOrphanPruneAt time.Time
 }
+
+// orphanPruneInterval is the minimum time between orphan-pruning sweeps triggered
+// from enforceRetention. This decouples the (relatively expensive, batch-fetch)
+// existence check from firing on every single Append().
+const orphanPruneInterval = 1 * time.Minute
 
 // NewNotificationHistoryStore creates a new store, loading existing data from disk.
 // If the file does not exist or is corrupted, the store starts empty.
@@ -331,6 +351,60 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	return cleared, nil
 }
 
+// SetSessionExistenceLookup registers the batch-fetch function used by the orphan-pruning
+// sweep in enforceRetention to determine which session IDs currently exist. Pass nil to
+// disable orphan pruning.
+func (s *NotificationHistoryStore) SetSessionExistenceLookup(fn func() map[string]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.existenceChecker = fn
+}
+
+// PruneOrphaned removes records that are positively marked session-scoped
+// (SessionScoped==true), carry no item_id (Metadata["item_id"] == ""), and whose
+// SessionID is absent from existingSessionIDs()'s returned set. existingSessionIDs is
+// called exactly ONCE per call (a single batch fetch), never once per record. Returns
+// the number of records removed.
+func (s *NotificationHistoryStore) PruneOrphaned(existingSessionIDs func() map[string]struct{}) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := s.pruneOrphanedRecords(existingSessionIDs)
+	if removed > 0 {
+		if err := s.saveToDisk(); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// pruneOrphanedRecords assumes s.mu is already held by the caller. Calls existingSessionIDs()
+// exactly once (a single batch fetch) and checks each candidate record via in-memory map
+// membership.
+func (s *NotificationHistoryStore) pruneOrphanedRecords(existingSessionIDs func() map[string]struct{}) int {
+	if existingSessionIDs == nil {
+		return 0
+	}
+	existing := existingSessionIDs()
+	if existing == nil {
+		// Not ready to judge existence this pass — treat as "prune nothing," never as
+		// "nothing exists" (a nil map is a distinct sentinel from a real, merely-empty map).
+		return 0
+	}
+	var kept []*NotificationRecord
+	removed := 0
+	for _, r := range s.records {
+		if r.SessionScoped && r.Metadata["item_id"] == "" {
+			if _, ok := existing[r.SessionID]; !ok {
+				removed++
+				continue
+			}
+		}
+		kept = append(kept, r)
+	}
+	s.records = kept
+	return removed
+}
+
 // SetMetadata updates a single metadata key on the notification record with the given ID.
 // A no-op (not an error) if the record does not exist, since the notification may have
 // been pruned or the approval pre-dates history tracking.
@@ -450,6 +524,16 @@ func (s *NotificationHistoryStore) enforceRetention() {
 	// Trim to max count
 	if len(s.records) > MaxNotifications {
 		s.records = s.records[:MaxNotifications]
+	}
+
+	// Orphan pruning: batch-fetch existing session IDs at most once per
+	// orphanPruneInterval (never per-record, never on every single Append()) and
+	// remove session-scoped records whose session no longer exists.
+	if s.existenceChecker != nil && time.Since(s.lastOrphanPruneAt) >= orphanPruneInterval {
+		s.lastOrphanPruneAt = now
+		if removed := s.pruneOrphanedRecords(s.existenceChecker); removed > 0 {
+			log.Info("NotificationHistoryStore: pruned orphaned records", "count", removed)
+		}
 	}
 }
 

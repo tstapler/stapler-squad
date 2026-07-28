@@ -3861,6 +3861,13 @@ func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
 	})
 }
 
+// rateLimitLookupTimeout bounds the ItemSession lookup performed by
+// onRateLimitDetected/onRateLimitRecovery to resolve a Hidden, backlog-linked
+// session's item_id for notification metadata. These callbacks run from
+// goroutines in the ratelimit package, so an unbounded lookup could otherwise
+// hang that goroutine indefinitely on a slow/stuck storage backend.
+const rateLimitLookupTimeout = 2 * time.Second
+
 // wireRateLimitCallbacks registers server-level callbacks on an Instance so that
 // rate-limit detection and recovery events are published to the event bus and
 // trigger desktop push notifications.
@@ -3869,48 +3876,93 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 		return
 	}
 	inst.SetRateLimitCallbacks(
-		// onDetected: called when rate limit is detected.
 		func(sessionID string, resetTime time.Time) {
-			var resetMsg string
-			if !resetTime.IsZero() {
-				resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
-			}
-			title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
-			notifID := fmt.Sprintf("rl-detect-%s", sessionID)
-			s.eventBus.Publish(events.NewNotificationEvent(
-				sessionID, inst.Title, notifID,
-				int32(8), // NotificationType_WARNING
-				int32(3), // NotificationPriority_HIGH
-				title,
-				fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
-				nil,
-			))
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+			s.onRateLimitDetected(inst, sessionID, resetTime)
 		},
-		// onRecovery: called when recovery completes (success or failure).
 		func(sessionID string, success bool, errMsg string) {
-			var title, message string
-			notifID := fmt.Sprintf("rl-recover-%s", sessionID)
-			if success {
-				title = fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title)
-				message = "Session auto-resumed after rate limit expiry."
-			} else {
-				title = fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title)
-				message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
-			}
-			notifType := int32(10) // NotificationType_INFO
-			if !success {
-				notifType = int32(9) // NotificationType_FAILURE
-			}
-			s.eventBus.Publish(events.NewNotificationEvent(
-				sessionID, inst.Title, notifID,
-				notifType,
-				int32(2), // NotificationPriority_MEDIUM
-				title, message, nil,
-			))
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
+			s.onRateLimitRecovery(inst, sessionID, success, errMsg)
 		},
 	)
+}
+
+// rateLimitLinkedItemID looks up the backlog item ID linked to inst's session
+// (via concStorage), bounded by rateLimitLookupTimeout. Returns "" when the
+// instance isn't backlog-linked, when concStorage is nil (fake InstanceStore
+// backing, e.g. in some test setups), or when the lookup fails/times out.
+func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
+	if s.concStorage == nil {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), rateLimitLookupTimeout)
+	defer cancel()
+	itemSession, err := s.concStorage.GetItemSessionBySessionUUID(lookupCtx, inst.UUID)
+	if err != nil {
+		if !errors.Is(err, session.ErrNotFound) {
+			log.Warn("wireRateLimitCallbacks: ItemSession lookup failed", "session", inst.UUID, "err", err)
+		}
+		return ""
+	}
+	return itemSession.BacklogItemID
+}
+
+// onRateLimitDetected publishes the rate-limit-detected notification for inst.
+// Hidden instances (e.g. headless review sessions) never surface a
+// notification for this.
+func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
+	if !inst.Hidden {
+		linkedItemID := s.rateLimitLinkedItemID(inst)
+
+		var resetMsg string
+		if !resetTime.IsZero() {
+			resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
+		}
+		title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
+		notifID := fmt.Sprintf("rl-detect-%s", sessionID)
+		s.eventBus.Publish(events.NewNotificationEvent(
+			sessionID, inst.Title, notifID,
+			int32(8), // NotificationType_WARNING
+			int32(3), // NotificationPriority_HIGH
+			title,
+			fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
+			events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
+	// Session state sync (rate_limit_state/rate_limit_reset_time) must fire
+	// regardless of Hidden — only the Notifications-page entry above is gated.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+}
+
+// onRateLimitRecovery publishes the rate-limit-recovery notification for inst.
+// Hidden instances (e.g. headless review sessions) never surface a
+// notification for this.
+func (s *SessionService) onRateLimitRecovery(inst *session.Instance, sessionID string, success bool, errMsg string) {
+	if !inst.Hidden {
+		linkedItemID := s.rateLimitLinkedItemID(inst)
+
+		var title, message string
+		notifID := fmt.Sprintf("rl-recover-%s", sessionID)
+		if success {
+			title = fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title)
+			message = "Session auto-resumed after rate limit expiry."
+		} else {
+			title = fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title)
+			message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
+		}
+		notifType := int32(10) // NotificationType_INFO
+		if !success {
+			notifType = int32(9) // NotificationType_FAILURE
+		}
+		s.eventBus.Publish(events.NewNotificationEvent(
+			sessionID, inst.Title, notifID,
+			notifType,
+			int32(2), // NotificationPriority_MEDIUM
+			title, message,
+			events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
+	// Session state sync (rate_limit_state) must fire regardless of Hidden —
+	// only the Notifications-page entry above is gated.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
 }
 
 // wireClaudeSessionIDCallback registers a callback on inst so that when the

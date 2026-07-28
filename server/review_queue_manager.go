@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -46,6 +47,13 @@ const autoCreatePRPrompt = "Create a pull request for the changes in this sessio
 const (
 	autoCreatePRLookupTimeout = 20 * time.Second
 	autoCreatePRRunTimeout    = 900 * time.Second
+
+	// itemSessionLookupTimeout bounds the synchronous ItemSession lookup OnItemAdded
+	// performs (see below) to resolve a backlog-linked item ID for notification
+	// metadata. Kept short and separate from autoCreatePRLookupTimeout: this lookup
+	// runs inline on the OnItemAdded call path (not in a background goroutine), so a
+	// slow storage backend must not stall queue-add notification delivery.
+	itemSessionLookupTimeout = 2 * time.Second
 )
 
 // ReactiveQueueManager manages the review queue with immediate reactivity to user interactions.
@@ -329,12 +337,57 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	}
 	rqm.publishToClients(event)
 
+	// item.SessionID is the session title (the queue key). Resolve it to the
+	// stable UUID so the web client can match the notification to a session, and
+	// capture the resolved *session.Instance itself so its Hidden flag can gate
+	// notification publishing below (a Hidden session — e.g. a headless
+	// triage/review worker — should not surface routine TASK_COMPLETE/IDLE/STALE
+	// notifications the way a normal user-facing session does).
+	resolvedID := item.SessionID
+	var inst *session.Instance
+	if rqm.poller != nil {
+		inst = rqm.poller.FindInstance(item.SessionID)
+		if inst != nil {
+			resolvedID = inst.GetStableID()
+		}
+	}
+	hiddenSession := inst != nil && inst.Hidden
+
+	// linkedItemID is the backlog item ID this session is linked to (if any),
+	// resolved below via a bounded storage lookup. Kept as a local variable —
+	// never written into item.Metadata, which is a pointer shared unlocked with
+	// ReviewQueue.Add() and concurrently ranged over by WatchReviewQueue's
+	// ReviewItemToProto goroutine (a data race / potential crash if mutated here).
+	var linkedItemID string
+	if rqm.storage != nil {
+		lookupCtx, cancel := context.WithTimeout(rqm.baseContext(), itemSessionLookupTimeout)
+		itemSession, err := rqm.storage.GetItemSessionBySessionUUID(lookupCtx, resolvedID)
+		cancel()
+		if err != nil {
+			if !errors.Is(err, session.ErrNotFound) {
+				log.Warn("OnItemAdded: ItemSession lookup failed", "session", resolvedID, "err", err)
+			}
+			// Not found (or any other lookup failure) — not a backlog-linked
+			// session, or lookup unavailable. Silently proceed without item_id.
+		} else {
+			linkedItemID = itemSession.BacklogItemID
+		}
+	}
+
+	// suppressForHidden narrows notification suppression to the routine reasons a
+	// Hidden (headless/background) session churns through in the ordinary
+	// course of automated work — TASK_COMPLETE/IDLE/STALE. ReasonErrorState and
+	// ReasonTestsFailing must still publish even when Hidden: those indicate a
+	// real problem an operator needs to see regardless of whether the session is
+	// hidden from the default session list/review queue UI.
+	suppressForHidden := hiddenSession && (item.Reason == session.ReasonTaskComplete || item.Reason == session.ReasonIdle || item.Reason == session.ReasonStale)
+
 	// Publish an EventNotification to the EventBus so the notification history store
 	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already
 	// broadcasts a richer notification (with the actual command preview and approval UUID)
 	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
 	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
-	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
+	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending && !suppressForHidden {
 		notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
@@ -343,14 +396,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 			message = fmt.Sprintf("Session '%s' needs attention", item.SessionName)
 		}
 
-		// item.SessionID is the session title (the queue key). Resolve it to the
-		// stable UUID so the web client can match the notification to a session.
-		resolvedID := item.SessionID
-		if rqm.poller != nil {
-			if inst := rqm.poller.FindInstance(item.SessionID); inst != nil {
-				resolvedID = inst.GetStableID()
-			}
-		}
+		metadata := events.SessionScopedMetadata(item.Metadata, linkedItemID)
 
 		notifEvent := events.NewNotificationEvent(
 			resolvedID,
@@ -360,7 +406,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 			notifPriority,
 			title,
 			message,
-			item.Metadata,
+			metadata,
 		)
 		rqm.eventBus.Publish(notifEvent)
 	}

@@ -817,6 +817,176 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	assert.Len(t, sessions, 1, "onAutonomousDriverComplete must not spawn a competing review session — that is abandoned_review's job")
 }
 
+// TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck is the regression test for
+// Epic 3 Story 3.1: a stuck (outcome.Done=false) triage-role driver run previously published
+// the "Triage stuck" notification with nil metadata, giving downstream consumers (e.g.
+// server/notifications) no way to correlate the notification back to its backlog item. The
+// notification's metadata must now carry {"item_id": <item.ID>}.
+func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "triage-stuck-metadata-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Triage stuck metadata test item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 5, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification && ev.NotificationTitle == "Triage did not complete" {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected the 'Triage did not complete' notification")
+	require.NotNil(t, notif.NotificationMetadata, "metadata must not be nil so downstream consumers can correlate the notification to its item")
+	assert.Equal(t, item.ID, notif.NotificationMetadata["item_id"])
+}
+
+// TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceHidden verifies
+// the Epic 3 Story 3.2 Hidden gate: the generic done/stuck notification at the end of
+// onAutonomousDriverComplete must never fire for a Hidden instance (e.g. a review-gate driver
+// run the operator never surfaces in the UI) — publishing it anyway would functionally
+// duplicate AC1's intent of suppressing notifications for sessions hidden from the UI.
+func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceHidden(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "hidden-generic-notif-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		Hidden:         true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	// The session.updated badge event still fires (unrelated to the Hidden gate); only the
+	// notification event must be absent. Drain briefly and assert no notification arrives.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-ch:
+			require.NotEqual(t, events.EventNotification, ev.Type, "a Hidden instance must never receive the generic done/stuck notification")
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAndBacklogLinked
+// covers the positive case for Epic 3 Story 3.2: a non-Hidden instance whose completing
+// session is linked to a backlog item must have the generic done/stuck notification's
+// metadata built via events.SessionScopedMetadata — {"item_id": ..., "session_scoped": "true"}
+// — not the nil it carried before this fix.
+func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAndBacklogLinked(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+
+	const title = "generic-notif-metadata-test"
+	inst := &session.Instance{
+		Title:          title,
+		UUID:           title + "-uuid",
+		Path:           "/tmp/test",
+		Status:         session.Paused,
+		Program:        "claude",
+		AutonomousMode: true,
+		Hidden:         false,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Generic notif metadata test item",
+		Status: string(session.BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: "future-pipeline-stage", // reaches the generic notifier, not a status transition
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 5; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 5
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "expected the generic done/stuck notification")
+	require.NotNil(t, notif.NotificationMetadata)
+	assert.Equal(t, item.ID, notif.NotificationMetadata["item_id"])
+	assert.Equal(t, "true", notif.NotificationMetadata["session_scoped"])
+}
+
 // TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_When_Called
 // is the regression test for one of the four instances of the recurring
 // "silent status-transition failure" bug shape found by the 2026-07-27

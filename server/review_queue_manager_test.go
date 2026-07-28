@@ -1115,3 +1115,259 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 		t.Fatalf("expected exactly 1 one-shot call, got %d", got)
 	}
 }
+
+// ─── AC4: OnItemAdded suppression for Hidden backlog-linked sessions ──────────
+
+// TestOnItemAdded_SuppressesNotification_When_SessionHidden verifies that a
+// Hidden session (e.g. a headless triage/review worker) does not get a
+// TASK_COMPLETE EventNotification published — Hidden sessions are excluded
+// from the default session list/review queue UI, so routine completion
+// notifications for them would be noise the operator can't act on directly.
+func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "hidden-session backlog item",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "review",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{
+		Title:  "review:153f8eac",
+		UUID:   sessionUUID,
+		Hidden: true,
+	}
+	poller.SetInstances([]*session.Instance{inst})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := mgr.eventBus.Subscribe(ctx)
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:  "review:153f8eac",
+		Reason:     session.ReasonTaskComplete,
+		Priority:   session.PriorityLow,
+		DetectedAt: time.Now(),
+	})
+
+	select {
+	case ev := <-eventCh:
+		t.Errorf("expected NO EventNotification for a Hidden session's TASK_COMPLETE, got type=%s", ev.Type)
+	case <-time.After(300 * time.Millisecond):
+		// Correct — no notification emitted.
+	}
+}
+
+// TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants
+// extends the base case to ReasonIdle and ReasonStale — the suppression must
+// apply to all three "routine churn" reasons, not just TASK_COMPLETE.
+func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason session.AttentionReason
+	}{
+		{"ReasonIdle", session.ReasonIdle},
+		{"ReasonStale", session.ReasonStale},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:    "hidden-session backlog item " + tc.name,
+				Status:   string(session.BacklogStatusInProgress),
+				Priority: 3,
+			})
+			if err != nil {
+				t.Fatalf("CreateBacklogItem: %v", err)
+			}
+
+			const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
+			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: sessionUUID,
+				SessionRole: "review",
+			}); err != nil {
+				t.Fatalf("CreateItemSession: %v", err)
+			}
+
+			inst := &session.Instance{
+				Title:  "review:153f8eac",
+				UUID:   sessionUUID,
+				Hidden: true,
+			}
+			poller.SetInstances([]*session.Instance{inst})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			eventCh, _ := mgr.eventBus.Subscribe(ctx)
+
+			mgr.OnItemAdded(&session.ReviewItem{
+				SessionID:  "review:153f8eac",
+				Reason:     tc.reason,
+				Priority:   session.PriorityLow,
+				DetectedAt: time.Now(),
+			})
+
+			select {
+			case ev := <-eventCh:
+				t.Errorf("expected NO EventNotification for a Hidden session's %s, got type=%s", tc.name, ev.Type)
+			case <-time.After(300 * time.Millisecond):
+				// Correct — no notification emitted.
+			}
+		})
+	}
+}
+
+// TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLinked
+// is the companion positive case: an ordinary (non-Hidden) backlog-linked
+// session at TASK_COMPLETE must still get a notification, and that
+// notification must carry item_id metadata resolved from the ItemSession
+// linkage — proving the Hidden gate doesn't accidentally suppress the common
+// case, and that metadata stamping actually reaches the published event.
+func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLinked(t *testing.T) {
+	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "visible-session backlog item",
+		Status:   string(session.BacklogStatusInProgress),
+		Priority: 3,
+	})
+	if err != nil {
+		t.Fatalf("CreateBacklogItem: %v", err)
+	}
+
+	const sessionTitle = "widgets-work-session"
+	const sessionUUID = "bbbb1111-2222-3333-4444-555566667777"
+	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}); err != nil {
+		t.Fatalf("CreateItemSession: %v", err)
+	}
+
+	inst := &session.Instance{
+		Title:  sessionTitle,
+		UUID:   sessionUUID,
+		Hidden: false,
+	}
+	poller.SetInstances([]*session.Instance{inst})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, _ := mgr.eventBus.Subscribe(ctx)
+
+	mgr.OnItemAdded(&session.ReviewItem{
+		SessionID:   sessionTitle,
+		SessionName: sessionTitle,
+		Reason:      session.ReasonTaskComplete,
+		Priority:    session.PriorityLow,
+		DetectedAt:  time.Now(),
+	})
+
+	var gotEvent *events.Event
+	deadline := time.After(300 * time.Millisecond)
+loop:
+	for {
+		select {
+		case ev := <-eventCh:
+			if ev.Type == events.EventNotification {
+				gotEvent = ev
+				break loop
+			}
+		case <-deadline:
+			break loop
+		}
+	}
+
+	if gotEvent == nil {
+		t.Fatal("expected an EventNotification for a non-Hidden backlog-linked session, got none")
+	}
+	if got := gotEvent.NotificationMetadata["item_id"]; got != item.ID {
+		t.Errorf("notification metadata item_id = %q, want %q", got, item.ID)
+	}
+	if got := gotEvent.NotificationMetadata["session_scoped"]; got != "true" {
+		t.Errorf("notification metadata session_scoped = %q, want %q", got, "true")
+	}
+}
+
+// TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorStateOrTestsFailing
+// proves the suppression added above is correctly scoped: even a Hidden
+// session must still surface a notification for ReasonErrorState/
+// ReasonTestsFailing — those indicate a real problem an operator needs to
+// see, unlike the routine TASK_COMPLETE/IDLE/STALE churn a headless worker
+// generates in its ordinary course of operation.
+func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorStateOrTestsFailing(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason session.AttentionReason
+	}{
+		{"ReasonErrorState", session.ReasonErrorState},
+		{"ReasonTestsFailing", session.ReasonTestsFailing},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
+
+			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+				Title:    "hidden-session-with-problem backlog item " + tc.name,
+				Status:   string(session.BacklogStatusInProgress),
+				Priority: 3,
+			})
+			if err != nil {
+				t.Fatalf("CreateBacklogItem: %v", err)
+			}
+
+			const sessionUUID = "cccc9999-2222-3333-4444-555566667777"
+			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: sessionUUID,
+				SessionRole: "review",
+			}); err != nil {
+				t.Fatalf("CreateItemSession: %v", err)
+			}
+
+			inst := &session.Instance{
+				Title:  "review:hidden-problem",
+				UUID:   sessionUUID,
+				Hidden: true,
+			}
+			poller.SetInstances([]*session.Instance{inst})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			eventCh, _ := mgr.eventBus.Subscribe(ctx)
+
+			mgr.OnItemAdded(&session.ReviewItem{
+				SessionID:  "review:hidden-problem",
+				Reason:     tc.reason,
+				Priority:   session.PriorityMedium,
+				DetectedAt: time.Now(),
+			})
+
+			select {
+			case ev := <-eventCh:
+				if ev.Type != events.EventNotification {
+					t.Errorf("expected EventNotification for Hidden session's %s, got %s", tc.name, ev.Type)
+				}
+			case <-time.After(300 * time.Millisecond):
+				t.Errorf("expected EventNotification for Hidden session's %s, got none (timeout)", tc.name)
+			}
+		})
+	}
+}

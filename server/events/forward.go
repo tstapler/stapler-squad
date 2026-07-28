@@ -20,6 +20,10 @@ const (
 	EventApprovalResponse    = pkgevents.EventApprovalResponse
 	EventNotification        = pkgevents.EventNotification
 	EventBacklogItemChanged  = pkgevents.EventBacklogItemChanged
+
+	// Metadata keys for session-scoped notifications (see SessionScopedMetadata).
+	MetadataKeySessionScoped = pkgevents.MetadataKeySessionScoped
+	MetadataKeyItemID        = pkgevents.MetadataKeyItemID
 )
 
 // BacklogChangeKind constants (mirrors pkg/events/types.go).
@@ -46,4 +50,5 @@ var (
 	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
 	NewNotificationEvent                = pkgevents.NewNotificationEvent
 	NewBacklogItemChangedEvent          = pkgevents.NewBacklogItemChangedEvent
+	SessionScopedMetadata               = pkgevents.SessionScopedMetadata
 )

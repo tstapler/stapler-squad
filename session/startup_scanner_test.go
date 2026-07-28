@@ -209,6 +209,70 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 	}
 }
 
+// TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly verifies that StartupScanner.Scan
+// relies entirely on Determine()'s reason-scoped Hidden gate (session/review_queue_determiner.go)
+// rather than adding its own Hidden check. A Hidden instance whose status is TaskComplete-shaped
+// must NOT be added (added == 0), while a Hidden instance whose status is ErrorState-shaped MUST
+// still be added (added == 1) — the deliberate safety-net narrowing: no other durable detector
+// watches a still-alive, stuck-in-error Hidden review session.
+func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
+	t.Run("task_complete_suppressed_for_hidden", func(t *testing.T) {
+		inst := makeStartedInstance("hidden-task-complete")
+		inst.Hidden = true
+
+		statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+			inst.Title: {
+				IsControllerActive: true,
+				ClaudeStatus:       detection.StatusSuccess,
+			},
+		})
+		contentProvider := newFakeContentProvider(map[string]string{
+			inst.Title: "",
+		})
+
+		queue := NewReviewQueue()
+		scanner := NewStartupScanner(statusProvider, contentProvider)
+		added := scanner.Scan([]*Instance{inst}, queue)
+
+		if added != 0 {
+			t.Errorf("expected 0 sessions added for Hidden instance with TaskComplete-shaped status, got %d", added)
+		}
+		if _, exists := queue.Get(inst.Title); exists {
+			t.Error("Hidden instance with ReasonTaskComplete must not appear in review queue")
+		}
+	})
+
+	t.Run("error_state_not_suppressed_for_hidden", func(t *testing.T) {
+		inst := makeStartedInstance("hidden-error-state")
+		inst.Hidden = true
+
+		statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+			inst.Title: {
+				IsControllerActive: true,
+				ClaudeStatus:       detection.StatusError,
+			},
+		})
+		contentProvider := newFakeContentProvider(map[string]string{
+			inst.Title: "",
+		})
+
+		queue := NewReviewQueue()
+		scanner := NewStartupScanner(statusProvider, contentProvider)
+		added := scanner.Scan([]*Instance{inst}, queue)
+
+		if added != 1 {
+			t.Errorf("expected 1 session added for Hidden instance with ErrorState-shaped status (safety net), got %d", added)
+		}
+		item, exists := queue.Get(inst.Title)
+		if !exists {
+			t.Fatal("Hidden instance with ReasonErrorState must appear in review queue")
+		}
+		if item.Reason != ReasonErrorState {
+			t.Errorf("expected reason %s, got %s", ReasonErrorState, item.Reason)
+		}
+	})
+}
+
 // TestStartupScanner_Scan_EmptyInstanceList verifies graceful handling of an empty list.
 func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})

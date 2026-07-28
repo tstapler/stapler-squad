@@ -721,3 +721,141 @@ func TestSetMetadata_Dedup_SecondApprovalStamped(t *testing.T) {
 		t.Errorf("expected approval_decision='deny', got '%s'", got)
 	}
 }
+
+// TestPruneOrphaned_RemovesEligibleRecord_KeepsItemLinkedAndNonSessionScoped verifies
+// that PruneOrphaned removes only records that are SessionScoped==true AND have no
+// Metadata["item_id"] AND whose SessionID is absent from the existence set — never a
+// record with an item_id (SessionID overloaded to carry a backlog item ID) and never a
+// record that isn't positively marked session-scoped. It also verifies the batch-fetch
+// existingSessionIDs callback is invoked exactly once, not once per candidate record.
+func TestPruneOrphaned_RemovesEligibleRecord_KeepsItemLinkedAndNonSessionScoped(t *testing.T) {
+	store := newTestStore(t)
+
+	const deadSessionID = "dead-session-id"
+
+	orphan := makeRecord("id-orphan", deadSessionID, notifTypeDedup)
+	orphan.SessionScoped = true
+	orphan.Metadata = map[string]string{}
+
+	itemLinked := makeRecord("id-item-linked", deadSessionID, int32(11))
+	itemLinked.SessionScoped = true
+	itemLinked.Metadata = map[string]string{"item_id": "item-123"}
+
+	notScoped := makeRecord("id-not-scoped", deadSessionID, int32(12))
+	notScoped.SessionScoped = false
+	notScoped.Metadata = map[string]string{}
+
+	for _, r := range []*NotificationRecord{orphan, itemLinked, notScoped} {
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append %s: %v", r.ID, err)
+		}
+	}
+
+	callCount := 0
+	existingSessionIDs := func() map[string]struct{} {
+		callCount++
+		return map[string]struct{}{"some-other-live-session": {}}
+	}
+
+	removed, err := store.PruneOrphaned(existingSessionIDs)
+	if err != nil {
+		t.Fatalf("PruneOrphaned: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("expected 1 record removed, got %d", removed)
+	}
+	if callCount != 1 {
+		t.Errorf("expected existingSessionIDs called exactly once, got %d", callCount)
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 records remaining, got %d", total)
+	}
+	seen := map[string]bool{}
+	for _, r := range records {
+		seen[r.ID] = true
+	}
+	if seen["id-orphan"] {
+		t.Errorf("expected id-orphan to be removed, but it's still present")
+	}
+	if !seen["id-item-linked"] {
+		t.Errorf("expected id-item-linked to be kept, but it's missing")
+	}
+	if !seen["id-not-scoped"] {
+		t.Errorf("expected id-not-scoped to be kept, but it's missing")
+	}
+}
+
+// TestPruneOrphaned_PrunesNothing_When_ExistingSessionIDsReturnsNil verifies that a nil
+// map from existingSessionIDs is treated as "not ready to judge existence this pass" —
+// distinct from a real, merely-empty map — so nothing is pruned rather than everything.
+func TestPruneOrphaned_PrunesNothing_When_ExistingSessionIDsReturnsNil(t *testing.T) {
+	store := newTestStore(t)
+
+	orphan := makeRecord("id-orphan", "dead-session-id", notifTypeDedup)
+	orphan.SessionScoped = true
+	orphan.Metadata = map[string]string{}
+
+	if err := store.Append(orphan); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	removed, err := store.PruneOrphaned(func() map[string]struct{} { return nil })
+	if err != nil {
+		t.Fatalf("PruneOrphaned: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("expected 0 records removed when existingSessionIDs returns nil, got %d", removed)
+	}
+
+	_, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected the orphaned record to still be present, total=%d", total)
+	}
+}
+
+// TestEnforceRetention_GatesOrphanSweep_ByOrphanPruneInterval verifies that the
+// orphan-pruning sweep wired into enforceRetention (which runs on every Append()) only
+// actually invokes the existence-check callback at most once per orphanPruneInterval,
+// not once per Append call.
+func TestEnforceRetention_GatesOrphanSweep_ByOrphanPruneInterval(t *testing.T) {
+	store := newTestStore(t)
+
+	callCount := 0
+	store.SetSessionExistenceLookup(func() map[string]struct{} {
+		callCount++
+		return map[string]struct{}{}
+	})
+
+	if err := store.Append(makeRecord("id-1", "session-A", int32(20))); err != nil {
+		t.Fatalf("Append 1: %v", err)
+	}
+	if err := store.Append(makeRecord("id-2", "session-B", int32(21))); err != nil {
+		t.Fatalf("Append 2: %v", err)
+	}
+
+	if callCount > 1 {
+		t.Errorf("expected at most 1 existence-check call across 2 Appends within the gate interval, got %d", callCount)
+	}
+	firstCount := callCount
+
+	// Advance lastOrphanPruneAt past the gate interval via the same-package test seam.
+	store.mu.Lock()
+	store.lastOrphanPruneAt = time.Now().Add(-orphanPruneInterval - time.Second)
+	store.mu.Unlock()
+
+	if err := store.Append(makeRecord("id-3", "session-C", int32(22))); err != nil {
+		t.Fatalf("Append 3: %v", err)
+	}
+
+	if callCount <= firstCount {
+		t.Errorf("expected existence-check to fire again after advancing past orphanPruneInterval, callCount stayed at %d", callCount)
+	}
+}

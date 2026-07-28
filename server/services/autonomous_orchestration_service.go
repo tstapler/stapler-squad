@@ -265,6 +265,10 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	// "complete" while the backlog item silently failed to advance (e.g. a concurrent status
 	// change broke the optimistic-concurrency precondition).
 	var statusTransitionErr error
+	// linkedItemID carries the backlog item ID (when this session is backlog-linked) out
+	// of the nested lookup block below, so the generic done/stuck notification at the end
+	// of this function can stamp it via events.SessionScopedMetadata.
+	var linkedItemID string
 	if a.storageGetter != nil {
 		concreteStorage := a.storageGetter()
 		if concreteStorage != nil {
@@ -283,6 +287,8 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 				if itemErr != nil || item == nil {
 					log.Warn("[AutonomousDriver] onAutonomousDriverComplete: failed to load linked backlog item", "itemSession", is.ID, "item", is.BacklogItemID, "err", itemErr)
 				} else {
+					linkedItemID = item.ID
+
 					// Write a durable autonomous_stuck row so a turn-cap stop is visible in
 					// the Unfinished tab, not just the ephemeral "Autonomous fix stuck"
 					// notification published below — previously invisible to the whole
@@ -315,7 +321,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 								int32(2), // NotificationPriority_MEDIUM
 								"Triage did not complete",
 								fmt.Sprintf("%s: autonomous triage session got stuck", item.Title),
-								nil,
+								map[string]string{"item_id": item.ID},
 							))
 							log.Info("[AutonomousDriver] triage stuck, notified operator", "item", item.ID, "reason", outcome.Reason)
 							return
@@ -546,12 +552,19 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 		body += fmt.Sprintf(" The backlog item status could not be updated (%v); it may be stuck in its previous status — check manually.", statusTransitionErr)
 		notifType = int32(9) // NotificationType_FAILURE
 	}
-	a.bus.Publish(events.NewNotificationEvent(
-		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
-		notifType,
-		int32(2), // NotificationPriority_MEDIUM
-		title, body, nil,
-	))
+	// Hidden sessions (e.g. review-gate driver runs) already have their own
+	// role-specific notification handling above (or intentionally none, per
+	// SessionRoleReview's comment) — this generic notifier would otherwise
+	// duplicate that signal for a session the operator never surfaces in the
+	// UI. See AC1's intent in the Epic 3 plan.
+	if !inst.Hidden {
+		a.bus.Publish(events.NewNotificationEvent(
+			sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+			notifType,
+			int32(2), // NotificationPriority_MEDIUM
+			title, body, events.SessionScopedMetadata(nil, linkedItemID),
+		))
+	}
 }
 
 // notifyStuckReviewBookkeepingFailed publishes an operator-facing notification

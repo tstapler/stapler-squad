@@ -160,5 +160,6 @@ func eventToRecord(event *events.Event) *NotificationRecord {
 		Metadata:         event.NotificationMetadata,
 		CreatedAt:        event.Timestamp,
 		IsRead:           false,
+		SessionScoped:    event.NotificationMetadata[events.MetadataKeySessionScoped] == "true",
 	}
 }
