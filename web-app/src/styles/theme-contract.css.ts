@@ -110,6 +110,9 @@ export const vars = createThemeContract({
     processingBg: null,
     processingFg: null,
     processingBorder: null,
+    duplicateBg: null,
+    duplicateFg: null,
+    duplicateBorder: null,
   },
   font: {
     mono: null,

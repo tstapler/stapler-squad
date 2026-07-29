@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -23,6 +24,12 @@ func TestCanTransition_AllValidPaths(t *testing.T) {
 		{BacklogStatusDone, BacklogStatusReview},
 		{BacklogStatusDone, BacklogStatusArchived},
 		{BacklogStatusArchived, BacklogStatusIdea},
+		{BacklogStatusIdea, BacklogStatusDuplicate},
+		{BacklogStatusRefining, BacklogStatusDuplicate},
+		{BacklogStatusReady, BacklogStatusDuplicate},
+		{BacklogStatusInProgress, BacklogStatusDuplicate},
+		{BacklogStatusReview, BacklogStatusDuplicate},
+		{BacklogStatusDuplicate, BacklogStatusIdea},
 	}
 	for _, tc := range cases {
 		if !CanTransitionBacklog(tc.from, tc.to) {
@@ -42,6 +49,8 @@ func TestCanTransition_AllInvalidPaths(t *testing.T) {
 		{BacklogStatusReady, BacklogStatusDone},
 		{BacklogStatusArchived, BacklogStatusReview},
 		{BacklogStatusInProgress, BacklogStatusIdea},
+		{BacklogStatusDone, BacklogStatusDuplicate},
+		{BacklogStatusArchived, BacklogStatusDuplicate},
 	}
 	for _, tc := range cases {
 		if CanTransitionBacklog(tc.from, tc.to) {
@@ -166,6 +175,85 @@ func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t 
 	item.SkipPlanning = true
 	if err := TransitionGuard(item, BacklogStatusInProgress); err != nil {
 		t.Errorf("TransitionGuard skip_planning=true = %v; want nil", err)
+	}
+}
+
+// TestTransitionGuard_AnyToDuplicate_RequiresDuplicateOfID verifies an empty
+// DuplicateOfID is rejected when transitioning to duplicate.
+func TestTransitionGuard_AnyToDuplicate_RequiresDuplicateOfID(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		ID:            "a",
+		DuplicateOfID: "",
+		Status:        BacklogStatusIdea,
+	}
+	if err := TransitionGuard(item, BacklogStatusDuplicate); !errors.Is(err, ErrDuplicateOfRequired) {
+		t.Errorf("TransitionGuard empty DuplicateOfID = %v; want ErrDuplicateOfRequired", err)
+	}
+}
+
+// TestTransitionGuard_AnyToDuplicate_RejectsSelfReference verifies that a
+// DuplicateOfID equal to the item's own ID is rejected.
+func TestTransitionGuard_AnyToDuplicate_RejectsSelfReference(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		ID:            "a",
+		DuplicateOfID: "a",
+		Status:        BacklogStatusIdea,
+	}
+	if err := TransitionGuard(item, BacklogStatusDuplicate); !errors.Is(err, ErrDuplicateOfSelf) {
+		t.Errorf("TransitionGuard self-reference = %v; want ErrDuplicateOfSelf", err)
+	}
+}
+
+// TestTransitionGuard_AnyToDuplicate_RejectsNonexistentTarget verifies that a
+// DuplicateOfID referencing a nonexistent item is rejected.
+func TestTransitionGuard_AnyToDuplicate_RejectsNonexistentTarget(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		ID:                "67de6c7b-0000-0000-0000-000000000000",
+		DuplicateOfID:     "1dc7ff10-326c-4276-a70f-eb8869713593",
+		DuplicateOfExists: false,
+		Status:            BacklogStatusIdea,
+	}
+	if err := TransitionGuard(item, BacklogStatusDuplicate); !errors.Is(err, ErrDuplicateOfInvalidTarget) {
+		t.Errorf("TransitionGuard nonexistent target = %v; want ErrDuplicateOfInvalidTarget", err)
+	}
+}
+
+// TestTransitionGuard_AnyToDuplicate_RejectsChainedDuplicateTarget verifies that a
+// DuplicateOfID referencing an item that is itself already duplicate status is
+// rejected (chain-prevention, folded into ErrDuplicateOfInvalidTarget per ADR-002).
+func TestTransitionGuard_AnyToDuplicate_RejectsChainedDuplicateTarget(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		ID:                "67de6c7b-0000-0000-0000-000000000000",
+		DuplicateOfID:     "1dc7ff10-326c-4276-a70f-eb8869713593",
+		DuplicateOfExists: true,
+		DuplicateOfStatus: BacklogStatusDuplicate,
+		Status:            BacklogStatusIdea,
+	}
+	if err := TransitionGuard(item, BacklogStatusDuplicate); !errors.Is(err, ErrDuplicateOfInvalidTarget) {
+		t.Errorf("TransitionGuard chained duplicate target = %v; want ErrDuplicateOfInvalidTarget", err)
+	}
+}
+
+// TestTransitionGuard_AnyToDuplicate_AcceptsValidTarget verifies that a valid,
+// non-self, existing, non-duplicate-status target is accepted.
+func TestTransitionGuard_AnyToDuplicate_AcceptsValidTarget(t *testing.T) {
+	item := BacklogItemTransitionInput{
+		ID:                "67de6c7b-0000-0000-0000-000000000000",
+		DuplicateOfID:     "b",
+		DuplicateOfExists: true,
+		DuplicateOfStatus: BacklogStatusIdea,
+		Status:            BacklogStatusReady,
+	}
+	if err := TransitionGuard(item, BacklogStatusDuplicate); err != nil {
+		t.Errorf("TransitionGuard valid target = %v; want nil", err)
+	}
+}
+
+// TestBacklogStatusDuplicate_HasExpectedStringValue asserts the literal string
+// value of BacklogStatusDuplicate, standalone (AC1).
+func TestBacklogStatusDuplicate_HasExpectedStringValue(t *testing.T) {
+	if string(BacklogStatusDuplicate) != "duplicate" {
+		t.Errorf("string(BacklogStatusDuplicate) = %q; want %q", string(BacklogStatusDuplicate), "duplicate")
 	}
 }
 

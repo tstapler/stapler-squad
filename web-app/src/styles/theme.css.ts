@@ -141,6 +141,9 @@ export const lightTheme = createTheme(vars, {
     processingBg: "#e0e7ff",
     processingFg: "#4338ca",
     processingBorder: "#c7d2fe",
+    duplicateBg: "#fae8ff",     /* ratio 7.08:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#86198f",
+    duplicateBorder: "#e9a5f1",
   },
   transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
   ...sharedTokens,
@@ -235,6 +238,9 @@ export const darkTheme = createTheme(vars, {
     processingBg: "#312e81",
     processingFg: "#a5b4fc",
     processingBorder: "#4338ca",
+    duplicateBg: "#3b0764",     /* ratio 8.52:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#f0abfc",
+    duplicateBorder: "#a21caf",
   },
   transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
   ...sharedTokens,
@@ -332,6 +338,9 @@ export const matrixTheme = createTheme(vars, {
     processingBg: "#001a0a",
     processingFg: "#00cc33",
     processingBorder: "#003300",
+    duplicateBg: "#001a0d",     /* ratio 14.23:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#5fffb0",
+    duplicateBorder: "#00994d",
   },
   font: {
     mono: "var(--font-jetbrains-mono,'Monaco',monospace)",
@@ -437,6 +446,9 @@ export const cyberpunk77Theme = createTheme(vars, {
     processingBg: "#0d0d22",
     processingFg: "#c8be08",
     processingBorder: "#1a1a3e",
+    duplicateBg: "#1a0022",     /* ratio 7.79:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#ff6ec7",
+    duplicateBorder: "#c026d3",
   },
   font: {
     mono: "var(--font-jetbrains-mono,'Monaco',monospace)",
@@ -542,6 +554,9 @@ export const wh40kTheme = createTheme(vars, {
     processingBg: "#120e0a",
     processingFg: "#a89878",
     processingBorder: "#3d3020",
+    duplicateBg: "#1a0e08",     /* ratio 8.32:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#e0a030",
+    duplicateBorder: "#b8860b",
   },
   font: {
     mono: "var(--font-jetbrains-mono,'Monaco',monospace)",
@@ -647,6 +662,9 @@ export const cleanTheme = createTheme(vars, {
     processingBg: "#312e81",
     processingFg: "#a5b4fc",
     processingBorder: "#4338ca",
+    duplicateBg: "#f3e8ff",     /* ratio 5.92:1 vs duplicateFg ✅ WCAG AA */
+    duplicateFg: "#7e22ce",
+    duplicateBorder: "#c084fc",
   },
   font: {
     mono: "var(--font-jetbrains-mono, 'JetBrains Mono', 'Fira Code', 'Monaco', monospace)",

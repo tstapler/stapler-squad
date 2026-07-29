@@ -16,6 +16,7 @@ import {
   type BacklogItem,
   type BacklogItemStatus,
   type BacklogItemInput,
+  type KnownBacklogStatus,
 } from "@/lib/hooks/useBacklogService";
 import { getStatusLabel } from "@/lib/backlog/status";
 import * as styles from "./backlog.css";
@@ -34,9 +35,10 @@ const ALL_STATUSES: BacklogItemStatus[] = [
   "review",
   "done",
   "archived",
+  "duplicate",
 ];
 
-const STATUS_CSS: Record<string, string> = {
+const STATUS_CSS: Record<KnownBacklogStatus, string> = {
   idea: styles.statusIdea,
   refining: styles.statusRefining,
   ready: styles.statusReady,
@@ -44,9 +46,11 @@ const STATUS_CSS: Record<string, string> = {
   review: styles.statusReview,
   done: styles.statusDone,
   archived: styles.statusArchived,
+  duplicate: styles.statusDuplicate,
 };
 
-const getStatusClass = (s: string): string => STATUS_CSS[s] ?? styles.statusArchived;
+const getStatusClass = (s: string): string =>
+  STATUS_CSS[s as KnownBacklogStatus] ?? styles.statusArchived;
 
 const PRIORITY_LABELS: Record<number, string> = {
   1: "P1",
@@ -84,8 +88,8 @@ function StatusFilterChips({
     onChange(next);
   };
 
-  // Exclude "archived" from default chips (too noisy)
-  const displayStatuses = ALL_STATUSES.filter((s) => s !== "archived");
+  // Exclude "archived" and "duplicate" from default chips (too noisy)
+  const displayStatuses = ALL_STATUSES.filter((s) => s !== "archived" && s !== "duplicate");
 
   return (
     <div className={styles.filterChipGroup} role="group" aria-label="Filter by status">
@@ -462,6 +466,7 @@ function BacklogPageInner() {
               <BacklogItemDetail
                 itemId={selectedItemId}
                 onClose={handleDetailClose}
+                onNavigateToItem={handleRowClick}
               />
             </aside>
           </>

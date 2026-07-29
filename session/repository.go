@@ -164,7 +164,7 @@ type Repository interface {
 	// ArchiveBacklogItem sets the archived_at timestamp on a backlog item.
 	ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error)
 	// TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
-	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error)
+	TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, opts *TransitionOptions) (*BacklogItemData, error)
 
 	// --- ItemSource ---
 
@@ -256,6 +256,7 @@ type BacklogItemData struct {
 	PlanArtifactsPath  string
 	Notes              string
 	ExternalID         string
+	DuplicateOfID      string
 	ArchivedAt         *time.Time
 	SourceID           string
 	CreatedAt          time.Time
@@ -305,6 +306,13 @@ type BacklogItemPrecondition struct {
 	ExpectedStatus string
 	// ExpectedUpdatedAt, if non-zero, requires the item's updated_at to match.
 	ExpectedUpdatedAt *time.Time
+}
+
+// TransitionOptions carries transition-scoped side-channel data that is not
+// part of the core (from, to, precondition) transition signature. Currently
+// only used to pass duplicate_of_id when transitioning to BacklogStatusDuplicate.
+type TransitionOptions struct {
+	DuplicateOfID string
 }
 
 // ItemSourceData is the domain model for an external item source.

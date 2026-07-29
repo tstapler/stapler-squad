@@ -2,6 +2,7 @@
 // +feature: backlog:item-badge
 
 import { getStatusLabel } from "@/lib/backlog/status";
+import type { KnownBacklogStatus } from "@/lib/hooks/useBacklogService";
 import * as styles from "./BacklogItemBadge.css";
 
 interface BacklogItemBadgeProps {
@@ -11,7 +12,7 @@ interface BacklogItemBadgeProps {
   acDone: number;
 }
 
-const STATUS_CLASS: Record<string, string> = {
+const STATUS_CLASS: Record<KnownBacklogStatus, string> = {
   idea: styles.statusIdea,
   refining: styles.statusRefining,
   ready: styles.statusReady,
@@ -19,9 +20,11 @@ const STATUS_CLASS: Record<string, string> = {
   review: styles.statusReview,
   done: styles.statusDone,
   archived: styles.statusArchived,
+  duplicate: styles.statusDuplicate,
 };
 
-const getStatusClass = (s: string): string => STATUS_CLASS[s] ?? styles.statusArchived;
+const getStatusClass = (s: string): string =>
+  STATUS_CLASS[s as KnownBacklogStatus] ?? styles.statusArchived;
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;

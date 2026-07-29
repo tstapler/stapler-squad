@@ -16,6 +16,7 @@ const (
 	BacklogStatusReview     BacklogStatus = "review"
 	BacklogStatusDone       BacklogStatus = "done"
 	BacklogStatusArchived   BacklogStatus = "archived"
+	BacklogStatusDuplicate  BacklogStatus = "duplicate"
 )
 
 // Session role constants.
@@ -120,32 +121,40 @@ func AggregateOutcome(verdicts []CriterionVerdict) string {
 // needing AC work should go idea→refining→ready instead.
 var validTransitions = map[BacklogStatus]map[BacklogStatus]bool{
 	BacklogStatusIdea: {
-		BacklogStatusReady:    true,
-		BacklogStatusRefining: true,
-		BacklogStatusArchived: true,
+		BacklogStatusReady:     true,
+		BacklogStatusRefining:  true,
+		BacklogStatusArchived:  true,
+		BacklogStatusDuplicate: true,
 	},
 	BacklogStatusRefining: {
-		BacklogStatusReady:    true,
-		BacklogStatusArchived: true,
+		BacklogStatusReady:     true,
+		BacklogStatusArchived:  true,
+		BacklogStatusDuplicate: true,
 	},
 	BacklogStatusReady: {
 		BacklogStatusInProgress: true,
 		BacklogStatusIdea:       true,
 		BacklogStatusArchived:   true,
+		BacklogStatusDuplicate:  true,
 	},
 	BacklogStatusInProgress: {
-		BacklogStatusReview: true,
-		BacklogStatusReady:  true,
+		BacklogStatusReview:    true,
+		BacklogStatusReady:     true,
+		BacklogStatusDuplicate: true,
 	},
 	BacklogStatusReview: {
 		BacklogStatusDone:       true,
 		BacklogStatusInProgress: true,
+		BacklogStatusDuplicate:  true,
 	},
 	BacklogStatusDone: {
 		BacklogStatusReview:   true,
 		BacklogStatusArchived: true,
 	},
 	BacklogStatusArchived: {
+		BacklogStatusIdea: true,
+	},
+	BacklogStatusDuplicate: {
 		BacklogStatusIdea: true,
 	},
 }
@@ -161,10 +170,13 @@ func CanTransitionBacklog(from, to BacklogStatus) bool {
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired            = errors.New("acceptance criteria required before marking ready")
-	ErrPlanRequired          = errors.New("plan must be approved or skip_planning must be true before spawning work session")
-	ErrPlanArtifactsRequired = errors.New("plan artifacts path is required when planning is not skipped")
-	ErrVerdictRequired       = errors.New("PASS verdict or manual override required before marking done")
+	ErrACRequired               = errors.New("acceptance criteria required before marking ready")
+	ErrPlanRequired             = errors.New("plan must be approved or skip_planning must be true before spawning work session")
+	ErrPlanArtifactsRequired    = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrVerdictRequired          = errors.New("PASS verdict or manual override required before marking done")
+	ErrDuplicateOfRequired      = errors.New("duplicate_of_id is required when marking an item duplicate")
+	ErrDuplicateOfSelf          = errors.New("duplicate_of_id cannot reference the item itself")
+	ErrDuplicateOfInvalidTarget = errors.New("duplicate_of_id does not reference a valid (existing, non-duplicate) backlog item")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
@@ -176,6 +188,25 @@ type BacklogItemTransitionInput struct {
 	PlanArtifactsPath string // path to plan artifacts written by triage session
 	OverallOutcome    string // from linked ReviewVerdict
 	OverrideReason    string
+	ID                string        // the item's own id — needed for the self-reference check
+	DuplicateOfID     string        // resolved from the transition request
+	DuplicateOfExists bool          // resolved by caller via prior GetBacklogItem lookup
+	DuplicateOfStatus BacklogStatus // resolved from the same lookup; used for chain-prevention
+}
+
+// NewTransitionInputFromItem builds the caller-independent portion of a
+// BacklogItemTransitionInput from an already-fetched backlog item. Callers
+// layer on any transition-specific fields (OverallOutcome, OverrideReason,
+// DuplicateOfID, DuplicateOfExists, DuplicateOfStatus, etc.) afterward.
+func NewTransitionInputFromItem(item *BacklogItemData) BacklogItemTransitionInput {
+	return BacklogItemTransitionInput{
+		ID:                item.ID,
+		Status:            BacklogStatus(item.Status),
+		AcCriteriaJSON:    item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+	}
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -215,6 +246,18 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 		}
 		if item.OverallOutcome != ReviewVerdictPass {
 			return ErrVerdictRequired
+		}
+		return nil
+
+	case to == BacklogStatusDuplicate:
+		if item.DuplicateOfID == "" {
+			return ErrDuplicateOfRequired
+		}
+		if item.DuplicateOfID == item.ID {
+			return ErrDuplicateOfSelf
+		}
+		if !item.DuplicateOfExists || item.DuplicateOfStatus == BacklogStatusDuplicate {
+			return ErrDuplicateOfInvalidTarget
 		}
 		return nil
 

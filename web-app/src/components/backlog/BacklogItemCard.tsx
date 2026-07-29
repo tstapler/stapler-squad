@@ -41,6 +41,8 @@ function getActionSpec(item: BacklogItem): ActionSpec {
       return { label: "Done ✓", action: "done", isDone: true };
     case "archived":
       return { label: "Archived", action: "archived", isDone: true };
+    case "duplicate":
+      return { label: "Duplicate", action: "duplicate", isDone: true };
     default:
       return { label: item.status, action: item.status, isDone: true };
   }

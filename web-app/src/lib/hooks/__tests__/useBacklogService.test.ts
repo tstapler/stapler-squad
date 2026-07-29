@@ -14,7 +14,8 @@
 import { renderHook } from "@testing-library/react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { useBacklogService } from "@/lib/hooks/useBacklogService";
+import { useBacklogService, mapBacklogItem } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem as BacklogItemProto } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -73,5 +74,31 @@ describe("useBacklogService", () => {
     expect(result.current.getBacklogItem).toBe(methodsBefore.getBacklogItem);
     expect(result.current.createBacklogItem).toBe(methodsBefore.createBacklogItem);
     expect(result.current.transitionStatus).toBe(methodsBefore.transitionStatus);
+  });
+});
+
+describe("mapBacklogItem", () => {
+  it("mapBacklogItem_should_IncludeDuplicateOfId_When_ProtoHasIt", () => {
+    const proto = {
+      id: "67de6c7b-0000-0000-0000-000000000000",
+      title: "some item",
+      description: "",
+      status: "duplicate",
+      priority: 3,
+      repoPath: "",
+      skipPlanning: false,
+      skipReviewGate: false,
+      planApproved: false,
+      planArtifactsPath: "",
+      acceptanceCriteria: [],
+      itemSessions: [],
+      sourceId: "",
+      statusEvents: [],
+      duplicateOfId: "10128af0-e1eb-47bc-9016-3af8fde83b4d",
+    } as unknown as BacklogItemProto;
+
+    const result = mapBacklogItem(proto);
+
+    expect(result.duplicateOfId).toBe("10128af0-e1eb-47bc-9016-3af8fde83b4d");
   });
 });

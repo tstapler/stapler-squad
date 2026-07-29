@@ -10,6 +10,7 @@ export const STATUS_LABELS: Record<string, string> = {
   review: "Review",
   done: "Done",
   archived: "Archived",
+  duplicate: "Duplicate",
 };
 
 /** Human-readable label for any status string, including unknown server-defined ones. */

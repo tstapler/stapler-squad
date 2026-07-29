@@ -525,8 +525,8 @@ func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogIt
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
-	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
+func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, opts *TransitionOptions) (*BacklogItemData, error) {
+	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition, opts)
 }
 
 // --- ItemSource ---

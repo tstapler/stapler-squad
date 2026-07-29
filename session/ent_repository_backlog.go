@@ -31,6 +31,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		PlanArtifactsPath:  item.PlanArtifactsPath,
 		Notes:              item.Notes,
 		ExternalID:         item.ExternalID,
+		DuplicateOfID:      item.DuplicateOfID,
 		ArchivedAt:         item.ArchivedAt,
 		CreatedAt:          item.CreatedAt,
 		UpdatedAt:          item.UpdatedAt,
@@ -140,6 +141,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Where(backlogitem.StatusNotIn(
 			string(BacklogStatusDone),
 			string(BacklogStatusArchived),
+			string(BacklogStatusDuplicate),
 		))
 	}
 
@@ -271,7 +273,7 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.
-func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, opts *TransitionOptions) (*BacklogItemData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
@@ -295,13 +297,42 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	}
 
 	now := time.Now()
-	item, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	builder := r.client.BacklogItem.UpdateOneID(parsedID).
 		SetStatus(string(toStatus)).
 		SetUserModifiedStatusAt(now).
-		Save(ctx)
+		Where(backlogitem.StatusEQ(current.Status))
+
+	if precondition != nil && precondition.ExpectedUpdatedAt != nil {
+		builder = builder.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+	}
+
+	// toStatus == BacklogStatusDuplicate is the AUTHORITATIVE guard here, not a
+	// convenience check: without it, a caller sending DuplicateOfId alongside a
+	// non-duplicate TargetStatus (e.g. TargetStatus: "ready") would silently
+	// persist duplicate_of_id on a non-duplicate item, completely bypassing every
+	// TransitionGuard check (empty/self-ref/chain) that only fires for
+	// to == BacklogStatusDuplicate. This check must live at the write layer
+	// (not only at the RPC caller) so it's correct regardless of which caller
+	// builds opts.
+	if opts != nil && opts.DuplicateOfID != "" && toStatus == BacklogStatusDuplicate {
+		builder = builder.SetDuplicateOfID(opts.DuplicateOfID)
+	}
+
+	// Reopening a duplicate item (any transition away from BacklogStatusDuplicate)
+	// must clear the stale duplicate_of_id link atomically with the status write,
+	// otherwise the item would silently retain a pointer to its old canonical item
+	// even though it is no longer marked a duplicate.
+	if toStatus != BacklogStatusDuplicate && current.Status == string(BacklogStatusDuplicate) {
+		builder = builder.ClearDuplicateOfID()
+	}
+
+	item, err := builder.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			// Get() above already confirmed the row exists; NotFound here can only
+			// mean the StatusEQ (or UpdatedAtEQ) predicate excluded a concurrently-
+			// modified row — translate to the precondition-failure sentinel, not "not found".
+			return nil, fmt.Errorf("%w: status changed concurrently for item %s", ErrPreconditionFailed, id)
 		}
 		return nil, fmt.Errorf("failed to transition backlog item %s status: %w", id, err)
 	}

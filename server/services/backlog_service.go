@@ -262,6 +262,7 @@ func backlogItemToProto(item *session.BacklogItemData) *sessionv1.BacklogItem {
 		PlanArtifactsPath: item.PlanArtifactsPath,
 		Notes:             item.Notes,
 		ExternalId:        item.ExternalID,
+		DuplicateOfId:     item.DuplicateOfID,
 		SourceId:          item.SourceID,
 		CreatedAt:         timestamppb.New(item.CreatedAt),
 		UpdatedAt:         timestamppb.New(item.UpdatedAt),
@@ -627,21 +628,43 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
 	}
 
-	// Run transition guard for business rules.
-	guardInput := session.BacklogItemTransitionInput{
-		Status:            from,
-		AcCriteriaJSON:    item.AcceptanceCriteria,
-		PlanApproved:      item.PlanApproved,
-		SkipPlanning:      item.SkipPlanning,
-		PlanArtifactsPath: item.PlanArtifactsPath,
-		OverallOutcome:    overallOutcome,
-		OverrideReason:    req.Msg.OverrideReason,
+	var duplicateOfExists bool
+	var duplicateOfStatus session.BacklogStatus
+	if to == session.BacklogStatusDuplicate && req.Msg.DuplicateOfId != "" {
+		target, targetErr := s.storage.GetBacklogItem(ctx, req.Msg.DuplicateOfId)
+		switch {
+		case targetErr == nil:
+			duplicateOfExists = true
+			duplicateOfStatus = session.BacklogStatus(target.Status)
+		case errors.Is(targetErr, session.ErrNotFound):
+			// Genuinely missing: leave duplicateOfExists false so TransitionGuard
+			// correctly rejects with ErrDuplicateOfInvalidTarget.
+		default:
+			// Any OTHER error (DB timeout, connection failure, etc.) is an infra
+			// failure, not "target doesn't exist" — do not fold it into the guard
+			// rejection path, which would surface as CodeFailedPrecondition and
+			// mask a real outage as "your duplicate_of_id is bad." Matches the
+			// first GetBacklogItem lookup's error handling ten lines above, and
+			// mark_duplicate's own handling.
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("look up duplicate_of_id: %w", targetErr))
+		}
 	}
+
+	// Run transition guard for business rules.
+	guardInput := session.NewTransitionInputFromItem(item)
+	guardInput.OverallOutcome = overallOutcome
+	guardInput.OverrideReason = req.Msg.OverrideReason
+	guardInput.DuplicateOfID = req.Msg.DuplicateOfId
+	guardInput.DuplicateOfExists = duplicateOfExists
+	guardInput.DuplicateOfStatus = duplicateOfStatus
 	if guardErr := s.engine.ValidateGates(guardInput, to); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
 			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
-			errors.Is(guardErr, session.ErrVerdictRequired) {
+			errors.Is(guardErr, session.ErrVerdictRequired) ||
+			errors.Is(guardErr, session.ErrDuplicateOfRequired) ||
+			errors.Is(guardErr, session.ErrDuplicateOfSelf) ||
+			errors.Is(guardErr, session.ErrDuplicateOfInvalidTarget) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, guardErr)
@@ -658,7 +681,12 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
-	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition)
+	var opts *session.TransitionOptions
+	if to == session.BacklogStatusDuplicate && req.Msg.DuplicateOfId != "" {
+		opts = &session.TransitionOptions{DuplicateOfID: req.Msg.DuplicateOfId}
+	}
+
+	updated, err := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId, to, precondition, opts)
 	if err != nil {
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
@@ -950,7 +978,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	s.worktreeMu.Unlock()
 
 	// 13. Transition item to in_progress.
-	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
+	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, nil); transErr != nil {
 		log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 	}
 
@@ -1043,7 +1071,7 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 6. Transition item to in_progress (only if the state machine permits it).
 	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
-		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, nil); transErr != nil {
 			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 		}
 	}
@@ -1117,7 +1145,7 @@ func (s *BacklogService) TriggerTriage(
 	// correctly reflects that the item is under evaluation again.
 	if item.Status == string(session.BacklogStatusReady) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
-			session.BacklogStatusIdea, nil); transErr != nil {
+			session.BacklogStatusIdea, nil, nil); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] failed to reset status to idea: %v", transErr)
 			// Non-fatal — continue with triage spawn.
 		}
@@ -1353,7 +1381,7 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil)
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, nil)
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {

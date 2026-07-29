@@ -102,6 +102,7 @@ message BacklogItem {
   repeated ItemSession item_sessions = 18;
   string source_id = 19;
   repeated BacklogStatusEvent status_events = 20;
+  string duplicate_of_id = 21;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -199,6 +200,7 @@ message TransitionBacklogItemStatusRequest {
   string expected_status = 3;
   google.protobuf.Timestamp expected_updated_at = 4;
   string override_reason = 5;
+  string duplicate_of_id = 6;
 }
 
 message TransitionBacklogItemStatusResponse {

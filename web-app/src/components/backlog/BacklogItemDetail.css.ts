@@ -126,6 +126,36 @@ export const statusRefining = style({
   color: vars.color.warningText,
   border: `1px solid ${vars.color.warning}`,
 });
+export const statusDuplicate = style({
+  background: vars.statusBadge.duplicateBg,
+  color: vars.statusBadge.duplicateFg,
+  border: `1px solid ${vars.statusBadge.duplicateBorder}`,
+});
+
+export const duplicateOfRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  marginTop: vars.space["1"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textSecondary,
+});
+
+export const duplicateOfLink = style({
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: vars.color.primary,
+  cursor: "pointer",
+  font: "inherit",
+  textDecoration: "none",
+  ":hover": {
+    textDecoration: "underline",
+  },
+  ":focus-visible": {
+    textDecoration: "underline",
+  },
+});
 
 export const priorityBadge = style({
   display: "inline-flex",

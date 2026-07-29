@@ -17,7 +17,7 @@ import {
 // Domain types exposed to UI (mapped from proto, but without Message<> noise)
 // ---------------------------------------------------------------------------
 
-export type KnownBacklogStatus = "idea" | "refining" | "ready" | "in_progress" | "review" | "done" | "archived";
+export type KnownBacklogStatus = "idea" | "refining" | "ready" | "in_progress" | "review" | "done" | "archived" | "duplicate";
 // (string & {}) preserves autocomplete for KnownBacklogStatus values while still
 // accepting unknown statuses returned by newer server versions.
 export type BacklogItemStatus = KnownBacklogStatus | (string & {});
@@ -76,6 +76,7 @@ export interface BacklogItem {
   skipReviewGate: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
+  duplicateOfId?: string;
   acCriteria: AcCriterion[];
   linkedSessions: LinkedSession[];
   notes?: string;
@@ -191,7 +192,7 @@ function mapStatusEvent(e: BacklogStatusEventProto): StatusEvent {
   };
 }
 
-function mapBacklogItem(p: BacklogItemProto): BacklogItem {
+export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
   const linkedSessions = (p.itemSessions ?? []).map(mapItemSession);
 
   // Extract gate verdict from the most recent session (for review status)
@@ -247,6 +248,7 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     skipReviewGate: p.skipReviewGate,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
+    duplicateOfId: p.duplicateOfId || undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,

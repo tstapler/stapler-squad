@@ -201,7 +201,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedStatus:    string(BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, precondition); err != nil {
+	if _, err := l.storage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, precondition, nil); err != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] TransitionBacklogItemStatus item=%s to=%s: %v", item.ID, toStatus, err)
 		return
 	}

@@ -2,7 +2,7 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback } from "react";
-import type { BacklogItem, AcCriterion, BacklogItemInput } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, AcCriterion, BacklogItemInput, KnownBacklogStatus } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { BacklogItemForm } from "./BacklogItemForm";
@@ -16,9 +16,10 @@ import * as styles from "./BacklogItemDetail.css";
 interface BacklogItemDetailProps {
   itemId: string;
   onClose?: () => void;
+  onNavigateToItem?: (itemId: string) => void;
 }
 
-const STATUS_CLASS: Record<string, string> = {
+const STATUS_CLASS: Record<KnownBacklogStatus, string> = {
   idea: styles.statusIdea,
   refining: styles.statusRefining,
   ready: styles.statusReady,
@@ -26,9 +27,11 @@ const STATUS_CLASS: Record<string, string> = {
   review: styles.statusReview,
   done: styles.statusDone,
   archived: styles.statusArchived,
+  duplicate: styles.statusDuplicate,
 };
 
-const getStatusClass = (s: string): string => STATUS_CLASS[s] ?? styles.statusArchived;
+const getStatusClass = (s: string): string =>
+  STATUS_CLASS[s as KnownBacklogStatus] ?? styles.statusArchived;
 
 const PRIORITY_LABELS: Record<number, string> = { 1: "P1", 2: "P2", 3: "P3", 4: "P4", 5: "P5" };
 
@@ -43,7 +46,7 @@ function formatDate(iso?: string): string {
   });
 }
 
-export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
+export function BacklogItemDetail({ itemId, onClose, onNavigateToItem }: BacklogItemDetailProps) {
   const {
     getBacklogItem,
     transitionStatus,
@@ -61,6 +64,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [editMode, setEditMode] = useState(false);
+
+  // Canonical item resolved from item.duplicateOfId when item.status === "duplicate".
+  // Tagged with the duplicateOfId it was fetched for so a render can tell a
+  // fresh resolution apart from one that belongs to a previous item — see
+  // resolvedDuplicateOf below.
+  const [duplicateOf, setDuplicateOf] = useState<{ forId: string; item: BacklogItem | null } | undefined>(undefined);
 
   // Notes inline editing
   const [editingNotes, setEditingNotes] = useState(false);
@@ -117,6 +126,31 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setTriageElapsedSeconds(0);
     }
   }, [item?.triageStatus]);
+
+  // Resolve the canonical item when this item is a duplicate. Rather than
+  // resetting state to `undefined` in a passive effect (which runs AFTER the
+  // render that shows the new `item`, causing one render where the new item
+  // is paired with the previous item's stale resolved value), we tag each
+  // resolution with the duplicateOfId it was fetched for. The render below
+  // derives validity by comparing that tag against the current item's
+  // duplicateOfId, so a stale value is never shown even for one frame.
+  useEffect(() => {
+    if (item?.status !== "duplicate" || !item.duplicateOfId) return;
+    let cancelled = false;
+    const duplicateOfId = item.duplicateOfId;
+    void (async () => {
+      const canonical = await getBacklogItem(duplicateOfId);
+      if (!cancelled) setDuplicateOf({ forId: duplicateOfId, item: canonical });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.id, item?.status, item?.duplicateOfId, getBacklogItem]);
+
+  // undefined = not yet fetched for the current item (or stale, being refetched),
+  // null = fetched-and-missing, object = resolved for the current item.
+  const resolvedDuplicateOf =
+    duplicateOf && duplicateOf.forId === item?.duplicateOfId ? duplicateOf.item : undefined;
 
   const handleAction = useCallback(
     async (action: string) => {
@@ -407,6 +441,22 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               >
                 {getStatusLabel(item.status)}
               </span>
+              {item.status === "duplicate" && item.duplicateOfId && (
+                <div className={styles.duplicateOfRow} aria-live="polite">
+                  {resolvedDuplicateOf === undefined && <span>Duplicate of: Loading…</span>}
+                  {resolvedDuplicateOf === null && <span>Duplicate of: (item not found)</span>}
+                  {resolvedDuplicateOf && (
+                    <button
+                      type="button"
+                      className={styles.duplicateOfLink}
+                      onClick={() => onNavigateToItem?.(resolvedDuplicateOf.id)}
+                      data-testid="duplicate-of-link"
+                    >
+                      Duplicate of: {resolvedDuplicateOf.title}
+                    </button>
+                  )}
+                </div>
+              )}
               <span
                 className={styles.priorityBadge}
                 aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}

@@ -349,6 +349,11 @@ export const statusRefining = style({
   color: vars.color.warningText,
   border: `1px solid ${vars.color.warning}`,
 });
+export const statusDuplicate = style({
+  background: vars.statusBadge.duplicateBg,
+  color: vars.statusBadge.duplicateFg,
+  border: `1px solid ${vars.statusBadge.duplicateBorder}`,
+});
 
 export const priorityBadge = style({
   display: "inline-flex",

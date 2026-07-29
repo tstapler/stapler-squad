@@ -31,13 +31,13 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	require.Equal(t, string(BacklogStatusIdea), createdItem.Status)
 
 	// 2. Transition to "ready"
-	readyItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil)
+	readyItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReady), readyItem.Status)
 
 	// 3. Approve plan and transition to "in_progress"
 	readyItem.PlanApproved = true
-	inProgressItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil)
+	inProgressItem, err := storage.TransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusInProgress), inProgressItem.Status)
 

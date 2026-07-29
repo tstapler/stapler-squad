@@ -64,6 +64,10 @@ type backlogHandlers struct {
 	storage  *session.Storage
 	store    session.InstanceStore
 	eventBus *events.EventBus // optional; nil means notifications are disabled
+	// noteAppendFn, if set, is used instead of storage.UpdateBacklogItem for the
+	// best-effort note append in markDuplicate. Exists purely as a test seam —
+	// production code never sets it, so it always falls back to the real call.
+	noteAppendFn func(ctx context.Context, id string, update session.BacklogItemUpdate, precondition *session.BacklogItemPrecondition) (*session.BacklogItemData, error)
 }
 
 // --- get_backlog_item ---
@@ -132,6 +136,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
 		sb.WriteString("3. Call submit_triage_result with: item_id, summary, suggestions (AC gaps/questions), tasks (implementation checklist, max 12), plan_artifact_path\n")
+		sb.WriteString("If this item describes the same problem as an existing item, call mark_duplicate(item_id, duplicate_of_id, note) instead of suggesting it be archived — this preserves a queryable link to the canonical item.\n")
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")
@@ -152,6 +157,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("- request_review — signal implementation complete, notify reviewer (role: work)\n")
 		sb.WriteString("- submit_review_verdict — submit per-criterion verdicts, PASS transitions to done (role: review)\n")
 		sb.WriteString("- submit_triage_result — record triage analysis and notify operator (role: triage)\n")
+		sb.WriteString("- mark_duplicate — mark an item as a duplicate of another, linking it (role: triage/work)\n")
 	}
 
 	payload := sb.String()
@@ -372,7 +378,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// If PASS, transition item to done (only from review status).
 	if overallOutcome == session.ReviewVerdictPass {
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition); transErr != nil {
+		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition, nil); transErr != nil {
 			log.InfoLog.Printf("[mcp:submit_review_verdict] PASS but transition to done failed: %v", transErr)
 			// Non-fatal — verdict is saved, status transition is best-effort.
 		}
@@ -535,6 +541,115 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	)), nil
 }
 
+// --- mark_duplicate ---
+
+func (h *backlogHandlers) markDuplicate(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	duplicateOfID, ok := args["duplicate_of_id"].(string)
+	if !ok || duplicateOfID == "" {
+		return errResult(ErrInvalidArgument, "duplicate_of_id is required", ""), nil
+	}
+	if err := validateUUID(duplicateOfID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	note, _ := args["note"].(string)
+
+	// Look up the source item first. This must happen before the session-item
+	// authorization check below: GetItemSessionBySessionAndItem joins against
+	// the item's existence (HasBacklogItemWith), so when item_id doesn't exist
+	// at all, that query also returns ErrNotFound — indistinguishable, at that
+	// call site, from "item exists but this session isn't linked to it." Doing
+	// the existence check first disambiguates the two cases correctly (a
+	// nonexistent item_id must report ErrItemNotFound, not ErrPermissionDenied)
+	// while still fully gating the mutation itself behind the auth check below.
+	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
+	}
+
+	// Verify session is linked to item. Any role passes — mark_duplicate must
+	// work for both triage and work roles per FR5.
+	_, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+
+	// Look up the target item (the one being marked canonical).
+	target, targetErr := h.storage.GetBacklogItem(ctx, duplicateOfID)
+	if targetErr != nil {
+		if errors.Is(targetErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("duplicate_of_id %q not found", duplicateOfID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("look up duplicate_of_id: %v", targetErr), ""), nil
+	}
+
+	from := session.BacklogStatus(item.Status)
+	if !session.CanTransitionBacklog(from, session.BacklogStatusDuplicate) {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("cannot mark item %s duplicate from status %q", itemID, from), ""), nil
+	}
+	guardInput := session.NewTransitionInputFromItem(item)
+	guardInput.DuplicateOfID = duplicateOfID
+	guardInput.DuplicateOfExists = true // only reached if the target lookup above succeeded
+	guardInput.DuplicateOfStatus = session.BacklogStatus(target.Status)
+	if guardErr := session.TransitionGuard(guardInput, session.BacklogStatusDuplicate); guardErr != nil {
+		return errResult(ErrInvalidArgument, guardErr.Error(), ""), nil
+	}
+
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(from)}
+	opts := &session.TransitionOptions{DuplicateOfID: duplicateOfID}
+	_, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDuplicate, precondition, opts)
+	if transErr != nil {
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInvalidStatusTrans, "item status changed concurrently — re-fetch with get_backlog_item and retry", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("transition to duplicate: %v", transErr), ""), nil
+	}
+
+	log.InfoLog.Printf("[mcp:mark_duplicate] session=%s item=%s duplicate_of=%s", callerUUID, itemID, duplicateOfID)
+
+	// Best-effort note append — non-fatal if it fails, since the transition
+	// itself already succeeded.
+	if note != "" {
+		newNotes := item.Notes
+		if newNotes != "" {
+			newNotes += "\n"
+		}
+		newNotes += note
+		appendFn := h.noteAppendFn
+		if appendFn == nil {
+			appendFn = h.storage.UpdateBacklogItem
+		}
+		if _, noteErr := appendFn(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); noteErr != nil {
+			log.WarningLog.Printf("[mcp:mark_duplicate] note append failed for item %s: %v", itemID, noteErr)
+		}
+	}
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Item %s marked duplicate of %s.", itemID, duplicateOfID,
+	)), nil
+}
+
 // --- Registration ---
 
 // registerBacklogTools registers all backlog-related MCP tools on the server.
@@ -656,5 +771,15 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.submitTriageResult,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("mark_duplicate",
+			mcpgo.WithDescription("Mark a backlog item as a duplicate of another item, linking it to the canonical item. Use this INSTEAD OF archiving + a free-text note when triage discovers an item describes the same problem as an existing item. Transitions item_id to 'duplicate' status. Fails if duplicate_of_id is empty, self-referencing, references a nonexistent item, or references an item that is itself already marked duplicate (chains are not allowed — always point at the canonical item directly)."),
+			mcpgo.WithString("item_id", mcpgo.Description("UUID of the backlog item to mark as a duplicate"), mcpgo.Required()),
+			mcpgo.WithString("duplicate_of_id", mcpgo.Description("UUID of the canonical item this is a duplicate of"), mcpgo.Required()),
+			mcpgo.WithString("note", mcpgo.Description("Optional note appended to the item's notes field explaining the duplicate finding")),
+		),
+		h.markDuplicate,
 	)
 }

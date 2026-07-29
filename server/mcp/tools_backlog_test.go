@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -438,4 +439,361 @@ func TestSubmitTriageResult_NoNotificationWhenEventBusNil(t *testing.T) {
 		require.True(t, ok)
 		assert.Contains(t, tc.Text, "Triage result submitted")
 	})
+}
+
+// ─── mark_duplicate tests (Epic 3.1) ───────────────────────────────────────
+
+// createLinkedBacklogItem creates a backlog item with the given status and
+// links a session to it with the given role, returning the item and session UUID.
+func createLinkedBacklogItem(t *testing.T, storage *session.Storage, status session.BacklogStatus, role string) (*session.BacklogItemData, string) {
+	t.Helper()
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:              "mark_duplicate test item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(status),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: role,
+	})
+	require.NoError(t, err)
+
+	return item, sessionUUID
+}
+
+// TestMarkDuplicate_HappyPath_TransitionsAndAppendsNote verifies the full
+// success path: status becomes duplicate, duplicate_of_id is set, the note
+// is appended, and a success text result is returned.
+func TestMarkDuplicate_HappyPath_TransitionsAndAppendsNote(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogStatusIdea, session.SessionRoleTriage)
+
+	canonicalData := session.BacklogItemData{
+		Title:              "Canonical item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	canonical, err := storage.CreateBacklogItem(ctx, canonicalData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": canonical.ID,
+		"note":            "same install-service.sh .zshrc bug",
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "marked duplicate")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDuplicate), fetched.Status)
+	assert.Equal(t, canonical.ID, fetched.DuplicateOfID)
+	assert.Contains(t, fetched.Notes, "same install-service.sh .zshrc bug")
+}
+
+// TestMarkDuplicate_ItemIdNotFound_ReturnsItemNotFound verifies that a
+// nonexistent item_id returns ErrItemNotFound referencing item_id. The item
+// existence lookup runs before the session-item authorization check
+// specifically so this case is distinguishable from "session not linked" —
+// no ItemSession can ever reference a nonexistent item (FK-enforced), so if
+// the auth check ran first it would misreport this as ErrPermissionDenied.
+func TestMarkDuplicate_ItemIdNotFound_ReturnsItemNotFound(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	nonExistentID := uuid.New().String()
+
+	canonicalData := session.BacklogItemData{
+		Title:              "Canonical item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	canonical, err := storage.CreateBacklogItem(context.Background(), canonicalData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), uuid.New().String())
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         nonExistentID,
+		"duplicate_of_id": canonical.ID,
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errCode)
+
+	errMsg, ok := errObj["message"].(string)
+	require.True(t, ok)
+	assert.Contains(t, errMsg, nonExistentID, "message should reference the missing item_id value")
+}
+
+// TestMarkDuplicate_DuplicateOfIdNotFound_ReturnsItemNotFound_NotInternalError
+// verifies the highest-risk disambiguation case: a nonexistent duplicate_of_id
+// must return ErrItemNotFound (not ErrInternalError), referencing duplicate_of_id.
+func TestMarkDuplicate_DuplicateOfIdNotFound_ReturnsItemNotFound_NotInternalError(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogStatusIdea, session.SessionRoleTriage)
+
+	nonExistentTargetID := uuid.New().String()
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": nonExistentTargetID,
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrItemNotFound, errCode, "duplicate_of_id lookup failure must be ItemNotFound, not InternalError")
+
+	errMsg, ok := errObj["message"].(string)
+	require.True(t, ok)
+	assert.Contains(t, errMsg, "duplicate_of_id")
+
+	// Confirm no transition occurred.
+	fetched, fetchErr := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, fetchErr)
+	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status)
+}
+
+// TestMarkDuplicate_SelfReference_ReturnsInvalidArgument verifies that
+// item_id == duplicate_of_id is rejected as ErrInvalidArgument.
+func TestMarkDuplicate_SelfReference_ReturnsInvalidArgument(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogStatusIdea, session.SessionRoleTriage)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": item.ID,
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errCode)
+}
+
+// TestMarkDuplicate_ChainedDuplicateTarget_ReturnsInvalidArgument verifies
+// that pointing duplicate_of_id at an already-duplicate item is rejected
+// as ErrInvalidArgument (no duplicate chains allowed).
+func TestMarkDuplicate_ChainedDuplicateTarget_ReturnsInvalidArgument(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogStatusIdea, session.SessionRoleTriage)
+
+	// A chain target: itself already marked duplicate of some other canonical item.
+	otherCanonicalData := session.BacklogItemData{
+		Title:              "Other canonical item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	otherCanonical, err := storage.CreateBacklogItem(ctx, otherCanonicalData)
+	require.NoError(t, err)
+
+	chainTargetData := session.BacklogItemData{
+		Title:              "Already-duplicate item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusDuplicate),
+		DuplicateOfID:      otherCanonical.ID,
+	}
+	chainTarget, err := storage.CreateBacklogItem(ctx, chainTargetData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": chainTarget.ID,
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrInvalidArgument, errCode)
+}
+
+// TestMarkDuplicate_NoteAppendFailure_DoesNotFailTransition verifies that a
+// failure in the best-effort note append does not fail the overall call —
+// the transition itself must have already succeeded and be reported as such.
+func TestMarkDuplicate_NoteAppendFailure_DoesNotFailTransition(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, sessionUUID := createLinkedBacklogItem(t, storage, session.BacklogStatusIdea, session.SessionRoleTriage)
+
+	canonicalData := session.BacklogItemData{
+		Title:              "Canonical item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	canonical, err := storage.CreateBacklogItem(ctx, canonicalData)
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{
+		storage: storage,
+		noteAppendFn: func(ctx context.Context, id string, update session.BacklogItemUpdate, precondition *session.BacklogItemPrecondition) (*session.BacklogItemData, error) {
+			return nil, errors.New("simulated note-append failure")
+		},
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": canonical.ID,
+		"note":            "this note append will fail",
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Still a success text result — note-append failure is non-fatal.
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "marked duplicate")
+
+	// The transition itself must have gone through, using the real storage.
+	fetched, fetchErr := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, fetchErr)
+	assert.Equal(t, string(session.BacklogStatusDuplicate), fetched.Status)
+	assert.Equal(t, canonical.ID, fetched.DuplicateOfID)
+}
+
+// TestMarkDuplicate_SessionNotLinkedToItem_ReturnsPermissionDenied verifies
+// Task 3.1.1a-bis's authorization check: a caller session not linked to
+// item_id is rejected with ErrPermissionDenied and no transition occurs.
+func TestMarkDuplicate_SessionNotLinkedToItem_ReturnsPermissionDenied(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	// item_id that the caller session is NOT linked to.
+	itemData := session.BacklogItemData{
+		Title:              "Unlinked item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	canonicalData := session.BacklogItemData{
+		Title:              "Canonical item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	canonical, err := storage.CreateBacklogItem(ctx, canonicalData)
+	require.NoError(t, err)
+
+	// Session linked to a completely unrelated item, not `item`.
+	unrelatedItemData := session.BacklogItemData{
+		Title:              "Unrelated item",
+		AcceptanceCriteria: `[{"index":0,"text":"Criterion","status":"pending"}]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusIdea),
+	}
+	unrelatedItem, err := storage.CreateBacklogItem(ctx, unrelatedItemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      unrelatedItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":         item.ID,
+		"duplicate_of_id": canonical.ID,
+	})
+
+	result, err := handler.markDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+
+	errObj, ok := m["error"].(map[string]interface{})
+	require.True(t, ok)
+	errCode, ok := errObj["code"].(string)
+	require.True(t, ok)
+	require.Equal(t, ErrPermissionDenied, errCode)
+
+	errMsg, ok := errObj["message"].(string)
+	require.True(t, ok)
+	assert.Contains(t, errMsg, "not linked")
+
+	// Confirm no transition occurred.
+	fetched, fetchErr := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, fetchErr)
+	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status)
 }
