@@ -1324,3 +1324,50 @@ yet merged/reviewed):**
 7. ~~Review note: PRs #274 and this doc's own 07-27 update both touched this file on divergent
    branches~~ — resolved: merged both entries into one narrative when landing #274 on top of
    the updated `main`.
+
+## Update — 2026-07-28: light verification pass (no full re-run) — PRs #273-275 confirmed working live, 2 MAJORs still open
+
+Not a full skill re-run — live state is the best this doc has ever recorded and yesterday's full
+pass (07-27) is less than 24h old, so a second full 4-agent quality sweep this soon would mostly
+re-derive what's already tracked. Instead: checked `ListStuckBacklogItems` live, then verified by
+direct code/PR read whether each of 07-27's shipped fixes and open action items actually hold up,
+rather than re-discovering them from scratch.
+
+**Live state**: `ListStuckBacklogItems` returns **3 rows / 3 unique items** — best-ever reading
+(down from 4/4 on 07-27):
+- `4f03de7b`, `505fb733` — both still `ORPHANED_TRIAGE`, idea status. **Confirmed PR #274's
+  remediation wiring is actually firing, not just merged**: `505fb733` has a 4th triage session
+  (`headless-triage-46950abe...`), auto-spawned and currently running with no `endedAt` — live
+  proof the new `retryOrphanedTriageWithBackoffGate` detector is retrying these, not leaving them
+  to rot the way the pre-PR-274 code did. Not counted as a regression; these will very likely clear
+  on their own.
+- `35f0f7b1` — `PLAN_NOT_APPROVED`, queued. Confirmed working-as-designed (BUG-038), unchanged.
+
+**PRs #273/#274/#275 confirmed merged** (`gh pr view`, all `state: MERGED`, 2026-07-27 evening).
+Spot-checked #273's two claimed fixes directly against current source rather than trusting the PR
+title: the `/settings/pipeline-modes` nav link (`web-app/src/app/settings/page.tsx`,
+`data-testid="settings-pipeline-modes-tab-link"`) is real and landed in this same commit
+(`ac0c9d0fa`) — closes the last open bucket-[3] UI gap tracked since 07-19. (07-27's own entry
+listed this as "still open" because it was written before #273 landed later the same session; that
+line is now stale, corrected here.)
+
+**07-27's two not-yet-started MAJORs — both confirmed still open by direct code read:**
+1. `ReconcilePRPending`'s CI-failing/blocked branch (`session/backlog_lifecycle.go:3971`) still
+   calls `fixSpawner.AutoReopenForPRFix(...)` with no `RemediationDue` backoff gate — every sibling
+   remediation call site (`abandoned_review`, `stale_work`, `orphaned_triage`, `push_failed`, and
+   the *closed*-PR branch just above this one in the same function) goes through a
+   `*WithBackoffGate` wrapper; this branch alone does not.
+2. `AutoRespawnAutonomousWork`'s failure (`server/services/autonomous_orchestration_service.go:383`)
+   is still only `log.Warn`'d, no operator notification — confirmed by reading the surrounding
+   `if due { go func() { ... log.Warn ... } }` block directly; the `justParked` case just above it
+   does notify, the per-attempt failure still does not.
+
+Both routed to a parallel `sdd:fix-bug` run (`Agent(isolation: worktree)`, per this repo's standing
+preference over `create_session` for Claude-driven fix work) — see below.
+
+**Item #5 from 07-27 (label/category-driven defaults for
+`SkipReviewGate`/`AutoSpawnSession`/`AutoCreatePR`/`PipelineMode`)** — still a product decision, not
+routed; asked the user directly rather than deciding unilaterally.
+
+**Item #6 (interface-pollution cleanup: `PipelineModeRepository`, `Repository`)** — still low
+priority/mechanical, left for a future refactor pass, not routed this time.
