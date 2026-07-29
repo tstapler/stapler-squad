@@ -44,6 +44,9 @@ export const modal = style({
   borderRadius: 12,
   width: "100%",
   maxWidth: 600,
+  maxHeight: "80vh",
+  display: "flex",
+  flexDirection: "column",
   // Story 6.1: Theme-aware glow border on omnibar
   boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
   overflow: "hidden",
@@ -118,6 +121,9 @@ export const body = style({
   display: "flex",
   flexDirection: "column",
   gap: 16,
+  overflowY: "auto",
+  flex: 1,
+  minHeight: 0,
 });
 
 export const field = style({
