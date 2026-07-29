@@ -25,6 +25,26 @@ const (
 	BacklogStatusArchived   = domain.BacklogStatusArchived
 )
 
+// BacklogCategory represents a coarse frontend-defaulting classification for
+// a backlog item (bugfix/feature/chore/refactor, or "" for uncategorized).
+// Type alias — session.BacklogCategory and domain.BacklogCategory are
+// identical types; all existing callers continue to work without any import
+// changes.
+type BacklogCategory = domain.BacklogCategory
+
+const (
+	BacklogCategoryBugfix   = domain.BacklogCategoryBugfix
+	BacklogCategoryFeature  = domain.BacklogCategoryFeature
+	BacklogCategoryChore    = domain.BacklogCategoryChore
+	BacklogCategoryRefactor = domain.BacklogCategoryRefactor
+)
+
+// IsValidBacklogCategory reports whether s is a known backlog category value
+// or the empty string (uncategorized).
+func IsValidBacklogCategory(s string) bool {
+	return BacklogCategory(s).IsValid()
+}
+
 // Session role constants.
 const (
 	SessionRoleWork   = "work"

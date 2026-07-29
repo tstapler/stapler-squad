@@ -161,6 +161,34 @@ func (s AcStatus) IsValid() bool {
 	return false
 }
 
+// BacklogCategory is a validated string-backed enum classifying a backlog
+// item into a coarse bucket (bugfix/feature/chore/refactor). It is purely a
+// frontend-defaulting hint — BacklogItemForm.tsx applies each category's
+// automation-toggle defaults once, at creation time, into local form state;
+// the server only persists and validates the string itself (see
+// session.IsValidBacklogCategory), it does not resolve or apply any
+// defaults. Unlike StuckReason above, the empty string is a valid value here
+// too, meaning "uncategorized" — today's behavior for every existing item,
+// preserved exactly.
+type BacklogCategory string
+
+const (
+	BacklogCategoryBugfix   BacklogCategory = "bugfix"
+	BacklogCategoryFeature  BacklogCategory = "feature"
+	BacklogCategoryChore    BacklogCategory = "chore"
+	BacklogCategoryRefactor BacklogCategory = "refactor"
+)
+
+// IsValid reports whether c is a known backlog category, or the empty string
+// (uncategorized).
+func (c BacklogCategory) IsValid() bool {
+	switch c {
+	case "", BacklogCategoryBugfix, BacklogCategoryFeature, BacklogCategoryChore, BacklogCategoryRefactor:
+		return true
+	}
+	return false
+}
+
 // AcCriteriaJSON is the JSON-serialized form of []AcCriterion stored in the DB.
 // Using a named type prevents silently passing Description or other string fields
 // where serialized AC criteria are expected.

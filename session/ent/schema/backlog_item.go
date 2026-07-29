@@ -49,6 +49,9 @@ func (BacklogItem) Fields() []ent.Field {
 		field.String("pipeline_mode").
 			Default("").
 			Comment("Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline)."),
+		field.String("category").
+			Default("").
+			Comment("Coarse classification (bugfix/feature/chore/refactor) used by the frontend to pre-fill sane automation-toggle defaults at creation time. Empty string means uncategorized (today's behavior, preserved exactly). See session.IsValidBacklogCategory for the validated enum."),
 		field.Bool("plan_approved").
 			Default(false),
 		field.Time("plan_approved_at").

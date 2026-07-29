@@ -169,36 +169,40 @@ func init() {
 	backlogitemDescPipelineMode := backlogitemFields[11].Descriptor()
 	// backlogitem.DefaultPipelineMode holds the default value on creation for the pipeline_mode field.
 	backlogitem.DefaultPipelineMode = backlogitemDescPipelineMode.Default.(string)
+	// backlogitemDescCategory is the schema descriptor for category field.
+	backlogitemDescCategory := backlogitemFields[12].Descriptor()
+	// backlogitem.DefaultCategory holds the default value on creation for the category field.
+	backlogitem.DefaultCategory = backlogitemDescCategory.Default.(string)
 	// backlogitemDescPlanApproved is the schema descriptor for plan_approved field.
-	backlogitemDescPlanApproved := backlogitemFields[12].Descriptor()
+	backlogitemDescPlanApproved := backlogitemFields[13].Descriptor()
 	// backlogitem.DefaultPlanApproved holds the default value on creation for the plan_approved field.
 	backlogitem.DefaultPlanApproved = backlogitemDescPlanApproved.Default.(bool)
 	// backlogitemDescQueuedAutonomous is the schema descriptor for queued_autonomous field.
-	backlogitemDescQueuedAutonomous := backlogitemFields[15].Descriptor()
+	backlogitemDescQueuedAutonomous := backlogitemFields[16].Descriptor()
 	// backlogitem.DefaultQueuedAutonomous holds the default value on creation for the queued_autonomous field.
 	backlogitem.DefaultQueuedAutonomous = backlogitemDescQueuedAutonomous.Default.(bool)
 	// backlogitemDescPrNumber is the schema descriptor for pr_number field.
-	backlogitemDescPrNumber := backlogitemFields[23].Descriptor()
+	backlogitemDescPrNumber := backlogitemFields[24].Descriptor()
 	// backlogitem.DefaultPrNumber holds the default value on creation for the pr_number field.
 	backlogitem.DefaultPrNumber = backlogitemDescPrNumber.Default.(int)
 	// backlogitemDescShippedApprovedCount is the schema descriptor for shipped_approved_count field.
-	backlogitemDescShippedApprovedCount := backlogitemFields[25].Descriptor()
+	backlogitemDescShippedApprovedCount := backlogitemFields[26].Descriptor()
 	// backlogitem.DefaultShippedApprovedCount holds the default value on creation for the shipped_approved_count field.
 	backlogitem.DefaultShippedApprovedCount = backlogitemDescShippedApprovedCount.Default.(int)
 	// backlogitemDescShippedChangesReqCount is the schema descriptor for shipped_changes_req_count field.
-	backlogitemDescShippedChangesReqCount := backlogitemFields[26].Descriptor()
+	backlogitemDescShippedChangesReqCount := backlogitemFields[27].Descriptor()
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[29].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[30].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[31].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[32].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[32].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[33].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

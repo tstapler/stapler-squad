@@ -144,6 +144,10 @@ message BacklogItem {
   // (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
   // >0 = this item's own cap, replacing the global value.
   optional int32 rework_cap_override = 28;
+  // category is a coarse classification (bugfix/feature/chore/refactor) the
+  // frontend uses to pre-fill sane automation-toggle defaults at creation
+  // time. Unset/empty means uncategorized.
+  optional string category = 29;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -213,6 +217,9 @@ message CreateBacklogItemRequest {
   bool auto_spawn_session = 10;
   optional string pipeline_mode = 11;
   bool auto_create_pr = 12;
+  // category is a coarse classification (bugfix/feature/chore/refactor).
+  // Unset means uncategorized.
+  optional string category = 13;
 }
 
 message CreateBacklogItemResponse {
@@ -354,6 +361,10 @@ message UpdateBacklogItemRequest {
   // Unset = leave the item's stored override untouched. 0 = unlimited retries
   // for this item. >0 = this item's own cap, replacing the global default.
   optional int32 rework_cap_override = 15;
+  // category is presence-gated (optional string on the wire): unset means
+  // "leave the item's stored category untouched", a non-nil pointer
+  // (including one pointing at "") explicitly sets/clears it.
+  optional string category = 16;
 }
 
 message UpdateBacklogItemResponse {

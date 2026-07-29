@@ -176,6 +176,20 @@ func (_c *BacklogItemCreate) SetNillablePipelineMode(v *string) *BacklogItemCrea
 	return _c
 }
 
+// SetCategory sets the "category" field.
+func (_c *BacklogItemCreate) SetCategory(v string) *BacklogItemCreate {
+	_c.mutation.SetCategory(v)
+	return _c
+}
+
+// SetNillableCategory sets the "category" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableCategory(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetCategory(*v)
+	}
+	return _c
+}
+
 // SetPlanApproved sets the "plan_approved" field.
 func (_c *BacklogItemCreate) SetPlanApproved(v bool) *BacklogItemCreate {
 	_c.mutation.SetPlanApproved(v)
@@ -641,6 +655,10 @@ func (_c *BacklogItemCreate) defaults() {
 		v := backlogitem.DefaultPipelineMode
 		_c.mutation.SetPipelineMode(v)
 	}
+	if _, ok := _c.mutation.Category(); !ok {
+		v := backlogitem.DefaultCategory
+		_c.mutation.SetCategory(v)
+	}
 	if _, ok := _c.mutation.PlanApproved(); !ok {
 		v := backlogitem.DefaultPlanApproved
 		_c.mutation.SetPlanApproved(v)
@@ -714,6 +732,9 @@ func (_c *BacklogItemCreate) check() error {
 	}
 	if _, ok := _c.mutation.PipelineMode(); !ok {
 		return &ValidationError{Name: "pipeline_mode", err: errors.New(`ent: missing required field "BacklogItem.pipeline_mode"`)}
+	}
+	if _, ok := _c.mutation.Category(); !ok {
+		return &ValidationError{Name: "category", err: errors.New(`ent: missing required field "BacklogItem.category"`)}
 	}
 	if _, ok := _c.mutation.PlanApproved(); !ok {
 		return &ValidationError{Name: "plan_approved", err: errors.New(`ent: missing required field "BacklogItem.plan_approved"`)}
@@ -806,6 +827,10 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
 		_node.PipelineMode = value
+	}
+	if value, ok := _c.mutation.Category(); ok {
+		_spec.SetField(backlogitem.FieldCategory, field.TypeString, value)
+		_node.Category = value
 	}
 	if value, ok := _c.mutation.PlanApproved(); ok {
 		_spec.SetField(backlogitem.FieldPlanApproved, field.TypeBool, value)
@@ -1193,6 +1218,18 @@ func (u *BacklogItemUpsert) SetPipelineMode(v string) *BacklogItemUpsert {
 // UpdatePipelineMode sets the "pipeline_mode" field to the value that was provided on create.
 func (u *BacklogItemUpsert) UpdatePipelineMode() *BacklogItemUpsert {
 	u.SetExcluded(backlogitem.FieldPipelineMode)
+	return u
+}
+
+// SetCategory sets the "category" field.
+func (u *BacklogItemUpsert) SetCategory(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldCategory, v)
+	return u
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateCategory() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldCategory)
 	return u
 }
 
@@ -1792,6 +1829,20 @@ func (u *BacklogItemUpsertOne) SetPipelineMode(v string) *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) UpdatePipelineMode() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.UpdatePipelineMode()
+	})
+}
+
+// SetCategory sets the "category" field.
+func (u *BacklogItemUpsertOne) SetCategory(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetCategory(v)
+	})
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateCategory() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateCategory()
 	})
 }
 
@@ -2619,6 +2670,20 @@ func (u *BacklogItemUpsertBulk) SetPipelineMode(v string) *BacklogItemUpsertBulk
 func (u *BacklogItemUpsertBulk) UpdatePipelineMode() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.UpdatePipelineMode()
+	})
+}
+
+// SetCategory sets the "category" field.
+func (u *BacklogItemUpsertBulk) SetCategory(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetCategory(v)
+	})
+}
+
+// UpdateCategory sets the "category" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateCategory() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateCategory()
 	})
 }
 

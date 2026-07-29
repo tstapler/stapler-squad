@@ -131,6 +131,13 @@ export interface BacklogItem {
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
   /**
+   * Coarse classification (bugfix/feature/chore/refactor) used only as a
+   * frontend-defaulting hint at creation time — see
+   * web-app/src/lib/backlog/categoryDefaults.ts. Undefined/"" means
+   * uncategorized.
+   */
+  category?: string;
+  /**
    * Per-item override for the auto-rework cap. Undefined = use the global
    * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
    * this item's own cap, replacing the global value.
@@ -235,6 +242,8 @@ export interface BacklogItemInput {
   skipTriage?: boolean;
   /** Pipeline mode slug, or "" for the built-in default. */
   pipelineMode?: string;
+  /** Coarse classification (bugfix/feature/chore/refactor), or "" for uncategorized. See BacklogItem.category. */
+  category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
 }
@@ -442,6 +451,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
     pipelineMode: p.pipelineMode || undefined,
+    category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
   };
 }
@@ -617,6 +627,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           notes: data.notes ?? "",
           skipTriage: data.skipTriage ?? false,
           pipelineMode: data.pipelineMode ?? "",
+          category: data.category ?? "",
         });
         return resp.item
           ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
@@ -648,6 +659,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
           acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
           notes: data.notes,
           pipelineMode: data.pipelineMode,
+          category: data.category,
           reworkCapOverride: data.reworkCapOverride,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;

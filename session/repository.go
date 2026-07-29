@@ -378,7 +378,16 @@ type BacklogItemData struct {
 	// by the current storage layer has PipelineMode == "" today. That full
 	// wiring (ent schema field, proto optional field, repository Create/
 	// Update mapping, RPC handler presence-gating) is Epic 1.4's scope.
-	PipelineMode      string
+	PipelineMode string
+	// Category is a coarse classification (bugfix/feature/chore/refactor) used
+	// purely as a frontend-defaulting hint at creation time — see
+	// BacklogCategory / IsValidBacklogCategory. Empty string means
+	// uncategorized (today's behavior for every existing item, preserved
+	// exactly). The server only persists and validates this value; it never
+	// resolves or applies the per-category automation-toggle defaults itself
+	// (that happens client-side, once, in BacklogItemForm.tsx at category-
+	// selection time).
+	Category          string
 	PlanApproved      bool
 	PlanApprovedAt    *time.Time
 	PlanArtifactsPath string
@@ -500,7 +509,12 @@ type BacklogItemUpdate struct {
 	// the item's stored pipeline_mode untouched", while a non-nil pointer
 	// (including one pointing at "") explicitly sets/resets it. See
 	// BacklogItemData.PipelineMode for the field's semantics.
-	PipelineMode      *string
+	PipelineMode *string
+	// Category is a pointer for partial-update presence: nil means "leave the
+	// item's stored category untouched", while a non-nil pointer (including
+	// one pointing at "") explicitly sets/clears it. See
+	// BacklogItemData.Category for the field's semantics.
+	Category          *string
 	Notes             *string
 	PlanApproved      *bool
 	PlanApprovedAt    *time.Time

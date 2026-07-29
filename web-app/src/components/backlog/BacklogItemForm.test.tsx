@@ -701,3 +701,150 @@ describe("BacklogItemForm — sdd default pipeline pre-selection", () => {
     );
   });
 });
+
+// docs/tasks/backlog-feature-improvement.md, 07-27/07-28 updates, recommended
+// action #5: category picker pre-fills sane per-category automation defaults
+// at creation time only, never clobbering a manual override, and never
+// touching the toggles on an existing item.
+describe("BacklogItemForm — category selector", () => {
+  beforeEach(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("selecting a category in create mode applies its defaults to the toggle checkboxes", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-category-bugfix");
+
+    fireEvent.click(screen.getByTestId("backlog-category-bugfix"));
+
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-skip-planning-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-skip-review-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-pipeline-mode-default")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("applies the feature category's defaults, including selecting the sdd pipeline mode", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-category-feature");
+
+    fireEvent.click(screen.getByTestId("backlog-category-feature"));
+
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-skip-planning-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-skip-review-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).not.toBeChecked();
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-pipeline-mode-sdd")).toHaveAttribute("aria-checked", "true")
+    );
+  });
+
+  it("re-applies defaults from scratch when the category selection changes again", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-category-bugfix");
+
+    // bugfix: autoSpawnSession + skipPlanning true, skipReviewGate + autoCreatePR false.
+    fireEvent.click(screen.getByTestId("backlog-category-bugfix"));
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-skip-review-checkbox")).not.toBeChecked();
+
+    // chore: every toggle true — switching categories re-applies from scratch,
+    // it does not merge with whatever bugfix left behind.
+    fireEvent.click(screen.getByTestId("backlog-category-chore"));
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-skip-planning-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-skip-review-checkbox")).toBeChecked();
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).toBeChecked();
+  });
+
+  it("a manual toggle flip after category selection persists in the submit payload (override wins)", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+    render(<BacklogItemForm onSubmit={onSubmit} onCancel={jest.fn()} />);
+    await screen.findByTestId("backlog-category-bugfix");
+
+    // bugfix defaults: autoSpawnSession=true, skipPlanning=true.
+    fireEvent.click(screen.getByTestId("backlog-category-bugfix"));
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).toBeChecked();
+
+    // Manually override autoSpawnSession back to false after the category applied it.
+    fireEvent.click(screen.getByTestId("backlog-auto-spawn-session-checkbox"));
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).not.toBeChecked();
+
+    fireEvent.change(screen.getByTestId("backlog-title-input"), {
+      target: { value: "Some title" },
+    });
+    fireEvent.change(screen.getByTestId("backlog-repo-path-input"), {
+      target: { value: "/home/user/project" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: "bugfix",
+          autoSpawnSession: false, // manual override wins over the category default
+          skipPlanning: true, // untouched category default still applies
+        })
+      )
+    );
+  });
+
+  it("in edit mode, changing category does not alter toggle state", async () => {
+    mockListPipelineModes(() => Promise.resolve([SDD_MODE]));
+    const onSubmit = jest.fn().mockResolvedValue(undefined);
+
+    render(
+      <BacklogItemForm
+        initialValues={{
+          id: "item-1",
+          title: "Existing item",
+          repoPath: "/home/user/project",
+          skipPlanning: false,
+          skipReviewGate: false,
+          autoSpawnSession: false,
+          autoCreatePR: false,
+          category: "",
+        }}
+        onSubmit={onSubmit}
+        onCancel={jest.fn()}
+      />
+    );
+    await screen.findByTestId("backlog-category-bugfix");
+
+    fireEvent.click(screen.getByTestId("backlog-category-bugfix"));
+
+    expect(screen.getByTestId("backlog-category-bugfix")).toHaveAttribute("aria-checked", "true");
+    // bugfix's defaults (autoSpawnSession/skipPlanning true) are NOT applied on an existing item.
+    expect(screen.getByTestId("backlog-auto-spawn-session-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-skip-planning-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-skip-review-checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("backlog-auto-create-pr-checkbox")).not.toBeChecked();
+
+    fireEvent.click(screen.getByTestId("backlog-form-submit"));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: "bugfix",
+          autoSpawnSession: false,
+          skipPlanning: false,
+          skipReviewGate: false,
+          autoCreatePR: false,
+        })
+      )
+    );
+  });
+});
