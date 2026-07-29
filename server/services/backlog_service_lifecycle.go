@@ -162,6 +162,13 @@ func (s *BacklogService) CreateBacklogItem(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
+	category := ""
+	if req.Msg.Category != nil {
+		category = *req.Msg.Category
+	}
+	if !session.IsValidBacklogCategory(category) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid category %q", category))
+	}
 
 	acJSON, err := acCriteriaToJSON(req.Msg.AcceptanceCriteria)
 	if err != nil {
@@ -190,6 +197,7 @@ func (s *BacklogService) CreateBacklogItem(
 		AutoSpawnSession:   req.Msg.AutoSpawnSession,
 		AutoCreatePR:       req.Msg.AutoCreatePr,
 		PipelineMode:       defaultPipelineModeForNewItem(req.Msg.PipelineMode),
+		Category:           category,
 		Notes:              req.Msg.Notes,
 	}
 
@@ -275,6 +283,16 @@ func (s *BacklogService) UpdateBacklogItem(
 	// SkipReviewGate/SkipPlanning/AutoSpawnSession above — see Story 1.4.4.
 	if req.Msg.PipelineMode != nil {
 		update.PipelineMode = req.Msg.PipelineMode
+	}
+	// Category is presence-gated the same way as PipelineMode above: only set
+	// update.Category when the field was explicitly present on the request,
+	// so an omitted category never clobbers the item's existing category back
+	// to "" (uncategorized).
+	if req.Msg.Category != nil {
+		if !session.IsValidBacklogCategory(*req.Msg.Category) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid category %q", *req.Msg.Category))
+		}
+		update.Category = req.Msg.Category
 	}
 	// ReworkCapOverride is presence-gated the same way as PipelineMode above:
 	// only set when the client explicitly sent it, so an omitted field never

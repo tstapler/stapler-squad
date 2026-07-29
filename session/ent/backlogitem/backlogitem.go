@@ -37,6 +37,8 @@ const (
 	FieldAutoCreatePr = "auto_create_pr"
 	// FieldPipelineMode holds the string denoting the pipeline_mode field in the database.
 	FieldPipelineMode = "pipeline_mode"
+	// FieldCategory holds the string denoting the category field in the database.
+	FieldCategory = "category"
 	// FieldPlanApproved holds the string denoting the plan_approved field in the database.
 	FieldPlanApproved = "plan_approved"
 	// FieldPlanApprovedAt holds the string denoting the plan_approved_at field in the database.
@@ -149,6 +151,7 @@ var Columns = []string{
 	FieldAutoSpawnSession,
 	FieldAutoCreatePr,
 	FieldPipelineMode,
+	FieldCategory,
 	FieldPlanApproved,
 	FieldPlanApprovedAt,
 	FieldQueuedAt,
@@ -218,6 +221,8 @@ var (
 	DefaultAutoCreatePr bool
 	// DefaultPipelineMode holds the default value on creation for the "pipeline_mode" field.
 	DefaultPipelineMode string
+	// DefaultCategory holds the default value on creation for the "category" field.
+	DefaultCategory string
 	// DefaultPlanApproved holds the default value on creation for the "plan_approved" field.
 	DefaultPlanApproved bool
 	// DefaultQueuedAutonomous holds the default value on creation for the "queued_autonomous" field.
@@ -301,6 +306,11 @@ func ByAutoCreatePr(opts ...sql.OrderTermOption) OrderOption {
 // ByPipelineMode orders the results by the pipeline_mode field.
 func ByPipelineMode(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPipelineMode, opts...).ToFunc()
+}
+
+// ByCategory orders the results by the category field.
+func ByCategory(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCategory, opts...).ToFunc()
 }
 
 // ByPlanApproved orders the results by the plan_approved field.

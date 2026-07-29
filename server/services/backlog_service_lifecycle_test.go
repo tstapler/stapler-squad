@@ -146,6 +146,118 @@ func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledBu
 	assert.Equal(t, "", *resp2.Msg.Item.PipelineMode, "explicit empty pipeline_mode must mean the flat default, not the sdd default")
 }
 
+// ─── category (docs/tasks/backlog-feature-improvement.md, recommended action #5) ──
+
+// TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted is the
+// default-behavior guard: an item created without an explicit category must
+// come back uncategorized ("").
+func TestCreateBacklogItem_should_DefaultCategoryToEmpty_When_FieldOmitted(t *testing.T) {
+	svc := newBacklogService(t)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item without a category",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.Category)
+	assert.Equal(t, "", *resp.Msg.Item.Category)
+}
+
+// TestCreateBacklogItem_should_PersistCategory_When_FieldSet is the round-trip
+// case for an explicitly-set, valid category.
+func TestCreateBacklogItem_should_PersistCategory_When_FieldSet(t *testing.T) {
+	svc := newBacklogService(t)
+
+	bugfix := "bugfix"
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "item with a category",
+		Category: &bugfix,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Item.Category)
+	assert.Equal(t, "bugfix", *resp.Msg.Item.Category)
+}
+
+// TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided
+// verifies CreateBacklogItem rejects any category outside the 4-value enum
+// (plus empty) with CodeInvalidArgument, mirroring how other enum-shaped
+// fields are validated in this service.
+func TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	svc := newBacklogService(t)
+
+	bogus := "not-a-real-category"
+	_, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "item with a bogus category",
+		Category: &bogus,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted is the
+// presence-gating regression guard: an UpdateBacklogItem request that omits
+// category entirely (req.Msg.Category == nil) must never clobber the item's
+// existing stored category back to "".
+func TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted(t *testing.T) {
+	svc := newBacklogService(t)
+
+	bugfix := "bugfix"
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "item using bugfix category",
+		Category: &bugfix,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, created.Msg.Item.Category)
+	require.Equal(t, "bugfix", *created.Msg.Item.Category)
+
+	// category is deliberately left unset (nil) on this request.
+	updated, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+		Title:  "renamed item",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, updated.Msg.Item.Category)
+	assert.Equal(t, "bugfix", *updated.Msg.Item.Category, "omitted category must not clobber the item's existing category")
+}
+
+// TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet proves the other
+// half of presence-gating: an explicitly-present category value is honored.
+func TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with no category yet",
+	}))
+	require.NoError(t, err)
+
+	feature := "feature"
+	updated, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		Category: &feature,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, updated.Msg.Item.Category)
+	assert.Equal(t, "feature", *updated.Msg.Item.Category)
+}
+
+// TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided
+// mirrors the create-side validation guard for the update path.
+func TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item to attempt a bogus category update on",
+	}))
+	require.NoError(t, err)
+
+	bogus := "not-a-real-category"
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		Category: &bogus,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
 // ─── auto_create_pr policy flag (opt-in "auto-create PR on Complete") ─────────
 
 // TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted is the

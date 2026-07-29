@@ -380,3 +380,25 @@ func FuzzMergeAcCriteria(f *testing.F) {
 		_, _ = MergeAcCriteria(existing, incoming)
 	})
 }
+
+// TestIsValidBacklogCategory_should_ReturnTrue_When_KnownOrEmpty verifies the
+// session-package wrapper around domain.BacklogCategory.IsValid behaves
+// identically — all 4 constants plus "" (uncategorized) are valid.
+func TestIsValidBacklogCategory_should_ReturnTrue_When_KnownOrEmpty(t *testing.T) {
+	for _, c := range []string{
+		string(BacklogCategoryBugfix), string(BacklogCategoryFeature),
+		string(BacklogCategoryChore), string(BacklogCategoryRefactor), "",
+	} {
+		if !IsValidBacklogCategory(c) {
+			t.Errorf("IsValidBacklogCategory(%q) = false, want true", c)
+		}
+	}
+}
+
+// TestIsValidBacklogCategory_should_ReturnFalse_When_Unknown guards against an
+// unvalidated string ever reaching the repository as a "valid" category.
+func TestIsValidBacklogCategory_should_ReturnFalse_When_Unknown(t *testing.T) {
+	if IsValidBacklogCategory("banana") {
+		t.Errorf(`IsValidBacklogCategory("banana") = true, want false`)
+	}
+}

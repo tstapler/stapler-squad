@@ -41,6 +41,8 @@ type BacklogItem struct {
 	AutoCreatePr bool `json:"auto_create_pr,omitempty"`
 	// Slug of the PipelineMode this item uses to drive triage/work/review content. Empty string means the built-in default (today's fixed hardcoded pipeline).
 	PipelineMode string `json:"pipeline_mode,omitempty"`
+	// Coarse classification (bugfix/feature/chore/refactor) used by the frontend to pre-fill sane automation-toggle defaults at creation time. Empty string means uncategorized (today's behavior, preserved exactly). See session.IsValidBacklogCategory for the validated enum.
+	Category string `json:"category,omitempty"`
 	// PlanApproved holds the value of the "plan_approved" field.
 	PlanApproved bool `json:"plan_approved,omitempty"`
 	// PlanApprovedAt holds the value of the "plan_approved_at" field.
@@ -174,7 +176,7 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case backlogitem.FieldPriority, backlogitem.FieldPrNumber, backlogitem.FieldShippedApprovedCount, backlogitem.FieldShippedChangesReqCount, backlogitem.FieldReworkCapOverride:
 			values[i] = new(sql.NullInt64)
-		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
+		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
 		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -268,6 +270,12 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field pipeline_mode", values[i])
 			} else if value.Valid {
 				_m.PipelineMode = value.String
+			}
+		case backlogitem.FieldCategory:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field category", values[i])
+			} else if value.Valid {
+				_m.Category = value.String
 			}
 		case backlogitem.FieldPlanApproved:
 			if value, ok := values[i].(*sql.NullBool); !ok {
@@ -506,6 +514,9 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("pipeline_mode=")
 	builder.WriteString(_m.PipelineMode)
+	builder.WriteString(", ")
+	builder.WriteString("category=")
+	builder.WriteString(_m.Category)
 	builder.WriteString(", ")
 	builder.WriteString("plan_approved=")
 	builder.WriteString(fmt.Sprintf("%v", _m.PlanApproved))

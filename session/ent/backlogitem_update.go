@@ -214,6 +214,20 @@ func (_u *BacklogItemUpdate) SetNillablePipelineMode(v *string) *BacklogItemUpda
 	return _u
 }
 
+// SetCategory sets the "category" field.
+func (_u *BacklogItemUpdate) SetCategory(v string) *BacklogItemUpdate {
+	_u.mutation.SetCategory(v)
+	return _u
+}
+
+// SetNillableCategory sets the "category" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillableCategory(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetCategory(*v)
+	}
+	return _u
+}
+
 // SetPlanApproved sets the "plan_approved" field.
 func (_u *BacklogItemUpdate) SetPlanApproved(v bool) *BacklogItemUpdate {
 	_u.mutation.SetPlanApproved(v)
@@ -934,6 +948,9 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.Category(); ok {
+		_spec.SetField(backlogitem.FieldCategory, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.PlanApproved(); ok {
 		_spec.SetField(backlogitem.FieldPlanApproved, field.TypeBool, value)
 	}
@@ -1506,6 +1523,20 @@ func (_u *BacklogItemUpdateOne) SetPipelineMode(v string) *BacklogItemUpdateOne 
 func (_u *BacklogItemUpdateOne) SetNillablePipelineMode(v *string) *BacklogItemUpdateOne {
 	if v != nil {
 		_u.SetPipelineMode(*v)
+	}
+	return _u
+}
+
+// SetCategory sets the "category" field.
+func (_u *BacklogItemUpdateOne) SetCategory(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetCategory(v)
+	return _u
+}
+
+// SetNillableCategory sets the "category" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillableCategory(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetCategory(*v)
 	}
 	return _u
 }
@@ -2259,6 +2290,9 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if value, ok := _u.mutation.PipelineMode(); ok {
 		_spec.SetField(backlogitem.FieldPipelineMode, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Category(); ok {
+		_spec.SetField(backlogitem.FieldCategory, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.PlanApproved(); ok {
 		_spec.SetField(backlogitem.FieldPlanApproved, field.TypeBool, value)

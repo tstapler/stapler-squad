@@ -937,8 +937,12 @@ type BacklogItem struct {
 	// (MaxAutoReworkIterationsOrDefault). 0 = unlimited retries for this item.
 	// >0 = this item's own cap, replacing the global value.
 	ReworkCapOverride *int32 `protobuf:"varint,28,opt,name=rework_cap_override,json=reworkCapOverride,proto3,oneof" json:"rework_cap_override,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// category is a coarse classification (bugfix/feature/chore/refactor) the
+	// frontend uses to pre-fill sane automation-toggle defaults at creation
+	// time. Unset/empty means uncategorized.
+	Category      *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BacklogItem) Reset() {
@@ -1165,6 +1169,13 @@ func (x *BacklogItem) GetReworkCapOverride() int32 {
 		return *x.ReworkCapOverride
 	}
 	return 0
+}
+
+func (x *BacklogItem) GetCategory() string {
+	if x != nil && x.Category != nil {
+		return *x.Category
+	}
+	return ""
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -1563,8 +1574,11 @@ type CreateBacklogItemRequest struct {
 	AutoSpawnSession   bool                   `protobuf:"varint,10,opt,name=auto_spawn_session,json=autoSpawnSession,proto3" json:"auto_spawn_session,omitempty"`
 	PipelineMode       *string                `protobuf:"bytes,11,opt,name=pipeline_mode,json=pipelineMode,proto3,oneof" json:"pipeline_mode,omitempty"`
 	AutoCreatePr       bool                   `protobuf:"varint,12,opt,name=auto_create_pr,json=autoCreatePr,proto3" json:"auto_create_pr,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// category is a coarse classification (bugfix/feature/chore/refactor).
+	// Unset means uncategorized.
+	Category      *string `protobuf:"bytes,13,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateBacklogItemRequest) Reset() {
@@ -1679,6 +1693,13 @@ func (x *CreateBacklogItemRequest) GetAutoCreatePr() bool {
 		return x.AutoCreatePr
 	}
 	return false
+}
+
+func (x *CreateBacklogItemRequest) GetCategory() string {
+	if x != nil && x.Category != nil {
+		return *x.Category
+	}
+	return ""
 }
 
 type CreateBacklogItemResponse struct {
@@ -2417,8 +2438,12 @@ type UpdateBacklogItemRequest struct {
 	// Unset = leave the item's stored override untouched. 0 = unlimited retries
 	// for this item. >0 = this item's own cap, replacing the global default.
 	ReworkCapOverride *int32 `protobuf:"varint,15,opt,name=rework_cap_override,json=reworkCapOverride,proto3,oneof" json:"rework_cap_override,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// category is presence-gated (optional string on the wire): unset means
+	// "leave the item's stored category untouched", a non-nil pointer
+	// (including one pointing at "") explicitly sets/clears it.
+	Category      *string `protobuf:"bytes,16,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateBacklogItemRequest) Reset() {
@@ -2554,6 +2579,13 @@ func (x *UpdateBacklogItemRequest) GetReworkCapOverride() int32 {
 		return *x.ReworkCapOverride
 	}
 	return 0
+}
+
+func (x *UpdateBacklogItemRequest) GetCategory() string {
+	if x != nil && x.Category != nil {
+		return *x.Category
+	}
+	return ""
 }
 
 type UpdateBacklogItemResponse struct {
@@ -7462,7 +7494,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf6\t\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa4\n" +
+	"\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -7496,9 +7529,11 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\rpipeline_mode\x18\x19 \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
 	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePr\x12F\n" +
 	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotes\x123\n" +
-	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01B\x10\n" +
+	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
+	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
-	"\x14_rework_cap_override\"\xd9\x02\n" +
+	"\x14_rework_cap_overrideB\v\n" +
+	"\t_category\"\xd9\x02\n" +
 	"\n" +
 	"ItemSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -7542,7 +7577,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\ritems_updated\x18\x05 \x01(\x05R\fitemsUpdated\x12#\n" +
 	"\ritems_skipped\x18\x06 \x01(\x05R\fitemsSkipped\x12#\n" +
 	"\ritems_errored\x18\a \x01(\x05R\fitemsErrored\x12#\n" +
-	"\rerror_message\x18\b \x01(\tR\ferrorMessage\"\xeb\x03\n" +
+	"\rerror_message\x18\b \x01(\tR\ferrorMessage\"\x99\x04\n" +
 	"\x18CreateBacklogItemRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12H\n" +
@@ -7557,8 +7592,10 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x12auto_spawn_session\x18\n" +
 	" \x01(\bR\x10autoSpawnSession\x12(\n" +
 	"\rpipeline_mode\x18\v \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
-	"\x0eauto_create_pr\x18\f \x01(\bR\fautoCreatePrB\x10\n" +
-	"\x0e_pipeline_mode\"s\n" +
+	"\x0eauto_create_pr\x18\f \x01(\bR\fautoCreatePr\x12\x1f\n" +
+	"\bcategory\x18\r \x01(\tH\x01R\bcategory\x88\x01\x01B\x10\n" +
+	"\x0e_pipeline_modeB\v\n" +
+	"\t_category\"s\n" +
 	"\x19CreateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\x12)\n" +
 	"\x10triage_triggered\x18\x02 \x01(\bR\x0ftriageTriggered\"0\n" +
@@ -7614,7 +7651,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\x12)\n" +
 	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xa5\x05\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xd3\x05\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -7631,9 +7668,11 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x12auto_spawn_session\x18\f \x01(\bR\x10autoSpawnSession\x12(\n" +
 	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
 	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePr\x123\n" +
-	"\x13rework_cap_override\x18\x0f \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01B\x10\n" +
+	"\x13rework_cap_override\x18\x0f \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
+	"\bcategory\x18\x10 \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
-	"\x14_rework_cap_override\"H\n" +
+	"\x14_rework_cap_overrideB\v\n" +
+	"\t_category\"H\n" +
 	"\x19UpdateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"4\n" +
 	"\x19ArchiveBacklogItemRequest\x12\x17\n" +

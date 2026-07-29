@@ -46,6 +46,11 @@ export function LifecycleSummary({ item, pipelineDisplay, stuckItem }: Lifecycle
     <div className={styles.container} data-testid="lifecycle-summary">
       <StageTracker status={item.status} />
       {stuckItem && <BlockerChip variant="full" item={stuckItem} />}
+      {item.category && (
+        <span className={styles.pipelineBadge} data-testid="lifecycle-category-badge">
+          Category: {item.category}
+        </span>
+      )}
       {showPipelineBadge && pipelineDisplay?.kind === "resolved" && (
         <span className={styles.pipelineBadge} data-testid="lifecycle-pipeline-badge">
           Pipeline: {pipelineDisplay.name}

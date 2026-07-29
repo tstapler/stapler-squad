@@ -2995,6 +2995,7 @@ type BacklogItemMutation struct {
 	auto_spawn_session              *bool
 	auto_create_pr                  *bool
 	pipeline_mode                   *string
+	category                        *string
 	plan_approved                   *bool
 	plan_approved_at                *time.Time
 	queued_at                       *time.Time
@@ -3600,6 +3601,42 @@ func (m *BacklogItemMutation) OldPipelineMode(ctx context.Context) (v string, er
 // ResetPipelineMode resets all changes to the "pipeline_mode" field.
 func (m *BacklogItemMutation) ResetPipelineMode() {
 	m.pipeline_mode = nil
+}
+
+// SetCategory sets the "category" field.
+func (m *BacklogItemMutation) SetCategory(s string) {
+	m.category = &s
+}
+
+// Category returns the value of the "category" field in the mutation.
+func (m *BacklogItemMutation) Category() (r string, exists bool) {
+	v := m.category
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCategory returns the old "category" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldCategory(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCategory is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCategory requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCategory: %w", err)
+	}
+	return oldValue.Category, nil
+}
+
+// ResetCategory resets all changes to the "category" field.
+func (m *BacklogItemMutation) ResetCategory() {
+	m.category = nil
 }
 
 // SetPlanApproved sets the "plan_approved" field.
@@ -5006,7 +5043,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 32)
+	fields := make([]string, 0, 33)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5039,6 +5076,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	}
 	if m.pipeline_mode != nil {
 		fields = append(fields, backlogitem.FieldPipelineMode)
+	}
+	if m.category != nil {
+		fields = append(fields, backlogitem.FieldCategory)
 	}
 	if m.plan_approved != nil {
 		fields = append(fields, backlogitem.FieldPlanApproved)
@@ -5133,6 +5173,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.AutoCreatePr()
 	case backlogitem.FieldPipelineMode:
 		return m.PipelineMode()
+	case backlogitem.FieldCategory:
+		return m.Category()
 	case backlogitem.FieldPlanApproved:
 		return m.PlanApproved()
 	case backlogitem.FieldPlanApprovedAt:
@@ -5206,6 +5248,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldAutoCreatePr(ctx)
 	case backlogitem.FieldPipelineMode:
 		return m.OldPipelineMode(ctx)
+	case backlogitem.FieldCategory:
+		return m.OldCategory(ctx)
 	case backlogitem.FieldPlanApproved:
 		return m.OldPlanApproved(ctx)
 	case backlogitem.FieldPlanApprovedAt:
@@ -5333,6 +5377,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPipelineMode(v)
+		return nil
+	case backlogitem.FieldCategory:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCategory(v)
 		return nil
 	case backlogitem.FieldPlanApproved:
 		v, ok := value.(bool)
@@ -5748,6 +5799,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldPipelineMode:
 		m.ResetPipelineMode()
+		return nil
+	case backlogitem.FieldCategory:
+		m.ResetCategory()
 		return nil
 	case backlogitem.FieldPlanApproved:
 		m.ResetPlanApproved()

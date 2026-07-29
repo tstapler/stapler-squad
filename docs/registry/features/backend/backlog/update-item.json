@@ -9,7 +9,10 @@
   "tested": true,
   "testIds": [
     "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",
-    "TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest"
+    "TestUpdateBacklogItem_should_PreserveExistingPipelineMode_When_FieldOmittedFromRequest",
+    "TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted",
+    "TestUpdateBacklogItem_should_UpdateCategory_When_FieldSet",
+    "TestUpdateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided"
   ],
-  "lastModified": "2026-07-17T00:00:00-07:00"
+  "lastModified": "2026-07-29T00:00:00-07:00"
 }

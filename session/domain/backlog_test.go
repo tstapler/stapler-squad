@@ -46,3 +46,26 @@ func TestStuckReasonPRNeedsFix_should_beValid_When_Checked(t *testing.T) {
 		t.Errorf("StuckReasonPRNeedsFix.IsValid() = false, want true")
 	}
 }
+
+// TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty verifies all
+// 4 category constants validate as true, AND (unlike StuckReason above) the
+// empty string also validates as true — "uncategorized" is a legitimate value
+// here, not an unvalidated placeholder.
+func TestBacklogCategory_IsValid_should_ReturnTrue_When_KnownOrEmpty(t *testing.T) {
+	known := []BacklogCategory{
+		BacklogCategoryBugfix, BacklogCategoryFeature, BacklogCategoryChore, BacklogCategoryRefactor, "",
+	}
+	for _, c := range known {
+		if !c.IsValid() {
+			t.Errorf("BacklogCategory(%q).IsValid() = false, want true", c)
+		}
+	}
+}
+
+// TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown guards against
+// an unvalidated string ever being treated as a real category.
+func TestBacklogCategory_IsValid_should_ReturnFalse_When_Unknown(t *testing.T) {
+	if BacklogCategory("banana").IsValid() {
+		t.Errorf(`BacklogCategory("banana").IsValid() = true, want false`)
+	}
+}
