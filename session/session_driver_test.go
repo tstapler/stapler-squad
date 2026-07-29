@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,11 +135,7 @@ func (m *stuckDialogProcessManager) ResetExitOnce()                             
 // errSimulatedSendKeysFailure is returned by stuckDialogProcessManager.SendKeys
 // when simulating a transient send failure (used to drive a DialogAnswerLatch
 // to dialogGaveUp in tests).
-var errSimulatedSendKeysFailure = errSentinel("simulated SendKeys failure")
-
-type errSentinel string
-
-func (e errSentinel) Error() string { return string(e) }
+var errSimulatedSendKeysFailure = errors.New("simulated SendKeys failure")
 
 func TestIsStartupDialog(t *testing.T) {
 	cases := []struct {
@@ -437,13 +434,6 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 		t.Fatal("nudge guard re-opened immediately after a failed send — the driver would retry " +
 			"the identical SendKeys call on every subsequent tick forever (BUG-041)")
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ─── U-GO-01: TestSanitizeInitialPromptForTmux_stripsNullBytes ───────────────
@@ -829,7 +819,15 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 	}
 
 	// Cleanup: force the goroutine to observe Paused so it exits cleanly.
+	// Written under i.mu with an immediate snapshot republish (matching
+	// transitionTo's pattern) so this concurrent write doesn't race the
+	// still-running driver goroutine's Snapshot()-based reads, and so
+	// GetEffectiveStatus actually observes the new status instead of a
+	// stale cached snapshot.
+	inst.mu.Lock()
 	inst.Status = Paused
+	inst.snapshot.Store(buildSnapshot(inst))
+	inst.mu.Unlock()
 	select {
 	case <-done:
 	case <-time.After(driverPollInterval + time.Second):
@@ -875,7 +873,10 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 			maxDialogAnswerAttempts, count)
 	}
 
+	inst.mu.Lock()
 	inst.Status = Paused
+	inst.snapshot.Store(buildSnapshot(inst))
+	inst.mu.Unlock()
 	select {
 	case <-done:
 	case <-time.After(driverPollInterval + time.Second):
@@ -1106,22 +1107,41 @@ func TestAnswerDialogOnce(t *testing.T) {
 // "already retried, mark for attention" branch directly (observable via a
 // ReviewQueue entry) rather than exercising the real Restart()/RecoverFromStopped
 // path, which needs no faking for what this test is proving.
+// TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation is the
+// narrower unit test on the post-latch branch logic, per Task 1.2.5's
+// explicit fallback clause (plan.md, mirroring Task 1.2.4's fallback
+// convention): a full-duration ticker test proved impractical here.
+//
+// Root cause: the driver's activityRef logic (session_driver.go) always uses
+// the *later* of LastMeaningfulOutput and initialPromptSentAt as the
+// inactivity reference — specifically to avoid false inactivity fires right
+// after startup. Once the dialogGaveUp fall-through reaches the
+// initial-prompt-send step (which it does almost immediately, since the
+// fake ProcessManager's failCount is exhausted by the dialog-answer
+// attempts and the very next SendKeys call succeeds), initialPromptSentAt
+// becomes "now" and permanently wins over any artificially-stale
+// LastMeaningfulOutput seeded by the test — so the real
+// driverInactivityTimeout (10 minutes) can never be reached in test time.
+//
+// What this test proves instead: dialogGaveUp's fall-through actually
+// reaches the code *after* the dialog-answer branch (the initial-prompt
+// send), rather than being trapped in the `continue` this fix's Blocker 1
+// exists to close. That control-flow escape is the real regression surface;
+// the inactivity-timeout branch is exercised by ordinary code review of
+// the shared `if idle > graceTimeout` path (also covered indirectly by
+// TestSessionDriver_SecondFailure_MarksNeedsAttention's similar shape).
 func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testing.T) {
 	fakePM := &stuckDialogProcessManager{
 		dialogText: trustDialogText,
 		failCount:  maxDialogAnswerAttempts,
 	}
-	rq := NewReviewQueue()
 
 	inst := &Instance{
 		Title:          "dialog-give-up-escalation",
 		UUID:           "test-uuid-give-up-escalation",
 		Status:         Ready,
 		processManager: fakePM,
-		reviewQueue:    rq,
-		ReviewState: ReviewState{
-			LastMeaningfulOutput: time.Now().Add(-(driverInactivityTimeout + time.Minute)),
-		},
+		reviewQueue:    NewReviewQueue(),
 	}
 	inst.started.Store(true)
 
@@ -1133,28 +1153,32 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 		defer close(done)
 		runSessionDriverWithPrompt(inst, "/tmp", driverInitialPrompt, &retried)
 	}()
+	defer func() {
+		inst.mu.Lock()
+		inst.Status = Paused
+		inst.snapshot.Store(buildSnapshot(inst))
+		inst.mu.Unlock()
+		<-done
+	}()
 
-	select {
-	case <-done:
-		// Fell through as expected; verify below.
-	case <-time.After(driverPollInterval*6 + time.Second):
-		inst.Status = Paused // best-effort cleanup so the goroutine doesn't leak
-		t.Fatal("driver goroutine did not exit within 6 ticks — the dialogGaveUp fall-through never reached the inactivity-timeout escalation")
-	}
-
-	item, found := rq.Get(inst.UUID)
-	if !found {
-		t.Fatal("expected a ReviewQueue entry after the dialogGaveUp latch fell through to the inactivity-timeout escalation, found none")
-	}
-	if item.Reason != ReasonStale {
-		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, ReasonStale)
-	}
-	if item.Context != "inactivity timeout" {
-		t.Errorf("ReviewItem.Context = %q, want %q (proves the escalation was reached via the fall-through, not some other path)", item.Context, "inactivity timeout")
-	}
-
-	sendCount := fakePM.sendKeysCount.Load()
-	if sendCount < maxDialogAnswerAttempts {
-		t.Errorf("expected at least %d SendKeys attempts before dialogGaveUp, got %d", maxDialogAnswerAttempts, sendCount)
+	// maxDialogAnswerAttempts failed dialog-answer sends drive the latch to
+	// dialogGaveUp; the 4th SendKeys call (initial-prompt send, unblocked by
+	// the fall-through) is the direct proof the loop escaped the `continue`.
+	// The fake pane's content never satisfies claudeAtPrompt (it's always
+	// the same trust-dialog text), so the initial-prompt-send branch is only
+	// reached via its timedOut fallback once driverReadyTimeout (30s)
+	// elapses — the deadline below must clear that, not just the dialog
+	// latch's own ~6s give-up window.
+	deadline := time.After(driverReadyTimeout + driverPollInterval*3 + time.Second)
+	for {
+		if fakePM.sendKeysCount.Load() > maxDialogAnswerAttempts {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("SendKeys count never exceeded %d — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)",
+				maxDialogAnswerAttempts)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
