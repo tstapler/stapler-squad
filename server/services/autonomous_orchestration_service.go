@@ -382,6 +382,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 									go func() {
 										if respawnErr := respawner.AutoRespawnAutonomousWork(a.lifecycleCtx, itemID); respawnErr != nil {
 											log.Warn("[AutonomousDriver] AutoRespawnAutonomousWork failed", "item", itemID, "err", respawnErr)
+											a.notifyAutonomousRespawnAttemptFailed(itemID, itemTitle, respawnErr)
 										}
 									}()
 								} else {
@@ -585,6 +586,31 @@ func (a *AutonomousOrchestrationService) notifyStuckReviewBookkeepingFailed(item
 		int32(3), // NotificationPriority_HIGH
 		"Stuck-review bookkeeping failed",
 		fmt.Sprintf("%s: could not mark the stalled review session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, endErr),
+		nil,
+	))
+}
+
+// notifyAutonomousRespawnAttemptFailed publishes an operator-facing
+// notification when a single AutoRespawnAutonomousWork attempt fails. Before
+// this fix, a failed respawn attempt was only log.Warn'd — invisible to the
+// operator for up to the full ~4.5-day backoff schedule, until either a
+// later attempt silently succeeded or RemediationDue's justParked branch
+// finally surfaced something once attempts were exhausted (see
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry: "unlike
+// BUG-030's fix which surfaces every failure immediately"). Unlike that
+// justParked notification (terminal: "give up automatically, use Reset"),
+// this fires on every individual failed attempt and is deliberately
+// non-terminal — WARNING/MEDIUM rather than justParked's WARNING/HIGH, since
+// no operator action is required yet: the item will still retry
+// automatically on the next backoff-eligible tick. Mirrors
+// notifyStuckReviewBookkeepingFailed's direct a.bus.Publish shape.
+func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(itemID, itemTitle string, respawnErr error) {
+	a.bus.Publish(events.NewNotificationEvent(
+		itemID, "", fmt.Sprintf("stuck-autonomous-respawn-failed-%s", itemID),
+		int32(8), // NotificationType_WARNING
+		int32(2), // NotificationPriority_MEDIUM
+		"Automated retry failed",
+		fmt.Sprintf("%s — an automated turn-budget respawn attempt failed (%v). It will retry automatically per the standard backoff schedule.", itemTitle, respawnErr),
 		nil,
 	))
 }

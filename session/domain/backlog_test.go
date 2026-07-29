@@ -27,12 +27,22 @@ func TestStuckReasonReworkBlockedStale_should_beValid_When_Checked(t *testing.T)
 	}
 }
 
-// TestAllStuckReasons_should_contain12Entries_When_Enumerated is a regression
+// TestAllStuckReasons_should_contain13Entries_When_Enumerated is a regression
 // guard: catches an accidental removal from AllStuckReasons (which would
 // silently exclude a valid reason from every consumer that iterates the full
 // set, e.g. exhaustiveness tests) independent of IsValid's own switch.
-func TestAllStuckReasons_should_contain12Entries_When_Enumerated(t *testing.T) {
-	if len(AllStuckReasons) != 12 {
-		t.Errorf("len(AllStuckReasons) = %d, want 12", len(AllStuckReasons))
+func TestAllStuckReasons_should_contain13Entries_When_Enumerated(t *testing.T) {
+	if len(AllStuckReasons) != 13 {
+		t.Errorf("len(AllStuckReasons) = %d, want 13", len(AllStuckReasons))
+	}
+}
+
+// TestStuckReasonPRNeedsFix_should_beValid_When_Checked confirms the new
+// reason (ReconcilePRPending's missing backoff gate fix,
+// docs/tasks/backlog-feature-improvement.md 2026-07-28) round-trips through
+// IsValid exactly like the other 12 established reasons.
+func TestStuckReasonPRNeedsFix_should_beValid_When_Checked(t *testing.T) {
+	if !StuckReasonPRNeedsFix.IsValid() {
+		t.Errorf("StuckReasonPRNeedsFix.IsValid() = false, want true")
 	}
 }
