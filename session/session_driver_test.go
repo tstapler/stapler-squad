@@ -52,7 +52,7 @@ func (m *stuckDialogProcessManager) HasSession() bool                    { retur
 func (m *stuckDialogProcessManager) GetCurrentWorkingDirectory() (string, error) {
 	return "/tmp", nil
 }
-func (m *stuckDialogProcessManager) GetPTY() (*os.File, error) { return nil, nil }
+func (m *stuckDialogProcessManager) GetPTY() (*os.File, error) { return nil, nil } //nolint:nilnil
 func (m *stuckDialogProcessManager) SendKeys(keys string) (int, error) {
 	n := m.sendKeysCount.Add(1)
 	if m.failCount > 0 && int(n) <= m.failCount {
@@ -126,7 +126,7 @@ func (m *stuckDialogProcessManager) SubscribeToControlModeUpdates() (string, cha
 	return "", nil
 }
 func (m *stuckDialogProcessManager) UnsubscribeFromControlModeUpdates(id string) {}
-func (m *stuckDialogProcessManager) Attach() (chan struct{}, error)              { return nil, nil }
+func (m *stuckDialogProcessManager) Attach() (chan struct{}, error)              { return nil, nil } //nolint:nilnil
 func (m *stuckDialogProcessManager) DetachSafely() error                         { return nil }
 func (m *stuckDialogProcessManager) SetOnExitCallback(fn func(string))           {}
 func (m *stuckDialogProcessManager) ResetExitOnce()                              {}
