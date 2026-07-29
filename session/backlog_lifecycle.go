@@ -195,19 +195,29 @@ const agentShipPrompt = "/backlog/ship"
 const oneShotShipTimeoutSeconds = 1800
 
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
-// default session list. Implemented by server/services.SessionService (it owns the
-// live in-memory Instance registry archival must go through — see ArchivedAt's
-// doc comment on session.Instance); wired via SetSessionArchiver from
-// server/dependencies.go, same pattern as SetNotifier/SetSessionCreator below.
+// default session list, and can also kill its live tmux pane. Implemented by
+// server/services.SessionService (it owns the live in-memory Instance registry both
+// operations must go through — see ArchivedAt's doc comment on session.Instance);
+// wired via SetSessionArchiver from server/dependencies.go, same pattern as
+// SetNotifier/SetSessionCreator below.
 // Used by the archive_terminal_sessions detector in ReconcileStuck as a periodic
 // safety net for work sessions belonging to backlog items that reached done/archived
-// without their sessions being archived by the (also newly added) transition hook —
-// e.g. pre-existing terminal items from before this detector existed, or a race/crash
-// mid-transition. Nil-safe: the detector no-ops when unset.
+// without their sessions being archived/stopped by the (also newly added) transition
+// hook — e.g. pre-existing terminal items from before this detector existed, or a
+// race/crash mid-transition. Nil-safe: the detector no-ops when unset.
 type SessionArchiver interface {
 	// ArchiveSessionByUUID soft-archives the session, if found and not already
 	// archived. No-op (not an error) if the session is not tracked.
 	ArchiveSessionByUUID(ctx context.Context, sessionUUID string) error
+	// KillTmuxPaneOnly closes the session's live tmux pane, if any, leaving its
+	// worktree intact (worktree cleanup is handled separately — see
+	// cleanupItemWorktreesExcept). No-op if the session isn't tracked live.
+	// Without this, ArchiveSessionByUUID alone only hides a terminal item's work
+	// session from the default list — the underlying tmux/claude process keeps
+	// running indefinitely, accumulating memory across every completed backlog
+	// item (root cause of the 2026-07-29 OOM: dozens of `done` items' work
+	// sessions still live, each with its own MCP server subprocess fleet).
+	KillTmuxPaneOnly(ctx context.Context, sessionUUID string) error
 }
 
 // prPendingChecker is the subset of GitWorktree's PR-status behavior that
@@ -1346,10 +1356,14 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 
 // reconcileTerminalItemSessions is the archive_terminal_sessions safety-net detector:
 // it finds every backlog item already in done/archived status and archives any of its
-// work-role sessions that are not yet archived. This exists because
+// work- or review-role sessions that are not yet archived. This exists because
 // TransitionBacklogItemStatus's archival hook only fires on a NEW transition into
 // done/archived — items that were already terminal before that hook was added (or hit a
-// race/crash mid-transition) would otherwise keep their work sessions unarchived forever.
+// race/crash mid-transition) would otherwise keep their sessions unarchived forever.
+// Review-role sessions are included alongside work-role ones for the same reason
+// archiveItemWorkSessions covers both (see its doc comment) — a review session left
+// running after its item reached done/archived leaks a live claude process exactly
+// like an orphaned work session does.
 // Idempotent and cheap to re-run every tick: SessionArchiver.ArchiveSessionByUUID is a
 // CAS no-op for sessions that are already archived or no longer tracked.
 func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Context) {
@@ -1372,12 +1386,15 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			continue
 		}
 		for _, is := range sessions {
-			if is.SessionUUID == "" || is.Role != SessionRoleWork {
+			if is.SessionUUID == "" || !IsTmuxBackedSessionRole(is.Role) {
 				continue
 			}
 			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to archive session=%s item=%s: %v", is.SessionUUID, item.ID, archErr)
 				continue
+			}
+			if killErr := archiver.KillTmuxPaneOnly(ctx, is.SessionUUID); killErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileTerminalItemSessions failed to kill tmux pane session=%s item=%s: %v", is.SessionUUID, item.ID, killErr)
 			}
 			processed++
 		}

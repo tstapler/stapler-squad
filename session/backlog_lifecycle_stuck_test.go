@@ -1450,11 +1450,13 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 // and reconcileTerminalItemSessions. ---
 
 // fakeSessionArchiver is a test stub implementing SessionArchiver. It records every
-// UUID it was asked to archive, in order, and can be configured to fail for
-// specific UUIDs.
+// UUID it was asked to archive/kill, in order, and can be configured to fail for
+// specific UUIDs (archive and kill failures are tracked independently).
 type fakeSessionArchiver struct {
-	archivedUUIDs []string
-	errForUUID    map[string]error
+	archivedUUIDs  []string
+	killedUUIDs    []string
+	errForUUID     map[string]error
+	killErrForUUID map[string]error
 }
 
 func (f *fakeSessionArchiver) ArchiveSessionByUUID(_ context.Context, sessionUUID string) error {
@@ -1464,6 +1466,16 @@ func (f *fakeSessionArchiver) ArchiveSessionByUUID(_ context.Context, sessionUUI
 		}
 	}
 	f.archivedUUIDs = append(f.archivedUUIDs, sessionUUID)
+	return nil
+}
+
+func (f *fakeSessionArchiver) KillTmuxPaneOnly(_ context.Context, sessionUUID string) error {
+	if f.killErrForUUID != nil {
+		if err, ok := f.killErrForUUID[sessionUUID]; ok {
+			return err
+		}
+	}
+	f.killedUUIDs = append(f.killedUUIDs, sessionUUID)
 	return nil
 }
 
@@ -1498,6 +1510,68 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	assert.Contains(t, archiver.archivedUUIDs, "done-work-session")
 }
 
+// TestReconcileTerminalItemSessions_should_KillTmuxPane_When_ItemAlreadyDone guards
+// the 2026-07-29 OOM fix: archiving alone only hides a terminal item's work session
+// from the default list — without also killing its tmux pane, the underlying
+// claude process (and its MCP subprocess fleet) keeps running indefinitely.
+func TestReconcileTerminalItemSessions_should_KillTmuxPane_When_ItemAlreadyDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live work session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-session")
+}
+
+// TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_ItemAlreadyDone
+// guards the review-session half of the 2026-07-29 OOM fix: review-role sessions
+// leaked the same way work-role ones did (excluded from both the terminal-transition
+// hook and this safety-net sweep), leaving live review sessions for already-done
+// items running indefinitely.
+func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_ItemAlreadyDone(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "done item with a still-live review session",
+		Status: string(BacklogStatusDone),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "leaked-live-review-session",
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	archiver := &fakeSessionArchiver{}
+	listener.SetSessionArchiver(archiver)
+
+	listener.reconcileTerminalItemSessions(ctx)
+
+	assert.Contains(t, archiver.archivedUUIDs, "leaked-live-review-session")
+	assert.Contains(t, archiver.killedUUIDs, "leaked-live-review-session")
+}
+
 func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlreadyArchived(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -1524,20 +1598,27 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	assert.Contains(t, archiver.archivedUUIDs, "archived-work-session")
 }
 
-func TestReconcileTerminalItemSessions_should_NotArchiveNonWorkSessions_When_ItemDone(t *testing.T) {
+// TestReconcileTerminalItemSessions_should_NotArchiveTriageSessions_When_ItemDone
+// guards the triage-role exclusion in IsTmuxBackedSessionRole: triage sessions run
+// as bounded one-shot headless subprocess calls, not persistent tmux-attached claude
+// processes (see headlessTriageUUIDPrefix), so they have no live tmux pane for this
+// sweep to kill and archiving them here would be meaningless — their own failure
+// mode (a crashed/hung goroutine) is handled by reconcileOrphanedTriageItems /
+// reconcileOrphanedTriageRemediation instead.
+func TestReconcileTerminalItemSessions_should_NotArchiveTriageSessions_When_ItemDone(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
-		Title:  "done item with a review session",
+		Title:  "done item with a triage session",
 		Status: string(BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID:      item.ID,
-		SessionUUID: "review-session-not-archived-here",
-		SessionRole: SessionRoleReview,
+		SessionUUID: "triage-session-not-archived-here",
+		SessionRole: SessionRoleTriage,
 	})
 	require.NoError(t, err)
 
@@ -1547,7 +1628,8 @@ func TestReconcileTerminalItemSessions_should_NotArchiveNonWorkSessions_When_Ite
 
 	listener.reconcileTerminalItemSessions(ctx)
 
-	assert.Empty(t, archiver.archivedUUIDs, "the sweep only archives work-role sessions — review sessions are already hidden/one-shot and excluded by design")
+	assert.Empty(t, archiver.archivedUUIDs, "the sweep only archives tmux-backed (work/review) sessions — triage sessions are headless one-shot calls with no live pane and are excluded by design")
+	assert.Empty(t, archiver.killedUUIDs, "no tmux pane exists for a triage session to kill")
 }
 
 func TestReconcileTerminalItemSessions_should_NotArchiveAnything_When_ItemNotTerminal(t *testing.T) {

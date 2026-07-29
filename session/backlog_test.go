@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+// TestIsTmuxBackedSessionRole verifies work and review sessions (persistent
+// tmux-attached claude processes) are reported tmux-backed, while triage sessions
+// (bounded one-shot headless calls, no live tmux pane) and unknown roles are not —
+// this predicate is the single source of truth the terminal-item-session sweep and
+// the terminal-transition archival hook both defer to, so they can't drift apart on
+// which roles get cleaned up (see IsTmuxBackedSessionRole's doc comment).
+func TestIsTmuxBackedSessionRole(t *testing.T) {
+	cases := []struct {
+		name string
+		role string
+		want bool
+	}{
+		{"work session is tmux-backed", SessionRoleWork, true},
+		{"review session is tmux-backed", SessionRoleReview, true},
+		{"triage session is headless, not tmux-backed", SessionRoleTriage, false},
+		{"unknown role is not tmux-backed", "bogus", false},
+		{"empty role is not tmux-backed", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsTmuxBackedSessionRole(tc.role); got != tc.want {
+				t.Errorf("IsTmuxBackedSessionRole(%q) = %v, want %v", tc.role, got, tc.want)
+			}
+		})
+	}
+}
+
 // UT-001: TestCanTransition_AllValidPaths verifies every permitted transition returns true.
 func TestCanTransition_AllValidPaths(t *testing.T) {
 	cases := []struct {

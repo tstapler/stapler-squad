@@ -995,10 +995,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// that session recovers, ends, or the item leaves review (see
 	// ReworkBlockStaleResolver's doc comment in session/backlog_lifecycle.go).
 	backlogLifecycleListener.SetReworkBlockStaleResolver(backlogSvc)
-	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so
-	// it can soft-archive work sessions for items already done/archived — reuses
-	// sessionService's ArchiveSessionByUUID, the same method BacklogService's
-	// SessionStopper uses for the transition-hook/rework-respawn archival paths.
+	// Wire the archive_terminal_sessions safety-net detector (ReconcileStuck) so it
+	// can soft-archive AND kill the tmux pane of work/review sessions for items
+	// already done/archived (session.IsTmuxBackedSessionRole decides which roles) —
+	// reuses sessionService's ArchiveSessionByUUID/KillTmuxPaneOnly, the same methods
+	// BacklogService's SessionStopper uses for the transition-hook/rework-respawn
+	// archival paths.
 	backlogLifecycleListener.SetSessionArchiver(sessionService)
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has

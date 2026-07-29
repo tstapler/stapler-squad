@@ -1113,6 +1113,14 @@ func TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession(t *testing.T)
 		"reopen must archive exactly the superseded first-round work session")
 	assert.NotContains(t, stopper.archivedUUIDs, secondUUID,
 		"reopen must not archive the brand-new session it just created")
+	// Regression guard for the 2026-07-29 OOM: archiving alone only hides the
+	// session from the UI — its tmux pane (and the claude process/MCP subprocess
+	// fleet behind it) must also be killed, or superseded rework sessions pile up
+	// as live, resource-consuming zombies indefinitely.
+	assert.Contains(t, stopper.killedPaneUUIDs, firstUUID,
+		"reopen must also kill the superseded first-round session's tmux pane, not just archive it")
+	assert.NotContains(t, stopper.killedPaneUUIDs, secondUUID,
+		"reopen must not kill the tmux pane of the brand-new session it just created")
 }
 
 // currentBranch returns the checked-out branch name at path via the real git CLI.

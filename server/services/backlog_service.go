@@ -796,23 +796,37 @@ func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, session
 	}
 }
 
-// archiveItemWorkSessions soft-archives every work-role session in sessions so it
-// stops accumulating in the default session list. Callers are: (1) terminal status
-// transitions (done/archived), where every work session for the item is superseded,
-// and (2) rework respawns, where only the sessions loaded *before* the new spawn
-// (i.e. every prior round) are passed in — the brand-new session is never included.
-// Nil-safe (sessionStopper may be unwired, e.g. in tests) and best-effort: archival
-// failures are logged, not returned, matching cleanupItemWorktreesExcept's contract.
+// archiveItemWorkSessions soft-archives every work- or review-role session in
+// sessions so it stops accumulating in the default session list, and kills its live
+// tmux pane so the underlying claude process (and its MCP server subprocess fleet)
+// doesn't keep running indefinitely — ArchiveSessionByUUID alone only hides the
+// session from the UI, it does not stop it (root cause of the 2026-07-29 OOM:
+// dozens of superseded/completed work AND review sessions still live). Worktree
+// cleanup is handled separately by cleanupItemWorktreesExcept, so this uses
+// KillTmuxPaneOnly (pane only), not StopSessionByUUID (which also destroys the
+// worktree). Review sessions are included because they leak the same way work
+// sessions do — a review session that already wrote its verdict (the precondition
+// for reaching either call site below) has no further reason to stay alive, but
+// nothing else stops it. Callers are: (1) terminal status transitions (done/
+// archived), where every session for the item is superseded, and (2) rework
+// respawns, where only the sessions loaded *before* the new spawn (i.e. every prior
+// round, including the review session whose FAIL verdict triggered the reopen) are
+// passed in — the brand-new session is never included. Nil-safe (sessionStopper may
+// be unwired, e.g. in tests) and best-effort: archival/kill failures are logged, not
+// returned, matching cleanupItemWorktreesExcept's contract.
 func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions []session.ItemSessionSummary) {
 	if s.sessionStopper == nil {
 		return
 	}
 	for _, is := range sessions {
-		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+		if is.SessionUUID == "" || !session.IsTmuxBackedSessionRole(is.Role) {
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {
 			log.WarningLog.Printf("[archiveItemWorkSessions] failed to archive session=%s: %v", is.SessionUUID, err)
+		}
+		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
+			log.WarningLog.Printf("[archiveItemWorkSessions] failed to kill tmux pane session=%s: %v", is.SessionUUID, err)
 		}
 	}
 }
