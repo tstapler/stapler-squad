@@ -1,0 +1,18 @@
+{
+  "id": "backlog-category-selector",
+  "type": "frontend",
+  "name": "Backlog item category selector with per-category automation defaults",
+  "component": "BacklogItemForm",
+  "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
+  "filePath": "web-app/src/components/backlog/BacklogItemForm.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "BacklogItemForm — category selector > selecting a category in create mode applies its defaults to the toggle checkboxes",
+    "BacklogItemForm — category selector > applies the feature category's defaults, including selecting the sdd pipeline mode",
+    "BacklogItemForm — category selector > re-applies defaults from scratch when the category selection changes again",
+    "BacklogItemForm — category selector > a manual toggle flip after category selection persists in the submit payload (override wins)",
+    "BacklogItemForm — category selector > in edit mode, changing category does not alter toggle state"
+  ],
+  "lastModified": "2026-07-29T00:00:00Z"
+}
