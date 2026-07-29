@@ -122,6 +122,7 @@ export const body = style({
   flexDirection: "column",
   gap: 16,
   overflowY: "auto",
+  overscrollBehavior: "contain",
   flex: 1,
   minHeight: 0,
 });
