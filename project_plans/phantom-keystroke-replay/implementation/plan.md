@@ -1083,3 +1083,24 @@ question, but it is not the live-browser, live-log repro Task 4.1.1
 literally specifies. A human (or a follow-up session) should complete the
 live repro via the MCP `create_session` path once finding 3's log-routing
 gap is understood, to get the fully literal AC5 confirmation.
+
+## Post-Implementation Finding: Task 3.1.1's Extracted Loop Gained a Third Callback, `onScrollbackRequest`
+
+Task 3.1.1's literal text (line 715-716 above) specifies `runInputReadLoop`'s
+signature as taking only two callbacks — `onInput` and `onResize` — matching
+what Goroutine 2's body was understood to do at plan-writing time. The
+shipped implementation in `server/services/connectrpc_websocket.go` adds a
+third parameter, `onScrollbackRequest func(startLine, endLine string)
+(string, error)`, because the real (pre-extraction) loop body also handled
+inbound `ScrollbackRequest` envelopes — a case the plan's line-856-924 range
+citation did not call out and this ticket's authors were not tracking as a
+distinct feature. This is a genuine, justified deviation, not scope creep:
+the extraction is still a pure move (same rationale as the `sessionID`
+parameter that Concern #1 above already added) — omitting
+`onScrollbackRequest` from the extracted function's signature would either
+fail to compile or silently drop scrollback-request handling from the
+extracted loop, the same class of problem the `sessionID` parameter fix was
+added to prevent. No test assertions or extraction methodology changed;
+Task 3.1.2's `TestRunInputReadLoopExitsPromptlyOnConnectionClose` still
+covers the extraction's core bounded-exit guarantee, independent of this
+third callback.
