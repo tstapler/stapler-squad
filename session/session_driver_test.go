@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -132,11 +133,7 @@ func (m *stuckDialogProcessManager) ResetExitOnce()                             
 // errSimulatedSendKeysFailure is returned by stuckDialogProcessManager.SendKeys
 // when simulating a transient send failure (used to drive a DialogAnswerLatch
 // to dialogGaveUp in tests).
-var errSimulatedSendKeysFailure = errSentinel("simulated SendKeys failure")
-
-type errSentinel string
-
-func (e errSentinel) Error() string { return string(e) }
+var errSimulatedSendKeysFailure = errors.New("simulated SendKeys failure")
 
 func TestIsStartupDialog(t *testing.T) {
 	cases := []struct {
@@ -395,13 +392,6 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded is the permanent
 // regression proof for AC2, replacing phase0_repro_test.go's now-obsolete
 // "expect repeated sends" assertion. It runs the REAL (now-fixed)
@@ -440,7 +430,11 @@ func TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded(t *testing.T) {
 	}
 
 	// Cleanup: force the goroutine to observe Paused so it exits cleanly.
+	// Written under stateMutex (matching GetEffectiveStatus's RLock) so this
+	// concurrent write doesn't race the still-running driver goroutine's reads.
+	inst.stateMutex.Lock()
 	inst.Status = Paused
+	inst.stateMutex.Unlock()
 	select {
 	case <-done:
 	case <-time.After(driverPollInterval + time.Second):
@@ -486,7 +480,9 @@ func TestSessionDriver_TailSliceBoundsDialogMatchAndHash(t *testing.T) {
 			maxDialogAnswerAttempts, count)
 	}
 
+	inst.stateMutex.Lock()
 	inst.Status = Paused
+	inst.stateMutex.Unlock()
 	select {
 	case <-done:
 	case <-time.After(driverPollInterval + time.Second):
@@ -749,7 +745,9 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	case <-done:
 		// Fell through as expected; verify below.
 	case <-time.After(driverPollInterval*6 + time.Second):
+		inst.stateMutex.Lock()
 		inst.Status = Paused // best-effort cleanup so the goroutine doesn't leak
+		inst.stateMutex.Unlock()
 		t.Fatal("driver goroutine did not exit within 6 ticks — the dialogGaveUp fall-through never reached the inactivity-timeout escalation")
 	}
 

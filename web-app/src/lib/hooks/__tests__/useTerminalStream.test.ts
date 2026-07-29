@@ -472,6 +472,74 @@ describe('useTerminalStream — connection-generation guard (Story 2.2)', () => 
     stream2.end();
   });
 
+  // Regression (sdd:6-verify Layer 1 review): disconnect()'s delayed
+  // graceful-close timeout read shared abortControllerRef/isConnected state
+  // at *fire time* rather than a captured generation, so a disconnect() that
+  // armed its 1000ms timer while still connected could abort/clobber a
+  // newer generation that took over before the timer fired.
+  it("a stale disconnect()'s delayed abort does not tear down a newer generation that connected in the meantime", async () => {
+    const stream1 = makePushStream<object>();
+    const stream2 = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(stream1.iterable)
+      .mockReturnValueOnce(stream2.iterable);
+
+    const { result } = renderHook(() =>
+      useTerminalStream({ ...BASE_OPTIONS, autoConnect: false }),
+    );
+
+    await act(async () => {
+      result.current.connect(); // generation 1
+    });
+    await act(async () => {
+      stream1.push(makeOutputMsg());
+    });
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(true);
+    });
+
+    // isConnectedRef.current is true at this synchronous instant, so
+    // disconnect() arms its 1000ms graceful-close timer instead of
+    // resolving immediately.
+    const disconnectPromise = result.current.disconnect();
+
+    // The connection dies out from under the pending disconnect() — gen1's
+    // own generation-guarded teardown flips isConnected back to false,
+    // letting a fresh connect() proceed.
+    await act(async () => {
+      stream1.end();
+    });
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(false);
+    });
+
+    await act(async () => {
+      result.current.connect(); // generation 2, while gen1's disconnect() timer is still pending
+    });
+    await act(async () => {
+      stream2.push(makeOutputMsg());
+    });
+    await waitFor(() => {
+      expect(result.current.isConnected).toBe(true);
+    });
+
+    const gen2Signal = mockStreamTerminal.mock.calls[1][1].signal as AbortSignal;
+    expect(gen2Signal.aborted).toBe(false);
+
+    // Let gen1's stale disconnect() timeout fire.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      await disconnectPromise;
+    });
+
+    // Generation 2 must survive: its AbortSignal was not aborted and its
+    // isConnected state was not clobbered back to false.
+    expect(gen2Signal.aborted).toBe(false);
+    expect(result.current.isConnected).toBe(true);
+
+    stream2.end();
+  }, 10000);
+
   // Task 2.2.8
   it('a message pushed to the live MessageQueue right as a reconnect closes it is dropped, not delivered to either connection', async () => {
     const stream1 = makePushStream<object>();

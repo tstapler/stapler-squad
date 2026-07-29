@@ -402,6 +402,12 @@ export function useTerminalStream({
       return;
     }
     isDisconnectingRef.current = true;
+    // Captured so the delayed callback below can tell whether a newer connect()
+    // has since taken over before it mutates shared abortControllerRef/isConnected
+    // state — otherwise a stale disconnect() racing a fresh connect() can abort
+    // or clobber the newer generation's connection (see connection-generation
+    // guard on the read side in connect(), Story 2.2).
+    const myGeneration = connectionGenerationRef.current;
 
     if (messageQueueRef.current) {
       const dropped = messageQueueRef.current.close();
@@ -413,7 +419,7 @@ export function useTerminalStream({
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (abortControllerRef.current) {
+        if (myGeneration === connectionGenerationRef.current && abortControllerRef.current) {
           console.debug("[useTerminalStream] Timeout waiting for graceful close, forcing abort");
           abortControllerRef.current.abort();
           abortControllerRef.current = null;
@@ -428,7 +434,9 @@ export function useTerminalStream({
       }
     });
 
-    setIsConnected(false);
+    if (myGeneration === connectionGenerationRef.current) {
+      setIsConnected(false);
+    }
     isDisconnectingRef.current = false;
   }, [getIsResyncingRef, onInputDropped]);
 

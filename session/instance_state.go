@@ -129,6 +129,9 @@ func (i *Instance) SetLastMeaningfulOutput(t time.Time) {
 // Unlike Status (which only reflects lifecycle transitions), this consults the
 // ClaudeController's detected terminal state to surface NeedsApproval, Idle, etc.
 func (i *Instance) GetEffectiveStatus() Status {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+
 	mgr := i.GetStatusManager()
 	if mgr == nil {
 		return i.Status
