@@ -2955,6 +2955,8 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
 			resolve = row.ItemStatus != BacklogStatusPRPending
+		case domain.StuckReasonPRNeedsFix:
+			resolve = row.ItemStatus != BacklogStatusPRPending
 		default:
 			// autonomous_stuck, push_failed, rework_cap, and any future reason
 			// with no non-terminal anchor: stays open until the blanket
@@ -3720,6 +3722,76 @@ func CaptureShipSnapshot(ctx context.Context, storage *Storage, item *BacklogIte
 	return nil
 }
 
+// remediatePRFixWithBackoffGate wraps fixSpawner.AutoReopenForPRFix with the
+// shared remediation backoff gate (Storage.RemediationDue,
+// session/backlog_remediation.go) — the fix for the MAJOR bug flagged in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry:
+// ReconcilePRPending's CI-failing/blocked-review/conflict branch (and its
+// sibling closed-without-merging branch) called AutoReopenForPRFix directly
+// on every ~60s reconciliation tick with no backoff, unlike every other
+// remediation call site in this file (autoReopenWithBackoffGate,
+// retryPushFailedWithBackoffGate, remediateStaleWorkWithBackoffGate,
+// retryOrphanedTriageWithBackoffGate) — a PR that keeps failing CI could get
+// a fresh fix session respawned indefinitely.
+//
+// Mirrors markAbandonedReview's shape (the one other *WithBackoffGate-family
+// helper that both opens/refreshes its own row AND dispatches in the same
+// call, rather than being fed by a separate periodic detector): MarkStuck
+// opens or refreshes the durable pr_needs_fix row for itemID this tick
+// (idempotent — a no-op refresh if already open), notifies once on first
+// sighting, then RemediationDue gates the actual dispatch. Best-effort
+// throughout: MarkStuck/FindOpenStuckStates/RemediationDue errors are
+// logged, never returned, and fail OPEN (still attempts the fix) rather than
+// silently stranding the item — same rationale as every sibling helper.
+//
+// Returns attempted=false when the backoff gate is not yet due (or MarkStuck
+// determined the item is no longer in pr_pending) — the caller must treat
+// this exactly like "nothing happened this tick" and MUST NOT run any
+// AutoReopenForPRFix-result-dependent logic (e.g. the closed-branch's
+// BUG-040 field-clearing), since nothing was actually attempted.
+func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Context, er *EntRepository, fixSpawner PRFixSpawner, itemID, itemTitle, fixCtx string) (attempted bool, err error) {
+	applied, markErr := er.MarkStuck(ctx, itemID, domain.StuckReasonPRNeedsFix, BacklogStatusPRPending, fixCtx)
+	if markErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuck item=%s: %v", itemID, markErr)
+	}
+	if applied {
+		rows, findErr := er.FindOpenStuckStates(ctx)
+		if findErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate FindOpenStuckStates item=%s: %v", itemID, findErr)
+		} else if row, ok := findOpenStuckStateFor(rows, itemID, domain.StuckReasonPRNeedsFix); ok && row.NotifiedAt == nil {
+			l.notify(itemID,
+				"PR needs attention",
+				fmt.Sprintf("%s — the PR has failing CI, blocking reviews, or a merge conflict. An automated fix attempt will run on the standard backoff schedule.", itemTitle),
+				8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+				2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
+			)
+			if _, notifyErr := er.MarkStuckNotified(ctx, itemID, domain.StuckReasonPRNeedsFix); notifyErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate MarkStuckNotified item=%s: %v", itemID, notifyErr)
+			}
+		}
+	}
+
+	due, justParked, gateErr := l.storage.RemediationDue(ctx, itemID, domain.StuckReasonPRNeedsFix)
+	if gateErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate RemediationDue item=%s: %v", itemID, gateErr)
+		due = true // fail open — see autoReopenWithBackoffGate's identical rationale
+	}
+	if justParked {
+		l.notify(itemID,
+			"Auto-rework paused",
+			fmt.Sprintf("%s — automated PR-fix retry has been attempted %d times over an extended period without resolving. It now needs manual attention; use Reset to try again automatically.", itemTitle, MaxRemediationAttempts),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			3, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
+		)
+	}
+	if !due {
+		log.InfoLog.Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: pr_needs_fix remediation backoff not yet due, skipping fix spawn", itemID)
+		return false, nil
+	}
+
+	return true, fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
+}
+
 // ReconcilePRPending polls items in pr_pending status. It transitions to done
 // when the PR is merged, and spawns a fix session when CI fails or reviewers
 // request changes.
@@ -3807,6 +3879,7 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 				// immediately (Task 2.1.5a) rather than waiting for the
 				// self-heal sweep's next tick.
 				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
+				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending")
 				// The PR is merged, so ship.md's "must still exist for a
 				// possible one-shot /backlog/ship re-invocation" constraint
 				// (see CleanupSlashCommands' doc comment) no longer applies —
@@ -3870,7 +3943,15 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			}
 			fixCtx := fmt.Sprintf("PR #%d (%s) was closed without merging. Investigate why, address any concerns, and open a fresh PR.", closedPrNum, closedPrURL)
 			log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-			if fixErr := fixSpawner.AutoReopenForPRFix(ctx, item.ID.String(), fixCtx); fixErr != nil {
+			attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+			if !attempted {
+				// Backoff not yet due — same as before this fix existed for a
+				// call that never happened: nothing was attempted, so nothing
+				// downstream (the BUG-040 field-clearing below) applies. Retry
+				// on a later tick once the gate opens.
+				continue
+			}
+			if fixErr != nil {
 				// Do NOT clear the PR fields below — see BUG-040. A failed
 				// reopen leaves the item in pr_pending; keeping the closed
 				// PR's fields intact means the item is still visible/retryable
@@ -3937,6 +4018,11 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			} else {
 				l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
 			}
+			// Poll-shaped resolve (pre-mortem F2): the PR is healthy again
+			// while the item is still pr_pending — a same-status clear
+			// selfHealStuck structurally cannot see (mirrors the
+			// PRReadyUnmerged handling immediately above).
+			l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRNeedsFix, "ReconcilePRPending/healthy")
 			continue
 		}
 
@@ -3968,7 +4054,7 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 		fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
 		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v)",
 			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts)
-		if fixErr := fixSpawner.AutoReopenForPRFix(ctx, item.ID.String(), fixCtx); fixErr != nil {
+		if _, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx); fixErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
 		}
 	}

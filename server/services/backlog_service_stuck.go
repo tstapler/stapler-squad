@@ -258,6 +258,10 @@ func (s *BacklogService) remediationActionByReason(reason domain.StuckReason) fu
 		return func(ctx context.Context, itemID string) error {
 			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered reopen — item was stuck in pr_pending with no PR reference (BUG-040)")
 		}
+	case domain.StuckReasonPRNeedsFix:
+		return func(ctx context.Context, itemID string) error {
+			return s.AutoReopenForPRFix(ctx, itemID, "Manually triggered PR fix retry — PR has failing CI, blocking reviews, or a merge conflict")
+		}
 	default:
 		return nil
 	}

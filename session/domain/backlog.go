@@ -112,6 +112,16 @@ const (
 	// (different item status, different threshold, different urgency) rather
 	// than merged.
 	StuckReasonReworkBlockedStale StuckReason = "rework_blocked_stale"
+	// StuckReasonPRNeedsFix: a pr_pending item's PR has failing CI, blocking
+	// reviews, or a merge conflict (ReconcilePRPending's spawn-fix branches).
+	// Gates ReconcilePRPending's AutoReopenForPRFix dispatch through the
+	// shared remediation backoff (Storage.RemediationDue) so a PR that keeps
+	// failing CI doesn't get a fresh fix session spawned on every ~60s
+	// reconciliation tick indefinitely — previously ungated, unlike every
+	// sibling remediation call site in session/backlog_lifecycle.go (see
+	// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry). Resolved
+	// once the PR becomes healthy again or the item reaches done.
+	StuckReasonPRNeedsFix StuckReason = "pr_needs_fix"
 )
 
 // AllStuckReasons lists every valid StuckReason constant.
@@ -128,6 +138,7 @@ var AllStuckReasons = []StuckReason{
 	StuckReasonPlanNotApproved,
 	StuckReasonPRPendingNoPR,
 	StuckReasonReworkBlockedStale,
+	StuckReasonPRNeedsFix,
 }
 
 // IsValid reports whether r is a known stuck reason value.
@@ -136,7 +147,7 @@ func (r StuckReason) IsValid() bool {
 	case StuckReasonPRReadyUnmerged, StuckReasonReworkCap, StuckReasonAbandonedReview,
 		StuckReasonStaleWork, StuckReasonBouncing, StuckReasonPushFailed, StuckReasonOrphanedTriage,
 		StuckReasonAutonomousStuck, StuckReasonSpawnFailed, StuckReasonPlanNotApproved,
-		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale:
+		StuckReasonPRPendingNoPR, StuckReasonReworkBlockedStale, StuckReasonPRNeedsFix:
 		return true
 	}
 	return false

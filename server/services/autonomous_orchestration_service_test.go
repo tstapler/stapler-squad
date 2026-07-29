@@ -1033,3 +1033,86 @@ func TestNotifyStuckReviewBookkeepingFailed_should_publishFailureNotification_Wh
 	assert.Contains(t, notif.NotificationMessage, "Stuck review item")
 	assert.Contains(t, notif.NotificationMessage, "could not mark the stalled review session ended")
 }
+
+// fakeFailingAutonomousStuckRespawner always returns err from
+// AutoRespawnAutonomousWork, simulating a headless respawn attempt that
+// fails (timeout, pool exhaustion, etc.) rather than a wiring/no-op gap.
+type fakeFailingAutonomousStuckRespawner struct {
+	err error
+}
+
+func (f *fakeFailingAutonomousStuckRespawner) AutoRespawnAutonomousWork(_ context.Context, _ string) error {
+	return f.err
+}
+
+// TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails
+// is the regression test for the MAJOR bug flagged in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry:
+// AutoRespawnAutonomousWork errors were only log.Warn'd, with no operator
+// notification until RemediationDue's justParked branch finally fired once
+// the full attempt budget was exhausted (up to the ~4.5-day backoff
+// schedule) — unlike the justParked branch a few lines above it in the same
+// block, which already notifies immediately. This reproduces a single failed
+// respawn attempt (first occurrence, so RemediationDue's fresh-row default
+// grants it immediately) and asserts a non-terminal, WARNING-level
+// notification is published right away, distinct from the "Autonomous fix
+// stuck" generic notification onAutonomousDriverComplete always fires and
+// from the terminal "Auto-rework paused" justParked notification.
+func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails(t *testing.T) {
+	storage := createTestStorage(t)
+	ctx := context.Background()
+	eventBus := events.NewEventBus(4)
+	svc := NewSessionService(storage, eventBus)
+	svc.SetLifecycleContext(ctx)
+
+	respawnErr := fmt.Errorf("headless pool exhausted")
+	svc.SetAutonomousStuckRespawner(&fakeFailingAutonomousStuckRespawner{err: respawnErr})
+
+	const title = "autonomous-respawn-failure-test"
+	inst := &session.Instance{
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
+		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(inst))
+	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Autonomous respawn failure test item",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, _ := eventBus.Subscribe(subCtx)
+
+	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	svc.autonomousSvc.onAutonomousDriverComplete(title, outcome)
+
+	var notif *events.Event
+	for i := 0; i < 10; i++ {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.EventNotification && ev.NotificationTitle == "Automated retry failed" {
+				notif = ev
+			}
+		case <-time.After(2 * time.Second):
+			i = 10
+		}
+		if notif != nil {
+			break
+		}
+	}
+	require.NotNil(t, notif, "a failed respawn attempt must publish an operator-facing notification, not just a log line")
+	assert.Equal(t, int32(8), notif.NotificationType, "must surface as a WARNING, not a terminal FAILURE")
+	assert.Equal(t, int32(2), notif.NotificationPriority, "non-terminal — must not demand acknowledgment like the justParked notification does")
+	assert.Contains(t, notif.NotificationMessage, "headless pool exhausted")
+	assert.Contains(t, notif.NotificationMessage, "will retry automatically")
+}

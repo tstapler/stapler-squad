@@ -679,6 +679,7 @@ func (f *fakePRPendingChecker) ClosePR(prNumber int, comment string) error {
 //   - error: err is non-nil; onCall is typically nil.
 type fakePRFixSpawner struct {
 	spawnCalled    bool
+	callCount      int
 	lastFixContext string
 	err            error
 	onCall         func()
@@ -686,6 +687,7 @@ type fakePRFixSpawner struct {
 
 func (f *fakePRFixSpawner) AutoReopenForPRFix(ctx context.Context, itemID string, fixContext string) error {
 	f.spawnCalled = true
+	f.callCount++
 	f.lastFixContext = fixContext
 	if f.onCall != nil {
 		f.onCall()
@@ -1252,6 +1254,125 @@ func TestReconcilePRPending_SpawnsFixSession_WhenCIFailingTrue(t *testing.T) {
 	assert.True(t, fakeSpawner.spawnCalled, "CIFailing alone should trigger a fix-session spawn")
 	assert.Contains(t, buf.String(), "CI=true")
 	assert.Contains(t, buf.String(), "conflict=false")
+}
+
+// TestReconcilePRPending_DoesNotRespawnFixSession_When_StillCIFailingOnNextTick
+// is the regression test for the MAJOR bug flagged in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-28 entry:
+// ReconcilePRPending's CI-failing branch called AutoReopenForPRFix directly,
+// on every reconciliation tick, with no remediation backoff gate — able to
+// respawn a fix session every ~60s tick indefinitely for a PR that keeps
+// failing CI, unlike every sibling remediation call site in this file. The
+// first tick must still spawn (matching pre-fix behavior — RemediationDue is
+// ungated until a stuck row exists), but an immediate second tick against
+// the still-CI-failing PR must NOT spawn again: the just-recorded first
+// attempt's next_remediation_at (30 minutes out, per
+// remediationBackoffSchedule[0]) is still in the future.
+func TestReconcilePRPending_DoesNotRespawnFixSession_When_StillCIFailingOnNextTick(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: "## Failing CI checks\n- build FAILED\n",
+		},
+	})
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+	require.Equal(t, 1, fakeSpawner.callCount, "first tick (fresh row) must still spawn — RemediationDue is ungated until a stuck row exists")
+
+	// Second tick, same still-CI-failing PR, no time elapsed: must be gated.
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, 1, fakeSpawner.callCount, "a second tick against a still-CI-failing PR must not respawn faster than the backoff schedule allows")
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(open, item.ID, domain.StuckReasonPRNeedsFix)
+	require.True(t, ok, "a pr_needs_fix stuck row must be open while the PR keeps failing CI")
+	assert.Equal(t, int32(1), row.RemediationAttempts, "the gated second tick must not consume a second remediation attempt")
+}
+
+// TestReconcilePRPending_RespawnsFixSession_When_BackoffElapses verifies the
+// gate added for the bug above is a genuine backoff, not a permanent block:
+// once next_remediation_at has passed, the next tick against a still-CI-
+// failing PR must spawn again.
+func TestReconcilePRPending_RespawnsFixSession_When_BackoffElapses(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 152)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: "## Failing CI checks\n- build FAILED\n",
+		},
+	})
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+	require.Equal(t, 1, fakeSpawner.callCount)
+
+	backdateNextRemediationAt(t, er, item.ID, domain.StuckReasonPRNeedsFix, time.Now().Add(-time.Second))
+
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, 2, fakeSpawner.callCount, "once the backoff window has elapsed, the next tick must retry")
+}
+
+// TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
+// covers the sibling call site: the closed-without-merging branch shares the
+// same remediatePRFixWithBackoffGate helper, so it must be gated identically.
+// Also verifies the BUG-040 PR-field-clearing logic is skipped (not just the
+// spawn) when the gate declines to attempt — clearing PrNumber/PrURL when
+// nothing was actually attempted would reproduce BUG-040's exact dead end.
+func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 173)
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
+		merged: false,
+		status: &git.PRStatus{IsClosed: true},
+	})
+	fakeSpawner := &fakePRFixSpawner{
+		onCall: func() {
+			_, transErr := storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+			require.NoError(t, transErr)
+		},
+	}
+	listener.SetPRFixSpawner(fakeSpawner)
+
+	er := storage.repo.(*EntRepository)
+	listener.ReconcilePRPending(ctx, er)
+	require.Equal(t, 1, fakeSpawner.callCount, "first tick must still spawn and reopen the item")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusInProgress), fetched.Status, "first tick's reopen must have succeeded")
+
+	// Put the item back at pr_pending with the same closed PR reference, as if
+	// a fresh push landed the same closed PR number again — the realistic
+	// repeat-tick scenario this gate protects against.
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, nil, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener.ReconcilePRPending(ctx, er)
+	assert.Equal(t, 1, fakeSpawner.callCount, "a second tick within the backoff window must not respawn again")
 }
 
 // TestReconcilePRPending_SpawnsFixSession_WhenHasBlockingReviewsTrue is a
