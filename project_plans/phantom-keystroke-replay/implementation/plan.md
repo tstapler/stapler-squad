@@ -1104,3 +1104,59 @@ added to prevent. No test assertions or extraction methodology changed;
 Task 3.1.2's `TestRunInputReadLoopExitsPromptlyOnConnectionClose` still
 covers the extraction's core bounded-exit guarantee, independent of this
 third callback.
+
+## Post-Review Finding: sdd:6-verify Layer 1 Pass Surfaced Two Real MUST FIX Gaps (commit f3a876fa0)
+
+A prior review round (against commit dca931a04) failed on a real,
+reproducible `TestAnswerDialogOnce/f_growing_buffer_within_tail_window_...`
+test failure; commit fee4da5a4 fixed it (restored the tail-slice call
+inside `answerDialogOnce` itself) and commit bf127e55b silenced a
+`nilnil` lint finding on the fake `ProcessManager`'s stub methods. Before
+re-requesting review, a fresh `sdd:6-verify` Layer 1 pass (two parallel
+review agents, one Go/concurrency, one React/TS idiom, each scoped to the
+code diff only — not the already-reviewed plan docs) surfaced two further
+real findings neither prior review round caught:
+
+1. **Go data race** (`go test -race`): `GetEffectiveStatus()`
+   (`session/instance_state.go`) claimed via its own comment — and via
+   `session_driver.go`'s call-site comments — to acquire
+   `stateMutex.RLock()`, but never actually did. This was latent/pre-existing
+   (not introduced by this branch) until this branch's own new tests
+   (`TestSessionDriver_StuckDialogAnswersBoundedNotUnbounded`,
+   `TestSessionDriver_TailSliceBoundsDialogMatchAndHash`) started writing
+   `inst.Status` directly from the test goroutine as cleanup, concurrently
+   with the driver goroutine's `GetEffectiveStatus()` reads — a genuine,
+   `-race`-confirmed data race. Fixed by actually taking the RLock inside
+   `GetEffectiveStatus` (bringing the code in line with its own documented
+   contract) and routing the tests' `inst.Status = Paused` cleanup writes
+   through `inst.stateMutex.Lock()`/`Unlock()`. Scoped narrowly to this
+   function and these three test call sites — `GetStatus()` and
+   `InstanceStatusManager.GetStatus()`'s own unsynchronized `instance.Status`
+   read are pre-existing, untouched by this branch, and out of scope here
+   (fixing them safely would need a broader lock-ordering audit against
+   `ism.mu`).
+2. **React/TS reconnect-race gap**: `useTerminalStream.ts`'s `disconnect()`
+   had no connection-generation guard on its delayed (1000ms) graceful-close
+   timeout or its trailing `setIsConnected(false)`, unlike `connect()`'s read
+   loop (Story 2.2's guard was only ever applied to the read side). A
+   `disconnect()` that armed its timer while still connected, raced by a
+   newer `connect()` that took over before the timer fired, would abort/null
+   the *newer* generation's live `AbortController` and clobber its
+   `isConnected` state once the stale timer fired — the exact class of bug
+   Story 2.2 exists to close, just on the write/teardown side instead of the
+   read side. Fixed by capturing `connectionGenerationRef.current` at
+   `disconnect()` entry and gating both effects on a still-matching
+   generation. A new regression test,
+   `"a stale disconnect()'s delayed abort does not tear down a newer
+   generation that connected in the meantime"`
+   (`web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`), was
+   confirmed to fail against the pre-fix code (asserting
+   `gen2Signal.aborted === false` observed `true`) and pass against the fix.
+
+Both prior review rounds (source-level plan/architecture review, and the
+first `sdd:6-verify`-equivalent pass on this branch) missed both of these —
+the data race only surfaces under `-race`, and the disconnect() gap required
+tracing the exact interleaving of a delayed `setTimeout` callback against a
+later `connect()` call, not just reading the connect()-side guard in
+isolation. `go test -race ./session ./server/services` and the full web-app
+Jest suite are green after this pass (commit f3a876fa0).
