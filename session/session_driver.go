@@ -15,6 +15,7 @@ package session
 // this driver covers everything else that requires interactive input.
 
 import (
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -144,6 +145,13 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var startupLatch dialogAnswerState
 	var approvalLatch dialogAnswerState
 
+	// Both DialogAnswerLatch call sites below send the identical key sequence
+	// ("1\n" selects the affirmative numbered option on both the startup-dialog
+	// and approval-prompt menus) — hoisted once so there is a single definition
+	// shared by both answerDialogOnce calls instead of two independent literal
+	// closures.
+	sendAnswerKey := func() error { return inst.SendKeys("1\n") }
+
 	for range ticker.C {
 		if time.Now().After(totalDeadline) {
 			return
@@ -208,9 +216,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		if hasOutput && isStartupDialog(tailed) {
-			status := answerDialogOnce(&startupLatch, tailed, func() error {
-				return inst.SendKeys("1\n")
-			}, inst.Title, "startup dialog")
+			status := answerDialogOnce(&startupLatch, tailed, sendAnswerKey, inst.Title, "startup dialog")
 
 			// Control-flow requirement (ADR-001): only dialogUnanswered (a send
 			// was just attempted this tick, whether it succeeded or is still
@@ -223,8 +229,18 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			// answered or abandoned. Without this, a dialogGaveUp session
 			// would silently wedge here until driverTotalTimeout (25 min)
 			// with zero operator escalation.
-			if status == dialogUnanswered {
+			//
+			// Exhaustive switch (not a plain if) so a future 4th
+			// dialogLatchStatus value can't silently fall through the
+			// implicit "unanswered" path and reintroduce the original
+			// unbounded-resend bug.
+			switch status {
+			case dialogUnanswered:
 				continue
+			case dialogAwaitingDismissal, dialogGaveUp:
+				// Fall through to the rest of the loop body — see comment above.
+			default:
+				panic(fmt.Sprintf("SessionDriver: unhandled dialogLatchStatus %d from answerDialogOnce (startup dialog)", status))
 			}
 		}
 
@@ -280,9 +296,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
 				if hasOutput && shouldApprovePrompt(tailed, allowedPath) {
-					answerDialogOnce(&approvalLatch, tailed, func() error {
-						return inst.SendKeys("1\n")
-					}, inst.Title, "approval prompt")
+					answerDialogOnce(&approvalLatch, tailed, sendAnswerKey, inst.Title, "approval prompt")
 				}
 			}
 		}
@@ -425,8 +439,13 @@ func isOneShot(inst *Instance) bool {
 // before hashing — mirroring GetCurrentStatus's existing tail-then-hash
 // precedent (claude_controller.go:528) — so the comparison is scoped to what
 // is actually still near-current on screen (not the session's entire
-// scrollback history) and is immune to incidental line-wrap/whitespace jitter
-// between polling ticks.
+// scrollback history) and is immune to incidental line-wrap/whitespace
+// jitter between polling ticks. Callers may pass either the raw Preview()
+// output or an already-tailed value (e.g. the same `tailed` they computed
+// for their own isStartupDialog/shouldApprovePrompt match) — tailContent is
+// idempotent on already-short input, so tailing twice is harmless and this
+// function's own tailing is what its unit tests (TestAnswerDialogOnce cases
+// f/g) exercise directly, independent of any caller-side tailing.
 //
 // Returns the latch's resulting status after this tick's transition, so the
 // call site can decide whether to keep short-circuiting the rest of the poll
@@ -444,12 +463,19 @@ func answerDialogOnce(state *dialogAnswerState, output string, send func() error
 		state.attempts = 0
 	}
 
-	if state.status == dialogAwaitingDismissal || state.status == dialogGaveUp {
+	// Exhaustive switch (not a plain if) so a future 4th dialogLatchStatus
+	// value can't silently fall through the implicit "unanswered" path below
+	// and reintroduce the original unbounded-resend bug.
+	switch state.status {
+	case dialogAwaitingDismissal, dialogGaveUp:
 		return state.status
+	case dialogUnanswered:
+		// Proceed below: this hash has not yet been successfully answered
+		// (or is still within its retry budget) — attempt the send.
+	default:
+		panic(fmt.Sprintf("answerDialogOnce: unhandled dialogLatchStatus %d for %s", state.status, logContext))
 	}
 
-	// dialogUnanswered: this hash has not yet been successfully answered
-	// (or is still within its retry budget) — attempt the send.
 	if err := send(); err != nil {
 		state.attempts++
 		log.Warn("SessionDriver: failed to answer "+logContext,

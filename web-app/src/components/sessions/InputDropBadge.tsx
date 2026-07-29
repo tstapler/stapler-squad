@@ -1,7 +1,7 @@
 "use client";
 // +feature: input-drop-badge
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { LiveRegion } from "@/components/ui/LiveRegion";
 import { DEFAULT_TOAST_MS } from "@/lib/notification-policy";
@@ -40,41 +40,37 @@ function formatBadgeText(count: number): string {
  */
 export function InputDropBadge({ count, episodeSeq }: InputDropBadgeProps) {
   const [visible, setVisible] = useState(false);
-  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSeqRef = useRef(0);
 
   useEffect(() => {
     // design/ux.md §3.3 — defensive no-op on count <= 0 (should not happen
     // given MessageQueue.close()'s contract, but a normal user-initiated
     // disconnect with an empty queue should never surface a badge).
-    if (episodeSeq === lastSeqRef.current || count <= 0) {
+    if (count <= 0) {
       return;
     }
-    lastSeqRef.current = episodeSeq;
 
     // A new episode always (re)shows the badge and restarts its own
     // auto-dismiss hold from this episode's close time — it does not
     // inherit/extend a prior episode's remaining hold time
     // (design/ux.md §2.3 Case C).
+    //
+    // No manual dedup ref here: the `[episodeSeq, count]` dependency array
+    // already guarantees this effect only re-fires when a genuinely new
+    // episode arrives, and this effect's own cleanup (returned below) is
+    // what clears the previous episode's timer — including under React
+    // StrictMode's dev-only setup→cleanup→setup replay on mount, where a
+    // separate cleanup-only effect would otherwise clear the timer armed by
+    // setup #1 with no corresponding rearm in setup #2.
     setVisible(true);
 
-    if (dismissTimerRef.current) {
-      clearTimeout(dismissTimerRef.current);
-    }
-    dismissTimerRef.current = setTimeout(() => {
+    const dismissTimer = setTimeout(() => {
       setVisible(false);
-      dismissTimerRef.current = null;
     }, DEFAULT_TOAST_MS);
-  }, [episodeSeq, count]);
 
-  // Clear any pending timer on unmount.
-  useEffect(() => {
     return () => {
-      if (dismissTimerRef.current) {
-        clearTimeout(dismissTimerRef.current);
-      }
+      clearTimeout(dismissTimer);
     };
-  }, []);
+  }, [episodeSeq, count]);
 
   if (typeof document === "undefined") {
     return null;

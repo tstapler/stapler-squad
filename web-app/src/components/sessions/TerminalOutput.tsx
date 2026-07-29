@@ -437,9 +437,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setDropEpisode((prev) => ({ count, seq: prev.seq + 1 }));
   }, []);
   const reportDroppedInput = useDropEpisodeCoalescer(handleDropEpisodeFlush, DROP_EPISODE_COALESCE_WINDOW_MS);
-  const handleInputDropped = useCallback((count: number) => {
-    reportDroppedInput(count);
-  }, [reportDroppedInput]);
 
   // Task 2.3.5 — e2e test-only trigger. Reproducing a genuine WebSocket
   // reconnect race (the real trigger for onInputDropped) inside Playwright
@@ -448,16 +445,19 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
   // announcement/dismiss behavior via this harmless, additive test seam
   // instead of the full reconnect path (Stories 2.1/2.2 already have direct
-  // Jest coverage of the drop mechanism itself). Not gated behind a build
-  // flag: it only ever forwards to the same handleInputDropped path real
-  // drops use, so calling it has no effect beyond what a real drop would do.
+  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
+  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
+  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
+  // attached in a production bundle — Next.js statically inlines
+  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
+  // this block out entirely rather than merely no-op'ing it at runtime.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = handleInputDropped;
+    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
+    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
     return () => {
       delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
     };
-  }, [handleInputDropped]);
+  }, [reportDroppedInput]);
 
   const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording, terminalState } = useTerminalStream({
     baseUrl,
@@ -476,7 +476,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     isExternal: isExternal,
     enablePredictiveEcho: true,
     onEchoAck: handleEchoAck,
-    onInputDropped: handleInputDropped,
+    onInputDropped: reportDroppedInput,
   });
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
