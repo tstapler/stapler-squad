@@ -1160,3 +1160,59 @@ tracing the exact interleaving of a delayed `setTimeout` callback against a
 later `connect()` call, not just reading the connect()-side guard in
 isolation. `go test -race ./session ./server/services` and the full web-app
 Jest suite are green after this pass (commit f3a876fa0).
+
+## Post-Review Finding: AC5 Live Manual Repro Completed via MCP `create_session` (2026-07-29, this session)
+
+Per the earlier "Task 4.1.1's Manual Repro Procedure Targets the Wrong
+Session-Creation Path" finding, this session had direct access to the
+`mcp__stapler-squad__*` session tools and completed the literal live repro
+that finding could only substitute with unit-test re-execution:
+
+1. Created a fresh git repo at `/home/tstapler/phantom-repro-verify-0729c`
+   (genuinely untrusted — not under `/tmp`, confirmed absent from
+   `~/.claude.json`'s trusted-projects list beforehand) and a session via
+   `mcp__stapler-squad__create_session` with `session_type: "directory"`,
+   the same code path `CreateDirectorySession` uses and which does call
+   `StartSessionDriver` (confirmed via `~/.stapler-squad/logs/staplersquad.log`
+   showing `"SessionDriver: answered startup dialog"` immediately after
+   creation — the omnibar path never produces this line).
+2. Immediately (within tens of ms of creation, before confirming the trust
+   dialog had cleared) called `pause_session` then `resume_session` —
+   producing the exact log signature the ticket describes:
+   `"failed to capture pane content for session"` /
+   `"can't find pane: staplersquad_<session>"` repeated during the
+   pause→recreate window (confirmed on a first attempt,
+   `phantom-repro-verify-0729b`, before repeating cleanly on
+   `-0729c` — see below), i.e. a real, induced "session not started or
+   paused" flap, not generic network-offline toggling.
+3. Log evidence for `phantom-repro-verify-0729c`: exactly one
+   `"SessionDriver: answered startup dialog"` line
+   (`09:44:39.860`), falling inside the pause (`09:44:37.857`) →
+   resume-complete (`09:44:41.608`) window — i.e. the dialog was answered
+   *during* the induced flap, not before it started. No second
+   `"answered startup dialog"` or any `"failed to answer startup dialog"`
+   line followed (a second apparent grep match was verified to be noise
+   from an unrelated concurrent session's terminal-capture log entry that
+   happened to quote this session's name as literal command text, not a
+   real second event for this session).
+4. Final state: `tmux capture-pane` showed a normal, fully-recovered Claude
+   Code welcome screen with an empty prompt (`❯ `) — no stuck dialog, no
+   repeated literal `1` characters, no garbage. Session was cleanly
+   destroyed afterward (`stop_session`) and its trust entry removed from
+   `~/.claude.json`.
+5. A first attempt (`phantom-repro-verify-0729b`, with `inject_mcp: true`)
+   confirmed a secondary, useful negative result: after the same induced
+   flap, the pane showed Claude Code's *own* "New MCP server found" dialog
+   (unrelated to the trust dialog, triggered by the injected `.mcp.json`) —
+   `isStartupDialog`'s pattern set correctly does **not** match this
+   dialog's text, so the driver made zero further `SendKeys` attempts
+   against it post-flap, confirming the latch doesn't misfire against
+   dialog-shaped screens outside its intended pattern set either.
+
+This satisfies AC5's literal requirement (previously only satisfied by
+substitute unit-test evidence) — recorded here and on backlog item
+`04089969-0f19-499c-be34-2e8bcfc4f13e` per Task 4.1.1 step 8. Finding 3 from
+the earlier Post-Implementation Finding section (a suspected log-routing
+gap for isolated instances) did not reproduce here — this session's
+MCP-backed instance routed logs to `~/.stapler-squad/logs/staplersquad.log`
+normally throughout.
