@@ -254,6 +254,19 @@ Invoke the sdd:2-research skill, then the sdd:3-plan skill (including its advers
 review pass), then the sdd:4-validate skill, writing into project_plans/<name>/ as those
 skills normally do.
 
+Important: this is a single, non-interactive call with no later turn. Once you stop
+producing tool calls, this process exits immediately and whatever text you last wrote
+becomes the final result of the whole triage attempt - there is no follow-up message
+coming to resume you. sdd:3-plan dispatches subagents that may report they are running
+in the background. You must still wait for each one to actually finish and produce its
+real output before moving on - keep checking within this same call rather than ending
+your turn on the assumption a later message will notify you when it completes. Do not
+end your response with a status update describing work still in progress, such as
+saying a subagent is running in the background and you will wait for it - that
+sentence would become this entire call's output, with none of the research, plan, or
+validation actually written. Only stop once Step 3's JSON object below is the last
+thing you have written.
+
 ### Step 3 - Output
 After requirements, research, plan, and validation are written, output ONLY a JSON
 object (no other text before or after):

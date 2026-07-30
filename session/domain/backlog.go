@@ -55,10 +55,18 @@ const (
 	// create errored) leaving a post-review item with no pr_number.
 	StuckReasonPushFailed StuckReason = "push_failed"
 	// StuckReasonOrphanedTriage: an idea-status item's triage session ended
-	// (crashed, was killed, or the process exited) without ever transitioning
-	// the item to ready — previously only surfaced when a human manually
+	// without ever transitioning the item to ready. Covers two shapes: the
+	// session is still open and has gone stale (crashed, was killed, or the
+	// server restarted mid-triage), or the session already ended cleanly (the
+	// headless call errored, or returned output the triage parser rejected —
+	// e.g. a premature "still working" status message instead of the final
+	// JSON block, confirmed live 2026-07-29/30, see
+	// docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry) but
+	// TriggerTriage never reached its idea->ready transition. Previously only
+	// the first shape was detected, and only when a human manually
 	// re-triggered triage (tombstoneOrphanTriageSessions); this reason lets the
-	// periodic stuck sweep catch it without a manual retry.
+	// periodic stuck sweep catch both shapes without a manual retry — see
+	// reconcileOrphanedTriageItems (session/backlog_lifecycle.go).
 	StuckReasonOrphanedTriage StuckReason = "orphaned_triage"
 	// StuckReasonAutonomousStuck: an autonomous driver run stopped after
 	// maxTurns without a DONE signal. Previously only surfaced as a one-off

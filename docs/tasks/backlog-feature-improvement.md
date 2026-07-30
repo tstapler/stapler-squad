@@ -1371,3 +1371,105 @@ routed; asked the user directly rather than deciding unilaterally.
 
 **Item #6 (interface-pollution cleanup: `PipelineModeRepository`, `Repository`)** — still low
 priority/mechanical, left for a future refactor pass, not routed this time.
+
+## Update — 2026-07-30: "sdd" pipeline mode triage stranded on a premature-completion
+placeholder — fixed (root cause + compounding detection gap)
+
+**Finding**: item `04089969-0f19-499c-be34-2e8bcfc4f13e` ("Phantom repeated '1'
+keystroke...", `PipelineMode: "sdd"`) sat at `status=idea` with a fully-researched plan
+and an open draft PR #288, but zero automatic path forward. Root-caused via
+`staplersquad-2026-07-29T22-55-04.915.log.gz:32397`:
+
+```
+[TriggerTriage] parse result failed item=04089969... elapsed=21m59s rawLen=164:
+ParseHeadlessTriageResult: no JSON object found in output (raw: "Planning subagent is
+running in the background to write `plan.md`. I'll wait for its completion before
+dispatching the architecture/adversarial/UX review subagents.")
+```
+
+The headless triage call for the "sdd" pipeline mode returned successfully (no error, no
+timeout — well inside the 30-minute budget) but its final turn was a status update about a
+still-running subagent, not the required JSON result. `ParseHeadlessTriageResult` correctly
+rejected it and `TriggerTriage` tombstoned the triage session — but never reached its
+`idea`→`ready` transition, and (compounding gap) `reconcileOrphanedTriageItems`
+(`session/backlog_lifecycle.go`) only matched sessions that were still open and stale, not
+ones that had already ended cleanly. A cleanly-ended, unparseable triage session was
+invisible to every existing detector, so the item was stranded with no retry path.
+
+**Root cause** (verified against actual prompt text, not assumed): the pipeline-mode-
+specific prompt content lives in `session/pipeline_mode_seed.go`'s `sddTriagePromptTemplate`
+— seeded once into the `PipelineMode` DB table at boot and never overwritten again (by
+design, so operator hand-edits survive restarts; see ADR-001 in
+`project_plans/backlog-configurable-pipeline/decisions/`). Its Step 2 instructs the model to
+invoke `sdd:2-research`, `sdd:3-plan`, and `sdd:4-validate`. `sdd:3-plan`
+(`~/dotfiles/.claude/skills/sdd/skills/3-plan/SKILL.md`) dispatches a planning subagent via
+the `Task` tool and says "Wait for the subagent to complete." A `claude -p` headless call has
+no later turn to resume in, though: once the top-level turn ends with no more pending tool
+calls, the process returns whatever text was last written and exits. On this run, the model
+reported the subagent as "running in the background" and ended its turn expecting a
+follow-up notification that a one-shot headless call can never deliver — that sentence became
+the entire raw output. Neither the shared system prompt (`headlessTriageSystemPrompt`,
+`session/headless/features.go`) nor the sdd-specific template said anything about this
+single-shot-no-later-turn constraint.
+
+**Fix shipped** (both halves of the scope, independent and both required for recovery):
+
+1. **Root cause — prompt fix.** Added an explicit "this is a single, non-interactive call
+   with no later turn; do not end your response with a status update about work still in
+   progress" directive to both `headlessTriageSystemPrompt`
+   (`session/headless/features.go` — applies to every pipeline mode's triage call, defense
+   in depth) and `sddTriagePromptTemplate` (`session/pipeline_mode_seed.go` — the
+   sdd-mode-specific reinforcement, naming the `sdd:3-plan` subagent-dispatch step
+   directly). Known limitation: because the "sdd" `PipelineMode` row is seeded once and
+   never overwritten (the same operator-durability guarantee this fix relies on for
+   *future* hand-edits), an already-seeded production DB row will keep serving the old
+   template text until it is refreshed via the pipeline-modes settings UI/RPC — a manual,
+   one-time operational step, not automated by this fix. New/fresh deployments get the
+   corrected template immediately.
+2. **Detection/retry gap — extended `reconcileOrphanedTriageItems`.** The detector now
+   flags an idea-status item's most recent triage session in either of two shapes: still
+   open and stale (the original behavior, unchanged), or already ended while the item is
+   still in idea (new). The second shape needs no staleness wait — `TriggerTriage` always
+   attempts the idea→ready transition immediately after a successful parse, so an ended
+   session with the item still in idea is unambiguous the moment it's observed. Both
+   shapes reuse the exact same `StuckReasonOrphanedTriage` stuck-row, notify, and
+   `RemediationDue`-gated `AutoRespawnTriage` retry machinery from PR #274 — no new
+   `StuckReason`, no new remediation path, no frontend changes needed. This also
+   incidentally closes an adjacent, previously-undetected gap: a plain headless *call
+   error* (not just an unparseable result) left an ended triage session with the item
+   stuck in idea the same way, with no detector either.
+
+**Regression tests** (`make build && make test && make lint` all green; the one failure
+observed in a full `make test` run, `session/tmux`'s `TestEnsureServerRunning_NoOp`, is the
+pre-existing, already-filed `BUG-051` flake under parallel load — confirmed unrelated: this
+change touches no file under `session/tmux/`, and the test passes reliably in isolation):
+- `TestParseHeadlessTriageResult_PrematureCompletionPlaceholder`
+  (`session/backlog_triage_test.go`) — reproduces the exact 164-byte raw string from the
+  incident log and asserts it is rejected the same as any other non-JSON output.
+- `TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition`
+  and `TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan`
+  (`session/backlog_lifecycle_stuck_test.go`) — detector-side coverage for the new
+  "ended, no transition" shape, and a guard against over-broadening it to items that
+  simply never had triage triggered.
+- `TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due`
+  — confirms the new shape is actually retried through the existing
+  `AutoRespawnTriage`/backoff-gate path end to end, the acceptance case for the
+  detection/retry half of this finding.
+
+**Item 04089969 itself**: not re-triggered from this session — this worktree has no access
+to (and per this repo's standing convention should not touch) the live deployed instance's
+`~/.stapler-squad/` DB. Once this fix is deployed, the new detector will pick the item up and
+retry it automatically on the next `ReconcileStuck` sweep; a human may also re-trigger triage
+manually in the interim.
+
+**Recurring-shape note** (`quality:reflect-and-fix` classification): Framework Pattern
+Misuse — an interactive multi-turn agentic pattern ("dispatch work, expect a notification in
+a later turn") applied inside a single-shot, no-later-turn execution context
+(`claude -p`/headless). This is the same general shape as the swallowed-status-transition
+class this doc has tracked since 07-27 (PR #275's `silenttransition` lint pass): a write or
+completion signal silently doesn't happen and nothing detects the resulting dead end. The
+earliest achievable enforcement point here is the regression test level (prompt content
+cannot be type- or lint-checked for semantic correctness) — the detector-side test is the
+structural backstop that would catch *any* future variant of "triage call returns without
+transitioning the item," not just this specific placeholder-text shape, which is the right
+altitude for this fix.

@@ -185,7 +185,28 @@ const CodebaseReadAllowedTools = "Read,Grep,Glob"
 
 // headlessTriageSystemPrompt instructs the model to perform pre-implementation
 // triage and output JSON. No submit_triage_result call; result is parsed directly.
+//
+// The "single, non-interactive call" paragraph was added after a live incident
+// (backlog item 04089969, docs/tasks/backlog-feature-improvement.md's 2026-07-30
+// entry): a triage call running the "sdd" pipeline mode dispatched a background
+// planning subagent (per sdd:3-plan's own instructions), then ended its turn with
+// "Planning subagent is running in the background... I'll wait for its completion"
+// instead of actually blocking on it. That sentence became the call's entire raw
+// output — ParseHeadlessTriageResult correctly rejected it as unparseable, and the
+// item was left stranded in idea with no path forward (see TriggerTriage, which
+// only ever attempts the idea->ready transition after a successful parse). Root
+// cause: a claude -p headless call has no later turn to resume in — once the
+// top-level turn ends with no more pending tool calls, the process returns
+// whatever text was last written and exits, discarding any subagent that reports
+// running "in the background" rather than actually blocking the call until done.
+// This paragraph is deliberately in the shared system prompt (not only the
+// sdd-mode-specific TriagePromptTemplate in pipeline_mode_seed.go) so the same
+// guard applies to every pipeline mode's triage content, not just "sdd" — see that
+// file's sddTriagePromptTemplate for the mode-specific reinforcement of the same
+// rule.
 const headlessTriageSystemPrompt = `You are a senior software architect performing pre-implementation triage. You have full filesystem write access to the artifact directory specified in the user prompt. Work systematically.
+
+This is a single, non-interactive call with no later turn: once you stop producing tool calls, this process exits and whatever text you last wrote becomes the final, and only, result. If any tool or subagent you use reports that it is running in the background, you must still wait for it to actually finish and produce its real output before you continue - poll or re-check within this same call rather than assuming a future message will notify you, because no future message is coming. Never end your response with a status update describing work still in progress (for example "I will wait for its completion" or "running in the background") - that text would become this call's entire final output, with none of the underlying work actually finished.
 
 Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
