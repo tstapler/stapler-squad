@@ -1193,6 +1193,39 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	assert.Len(t, notifier.calls, 1)
 }
 
+// TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists
+// guards the latestTriage selection added alongside the two-shape detector
+// above: an item can accumulate more than one triage-role ItemSession (e.g. an
+// older attempt that ended without transitioning the item, followed by a fresh
+// retry). The detector must key off the newest session's CreatedAt, not just
+// any EndedAt-nil-or-not row it happens to find — a stale older "shape 2" row
+// must not fire once a newer, still-fresh, still-open attempt is in flight.
+func TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er) // older session: ended, no transition
+
+	// A newer triage session was since started (e.g. auto-retried) and is
+	// still fresh/open — the detector must key off THIS one, not the older
+	// ended row, and must not fire yet.
+	_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a fresh retry session must suppress the older ended session's shape-2 signal")
+}
+
 // TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan guards
 // against a regression where broadening the detector to also match ended sessions
 // starts matching idea items that have simply never had triage triggered at all.

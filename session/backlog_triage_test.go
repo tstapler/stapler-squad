@@ -90,7 +90,7 @@ func TestParseHeadlessTriageResult_NoJSON(t *testing.T) {
 // result that happens to look empty" and the item becomes eligible for the
 // orphaned_triage stuck-detector's automatic retry (session/backlog_lifecycle.go's
 // reconcileOrphanedTriageItems, "shape 2" — see
-// TestReconcileOrphanedTriageItems_should_flagAndRetry_When_TriageSessionEndedWithoutTransition
+// TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
 // for the detector-side half of this regression).
 func TestParseHeadlessTriageResult_PrematureCompletionPlaceholder(t *testing.T) {
 	raw := "Planning subagent is running in the background to write `plan.md`. I'll wait for its completion before dispatching the architecture/adversarial/UX review subagents."

@@ -93,6 +93,21 @@ func TestEnsureDefaultSDDPipelineMode_should_ReturnNil_When_NilRepo(t *testing.T
 	assert.NoError(t, EnsureDefaultSDDPipelineMode(context.Background(), nil))
 }
 
+// TestSDDTriagePromptTemplate_WarnsAgainstBackgroundStatusPlaceholder guards
+// the "single, non-interactive call" paragraph added to sddTriagePromptTemplate
+// after the same live incident that motivated the equivalent guidance in
+// session/headless/features.go's headlessTriageSystemPrompt (see
+// TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder in
+// session/headless/features_test.go for that sibling test): a headless call is
+// single-shot with no later turn to resume in, so the model must not end its
+// turn with a status update describing work still running in the background. A
+// future edit to this template must not silently drop the guidance with zero
+// test failure.
+func TestSDDTriagePromptTemplate_WarnsAgainstBackgroundStatusPlaceholder(t *testing.T) {
+	assert.Contains(t, sddTriagePromptTemplate, "single, non-interactive call")
+	assert.Contains(t, sddTriagePromptTemplate, "no later turn")
+}
+
 // TestEnsureDefaultSDDPipelineMode_should_NotError_When_CreateRaceLoses uses a
 // fake repository to simulate a lost create-race (another boot, or a
 // concurrent caller, created the row a moment after this GetBySlug missed

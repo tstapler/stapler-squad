@@ -174,3 +174,17 @@ func TestHeadlessReviewSystemPrompt_NoteOnNonEmptyDiffIsInformationalOnly(t *tes
 func TestHeadlessReviewSystemPromptWithCodebaseAccess_UnaffectedByEvidentiaryWeightChange(t *testing.T) {
 	assert.NotContains(t, HeadlessReviewSystemPromptWithCodebaseAccess(), "informational context only")
 }
+
+// TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder guards the
+// "single, non-interactive call" paragraph added after a live incident where a
+// headless triage call ended its turn with a status update describing a still-running
+// background subagent instead of the final JSON block (see the doc comment above
+// headlessTriageSystemPrompt in features.go, and
+// TestParseHeadlessTriageResult_PrematureCompletionPlaceholder in
+// session/backlog_triage_test.go for the parser-side half of this regression). A
+// future edit to this prompt string must not silently drop the guidance with zero
+// test failure.
+func TestHeadlessTriageSystemPrompt_WarnsAgainstBackgroundStatusPlaceholder(t *testing.T) {
+	assert.Contains(t, HeadlessTriageSystemPrompt(), "single, non-interactive call")
+	assert.Contains(t, HeadlessTriageSystemPrompt(), "no later turn")
+}
