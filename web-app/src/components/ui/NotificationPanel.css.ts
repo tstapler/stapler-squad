@@ -1,5 +1,5 @@
 import { style, keyframes, globalStyle } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, breakpoints } from "@/styles/theme.css";
 
 const fadeIn = keyframes({
   from: { opacity: 0 },
@@ -33,7 +33,7 @@ export const panel = style({
   flexDirection: "column",
   overflow: "hidden",
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       width: "100%",
       maxWidth: "100vw",
     },
@@ -48,12 +48,14 @@ export const header = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: vars.space[2],
   padding: "1rem 1.25rem",
   borderBottom: `1px solid ${vars.color.borderColor}`,
   backgroundColor: vars.color.cardBackground,
   flexShrink: 0,
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       padding: "0.75rem 1rem",
     },
   },
@@ -68,7 +70,7 @@ export const title = style({
   gap: "0.5rem",
   color: vars.color.textPrimary,
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       fontSize: "1.125rem",
     },
   },
@@ -91,6 +93,7 @@ export const unreadBadge = style({
 export const headerActions = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: "0.5rem",
 });
 
@@ -202,7 +205,7 @@ export const item = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       padding: "0.875rem 1rem",
     },
   },
@@ -336,7 +339,7 @@ export const removeButton = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       opacity: 1,
     },
   },
@@ -465,7 +468,7 @@ export const approveButton = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       padding: "0.75rem 1rem",
       minHeight: "44px",
     },
@@ -493,7 +496,7 @@ export const denyButton = style({
     },
   },
   "@media": {
-    "screen and (max-width: 768px)": {
+    [`screen and (max-width: ${breakpoints.md})`]: {
       padding: "0.75rem 1rem",
       minHeight: "44px",
     },

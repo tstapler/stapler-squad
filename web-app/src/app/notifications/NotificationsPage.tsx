@@ -205,20 +205,34 @@ export function NotificationsPage() {
 
   return (
     <div className={pageRoot}>
-      <div className={header}>
-        <h2 className={title}>
+      <div className={header} data-testid="notifications-header">
+        <h2 className={title} data-testid="notifications-title">
           Notifications
-          {unreadCount > 0 && <span className={unreadBadge}>{unreadCount}</span>}
+          {unreadCount > 0 && (
+            <span className={unreadBadge} data-testid="notifications-unread-badge">
+              {unreadCount}
+            </span>
+          )}
         </h2>
         <div className={headerActions}>
           {notificationHistory.length > 0 && (
             <>
               {unreadCount > 0 && (
-                <button className={markAllButton} onClick={markAllAsRead} aria-label="Mark all as read">
+                <button
+                  className={markAllButton}
+                  onClick={markAllAsRead}
+                  aria-label="Mark all as read"
+                  data-testid="notifications-mark-all-read"
+                >
                   Mark all read
                 </button>
               )}
-              <button className={clearButton} onClick={clearHistory} aria-label="Clear all notifications">
+              <button
+                className={clearButton}
+                onClick={clearHistory}
+                aria-label="Clear all notifications"
+                data-testid="notifications-clear-all"
+              >
                 Clear all
               </button>
             </>
@@ -249,7 +263,7 @@ export function NotificationsPage() {
         </div>
       </div>
 
-      <div className={content}>
+      <div className={content} data-testid="notifications-content">
         {historyLoading && notificationHistory.length === 0 ? (
           <div className={empty}>
             <div className={emptyIcon}>⏳</div>

@@ -1,0 +1,17 @@
+{
+  "id": "ui:notifications-page",
+  "type": "frontend",
+  "component": "NotificationsPage",
+  "path": "web-app/src/app/notifications/NotificationsPage.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "tests/e2e/notifications-responsive.spec.ts",
+    "notifications-responsive > header title, unread badge, and action buttons stay within a 375px viewport",
+    "notifications-responsive > header row has no horizontal clipping at 390px",
+    "notifications-responsive > header row has no horizontal clipping at 414px",
+    "notifications-responsive > header row wraps onto a second line instead of overflowing at 375px",
+    "notifications-responsive > notification list scrolls vertically when content exceeds viewport height"
+  ],
+  "lastModified": "2026-07-30T00:00:00Z"
+}
