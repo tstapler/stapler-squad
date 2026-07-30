@@ -50,7 +50,7 @@ async function mockNotificationHistory(page: Page, notifications: FakeNotificati
 }
 
 test.describe("notifications-responsive", () => {
-  test("notifications-responsive > header title, unread badge, and action buttons stay within a 375px viewport", async ({ page }) => {
+  test("header title, unread badge, and action buttons stay within a 375px viewport", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await mockNotificationHistory(page, [
       { id: "n1", sessionId: "s1", title: "First session", message: "Task finished", isRead: false },
@@ -70,7 +70,7 @@ test.describe("notifications-responsive", () => {
   });
 
   for (const width of [390, 414]) {
-    test(`notifications-responsive > header row has no horizontal clipping at ${width}px`, async ({ page }) => {
+    test(`header row has no horizontal clipping at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 844 });
       await mockNotificationHistory(page, [
         { id: "n1", sessionId: "s1", title: "First session", message: "Task finished", isRead: false },
@@ -87,7 +87,7 @@ test.describe("notifications-responsive", () => {
     });
   }
 
-  test("notifications-responsive > header row wraps onto a second line instead of overflowing at 375px", async ({ page }) => {
+  test("header row wraps onto a second line instead of overflowing at 375px", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await mockNotificationHistory(page, [
       { id: "n1", sessionId: "s1", title: "First session", message: "Task finished", isRead: false },
@@ -114,7 +114,7 @@ test.describe("notifications-responsive", () => {
     expect(actionBox!.y).toBeGreaterThan(titleBox!.y);
   });
 
-  test("notifications-responsive > notification list scrolls vertically when content exceeds viewport height", async ({ page }) => {
+  test("notification list scrolls vertically when content exceeds viewport height", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 600 });
     const notifications: FakeNotification[] = Array.from({ length: 30 }, (_, i) => ({
       id: `n${i}`,
