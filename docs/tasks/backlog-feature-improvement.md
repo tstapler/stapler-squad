@@ -1372,6 +1372,106 @@ routed; asked the user directly rather than deciding unilaterally.
 **Item #6 (interface-pollution cleanup: `PipelineModeRepository`, `Repository`)** — still low
 priority/mechanical, left for a future refactor pass, not routed this time.
 
+## Update — 2026-07-30: light verification pass — best-ever live state (1 stuck item), both 07-28 MAJORs and item #5 confirmed closed, one new low-severity finding
+
+Not a full skill re-run (same rationale as 07-28: a full pass ran 2 days ago and live state is
+trending well) — checked `ListStuckBacklogItems` live, verified the two 07-28 open items and item
+#5 by direct code/PR read, then root-caused the one remaining stuck item via its full status-event
+history rather than trusting the surfaced reason string.
+
+**Live state**: `ListStuckBacklogItems` returns **1 row / 1 item** — best-ever reading (down from
+3/3 on 07-28).
+
+**07-28's two open MAJORs — both confirmed fixed**, via `054f3fe27` / PR #284 ("gate PR-fix
+respawns with backoff, notify on failed autonomous respawn"), merged same day: `ReconcilePRPending`'s
+closed-PR branch now routes `AutoReopenForPRFix` through the same `RemediationDue` backoff gate
+every sibling call site uses; `AutoRespawnAutonomousWork`'s per-attempt failure now publishes
+`notifyAutonomousRespawnAttemptFailed` in addition to the existing `log.Warn`, confirmed by reading
+`autonomous_orchestration_service.go:384-385` directly.
+
+**07-27's item #5 (label/category-driven defaults) — confirmed closed**, via `46b7e6239` / PR #285
+("add category picker with per-category automation defaults"): a 4-value hardcoded category enum
+pre-fills `SkipReviewGate`/`SkipPlanning`/`AutoSpawnSession`/`AutoCreatePR`/`PipelineMode` at
+creation time, client-side, once — per-item manual overrides still win. Closes the product-decision
+item that was deliberately left unrouted pending a direct answer from the user.
+
+**Item #6 (interface-pollution cleanup)** — still open, still low priority, not re-routed.
+
+### [1, low severity, NOT NEW — re-demonstrated via a different trigger] `autonomous_stuck` stale row survives a manual `pr_pending`→`idea` reset
+
+The one live stuck item (`04089969` "Phantom repeated '1' keystroke...") is flagged
+`STUCK_REASON_AUTONOMOUS_STUCK`, context "autonomous driver stopped after 0 turns without a DONE
+signal (startup timeout)", `firstDetectedAt`/`lastCheckedAt` both `2026-07-29T15:49:47Z`. Read the
+item's full `statusEvents` history (not just the surfaced reason) to root-cause it, since the
+context string alone reads as an active problem and isn't:
+
+1. The item's actual history: idea→ready (triage, 07-25) → in_progress → review → in_progress
+   (manual reopen) → review → review→pr_pending (`system`, 07-29T17:12 — draft PR opened, but the
+   note records the worktree's local `main` was ~1429 commits behind `origin/main`, so GitHub
+   reported the PR `CONFLICTING` across 2769 files; merging origin/main hit 841 conflicts and was
+   correctly aborted as too risky to resolve autonomously) → **pr_pending→idea, `triggeredBy:
+   "user"`, 07-30T05:32** — a deliberate manual reset (the "Return to Triage" escape hatch,
+   `.claude` rules' documented human-override affordance), not a bug.
+2. The `autonomous_stuck` row's `firstDetectedAt` (07-29T15:49) predates that manual reset by
+   ~14h — it's a stale leftover from the turn-cap episode that happened *before* the human decided
+   to reset the item, not a live problem with the item's current (fresh) state. This is the exact
+   gap the 07-19 audit entry already flagged and left open ("Recommended Next Actions #4... low
+   severity, cosmetic, cheap fix: add an automated `ResolveStuck` call mirroring
+   `resolveToPRPending`'s pattern") — confirmed still unfixed, now demonstrated via a new trigger
+   (surviving a manual status reset) rather than the original automated-completion path.
+3. **[1, NEW, root-caused via the rotated server logs — corrects an earlier, wrong hypothesis
+   written earlier in this same pass]** A 4th triage session (`headless-triage-a79d4747...`) ran
+   after the manual reset (created 05:32:07, ended 05:54:05) and the item is still `status=idea`
+   with no `idea→ready` event. Initially hypothesized as another instance of the "swallowed
+   `TransitionBacklogItemStatus` write" shape — **wrong, disproven by direct log evidence**:
+   `staplersquad-2026-07-29T22-55-04.915.log.gz:32397` —
+   `ERROR ... backlog_service_triage.go:1957: [TriggerTriage] parse result failed item=04089969
+   elapsed=21m59s rawLen=164: ParseHeadlessTriageResult: no JSON object found in output (raw:
+   "Planning subagent is running in the background to write plan.md. I'll wait for its completion
+   before dispatching the architecture/adversarial/UX review subagents.")`. The headless call
+   itself succeeded (no `callErr`, no timeout — the 30-minute budget was not exhausted) but
+   returned a **placeholder "still working" message as its final turn**, well before the
+   SDD-mode multi-subagent triage flow (background `plan.md` writer → architecture/adversarial/UX
+   review subagents) actually finished. `ParseHeadlessTriageResult` correctly rejects this as
+   unparseable (per `backlog_service_triage.go:1955-1961`), logs it, calls
+   `UpdateItemSessionEnded`, and `return`s **before ever reaching the `idea`→`ready` transition
+   call** (line ~1990) — so there was no silent write failure; the transition attempt was never
+   made. This is a **new, distinct failure mode**, specific to `PipelineMode: "sdd"`'s
+   multi-subagent orchestration prematurely reporting completion to the headless caller — not the
+   generic bucket-1 "logged-only error swallows a status write" shape at all.
+
+   **Compounding gap, still real**: nothing retries after this. The session ended cleanly (has a
+   real `endedAt`), so `reconcileOrphanedTriageItems`'s "stale *open* session" detection
+   (`session/backlog_lifecycle.go`, 2h-idle threshold per the 07-27 update) doesn't apply — there's
+   no open session to find stale. The item is left in `idea` with a cleanly-ended, unparseable
+   triage result and no automated path back to a retry, which is presumably why it's surfacing as
+   a stale `autonomous_stuck` row instead (point 2) — an unrelated, older detector — rather than
+   anything that actually matches its current state.
+
+Not routed to `sdd:fix-bug` this pass — point 3 needs to be scoped as two separate things (the
+SDD-mode premature-completion bug in the headless prompt/orchestration itself, likely upstream of
+this repo's own code if the multi-subagent behavior lives in the triage system prompt; and the
+missing "triage ended but produced no usable result and nothing retries" detector gap) rather than
+routed as one undifferentiated fix; the stale `autonomous_stuck` row (point 2) stays at the
+low-priority assessment unchanged since 07-19.
+
+### Recommended Next Actions
+
+1. **`sdd:fix-bug` — point 3 above (SDD-mode headless triage can return a premature "still
+   working" placeholder instead of the final result, with no retry path once that happens).**
+   Highest priority this pass: live, on the one currently-stuck item, blocking a fully-researched
+   item with an open PR from ever resuming. Two angles to scope before implementing: (a) can the
+   headless call be made to actually block until the background subagent completes, rather than
+   returning once the orchestrating turn says "I'll wait" — check `HeadlessTriageSystemPrompt()`
+   and whatever drives the SDD pipeline mode's subagent dispatch; (b) independent of (a), add a
+   detector/retry for "most recent triage session ended with an unparseable/failed result and the
+   item never left idea" — the same shape `orphaned_triage`'s backoff-retry machinery (PR #274)
+   already solves for *open*-and-stale sessions, extended to cover *ended*-but-failed ones. Item
+   `04089969` is the live regression case.
+2. `sdd:fix-bug` — the `autonomous_stuck` stale-row-on-manual-reset gap (low priority, unchanged
+   from 07-19's assessment) — pick up whenever a session has slack for cosmetic-severity fixes.
+3. Item #6 (interface-pollution cleanup) — still deferred to a future refactor pass.
+
 ## Update — 2026-07-30: "sdd" pipeline mode triage stranded on a premature-completion
 placeholder — fixed (root cause + compounding detection gap)
 
