@@ -2235,19 +2235,37 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 }
 
 // reconcileOrphanedTriageItems flags idea-status items whose most recent triage-role
-// ItemSession never ended and has gone stale — the triage process crashed, was killed,
-// or a server restart happened mid-triage before the completion goroutine ever ran.
-// Previously this class of failure was only caught by tombstoneOrphanTriageSessions
-// (same package, server/services/backlog_service_triage.go), and only when a human
-// manually re-triggered triage on the item; this is the standing-sweep equivalent.
-// Pure staleness gate — no liveness checker — matching reconcileStaleWorkSessions'
-// established pattern for the closest analogous detector in this file: a headless
-// triage call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
-// here; staleness alone is the reliable signal. Headless-triage sessions (the common
-// case) get the much shorter maxHeadlessTriageSessionStaleness (30m) rather than the
-// general-purpose maxWorkSessionStaleness (2h): an open headless row found later
-// reliably means dead, not slow (see that constant's doc comment). Best-effort:
-// query/notify failures are logged, never returned.
+// ItemSession never got the item to "ready". Two distinct shapes share this one
+// detector and StuckReason:
+//
+//  1. Still open and stale — the triage process crashed, was killed, or a server
+//     restart happened mid-triage before the completion goroutine ever ran.
+//     Previously this class of failure was only caught by
+//     tombstoneOrphanTriageSessions (same package, server/services/
+//     backlog_service_triage.go), and only when a human manually re-triggered
+//     triage on the item; this is the standing-sweep equivalent. Pure staleness
+//     gate — no liveness checker — matching reconcileStaleWorkSessions' established
+//     pattern for the closest analogous detector in this file: a headless triage
+//     call routinely runs 7-15 minutes, so per-tick liveness signals are noisy
+//     here; staleness alone is the reliable signal. Headless-triage sessions (the
+//     common case) get the much shorter maxHeadlessTriageSessionStaleness (30m)
+//     rather than the general-purpose maxWorkSessionStaleness (2h): an open
+//     headless row found later reliably means dead, not slow (see that constant's
+//     doc comment).
+//  2. Already ended, but the item never left idea — the headless call errored, or
+//     returned output ParseHeadlessTriageResult rejected (e.g. a premature-
+//     completion status message instead of the final JSON block — see
+//     docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry for the live
+//     incident, item 04089969, this shape was added for). Unlike shape 1, no
+//     staleness wait is needed: TriggerTriage always attempts the idea->ready
+//     transition immediately after a successful parse (see its cleanupCtx block),
+//     so a triage session with EndedAt set while the item is still in idea is an
+//     unambiguous "triage did not succeed" signal, not a race with an in-flight
+//     write. Before this shape existed, a session in this state had no detector at
+//     all: it doesn't match shape 1 (EndedAt is non-nil), and nothing else flags an
+//     idea-status item whose triage session simply exited without transitioning it.
+//
+// Best-effort: query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
 		Statuses: []string{string(BacklogStatusIdea)},
@@ -2263,35 +2281,52 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
+		// Find the most recent triage-role session regardless of whether it has
+		// ended yet — shape 1 above needs the open-and-stale case, shape 2 needs
+		// the already-ended case, and both only ever care about the single latest
+		// attempt (an older, already-superseded session should never re-trigger
+		// this detector).
 		var latestTriage *ItemSessionSummary
 		for i := range sessions {
-			if sessions[i].Role == SessionRoleTriage && sessions[i].EndedAt == nil {
+			if sessions[i].Role != SessionRoleTriage {
+				continue
+			}
+			if latestTriage == nil || sessions[i].CreatedAt.After(latestTriage.CreatedAt) {
 				latestTriage = &sessions[i]
 			}
 		}
 		if latestTriage == nil {
-			continue // no open triage session
-		}
-		staleness := maxWorkSessionStaleness
-		if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
-			staleness = maxHeadlessTriageSessionStaleness
-		}
-		if time.Since(latestTriage.CreatedAt) <= staleness {
-			continue // still plausibly running
+			continue // no triage session has ever run for this item
 		}
 
-		// Tombstone the dead row now rather than leaving it open until a human
-		// manually re-triggers triage (the only other path that closes it, via
-		// tombstoneOrphanTriageSessions in server/services). Staleness past
-		// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
-		// (see doc comment above: no liveness checker, headless calls don't run
-		// this long) — nothing left to preserve by keeping the row open.
-		if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
-			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
+		var reasonDetail string
+		if latestTriage.EndedAt == nil {
+			// Shape 1: still open. Staleness gate as before.
+			staleness := maxWorkSessionStaleness
+			if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
+				staleness = maxHeadlessTriageSessionStaleness
+			}
+			if time.Since(latestTriage.CreatedAt) <= staleness {
+				continue // still plausibly running
+			}
+
+			// Tombstone the dead row now rather than leaving it open until a human
+			// manually re-triggers triage (the only other path that closes it, via
+			// tombstoneOrphanTriageSessions in server/services). Staleness past
+			// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
+			// (see doc comment above: no liveness checker, headless calls don't run
+			// this long) — nothing left to preserve by keeping the row open.
+			if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
+				log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
+			}
+			reasonDetail = fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, staleness)
+		} else {
+			// Shape 2: already ended, item still in idea. Nothing to tombstone —
+			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea,
-			fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, maxWorkSessionStaleness))
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -2309,10 +2344,10 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 
-		log.WarningLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned (stale)", item.ID, latestTriage.SessionUUID)
+		log.WarningLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned (%s)", item.ID, latestTriage.SessionUUID, reasonDetail)
 		l.notify(item.ID,
 			"Triage may be stuck",
-			fmt.Sprintf("%s — its triage session ended without finishing and nothing is running. Re-trigger triage or investigate.", item.Title),
+			fmt.Sprintf("%s — its triage session ended without moving the item to Ready and nothing is running. Re-trigger triage or investigate.", item.Title),
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)

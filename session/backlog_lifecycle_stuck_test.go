@@ -100,6 +100,38 @@ func newOrphanedTriageTestItem(t *testing.T, storage *Storage, er *EntRepository
 	return item
 }
 
+// newEndedTriageTestItem creates an idea-status BacklogItem with a single
+// triage-role ItemSession that has already ended (EndedAt set), matching
+// "shape 2" of reconcileOrphanedTriageItems: a headless triage call that
+// returned (errored, or produced output ParseHeadlessTriageResult rejected —
+// see TestParseHeadlessTriageResult_PrematureCompletionPlaceholder) and was
+// tombstoned by TriggerTriage's own goroutine, but never transitioned the item
+// out of idea. No staleness backdating needed — shape 2 has no staleness gate,
+// since an ended session with the item still in idea is unambiguous the moment
+// it's observed.
+func newEndedTriageTestItem(t *testing.T, storage *Storage, er *EntRepository) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Ended-without-transition triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	return item
+}
+
 // TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_ItemsParked
 // verifies that BackfillStuckStates seeds an open, notified stuck row for each
 // currently-stuck item it can detect from existing DB-derivable queries.
@@ -1120,6 +1152,101 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+}
+
+// TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
+// is the regression test for the "compounding gap" half of the live incident tracked in
+// docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry (backlog item 04089969):
+// a headless triage call that returns cleanly (real EndedAt, no crash/kill) but with
+// output ParseHeadlessTriageResult rejects (see
+// TestParseHeadlessTriageResult_PrematureCompletionPlaceholder) never transitions the
+// item out of idea, and — before this fix — was invisible to every existing detector:
+// reconcileOrphanedTriageItems previously only matched EndedAt == nil (open) sessions,
+// so a session tombstoned by TriggerTriage's own goroutine (the normal completion path,
+// success or failure) fell through every check. No staleness wait should be required:
+// unlike the open-and-stale shape, an ended session with the item still in idea is
+// unambiguous the moment it's observed.
+func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "an ended triage session with the item still in idea must be flagged immediately, with no staleness wait")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+
+	// Repeat tick must not re-notify (DB-backed notify-once dedup) — mirrors the
+	// open-and-stale shape's identical guarantee.
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan guards
+// against a regression where broadening the detector to also match ended sessions
+// starts matching idea items that have simply never had triage triggered at all.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	_, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Never triaged item",
+		Status: string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item that has never had a triage session must not be flagged")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due
+// verifies the ended-without-transition shape is retried through the exact same
+// AutoRespawnTriage backoff-gate path as the pre-existing open-and-stale shape —
+// reconcileOrphanedTriageRemediation and retryOrphanedTriageWithBackoffGate key only on
+// (reason, item status), so extending the detection condition in
+// reconcileOrphanedTriageItems is sufficient on its own; no changes to the remediation
+// path itself were needed. This is the "detection/retry gap" acceptance case for the
+// 2026-07-30 finding: item 04089969's shape must actually become eligible for an
+// automatic retry, not just get a durable stuck row that nothing ever acts on.
+func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRow_When_Due(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newEndedTriageTestItem(t, storage, er)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for the ended-without-transition row")
+	}
 }
 
 // fakeTriageRespawner is a test double implementing TriageRespawner, recording

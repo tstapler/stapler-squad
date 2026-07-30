@@ -78,6 +78,28 @@ func TestParseHeadlessTriageResult_NoJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "ParseHeadlessTriageResult")
 }
 
+// TestParseHeadlessTriageResult_PrematureCompletionPlaceholder is a regression test
+// for the live incident tracked in docs/tasks/backlog-feature-improvement.md's
+// 2026-07-30 entry (backlog item 04089969, log line
+// staplersquad-2026-07-29T22-55-04.915.log.gz:32397). Running the "sdd" pipeline
+// mode's triage prompt, the headless call ended its turn with a status update
+// describing a still-running background subagent instead of the final JSON block —
+// the raw output was exactly the string below (rawLen=164 in the original log).
+// ParseHeadlessTriageResult must reject this the same as any other non-JSON output
+// (asserted here) so TriggerTriage's caller can distinguish "no result yet" from "a
+// result that happens to look empty" and the item becomes eligible for the
+// orphaned_triage stuck-detector's automatic retry (session/backlog_lifecycle.go's
+// reconcileOrphanedTriageItems, "shape 2" — see
+// TestReconcileOrphanedTriageItems_should_flagAndRetry_When_TriageSessionEndedWithoutTransition
+// for the detector-side half of this regression).
+func TestParseHeadlessTriageResult_PrematureCompletionPlaceholder(t *testing.T) {
+	raw := "Planning subagent is running in the background to write `plan.md`. I'll wait for its completion before dispatching the architecture/adversarial/UX review subagents."
+	_, err := ParseHeadlessTriageResult(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ParseHeadlessTriageResult")
+	assert.Contains(t, err.Error(), "no JSON object found")
+}
+
 // TestParseHeadlessTriageResult_StrayBraceInPreamble is a regression test for the
 // audit finding in project_plans/backlog-cross-platform-audit/gaps-and-risks.md #5:
 // the old first-`{`/last-`}` scan spans across an unrelated illustrative brace in
