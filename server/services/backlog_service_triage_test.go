@@ -1956,6 +1956,57 @@ func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkS
 	assert.NotContains(t, err.Error(), "likely stalled")
 }
 
+// TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession
+// covers the third of activeWorkSessionBlockedError's four branches: no
+// sessionStopper was ever wired via SetSessionStopper (NewBacklogService's
+// zero value). The blocked-spawn error must say so explicitly rather than
+// silently falling back to a bare "already active" message with no
+// indication that the progress signal couldn't even be attempted.
+func TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	// Deliberately no svc.SetSessionStopper call.
+	ctx := t.Context()
+
+	itemID, _ := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "progress signal unavailable: sessionStopper not wired")
+}
+
+// TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWorkSession
+// covers the fourth branch: a sessionStopper is wired and the blocking
+// session is live (IsSessionLive true, so spawnSessionAfterGates' 8a orphan
+// sweep does NOT tombstone it), but TimeSinceLastMeaningfulOutput itself
+// reports live=false — the disagreement mockSessionStopper's
+// tslmoOverrideNotLive models (see its doc comment). The blocked-spawn error
+// must say the progress signal is unavailable for that reason, not silently
+// mislabel it as fresh or stale.
+func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs:            map[string]bool{},
+		staleFor:             map[string]time.Duration{},
+		tslmoOverrideNotLive: map[string]bool{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true            // IsSessionLive → true: not tombstoned as orphan.
+	stopper.tslmoOverrideNotLive[activeUUID] = true // TimeSinceLastMeaningfulOutput → live=false.
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "progress signal unavailable: session not currently tracked live")
+}
+
 // TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved
 // covers both zero-hash edge cases from Story 1.6.2's acceptance criteria: the default
 // mode ("") short-circuits ContentHashFor without touching the cache, and an unresolved
