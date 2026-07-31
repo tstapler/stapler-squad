@@ -1860,6 +1860,102 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	assert.Equal(t, wantHash, sessions[0].PipelineModeSnapshotHash)
 }
 
+// spawnReadyItemWithActiveWorkSession is shared setup for the two
+// TestSpawnSessionFromItem_should_..._When_BlockedByActiveWorkSession tests
+// below: creates a ready item, spawns its first work session, and returns
+// that session's UUID so the caller can wire a mockSessionStopper's
+// liveUUIDs/staleFor maps before attempting the blocked second spawn.
+func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, storage *session.Storage, ctx context.Context) (itemID, activeSessionUUID string) {
+	t.Helper()
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "blocked-spawn test item",
+		RepoPath:     repoPath,
+		SkipTriage:   true,
+		SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID = createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	spawnResp, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotEmpty(t, spawnResp.Msg.SessionUuid)
+
+	return itemID, spawnResp.Msg.SessionUuid
+}
+
+// TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession
+// is the regression test for the 2026-07-31 finding in
+// docs/tasks/backlog-feature-improvement.md: before this fix, a blocked
+// second spawn returned a bare "already active... wait or kill it" error
+// with no signal about whether the blocking session was actually making
+// progress — a caller (human or agent) had to reconstruct that answer by
+// hand via get_session's timestamps, a full diff pull, and a live tmux
+// check. This asserts the blocked-spawn error itself now carries the same
+// progress signal notifyIfActiveWorkSessionStale already computes for the
+// analogous review-reopen path (TimeSinceLastMeaningfulOutput vs.
+// maxReworkBlockStaleness), so a caller can tell "stalled" from "still
+// working" from this one RPC response.
+func TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{},
+		staleFor:  map[string]time.Duration{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true
+	stopper.staleFor[activeUUID] = 20 * time.Minute // > maxReworkBlockStaleness (15min)
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "likely stalled")
+	assert.Contains(t, err.Error(), "20m0s")
+}
+
+// TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkSession
+// is the healthy-case counterpart above: a blocking session that has produced
+// output recently (well within maxReworkBlockStaleness) must be reported as
+// active, not stalled — the enrichment must not cry wolf on a genuinely
+// healthy in-progress session.
+func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{},
+		staleFor:  map[string]time.Duration{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true
+	stopper.staleFor[activeUUID] = 30 * time.Second // well within maxReworkBlockStaleness
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "still active")
+	assert.NotContains(t, err.Error(), "likely stalled")
+}
+
 // TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved
 // covers both zero-hash edge cases from Story 1.6.2's acceptance criteria: the default
 // mode ("") short-circuits ContentHashFor without touching the cache, and an unresolved
