@@ -37,7 +37,7 @@ the existing `BacklogItem` aggregate, not a new entity with its own lifecycle.
 
 | Term | Definition | Becomes |
 |---|---|---|
-| `PlanReviewStatus` | The 5-state derived status: `no_plan`, `pending_review`, `approved`, `changes_requested`, `skipped`. Never persisted — computed from `planArtifactsPath`, `planApproved`, `planRejectionReason`, `skipPlanning`. | TS union type (`web-app/src/lib/backlog/planReviewStatus.ts`), mirrored as a Go type where the same derivation is needed server-side for MCP prompt injection (`session/backlog_review.go`, Task 5.3.1) |
+| `PlanReviewStatus` | The 5-state derived status: `no_plan`, `pending_review`, `approved`, `changes_requested`, `skipped`. Never persisted — computed from `planArtifactsPath`, `planApproved`, `planRejectionReason`, `skipPlanning`. | TS union type (`web-app/src/lib/backlog/planReviewStatus.ts`) only in this pass. A mirrored Go type for `session/backlog_review.go`'s MCP prompt-injection path is **not** built here — see §7 Unresolved Question 5. |
 | `derivePlanReviewStatus` | Pure function computing `PlanReviewStatus` from a `BacklogItem`-shaped input. Single source of truth — `PlanVerdictBox` and `ActionsSection` both call it rather than re-deriving. | `web-app/src/lib/backlog/planReviewStatus.ts` function |
 | `PlanVerdictBox` | New React component rendering the persistent plan-review status card + reject-with-reason form + read-only historical variant, modeled 1:1 on `GateVerdictBox.tsx`. | `web-app/src/components/backlog/PlanVerdictBox.tsx` |
 | `RejectPlan` | New RPC: `item_id` + `reason` (required) + optional `expected_modified_at_unix_ms`. Persists `plan_rejection_reason`/`plan_rejected_at`. Does not itself trigger regeneration (ADR-002). | `proto/session/v1/backlog.proto` message + `BacklogService.RejectPlan` |
@@ -70,12 +70,15 @@ the existing `BacklogItem` aggregate, not a new entity with its own lifecycle.
 
 ## 4. Migration Plan
 
-- **Schema**: two new nullable/optional columns on `backlog_item`
-  (`plan_rejection_reason string`, `plan_rejected_at timestamp`, both
-  `NULL`-able, no default required beyond ent's own zero-value handling).
-  Purely additive — no backfill needed; every existing row reads as
-  "no rejection recorded" (`""`/`nil`), which is correct for 100% of
-  pre-existing items.
+- **Schema**: three new nullable/optional columns on `backlog_item`
+  (`plan_rejection_reason string`, `plan_rejected_at timestamp`,
+  `plan_artifacts_set_at timestamp` — the last added during Phase 4 to fix
+  pre-mortem P1 item #2, see §10), all `NULL`-able, no default required
+  beyond ent's own zero-value handling. Purely additive — no backfill
+  needed; every existing row reads as "no rejection recorded" (`""`/`nil`)
+  and "plan set-at unknown" (`nil`, falls back to `QueuedAt`/skipped in
+  Task 8.1.1's staleness check), which is correct for 100% of pre-existing
+  items.
 - **Codegen**: `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`
   (exact command from `session/ent/generate.go`) — commit all regenerated
   `session/ent/` files in the same commit as the schema edit.
@@ -169,6 +172,26 @@ the existing `BacklogItem` aggregate, not a new entity with its own lifecycle.
    gates a different (review) gate entirely, not the plan gate; confirmed
    not conflated per pitfalls.md §6, but worth a follow-up sanity check once
    this ships.
+5. **No canonical Go-side `PlanReviewStatus` derivation.** The Domain
+   Glossary previously promised a mirrored Go type consumed by
+   `session/backlog_review.go`'s MCP prompt-injection path (a stale
+   cross-reference to a "Task 5.3.1" that was never scoped into any epic —
+   architecture-review.md's Concerns section caught this). Verified against
+   the real file: `backlog_review.go` currently injects plan content via
+   `readPlanFile(item.PlanArtifactsPath)` (lines 249-250, 331-332) with no
+   awareness of `PlanApproved`/`PlanRejectionReason` at all, so an MCP/AI
+   consumer has no standing signal that a previously-injected plan was later
+   rejected. This pass does not add that signal or a Go-side
+   `DerivePlanReviewStatus` helper — the urgency architecture-review.md
+   flagged (gate checks at `backlog_service_triage.go:438,656` silently
+   diverging from `plan_rejection_reason` semantics) is substantially
+   mitigated by Epic 3's `RejectPlan`-clears-`PlanApproved` fix (Architecture
+   Blocker 3 remediation — rejecting now directly flips the same boolean the
+   gates already check, rather than requiring the gates to learn a new
+   field). A shared Go `PlanReviewStatus` type consumed by both
+   `backlog_review.go` and the two gate checks remains good hygiene and a
+   reasonable follow-up, but is deferred rather than added to this pass's
+   scope.
 
 ---
 
@@ -233,15 +256,22 @@ changes underneath it.*
   pap := artifactAbsPath
   update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
   ```
-  to also reset approval:
+  to also reset approval and stamp when the plan was (re)generated:
   ```go
   pap := artifactAbsPath
   approvalReset := false
-  update := session.BacklogItemUpdate{PlanArtifactsPath: &pap, PlanApproved: &approvalReset}
+  setAt := time.Now()
+  update := session.BacklogItemUpdate{PlanArtifactsPath: &pap, PlanApproved: &approvalReset, PlanArtifactsSetAt: &setAt}
   ```
   Mirrors the existing `PlanApprovedAt`-left-stale convention already used at
   `backlog_service_lifecycle.go:595-601` (only `PlanApproved` is reset there
   too) — do not add a `PlanApprovedAt` reset here for consistency.
+  **Pre-mortem P1 remediation** (pre-mortem.md failure mode #2): `PlanArtifactsSetAt`
+  is stamped here — the one write site that fires unconditionally on every
+  `TriggerTriage` completion (fresh or feedback-driven) — specifically so
+  Epic 8's staleness detector (Task 8.1.1) has a clock that only moves when
+  the plan itself is (re)generated, not on every unrelated field edit to the
+  item (the flaw a whole-row `UpdatedAt` fallback would have).
 
 - **Task 1.1.2** (4 min, 1 file: `server/services/backlog_service_test.go`)
   Add `TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved`: create an
@@ -249,7 +279,9 @@ changes underneath it.*
   non-empty feedback against a seeded prior triage result, poll until the
   async goroutine completes (reuse whatever polling helper the existing
   `TestTriggerTriage_RefineWithFeedback` test already uses), assert
-  `item.PlanApproved == false`.
+  `item.PlanApproved == false` and `item.PlanArtifactsSetAt` is non-nil and
+  ≈`time.Now()` (within a few seconds) — the regression check for the
+  pre-mortem P1 fix (Task 2.1.1's new field).
 
 - **Task 1.1.3** (2 min, 1 file: `docs/registry/features/backend/backlog/trigger-triage.json`)
   Update `lastModified` to today's date and append the new test's function
@@ -260,7 +292,11 @@ changes underneath it.*
 
 ### Epic 2 — Data Model: Plan Rejection State
 
-Depends on: nothing (can start immediately, in parallel with Epic 1).
+Depends on: nothing (can start immediately, in parallel with Epic 1) — with
+one exception: Story 2.4 specifically extends a write block Epic 1's Task
+1.1.1 creates, so Story 2.4 cannot start until Task 1.1.1 lands (Stories
+2.1-2.3 have no such dependency and can still run fully in parallel with
+Epic 1).
 
 #### Story 2.1 — ent schema fields
 
@@ -273,7 +309,14 @@ Depends on: nothing (can start immediately, in parallel with Epic 1).
   field.Time("plan_rejected_at").
       Optional().
       Nillable(),
+  field.Time("plan_artifacts_set_at").
+      Optional().
+      Nillable().
+      Comment("Timestamp of the most recent write that set plan_artifacts_path (i.e. the plan was (re)generated). Distinct from the whole-row UpdatedAt, which is bumped by any field edit (title, tags, description) and is therefore unsuitable as a staleness anchor — see pre-mortem.md P1 item #2. Used by reconcilePlanNotApprovedItems (Task 8.1.1) instead of UpdatedAt."),
   ```
+  **Pre-mortem P1 remediation** (pre-mortem.md, failure mode #2): this field
+  exists specifically so Epic 8's staleness detector has a clock that only
+  moves when the plan itself changes, not on every unrelated field edit.
 
 - **Task 2.1.2** (3 min, codegen — no hand-edited files)
   Run the exact command from `session/ent/generate.go`:
@@ -290,20 +333,22 @@ Depends on: nothing (can start immediately, in parallel with Epic 1).
   ```go
   PlanRejectionReason string
   PlanRejectedAt      *time.Time
+  PlanArtifactsSetAt  *time.Time
   ```
   Add to `BacklogItemUpdate` (after `PlanArtifactsPath`, ~line 522):
   ```go
   PlanRejectionReason *string
   PlanRejectedAt      *time.Time
+  PlanArtifactsSetAt  *time.Time
   ```
 
-- **Task 2.2.2** (4 min, 1 file: `session/ent_repository_backlog.go`)
+- **Task 2.2.2** (5 min, 1 file: `session/ent_repository_backlog.go`)
   Three edits in this one file:
   1. `backlogItemToData` (read path, ~line 190): add
-     `PlanRejectionReason: item.PlanRejectionReason, PlanRejectedAt: item.PlanRejectedAt,`
+     `PlanRejectionReason: item.PlanRejectionReason, PlanRejectedAt: item.PlanRejectedAt, PlanArtifactsSetAt: item.PlanArtifactsSetAt,`
      after the `PlanArtifactsPath` line.
   2. `CreateBacklogItem` builder chain (~line 289): add
-     `.SetNillablePlanRejectionReason(&data.PlanRejectionReason).SetNillablePlanRejectedAt(data.PlanRejectedAt)`
+     `.SetNillablePlanRejectionReason(&data.PlanRejectionReason).SetNillablePlanRejectedAt(data.PlanRejectedAt).SetNillablePlanArtifactsSetAt(data.PlanArtifactsSetAt)`
      after `.SetNillablePlanArtifactsPath(...)`.
   3. `UpdateBacklogItem`'s partial-update block (~line 605-607): add
      ```go
@@ -312,6 +357,9 @@ Depends on: nothing (can start immediately, in parallel with Epic 1).
      }
      if update.PlanRejectedAt != nil {
          u.SetPlanRejectedAt(*update.PlanRejectedAt)
+     }
+     if update.PlanArtifactsSetAt != nil {
+         u.SetPlanArtifactsSetAt(*update.PlanArtifactsSetAt)
      }
      ```
 
@@ -324,6 +372,9 @@ Depends on: nothing (can start immediately, in parallel with Epic 1).
   }
   if update.PlanRejectedAt != nil {
       fields = append(fields, "planRejectedAt")
+  }
+  if update.PlanArtifactsSetAt != nil {
+      fields = append(fields, "planArtifactsSetAt")
   }
   ```
 
@@ -356,6 +407,64 @@ leave a stale rejection reason behind once it's re-triaged and re-approved.*
 - **Task 2.3.2** (4 min, 1 file: `server/services/backlog_service_test.go`)
   Add `TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason`:
   reject a plan, transition to `idea`, assert `plan_rejection_reason == ""`.
+
+#### Story 2.4 — Extend `TriggerTriage`'s regeneration-completion write to also clear the rejection reason
+
+**Sequencing note (read before starting this story)**: this story edits the
+*same* `session.BacklogItemUpdate` write block in
+`server/services/backlog_service_triage.go` that Epic 1's Task 1.1.1 already
+adds `PlanApproved: &approvalReset` to. Task 1.1.1 ships first (Epic 1 has
+no dependency on anything and is written before this field even exists).
+This story must be scoped in implementation as **extending the block Task
+1.1.1 created**, not a fresh, independent edit to that file — a second
+uncoordinated edit to the same struct literal is exactly the kind of
+same-file collision the plan's "3-5 files" task-sizing discipline exists to
+surface, not hide. This is why the dependency graph (§8) already draws
+`E1 -.extends reset write.-> E2` as a dotted edge into Epic 2 — this story
+is that edge.
+
+**Acceptance criterion** (adversarial-review.md Blocker remediation; ADR-001
+"Consequences" already promises this as one of four write sites that must
+agree on clearing `plan_rejection_reason` — this story is the missing
+fourth): *A freshly-regenerated plan must not display stale rejection
+feedback that the regeneration was meant to address.*
+
+> **Given** a backlog item with `plan_rejection_reason = "missing caching
+> plan"` (i.e. `changes_requested` state),
+> **when** the user clicks "Regenerate Plan with This Feedback" (Epic 6),
+> which calls `TriggerTriage(item_id, feedback)`, and it completes
+> successfully,
+> **then** `item.planRejectionReason == ""` afterward, so
+> `derivePlanReviewStatus(item)` returns `"pending_review"` (not
+> `"changes_requested"` with stale text) for the newly-generated,
+> never-yet-reviewed plan.
+
+- **Task 2.4.1** (3 min, 1 file: `server/services/backlog_service_triage.go`)
+  Extend the async completion block Task 1.1.1 already modified
+  (~line 2080-2086 pre-Task-1.1.1, shifted slightly after it lands — locate
+  by the `PlanArtifactsPath: &pap` literal, not the line number) to also
+  clear the rejection reason:
+  ```go
+  pap := artifactAbsPath
+  approvalReset := false
+  clearedReason := ""
+  update := session.BacklogItemUpdate{
+      PlanArtifactsPath:   &pap,
+      PlanApproved:        &approvalReset,
+      PlanRejectionReason: &clearedReason,
+  }
+  ```
+  Do not reset `PlanRejectedAt` (best-effort per ADR-001 — matches the
+  existing `PlanApprovedAt`-left-stale convention already used at
+  `backlog_service_lifecycle.go:595-601` and by Task 1.1.1 itself).
+
+- **Task 2.4.2** (4 min, 1 file: `server/services/backlog_service_test.go`)
+  Add `TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason`,
+  structured identically to Task 1.1.1's own
+  `TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved` (Task 1.1.2):
+  create an item, reject its plan with a reason, call `TriggerTriage` with
+  feedback, poll until the async goroutine completes, assert
+  `item.PlanRejectionReason == ""`.
 
 ---
 
@@ -437,9 +546,11 @@ decline a plan and supply free-text feedback that is durably recorded.*
           return nil, mismatchErr
       }
       now := time.Now()
+      approvalReset := false
       update := session.BacklogItemUpdate{
           PlanRejectionReason: &reason,
           PlanRejectedAt:      &now,
+          PlanApproved:        &approvalReset,
       }
       updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
       if err != nil {
@@ -450,6 +561,23 @@ decline a plan and supply free-text feedback that is durably recorded.*
       }), nil
   }
   ```
+  **`PlanApproved: &approvalReset` is required, not optional polish**
+  (architecture-review.md Blocker 3): without it, a normal "I approved this
+  plan, then noticed a problem and want to reject it" flow leaves
+  `plan_approved=true` AND a non-empty `plan_rejection_reason` persisted
+  simultaneously. The frontend's `derivePlanReviewStatus` masks this by
+  prioritizing `changes_requested` over `approved` — but the **backend**
+  spawn gates at `server/services/backlog_service_triage.go:438` and `:656`
+  check the raw `item.PlanApproved` bool directly and never consult
+  `PlanRejectionReason`, so without this reset a session could still spawn
+  (or `DequeueNextQueuedItems` could still dequeue) against a plan the UI
+  shows as "changes requested." Setting `PlanApproved: &approvalReset` here
+  closes the gap at the single write site rather than requiring every gate
+  check to be taught about the new field — mirrors Epic 1's Task 1.1.1,
+  which already resets `PlanApproved` on `TriggerTriage` regeneration for
+  the same underlying reason (a stale approval must not silently survive
+  content it never covered).
+
   `checkPlanArtifactFreshness` is defined by this story's own Task 3.1.3b
   below (not Epic 4) — `RejectPlan`/`ApprovePlan` are its only two
   consumers, so it lives with them; Epic 4 does not need to exist first.
@@ -462,18 +590,30 @@ decline a plan and supply free-text feedback that is durably recorded.*
   ```go
   // checkPlanArtifactFreshness returns a FailedPrecondition connect error if
   // expectedModifiedAtUnixMs is non-zero and doesn't match plan.md's current
-  // on-disk mtime. 0 means "no check requested" — always passes, preserving
-  // backward compatibility with callers that don't send the token. The
-  // mtime itself is produced by Epic 4's GetPlanArtifactContent RPC and
-  // round-tripped through the frontend; this helper has no code dependency
-  // on Epic 4, only a data dependency (the token's origin).
+  // on-disk mtime, OR if expectedModifiedAtUnixMs is non-zero and the mtime
+  // cannot be determined at all. 0 means "no check requested" — always
+  // passes, preserving backward compatibility with callers that don't send
+  // the token. A non-zero token means the caller asked for a freshness
+  // guarantee; if the server can no longer verify it (e.g. a concurrent
+  // TriggerTriage regeneration is mid-rewrite of plan.md — unlink-then-
+  // create, or the file is briefly missing/renamed), fail CLOSED rather
+  // than silently proceeding — this is the exact race the token exists to
+  // catch (adversarial-review.md Blocker: the previous fail-open version
+  // let RejectPlan record a rejection against content the user never
+  // actually saw, since RejectPlan has no other file-existence
+  // precondition — its only guard is `item.PlanArtifactsPath == ""`, a
+  // DB-field check, not a file-existence check). The mtime itself is
+  // produced by Epic 4's GetPlanArtifactContent RPC and round-tripped
+  // through the frontend; this helper has no code dependency on Epic 4,
+  // only a data dependency (the token's origin).
   func checkPlanArtifactFreshness(artifactsPath string, expectedModifiedAtUnixMs int64) error {
       if expectedModifiedAtUnixMs == 0 {
           return nil
       }
       info, statErr := os.Stat(filepath.Join(artifactsPath, "plan.md"))
       if statErr != nil {
-          return nil // missing plan.md is handled by the caller's own precondition check
+          return connect.NewError(connect.CodeFailedPrecondition,
+              fmt.Errorf("plan artifact unavailable — reload and try again: %w", statErr))
       }
       if info.ModTime().UnixMilli() != expectedModifiedAtUnixMs {
           return connect.NewError(connect.CodeFailedPrecondition,
@@ -509,6 +649,18 @@ decline a plan and supply free-text feedback that is durably recorded.*
 - **Task 3.1.6** (3 min, 1 file: `server/services/backlog_service_test.go`)
   Add `TestApprovePlan_ClearsExistingRejectionReason`: reject a plan, then
   approve it, assert `plan_rejection_reason == ""`.
+
+- **Task 3.1.7** (3 min, 1 file: `server/services/backlog_service_test.go`)
+  Add `TestRejectPlan_ClearsExistingApproval` (the mirror-image regression
+  test for Task 3.1.3's `PlanApproved` reset, architecture-review.md
+  Blocker 3's required remediation): approve a plan
+  (`item.PlanApproved == true`), then reject it, assert
+  `item.PlanApproved == false` in the `RejectPlanResponse.Item` and via a
+  fresh `GetBacklogItem` read. Also assert the backend gate itself agrees:
+  call `SpawnSessionFromItem`/whatever helper the existing gate tests use
+  and confirm it still returns the "plan not approved" precondition error
+  after reject-following-approve — this is the concrete case the blocker
+  identified as a live spawn-gate bypass, not just a field-value check.
 
 ---
 
@@ -646,12 +798,20 @@ renders as formatted content in the UI, not just a path.*
   (e.g. `filename: "../../../etc/passwd"`),
   `TestGetPlanArtifactContent_MissingFile_ReturnsNotFound`.
 
-- **Task 4.2.3** (3 min, 1 file: `server/services/backlog_service_test.go`)
+- **Task 4.2.3** (5 min, 1 file: `server/services/backlog_service_test.go`)
   Add `TestApprovePlan_StaleContentToken_ReturnsFailedPrecondition` and
   `TestRejectPlan_StaleContentToken_ReturnsFailedPrecondition` — these
   exercise `checkPlanArtifactFreshness` (Task 3.1.3b) via both handlers now
   that `GetPlanArtifactContent`'s `modified_at_unix_ms` (this epic) is the
-  value a real client would echo back.
+  value a real client would echo back. Also add
+  `TestRejectPlan_PlanFileGoneMidRegeneration_FailsClosed` (adversarial-review.md
+  Blocker remediation): call `RejectPlan` with a non-zero
+  `expected_modified_at_unix_ms` after deleting/renaming `plan.md` out from
+  under the item (simulating a regeneration mid-rewrite), assert the call
+  returns `FailedPrecondition` — not success — proving the helper fails
+  closed rather than silently skipping the check on a stat error. Add the
+  equivalent `TestApprovePlan_PlanFileGoneMidRegeneration_FailsClosed` for
+  symmetry.
 
 ---
 
@@ -770,7 +930,16 @@ approved / changes-requested (and skipped).*
 
 ### Epic 6 — Frontend: Reject Flow Wiring
 
-Depends on: Epic 5.
+Depends on: Epic 5. **Also coordinates with Epic 7** (added post-consistency-review):
+Task 6.1.3 owns the single merged JSX render site for `PlanArtifactsSection`
++ `PlanVerdictBox` (content must render above the verdict/action row — see
+Task 6.1.3), and Task 6.1.2 consumes the `onMtimeChange` value
+`PlanArtifactsSection` (Task 7.1.3) reports. Whichever of Epic 6 / Epic 7
+lands first should implement both tasks' final merged shape rather than
+each independently; the other epic's corresponding task (6.1.3 / 7.1.4)
+becomes a no-op on landing second. This does not create a hard build-order
+dependency (both can still be branched/reviewed in parallel), only a
+last-writer-must-reconcile note for whoever picks up the second one.
 
 #### Story 6.1 — Wire `PlanVerdictBox` into `BacklogItemDetail`
 
@@ -803,7 +972,23 @@ button.*
   ```
   Export it from the hook's returned object alongside `approvePlan`.
 
-- **Task 6.1.2** (4 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
+- **Task 6.1.2** (5 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
+  **Cross-artifact-consistency BLOCKER remediation**: the earlier draft of
+  this task called `rejectPlan(item.id, reason)` with no freshness token,
+  and the pre-existing `approve_plan` case (~line 514) calls
+  `approvePlan(item.id)` the same way — so `expected_modified_at_unix_ms`
+  (Task 3.1.1) was defined server-side but never actually threaded from the
+  frontend, making the optimistic-concurrency guard dead code. Fix: add a
+  `planContentMtime` state slot here that `PlanArtifactsSection` (Task
+  7.1.3, below) reports into via a callback prop, and thread it into both
+  write paths.
+
+  Add state near the component's other action state (~line 470s, alongside
+  `actionLoading`):
+  ```ts
+  const [planContentMtime, setPlanContentMtime] = useState<number | null>(null);
+  ```
+
   Add `handleRejectPlan` and `handleRegeneratePlanWithFeedback` callbacks
   near `handleGateReopen` (~line 805):
   ```ts
@@ -812,7 +997,7 @@ button.*
     const toastKey = `${item.id}:reject_plan`;
     setActionLoading("reject_plan");
     try {
-      await rejectPlan(item.id, reason);
+      await rejectPlan(item.id, reason, planContentMtime !== null ? BigInt(planContentMtime) : undefined);
       showActionToast("Changes requested.", "success", toastKey);
       await load();
     } catch (e) {
@@ -821,7 +1006,7 @@ button.*
     } finally {
       if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, rejectPlan, load, showActionToast]);
+  }, [item, rejectPlan, load, showActionToast, planContentMtime]);
 
   const handleRegeneratePlanWithFeedback = useCallback(async () => {
     if (!item?.planRejectionReason) return;
@@ -830,12 +1015,56 @@ button.*
   }, [item, triggerTriage, load]);
   ```
 
-- **Task 6.1.3** (4 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
-  Insert `PlanVerdictBox` right before `<ActionsSection` (~line 1154),
+  Update the existing `case "approve_plan":` (~line 513-514) to pass the
+  same token:
+  ```ts
+  case "approve_plan":
+    await approvePlan(item.id, planContentMtime !== null ? BigInt(planContentMtime) : undefined);
+    break;
+  ```
+
+- **Task 6.1.2b** (2 min, 1 file: `web-app/src/lib/hooks/useBacklogService.ts`)
+  **Required companion to Task 6.1.2.** `approvePlan` (~line 774) currently
+  only accepts `id` — extend its signature to accept the same optional
+  token `rejectPlan` (Task 6.1.1) already does, and pass it through:
+  ```ts
+  const approvePlan = useCallback(async (id: string, expectedModifiedAtUnixMs?: bigint): Promise<BacklogItem | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.approvePlan({ itemId: id, expectedModifiedAtUnixMs: expectedModifiedAtUnixMs ?? 0n });
+      // ...unchanged below this line...
+  ```
+
+- **Task 6.1.3** (5 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
+  **Cross-artifact-consistency BLOCKER remediation (DOM order)**: the
+  earlier draft inserted `PlanVerdictBox` right before `<ActionsSection`
+  (~line 1154) while `PlanArtifactsSection` stayed at its original location
+  further down the file (~line 1217, per Task 7.1.4) — meaning the verdict
+  card and Approve/Reject actions rendered **above** the plan content itself.
+  This directly contradicts the research finding both `design/ux.md` §7.2
+  and `research/ux.md` §1 cite: comparable review tools never put an
+  approve/reject action behind or above content the user hasn't seen yet.
+  Fix: move the existing `<PlanArtifactsSection>` block (currently rendered
+  at ~line 1217, per Task 7.1.4) to render immediately **above** the
+  `PlanVerdictBox` insertion point below — i.e. the final order in the JSX
+  becomes `PlanArtifactsSection` (content) → `PlanVerdictBox` (verdict +
+  reject action) → `ActionsSection` (approve/spawn actions), not the
+  reverse. This is a pure reordering of two existing JSX blocks within the
+  same parent — no new markup beyond what Tasks 6.1.3/7.1.4 already define.
+
+  Insert `PlanArtifactsSection` (moved up) followed immediately by
+  `PlanVerdictBox`, both right before `<ActionsSection` (~line 1154),
   gated on the item having ever had a plan or being explicitly skipped
   (i.e. not shown for a bare "idea"-status item where triage hasn't run
   yet — `derivePlanReviewStatus(item) !== "no_plan" || item.status === "ready" || item.status === "queued"`):
   ```tsx
+  {item.planArtifactsPath && (
+    <PlanArtifactsSection
+      item={item}
+      defaultExpanded={planArtifactsExpanded || derivePlanReviewStatus(item) === "pending_review"}
+      onMtimeChange={setPlanContentMtime}
+    />
+  )}
   {(item.status === "ready" || item.status === "queued" || derivePlanReviewStatus(item) !== "no_plan") && (
     <PlanVerdictBox
       status={derivePlanReviewStatus(item)}
@@ -847,6 +1076,10 @@ button.*
     />
   )}
   ```
+  Task 7.1.4 (below) is superseded by this block for *placement* — it no
+  longer needs a separate render site at ~line 1217; only its
+  `defaultExpanded` logic is preserved here. `onMtimeChange` is the new prop
+  Task 7.1.3 adds.
 
 - **Task 6.1.4** (3 min, 1 file: `web-app/src/components/backlog/detail/ActionsSection.tsx`)
   Import and use `derivePlanReviewStatus` for `canSpawnSession` (~line
@@ -863,6 +1096,17 @@ button.*
   every case that mattered before (adding `changes_requested` doesn't loosen
   or tighten the gate; a rejected plan was never approved, so it was already
   blocking spawn).
+
+- **Task 6.1.5** (5 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.test.tsx`)
+  **Regression test for the cross-artifact-consistency BLOCKER fix** (Tasks
+  6.1.2/6.1.2b/7.1.3): render the detail view with a mocked
+  `getPlanArtifactContent` returning a fixed `modifiedAtUnixMs`, wait for
+  `PlanArtifactsSection` to report it via `onMtimeChange`, then trigger
+  reject (and separately, approve), and assert the mocked `rejectPlan`/
+  `approvePlan` client calls were made with `expectedModifiedAtUnixMs`
+  equal to that fetched value — not `0n`/`undefined`. This is the specific
+  case the consistency review found silently broken (token defined
+  server-side, never populated from the UI).
 
 ---
 
@@ -915,9 +1159,17 @@ renders as formatted markdown, not just a path.*
   });
   ```
 
-- **Task 7.1.3** (5 min, 1 file: `web-app/src/components/backlog/detail/PlanArtifactsSection.tsx`)
+- **Task 7.1.3** (6 min, 1 file: `web-app/src/components/backlog/detail/PlanArtifactsSection.tsx`)
   Convert from a pure prop-display component to a content-fetching one,
-  following `DescriptionSection.tsx`'s render pattern exactly:
+  following `DescriptionSection.tsx`'s render pattern exactly.
+  **Two cross-artifact-consistency BLOCKER fixes applied vs. the earlier
+  draft**: (1) `InlineNotice`'s real props (`web-app/src/components/common/InlineNotice.tsx:16-28`)
+  are `actions: InlineNoticeAction[]`, not `actionLabel`/`onAction` — the
+  earlier draft's code sample would not compile. (2) added an
+  `onMtimeChange` callback prop so `BacklogItemDetail` (Task 6.1.2/6.1.3)
+  can receive the fetched mtime and echo it back to `ApprovePlan`/
+  `RejectPlan` — without this the `expected_modified_at_unix_ms` guard
+  (Task 3.1.1) has no way to ever be populated from the UI.
   ```tsx
   "use client";
   import { useEffect, useState } from "react";
@@ -934,9 +1186,11 @@ renders as formatted markdown, not just a path.*
   export interface PlanArtifactsSectionProps {
     item: BacklogItem;
     defaultExpanded: boolean;
+    /** Called with the fetched plan.md mtime whenever content loads successfully — the parent threads this into ApprovePlan/RejectPlan's expected_modified_at_unix_ms. */
+    onMtimeChange?: (mtimeUnixMs: number) => void;
   }
 
-  export function PlanArtifactsSection({ item, defaultExpanded }: PlanArtifactsSectionProps) {
+  export function PlanArtifactsSection({ item, defaultExpanded, onMtimeChange }: PlanArtifactsSectionProps) {
     const { getPlanArtifactContent } = useBacklogService();
     const [content, setContent] = useState<string | null>(null);
     const [displayedMtime, setDisplayedMtime] = useState<number | null>(null);
@@ -954,6 +1208,7 @@ renders as formatted markdown, not just a path.*
         }
         setContent(res.content);
         setDisplayedMtime(Number(res.modifiedAtUnixMs));
+        onMtimeChange?.(Number(res.modifiedAtUnixMs));
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load plan content.");
@@ -974,8 +1229,7 @@ renders as formatted markdown, not just a path.*
           {newerAvailable && (
             <InlineNotice
               message="A newer plan is available."
-              actionLabel="Reload"
-              onAction={() => { setNewerAvailable(false); setDisplayedMtime(null); void fetchContent(); }}
+              actions={[{ label: "Reload", onClick: () => { setNewerAvailable(false); setDisplayedMtime(null); void fetchContent(); }, variant: "primary" }]}
               data-testid="plan-content-stale-notice"
             />
           )}
@@ -994,18 +1248,15 @@ renders as formatted markdown, not just a path.*
   updates whenever `TriggerTriage`/`ApprovePlan`/`RejectPlan` complete and
   the parent reloads the item) rather than a new polling loop.
 
-- **Task 7.1.4** (2 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
-  Promote default-expand when a plan is pending review (UX research §1: never
-  gate "Approve" behind a hidden section) — change the render condition at
-  ~line 1217-1219:
-  ```tsx
-  {item.planArtifactsPath && (
-    <PlanArtifactsSection
-      item={item}
-      defaultExpanded={planArtifactsExpanded || derivePlanReviewStatus(item) === "pending_review"}
-    />
-  )}
-  ```
+- **Task 7.1.4** (1 min, 1 file: `web-app/src/components/backlog/BacklogItemDetail.tsx`)
+  **Superseded by Task 6.1.3** for JSX placement and props (Task 6.1.3 now
+  owns the single `<PlanArtifactsSection>` render site, moved above
+  `PlanVerdictBox`, and already includes `onMtimeChange={setPlanContentMtime}`
+  and `defaultExpanded={planArtifactsExpanded || derivePlanReviewStatus(item) === "pending_review"}`).
+  This task is a no-op if Epic 6 lands first; if Epic 7 lands first (they
+  have no ordering dependency per §8's graph), implement Task 6.1.3's final
+  JSX shape directly here instead of the old pre-move version, so whichever
+  epic lands second doesn't have to re-derive the merge.
 
 - **Task 7.1.5** (5 min, 1 file: `web-app/src/components/backlog/detail/PlanArtifactsSection.test.tsx`, new file)
   RTL tests: renders fetched markdown content, shows `InlineError` on fetch
@@ -1033,7 +1284,7 @@ closes the *detection* gap, not an enforcement gap):
 > notification fires — matching what already happens for `queued`-status
 > items in the same situation.
 
-- **Task 8.1.1** (4 min, 1 file: `session/backlog_lifecycle.go`)
+- **Task 8.1.1** (5 min, 1 file: `session/backlog_lifecycle.go`)
   Widen the `Statuses` filter in `reconcilePlanNotApprovedItems` (~line
   2521-2524):
   ```go
@@ -1043,18 +1294,84 @@ closes the *detection* gap, not an enforcement gap):
   ```
   The staleness check already uses `item.QueuedAt` (~line 2534) — for
   `ready`-status items `QueuedAt` is nil, so add a fallback to
-  `item.UpdatedAt` when `QueuedAt` is nil:
+  `item.PlanArtifactsSetAt` (Task 2.1.1's new field) when `QueuedAt` is nil.
+  **Do not fall back to `item.UpdatedAt`** (pre-mortem.md P1 item #2,
+  originally drafted here and caught before implementation): `UpdatedAt` is
+  a whole-row timestamp bumped by any field edit — title, tags,
+  description — so a genuinely stale, unreviewed plan would never trip this
+  detector once the item is touched for an unrelated reason, silently
+  defeating the entire point of Epic 8.
   ```go
   var since time.Time
   if item.QueuedAt != nil {
       since = *item.QueuedAt
+  } else if item.PlanArtifactsSetAt != nil {
+      since = *item.PlanArtifactsSetAt
   } else {
-      since = item.UpdatedAt
+      // No plan generated yet and never queued — nothing to be stale about.
+      continue
   }
   if time.Since(since) <= planApprovalStaleness {
       continue
   }
   ```
+  **Also required** (architecture-review.md Blocker 1 — do not skip): the
+  `er.MarkStuck(...)` call a few lines below (~line 2538) hardcodes
+  `BacklogStatusQueued` as its fourth argument (`expectedStatus`).
+  `MarkStuck`'s own precondition (`session/ent_repository_backlog.go:1044`,
+  `if current.Status != string(expectedStatus) { return false, nil }`) is a
+  **silent** no-op — every newly-included `ready`-status item has
+  `current.Status == "ready" != "queued"`, so `MarkStuck` would always
+  return `applied=false` and the widened detection above would be dead code.
+  Change the call to pass the item's actual current status instead of the
+  hardcoded constant:
+  ```go
+  applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, item.Status,
+      "queued or ready item blocked by the planning gate (plan not approved, skip_planning not set)")
+  ```
+  (`item.Status` is already typed `BacklogStatus` on `BacklogItemData` —
+  `session/repository.go:450` — no conversion needed.) Note this also
+  changes the `stuckContext` string since "queued item" is no longer
+  accurate for every case; Task 8.1.2 below updates the *notification*
+  message to match.
+
+- **Task 8.1.1b** (4 min, 1 file: `session/backlog_lifecycle.go`)
+  **Required companion fix** (architecture-review.md Blocker 2). Even with
+  Task 8.1.1's `MarkStuck` fix, `selfHealStuck`'s resolve condition for this
+  reason (`session/backlog_lifecycle.go:3052-3053`) is
+  `case domain.StuckReasonPlanNotApproved: resolve = row.ItemStatus != BacklogStatusQueued`.
+  `selfHealStuck` runs every tick — once a `ready`-status item is marked
+  stuck, `row.ItemStatus` is `"ready"`, and `"ready" != "queued"` evaluates
+  `true` immediately, so `selfHealStuck` clears the stuck row on its very
+  next run before a human ever sees the notification persist. Checking only
+  "did the status change" is also wrong even for the pre-existing
+  `queued`-only case in the general sense the fix must handle: for a
+  `ready`-status item, approving the plan does **not** itself change
+  `item.Status` (unlike a `queued` item, which gets picked up by
+  `DequeueNextQueuedItems` shortly after approval and so leaves `queued`
+  status on its own) — a `ready` item that gets its plan approved would stay
+  `"ready"` indefinitely, so a pure status-anchored resolve condition would
+  leave it stuck forever even after the actual blocker clears. Resolve based
+  on the underlying condition instead of status:
+  ```go
+  case domain.StuckReasonPlanNotApproved:
+      planItem, itemErr := l.storage.GetBacklogItem(ctx, row.ItemID)
+      if itemErr != nil {
+          // Item is gone or unreadable — the blanket terminal/done rule
+          // above already handles archived/done items; treat any other
+          // fetch failure as "leave open," matching every other case in
+          // this switch's fail-safe posture (never silently resolve on an
+          // error).
+          continue
+      }
+      resolve = planItem.SkipPlanning || planItem.PlanApproved
+  ```
+  This is a new case in the existing `switch row.Reason` (~line 3041-3058)
+  — replace the old one-line `case domain.StuckReasonPlanNotApproved:` with
+  the block above. Add a one-line doc comment above the case noting this is
+  the one reason in the switch that needs a per-row item fetch, since
+  resolution for it depends on a field (`PlanApproved`/`SkipPlanning`), not
+  a status transition, unlike every sibling case.
 
 - **Task 8.1.2** (3 min, 1 file: `session/backlog_lifecycle.go`)
   Update the notification message (~line 2559-2560) to be status-neutral
@@ -1064,12 +1381,41 @@ closes the *detection* gap, not an enforcement gap):
   fmt.Sprintf("%s — this item's plan has been awaiting approval for over %s. Approve the plan or update the item to unblock it.", item.Title, planApprovalStaleness)
   ```
 
-- **Task 8.1.3** (5 min, 1 file: `session/backlog_lifecycle_test.go`)
-  Add a test seeding a `ready`-status item with a stale, unapproved plan
-  (`UpdatedAt` older than `planApprovalStaleness`), run
-  `reconcilePlanNotApprovedItems`, assert `StuckReasonPlanNotApproved` is
-  applied and a notification fires — mirroring whatever existing test
-  pattern covers the `queued`-status case today.
+- **Task 8.1.3** (7 min, 1 file: `session/backlog_lifecycle_test.go`)
+  Add `TestReconcilePlanNotApprovedItems_ReadyStatusStalePlan_MarksStuck`:
+  seed a `ready`-status item with a stale, unapproved plan
+  (`PlanArtifactsSetAt` older than `planApprovalStaleness`, no `QueuedAt`),
+  run `reconcilePlanNotApprovedItems`, assert `StuckReasonPlanNotApproved` is
+  applied (`applied == true` from `MarkStuck` — this is the regression
+  check for Task 8.1.1's fix; before that fix this assertion fails because
+  `MarkStuck` silently no-ops on the status-mismatch precondition) and a
+  notification fires. Also add
+  `TestReconcilePlanNotApprovedItems_QueuedStatusStalePlan_StillMarksStuck`
+  seeding a `queued`-status item the same way, to regression-guard that
+  passing `item.Status` instead of the old hardcoded `BacklogStatusQueued`
+  didn't silently break the pre-existing queued-item case.
+
+- **Task 8.1.3b** (5 min, 1 file: `session/backlog_lifecycle_test.go`)
+  **Pre-mortem P1 regression guard** (pre-mortem.md failure mode #2 — the
+  specific scenario the fix must prevent). Add
+  `TestReconcilePlanNotApprovedItems_UnrelatedFieldEditDoesNotResetStaleness`:
+  seed a `ready`-status item with `PlanArtifactsSetAt` older than
+  `planApprovalStaleness` and no `QueuedAt`, then update an unrelated field
+  (e.g. `Title`) via `UpdateBacklogItem` — which bumps the row's `UpdatedAt`
+  to "now" but must NOT touch `PlanArtifactsSetAt` — then run
+  `reconcilePlanNotApprovedItems` and assert the item is still marked stuck.
+  This fails against a `since = item.UpdatedAt` fallback (the pre-fix bug)
+  and passes against `since = *item.PlanArtifactsSetAt`.
+
+- **Task 8.1.4** (5 min, 1 file: `session/backlog_lifecycle_test.go`)
+  Add `TestSelfHealStuck_PlanNotApproved_ResolvesOnApprovalEvenWhenStatusUnchanged`
+  (covers Task 8.1.1b): seed a `ready`-status item, mark it stuck with
+  `StuckReasonPlanNotApproved`, then approve its plan (`PlanApproved =
+  true`) **without** changing `item.Status` (it stays `"ready"`), run
+  `selfHealStuck`, assert the stuck row resolves. This is the regression
+  check that a status-anchored-only resolve condition (the pre-fix bug)
+  would fail — a `ready` item's status never changes on approval, unlike a
+  `queued` item's.
 
 ---
 
@@ -1164,8 +1510,11 @@ Context): *`tests/e2e/plan-gate.spec.ts` must not regress.*
 
 ## 10. Summary
 
-- **9 epics**, **16 stories**, **51 tasks**, each scoped to 3-5 files and
-  2-5 minutes of focused work.
+- **9 epics**, **16 stories**, **55 tasks** (51 original + Task 2.1.1's
+  `plan_artifacts_set_at` field, 8.1.3b, 6.1.2b, and 6.1.5 added during
+  Phase 4 to remediate the pre-mortem P1 item and the three cross-artifact
+  BLOCKER findings below), each scoped to 3-5 files and 2-5 minutes of
+  focused work.
 - **12 domain glossary terms**.
 - **2 ADRs**: plan-review state data model (durable fields, not a
   status-event or enum), and `RejectPlan`/`TriggerTriage` decoupling
@@ -1175,3 +1524,31 @@ Context): *`tests/e2e/plan-gate.spec.ts` must not regress.*
   deferred** to a follow-up project — not designed in reduced form here,
   per the convergent recommendation across ux.md, build-vs-buy.md, and
   requirements.md's own scope hedge.
+
+### Phase 4 Patches Applied (post-review, before validation gate)
+
+Both prior reviews' Blockers were verified resolved against this plan's
+task text (see `adversarial-review.md` / `architecture-review.md`, now
+**Verdict: CONCERNS**). Phase 4's own pre-mortem and cross-artifact-consistency
+passes then found and this plan was patched to fix, in place:
+
+1. **Pre-mortem P1** — Epic 8's staleness clock used whole-row `UpdatedAt`
+   (reset by any field edit), silently defeating the stuck-item detector.
+   Fixed via a new `plan_artifacts_set_at` field (Task 2.1.1) stamped by
+   Task 1.1.1 and consumed by Task 8.1.1, plus regression test 8.1.3b.
+2. **Cross-artifact BLOCKER** — `expected_modified_at_unix_ms` was defined
+   server-side (Epic 3/4) but never threaded from the frontend (Epic 6/7
+   both called their RPCs with no token, defaulting to "skip check").
+   Fixed by lifting mtime state into `BacklogItemDetail` (Task 6.1.2),
+   extending `approvePlan`'s hook signature (Task 6.1.2b), and reporting
+   the fetched mtime via a new `onMtimeChange` prop on `PlanArtifactsSection`
+   (Task 7.1.3), with regression test 6.1.5.
+3. **Cross-artifact BLOCKER** — `PlanArtifactsSection` (content) was set to
+   render below `PlanVerdictBox`/`ActionsSection` (verdict + actions),
+   contradicting the research finding that content must be visible before
+   an approve/reject action is reachable. Fixed by merging both render
+   sites into Task 6.1.3, content first (see Epic 6/7 coordination note).
+4. **Cross-artifact BLOCKER** — Task 7.1.3's original code sample called
+   `InlineNotice` with `actionLabel`/`onAction` props that don't exist on
+   the real component (`actions: InlineNoticeAction[]` is the actual
+   shape) — would not have compiled. Fixed in place.
