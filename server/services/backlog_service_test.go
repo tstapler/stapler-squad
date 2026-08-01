@@ -159,6 +159,18 @@ type mockSessionStopper struct {
 	// TimeSinceLastMeaningfulOutput should report for it. A UUID present in
 	// liveUUIDs but absent here reports (0, true) — live and fresh.
 	staleFor map[string]time.Duration
+	// tslmoOverrideNotLive forces TimeSinceLastMeaningfulOutput to report
+	// live=false for a UUID even though it's present (true) in liveUUIDs, so
+	// IsSessionLive still reports it as live. Models the real SessionService
+	// implementation's rare edge case where a session is deregistered from the
+	// live poller between an earlier IsSessionLive check (e.g.
+	// tombstoneOrphanWorkSessions' orphan sweep) and a later
+	// TimeSinceLastMeaningfulOutput call in the same request — both are backed
+	// by the same FindLiveInstance lookup in production, so they normally
+	// agree, but a caller enriching an error message with the progress signal
+	// must still handle the disagreement gracefully rather than assume it. Nil
+	// (the default) preserves the old coupled behavior for every other test.
+	tslmoOverrideNotLive map[string]bool
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -166,7 +178,7 @@ func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 }
 
 func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Duration, bool) {
-	if !m.liveUUIDs[uuid] {
+	if !m.liveUUIDs[uuid] || m.tslmoOverrideNotLive[uuid] {
 		return 0, false
 	}
 	return m.staleFor[uuid], true

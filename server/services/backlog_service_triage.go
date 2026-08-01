@@ -691,9 +691,8 @@ func (s *BacklogService) spawnSessionAfterGates(
 	s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
-	if hasActiveWorkSession(priorSessions) {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("a work session is already active for this item; wait for it to finish or kill it first"))
+	if active := findActiveWorkSession(priorSessions); active != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
@@ -924,12 +923,48 @@ func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int,
 // hasActiveWorkSession reports whether any of the provided ItemSessions is an
 // open (not yet ended) work-role session.
 func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
-	for _, ps := range priorSessions {
-		if ps.Role == session.SessionRoleWork && ps.EndedAt == nil {
-			return true
+	return findActiveWorkSession(priorSessions) != nil
+}
+
+// findActiveWorkSession returns the open (not yet ended) work-role
+// ItemSession, if any — the same match hasActiveWorkSession checks for, but
+// returning the session itself so a caller blocked by it (spawnSessionAfterGates'
+// 8b guard) can enrich its error with a progress signal instead of a bare
+// "already active."
+func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
 		}
 	}
-	return false
+	return nil
+}
+
+// activeWorkSessionBlockedError builds the CodeAlreadyExists error for
+// spawnSessionAfterGates' 8b guard, enriched with the same progress signal
+// notifyIfActiveWorkSessionStale already computes for the review-reopen path
+// (via the shared workSessionStaleness helper below) — without this, a
+// caller blocked here has no way to tell "still working" from "silently
+// stuck" short of manually cross-referencing a session's last-activity
+// timestamp, a full diff pull, and a live tmux check (see
+// docs/tasks/backlog-feature-improvement.md's 2026-07-31 entry: discovered
+// live while manually unsticking backlog item 04089969). Reuses
+// maxReworkBlockStaleness (15min) as the same "stalled" threshold that path
+// already established, rather than inventing a second one.
+func (s *BacklogService) activeWorkSessionBlockedError(active *session.ItemSessionSummary) error {
+	base := fmt.Sprintf("a work session (%s) is already active for this item; wait for it to finish or kill it first", active.SessionUUID)
+	if s.sessionStopper == nil {
+		return fmt.Errorf("%s — progress signal unavailable: sessionStopper not wired", base)
+	}
+	idle, live, stale := s.workSessionStaleness(active.SessionUUID)
+	if !live {
+		return fmt.Errorf("%s — progress signal unavailable: session not currently tracked live", base)
+	}
+	if stale {
+		return fmt.Errorf("%s — likely stalled: no output in %s (stale threshold %s), consider checking it manually",
+			base, idle.Round(time.Second), maxReworkBlockStaleness)
+	}
+	return fmt.Errorf("%s — still active: output %s ago", base, idle.Round(time.Second))
 }
 
 // maxReworkBlockStaleness is the threshold notifyIfActiveWorkSessionStale (and
@@ -944,6 +979,27 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 // a low-stakes "might be worth a look" badge). Used by both the mark side
 // (this function) and the resolve side so they agree on one number.
 const maxReworkBlockStaleness = 15 * time.Minute
+
+// workSessionStaleness reports how long sessionUUID has been idle (no
+// meaningful output) and whether it currently exceeds maxReworkBlockStaleness.
+// Shared by the three call sites that all need this exact computation —
+// activeWorkSessionBlockedError (the blocked-spawn error, enriched with a
+// progress signal), notifyIfActiveWorkSessionStale (the mark side of the
+// rework-blocked-stale notification), and ResolveReworkBlockedStaleIfRecovered
+// (its resolve-side counterpart) — so the "idle vs. threshold" comparison
+// can't drift between them. live mirrors TimeSinceLastMeaningfulOutput's own
+// liveness flag; idle and stale are meaningless when live is false. Returns
+// (0, false, false) when no sessionStopper is wired — callers that need to
+// distinguish "no stopper" from "stopper says not live" (activeWorkSessionBlockedError
+// does, for its own distinct error message) must still check s.sessionStopper == nil
+// themselves before calling this.
+func (s *BacklogService) workSessionStaleness(sessionUUID string) (idle time.Duration, live, stale bool) {
+	if s.sessionStopper == nil {
+		return 0, false, false
+	}
+	idle, live = s.sessionStopper.TimeSinceLastMeaningfulOutput(sessionUUID)
+	return idle, live, live && idle > maxReworkBlockStaleness
+}
 
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
@@ -1003,16 +1059,12 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	if active == nil {
 		return
 	}
-	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
-	if !live {
-		return
-	}
-	threshold := maxReworkBlockStaleness
-	if idle <= threshold {
+	idle, _, stale := s.workSessionStaleness(active.SessionUUID)
+	if !stale {
 		return
 	}
 	log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
-		itemID, active.SessionUUID, idle.Round(time.Second), threshold)
+		itemID, active.SessionUUID, idle.Round(time.Second), maxReworkBlockStaleness)
 
 	// Durably mark the item, best-effort: a storage error or a status
 	// precondition mismatch (item moved off review between read and write)
@@ -1081,8 +1133,8 @@ func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Contex
 	if s.sessionStopper == nil {
 		return nil
 	}
-	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
-	if !live || idle <= maxReworkBlockStaleness {
+	_, _, stale := s.workSessionStaleness(active.SessionUUID)
+	if !stale {
 		s.resolveReworkBlockedStaleLogged(ctx, itemID)
 	}
 	return nil

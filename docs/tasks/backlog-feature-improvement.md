@@ -1573,3 +1573,43 @@ cannot be type- or lint-checked for semantic correctness) — the detector-side 
 structural backstop that would catch *any* future variant of "triage call returns without
 transitioning the item," not just this specific placeholder-text shape, which is the right
 altitude for this fix.
+
+## Update — 2026-07-31: blocked-spawn error gave zero progress signal — fixed, plus a deferred-scope note on 3 sibling call sites
+
+**Finding**: `SpawnSessionFromItem`'s 8b guard (`server/services/backlog_service_triage.go`) —
+the check that rejects a second spawn attempt while a work session is already active for an
+item — returned a bare `"a work session (%s) is already active for this item; wait for it to
+finish or kill it first"` error with no indication of whether that blocking session was
+actually making progress. Discovered live while manually unsticking backlog item
+`04089969` (the same item as the 07-30 entry above, in a later stuck episode): the blocked-
+spawn error alone gave no way to tell "still working" from "silently stuck," and the answer
+had to be reconstructed by hand via `get_session`'s timestamps, a full diff pull, and a live
+tmux check — exactly the kind of manual cross-referencing this doc's `notifyIfActiveWorkSessionStale`
+finding (07-20-era work, see `maxReworkBlockStaleness`'s doc comment) already solved for the
+review-reopen path, just never extended to this RPC's own error response.
+
+**Classification** (`quality:reflect-and-fix` taxonomy): API Contract Gap — the server already
+computed the needed signal (`SessionStopper.TimeSinceLastMeaningfulOutput`, via the
+`maxReworkBlockStaleness` 15-minute threshold) for one narrow path
+(`notifyIfActiveWorkSessionStale` / `ResolveReworkBlockedStaleIfRecovered`), but never exposed
+it on the actual spawn-blocking RPC error a caller (human or agent) directly receives.
+
+**Fix**: PR #292 (branch `fix/spawn-blocked-progress-signal`) adds
+`activeWorkSessionBlockedError`, which enriches the 8b guard's error with the same
+`TimeSinceLastMeaningfulOutput`-vs-`maxReworkBlockStaleness` progress signal, and generalizes
+the staleness computation both existing call sites already had into one shared helper,
+`workSessionStaleness`, called from all three sites
+(`activeWorkSessionBlockedError`, `notifyIfActiveWorkSessionStale`,
+`ResolveReworkBlockedStaleIfRecovered`) so the "idle vs. threshold" comparison can no longer
+drift between them.
+
+**Deferred scope** (noted and deliberately out of scope for PR #292, not missed): 3 sibling
+call sites of `hasActiveWorkSession` — `AutoRespawnAutonomousWork`, `AutoReopenForPRFix`, and
+`AutoRespawnReview` — still silently log-and-skip when they find an active work session
+blocking their own respawn attempt, with no equivalent progress signal exposed anywhere. This
+is strictly worse than even the pre-fix `SpawnSessionFromItem` baseline, since none of the
+three even attempt `notifyIfActiveWorkSessionStale`-style enrichment. Left out of this PR
+because those are internal reconciler loops, not caller-facing RPC responses — but worth a
+follow-up pass extending the same `workSessionStaleness`-backed enrichment pattern to their
+log lines (or a notification, matching `notifyIfActiveWorkSessionStale`'s shape) once a
+concrete stuck-item episode traces back to one of them.
