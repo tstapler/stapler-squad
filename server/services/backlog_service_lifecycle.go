@@ -682,8 +682,9 @@ func checkPlanArtifactFreshness(artifactsPath string, expectedModifiedAtUnixMs i
 	}
 	info, statErr := os.Stat(filepath.Join(artifactsPath, "plan.md"))
 	if statErr != nil {
+		log.WarningLog.Printf("[checkPlanArtifactFreshness] stat failed for %s: %v", artifactsPath, statErr)
 		return connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("plan artifact unavailable — reload and try again: %w", statErr))
+			fmt.Errorf("plan artifact unavailable — reload and try again"))
 	}
 	if info.ModTime().UnixMilli() != expectedModifiedAtUnixMs {
 		return connect.NewError(connect.CodeFailedPrecondition,
@@ -717,6 +718,10 @@ func (s *BacklogService) RejectPlan(
 	if item.PlanArtifactsPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	}
+	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("plan artifacts path %q does not exist on disk — re-run TriggerTriage", item.PlanArtifactsPath))
 	}
 	if mismatchErr := checkPlanArtifactFreshness(item.PlanArtifactsPath, req.Msg.ExpectedModifiedAtUnixMs); mismatchErr != nil {
 		log.WarningLog.Printf("[RejectPlan] stale content token item=%s", req.Msg.ItemId)
@@ -787,7 +792,8 @@ func (s *BacklogService) GetPlanArtifactContent(
 		if os.IsNotExist(statErr) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("plan artifact %q not found — it may have been moved or deleted", req.Msg.Filename))
 		}
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat plan artifact: %w", statErr))
+		log.WarningLog.Printf("[GetPlanArtifactContent] stat failed item=%s filename=%s: %v", req.Msg.ItemId, req.Msg.Filename, statErr)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat plan artifact"))
 	}
 	if info.IsDir() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%q is a directory", req.Msg.Filename))
@@ -803,7 +809,8 @@ func (s *BacklogService) GetPlanArtifactContent(
 	}
 	f, openErr := os.Open(fullPath)
 	if openErr != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open plan artifact: %w", openErr))
+		log.WarningLog.Printf("[GetPlanArtifactContent] open failed item=%s filename=%s: %v", req.Msg.ItemId, req.Msg.Filename, openErr)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open plan artifact"))
 	}
 	defer func() { _ = f.Close() }()
 	buf := make([]byte, readLimit)

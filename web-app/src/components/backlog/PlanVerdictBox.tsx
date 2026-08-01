@@ -85,6 +85,12 @@ export function PlanVerdictBox({
       await onReject(reason.trim());
       setShowRejectForm(false);
       setReason("");
+    } catch (err) {
+      // Caller (BacklogItemDetail's handleRejectPlan) already surfaces a
+      // toast and re-throws so callers can react — swallow it here rather
+      // than letting it become an unhandled rejection from the fire-and-
+      // forget onClick, and leave the form open so the user can retry.
+      console.error(err);
     } finally {
       setLocalPending(false);
     }
@@ -95,6 +101,8 @@ export function PlanVerdictBox({
     setLocalPending(true);
     try {
       await onRegenerateWithFeedback();
+    } catch (err) {
+      console.error(err);
     } finally {
       setLocalPending(false);
     }

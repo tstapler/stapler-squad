@@ -2531,17 +2531,24 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		if item.SkipPlanning || item.PlanApproved {
 			continue
 		}
-		// ready-status items have no QueuedAt — fall back to when the plan was
-		// last (re)generated. Deliberately NOT item.UpdatedAt: that whole-row
-		// timestamp is bumped by any unrelated field edit (title, tags,
-		// description), which would silently defeat this detector for a plan
-		// that has genuinely sat unreviewed for weeks.
+		// Anchor on item.Status, not "QueuedAt is set": a queued item can be
+		// manually un-queued back to ready (domain.BacklogStatusQueued's
+		// "backward: manually un-queue" transition) without QueuedAt ever
+		// being cleared, so a stale QueuedAt from a prior queue stint must
+		// never win over a freshly-(re)generated plan's PlanArtifactsSetAt
+		// for a ready-status item. Deliberately NOT item.UpdatedAt: that
+		// whole-row timestamp is bumped by any unrelated field edit (title,
+		// tags, description), which would silently defeat this detector for
+		// a plan that has genuinely sat unreviewed for weeks.
 		var since time.Time
-		if item.QueuedAt != nil {
+		switch {
+		case item.Status == string(BacklogStatusQueued) && item.QueuedAt != nil:
 			since = *item.QueuedAt
-		} else if item.PlanArtifactsSetAt != nil {
+		case item.PlanArtifactsSetAt != nil:
 			since = *item.PlanArtifactsSetAt
-		} else {
+		case item.QueuedAt != nil:
+			since = *item.QueuedAt
+		default:
 			continue // no plan generated yet and never queued — nothing to be stale about
 		}
 		if time.Since(since) <= planApprovalStaleness {
@@ -3076,6 +3083,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 			if itemErr != nil {
 				// Fetch failure — leave open rather than guess; the blanket
 				// terminal rule above already handles archived/done items.
+				log.WarningLog.Printf("[BacklogLifecycle] selfHealStuck GetBacklogItem item=%s: %v", row.ItemID, itemErr)
 				continue
 			}
 			resolve = planItem.SkipPlanning || planItem.PlanApproved

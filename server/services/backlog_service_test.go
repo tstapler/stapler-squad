@@ -922,6 +922,36 @@ func TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testin
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }
 
+// TestRejectPlan_ArtifactsDirectoryGone_ReturnsFailedPrecondition is a
+// code-review regression guard: RejectPlan must check the artifacts
+// directory actually exists on disk, matching ApprovePlan's own check —
+// without it, RejectPlan would silently "succeed" recording a rejection
+// reason against a plan whose directory has already been deleted (e.g. a
+// cleaned-up worktree), while ApprovePlan already refuses the same case.
+func TestRejectPlan_ArtifactsDirectoryGone_ReturnsFailedPrecondition(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with deleted plan dir",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := filepath.Join(t.TempDir(), "gone")
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "doesn't matter",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
 // TestRejectPlan_ClearsExistingApproval is the mirror-image regression test
 // for the architecture-review.md Blocker 3 fix: rejecting an approved plan
 // must clear plan_approved at the same write site, and the backend spawn

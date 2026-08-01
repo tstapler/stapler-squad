@@ -3655,6 +3655,49 @@ func TestReconcilePlanNotApprovedItems_QueuedStatusStalePlan_StillMarksStuck(t *
 	require.Len(t, notifier.calls, 1)
 }
 
+// TestReconcilePlanNotApprovedItems_StaleQueuedAtDoesNotMaskFreshlyRegeneratedReadyPlan
+// is a code-review regression guard: a Queued->Ready backward transition
+// (domain.BacklogStatusQueued's "manually un-queue" edge) never clears
+// QueuedAt. If the item is later re-triaged (fresh PlanArtifactsSetAt) while
+// still carrying its old, stale QueuedAt, the staleness clock must use the
+// fresh PlanArtifactsSetAt for a ready-status item — not the stale QueuedAt
+// from its prior queue stint, which would falsely flag a brand-new plan as
+// stuck.
+func TestReconcilePlanNotApprovedItems_StaleQueuedAtDoesNotMaskFreshlyRegeneratedReadyPlan(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	staleQueuedAt := time.Now().Add(-1 * time.Hour) // long past staleness threshold
+	freshSetAt := time.Now()                        // plan just (re)generated
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "un-queued then re-triaged item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PlanArtifactsPath:  &artifactsPath,
+		QueuedAt:           &staleQueuedAt, // stale — left over from a prior queue stint
+		PlanArtifactsSetAt: &freshSetAt,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	assert.False(t, ok, "a ready-status item's fresh PlanArtifactsSetAt must win over a stale leftover QueuedAt")
+}
+
 // TestReconcilePlanNotApprovedItems_UnrelatedFieldEditDoesNotResetStaleness
 // is the pre-mortem P1 regression guard: editing an unrelated field bumps
 // UpdatedAt but must not reset the staleness clock (PlanArtifactsSetAt is
