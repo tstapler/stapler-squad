@@ -1170,10 +1170,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// elapses — the deadline below must clear that, not just the dialog
 	// latch's own ~6s give-up window.
 	deadline := time.After(driverReadyTimeout + driverPollInterval*3 + time.Second)
-	for {
-		if fakePM.sendKeysCount.Load() > maxDialogAnswerAttempts {
-			break
-		}
+	for fakePM.sendKeysCount.Load() <= maxDialogAnswerAttempts {
 		select {
 		case <-deadline:
 			t.Fatalf("SendKeys count never exceeded %d — the dialogGaveUp fall-through never reached the initial-prompt-send step (stuck in the continue trap)",
