@@ -141,10 +141,12 @@ type TriageRespawner interface {
 	IsTriageLive(itemID string) bool
 }
 
-// QueueDequeuer claims and spawns as many queued backlog items as there are
-// free WIP slots, oldest-queued first. Called the moment a slot frees up
-// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
-// for a missed exit hook or a concurrency limit raised while items were queued.
+// QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
+// config.Config.AutoSpawnReadyItemsOrDefault) backlog items as there are free WIP
+// slots, highest-priority first. Called the moment a slot frees up (onSessionExited)
+// and by the periodic ReconcileStuck sweep as a safety net for a missed exit hook, a
+// concurrency limit raised while items were waiting, or an item reaching "ready"
+// between ticks.
 type QueueDequeuer interface {
 	DequeueNextQueuedItems(ctx context.Context) error
 }

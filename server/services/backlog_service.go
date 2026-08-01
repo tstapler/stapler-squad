@@ -298,6 +298,14 @@ func (s *BacklogService) maxAutoReworkIterations() int {
 	return s.cfg.MaxAutoReworkIterationsOrDefault()
 }
 
+// autoSpawnReadyItemsEnabled reads cfg.AutoSpawnReadyItemsOrDefault() under
+// cfgMu's read lock — see maxConcurrentBacklogWorkItems's doc comment.
+func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AutoSpawnReadyItemsOrDefault()
+}
+
 // SetEventBus wires in the event bus used to publish operator-facing notifications.
 func (s *BacklogService) SetEventBus(b *events.EventBus) {
 	s.eventBus = b

@@ -544,6 +544,131 @@ func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApproved
 	assert.Empty(t, creator.calls, "no session should have been spawned for an unapproved-plan item")
 }
 
+// TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfigDefault
+// guards the "software factory" default switch: a "ready" item that was never
+// explicitly queued (no manual "Spawn Session" click, no AutoSpawnSession flag) must
+// still be picked up and spawned by DequeueNextQueuedItems when a WIP slot is free —
+// this is what makes auto-implementation the default (config.Config.
+// AutoSpawnReadyItemsOrDefault defaults to true with cfg=nil, matching every other
+// test in this file).
+func TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfigDefault(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "never manually spawned")
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", item.Msg.Item.Status, "a ready item must be auto-spawned once a slot is free, with no manual trigger")
+	assert.Len(t, creator.calls, 1)
+}
+
+// TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled verifies
+// the opt-out: explicit AutoSpawnReadyItems=false must leave "ready" items exactly
+// where manual-spawn-only behavior left them before this feature existed.
+func TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	disabled := false
+	cfg := &config.Config{AutoSpawnReadyItems: &disabled}
+	svc := NewBacklogService(storage, creator, cfg, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "manual spawn only")
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", item.Msg.Item.Status, "with the feature disabled, a ready item must NOT be auto-spawned")
+	assert.Empty(t, creator.calls)
+}
+
+// TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_OnlyOneSlotFree
+// is the direct regression test for "in priority order": P1 must win over P5 for the
+// one free slot, regardless of which was created first.
+func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_OnlyOneSlotFree(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the (default, cfg=nil) WIP cap of 2 first, then free exactly one slot —
+	// mirrors TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst's setup.
+	inProgressIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		inProgressIDs = append(inProgressIDs, id)
+	}
+
+	// Lower-priority item created first, higher-priority item created second — a
+	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
+	// pick the P1 one instead.
+	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
+	time.Sleep(5 * time.Millisecond)
+	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
+
+	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	p1Item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: p1ID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", p1Item.Msg.Item.Status, "the P1 item must be spawned first, regardless of creation order")
+
+	p5Item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: p5ID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", p5Item.Msg.Item.Status, "the P5 item must stay ready — only one slot was free")
+}
+
+// TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItemSpawnFails
+// mirrors TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure for the new
+// ready-origin claim path: rollback must target "ready" (where the item actually
+// came from), not unconditionally "queued" — in_progress->queued isn't even a valid
+// transition for an item that was never queued.
+func TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItemSpawnFails(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:              "ready with no repo path",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+		SkipTriage:         true,
+		SkipPlanning:       true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: itemID, TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", getResp.Msg.Item.Status, "spawn failure for an auto-claimed ready item must roll back to ready, not queued")
+	assert.Empty(t, creator.calls)
+}
+
 // --- AutoReopenForPRFix: live-bug regression (ReconcilePRPending churn) ---
 
 // TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn is the regression

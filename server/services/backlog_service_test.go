@@ -1169,6 +1169,31 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	return itemID
 }
 
+// createReadyItemWithPriority is createReadyItemForSpawn plus an explicit priority
+// (1 = P1/highest ... 5 = P5/lowest), for tests asserting dequeue ordering.
+func createReadyItemWithPriority(t *testing.T, svc *BacklogService, repoPath, title string, priority int32) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    title,
+		RepoPath: repoPath,
+		Priority: priority,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
 // TestSpawnSessionFromItem_RecordsTriggeredByFromAutonomousFlag verifies that the
 // in_progress transition SpawnSessionFromItem fires on a fresh spawn records
 // TriggeredBy="user" for a manual (non-autonomous) spawn and TriggeredBy="system"

@@ -529,30 +529,43 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 }
 
 // DequeueNextQueuedItems implements session.QueueDequeuer. It claims and spawns as
-// many queued items as there are free WIP slots, oldest-queued (FIFO) first. Called
-// from BacklogLifecycleListener.onSessionExited (immediate dequeue the moment a slot
-// frees up) and the periodic ReconcileStuck sweep (safety net for a missed hook or a
-// concurrency limit raised while items were queued) — see session/backlog_lifecycle.go.
+// many queued items as there are free WIP slots, highest-priority (P1) first, oldest
+// (by queued time, or created time for a "ready" candidate that was never explicitly
+// queued) as the tiebreaker. When autoSpawnReadyItemsEnabled (default true —
+// config.Config.AutoSpawnReadyItemsOrDefault) is set, "ready" items are eligible
+// candidates too, not just ones already sitting in "queued" — this is what makes
+// auto-implementation the default: an item reaching "ready" no longer needs either a
+// human to click "Spawn Session" or an explicit AutoSpawnSession flag to eventually
+// get worked, it just needs a free WIP slot and the highest priority among what's
+// waiting. Called from BacklogLifecycleListener.onSessionExited (immediate dequeue
+// the moment a slot frees up) and the periodic ReconcileStuck sweep (safety net for a
+// missed hook, a concurrency limit raised while items were waiting, or an item that
+// reached "ready" between ticks) — see session/backlog_lifecycle.go.
 //
-// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress,
-// ExpectedStatus=queued) before spawning, so concurrent callers (this method running
-// from both the exit hook and the sweep, or multiple server processes sharing one DB)
-// cannot double-claim the SAME item — see TransitionBacklogItemStatus's doc comment.
-// That per-item CAS alone does not prevent two concurrent calls to this method from
-// each computing their own freeSlots from an unsynchronized snapshot and jointly
-// claiming DIFFERENT queued items past the cap, so dequeueMu additionally serializes
-// the whole method body, making this method single-flight system-wide (PR #199
-// review F2 — the exact "uncontrolled concurrency overshoot" class of bug the WIP
-// cap feature exists to prevent).
+// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress or
+// ready->in_progress, ExpectedStatus set to whichever status the candidate was found
+// in) before spawning, so concurrent callers (this method running from both the exit
+// hook and the sweep, or multiple server processes sharing one DB) cannot double-claim
+// the SAME item — see TransitionBacklogItemStatus's doc comment. That per-item CAS
+// alone does not prevent two concurrent calls to this method from each computing
+// their own freeSlots from an unsynchronized snapshot and jointly claiming DIFFERENT
+// candidates past the cap, so dequeueMu additionally serializes the whole method
+// body, making this method single-flight system-wide (PR #199 review F2 — the exact
+// "uncontrolled concurrency overshoot" class of bug the WIP cap feature exists to
+// prevent).
 //
 // The claim itself now goes through transitionWithGuard (PR #199 review F4), so an
 // item without an approved plan (SkipPlanning=false, PlanApproved=false) cannot be
 // claimed at all — defense-in-depth against F3, on top of SpawnSessionFromItem's own
-// planning gate now running before the WIP-cap queue gate.
+// planning gate now running before the WIP-cap queue gate. This is also what makes a
+// "ready" candidate safe to auto-claim directly: ready->in_progress carries the exact
+// same ErrPlanRequired/ErrPlanArtifactsRequired guard as queued->in_progress (see
+// domain.TransitionGuard), so an unapproved-plan item is silently skipped (left at
+// ready) rather than auto-spawned without review.
 //
 // If the claim succeeds but the spawn itself fails (missing repo_path, stale plan
-// approval, SessionCreator error), the item is rolled back to queued rather than left
-// stranded in_progress with no session.
+// approval, SessionCreator error), the item is rolled back to whichever status it was
+// claimed from (queued or ready) rather than left stranded in_progress with no session.
 func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -569,28 +582,32 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return nil
 	}
 
-	queued, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusQueued)},
+	statuses := []string{string(session.BacklogStatusQueued)}
+	if s.autoSpawnReadyItemsEnabled() {
+		statuses = append(statuses, string(session.BacklogStatusReady))
+	}
+	candidates, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: statuses,
 	})
 	if err != nil {
-		return fmt.Errorf("list queued items: %w", err)
+		return fmt.Errorf("list queued/ready items: %w", err)
 	}
-	sort.Slice(queued, func(i, j int) bool {
-		ai, aj := queued[i].QueuedAt, queued[j].QueuedAt
-		if ai == nil || aj == nil {
-			return aj == nil && ai != nil
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority < candidates[j].Priority // P1 (1) before P5 (5)
 		}
-		return ai.Before(*aj)
+		return effectiveQueueTime(candidates[i]).Before(effectiveQueueTime(candidates[j]))
 	})
 
 	spawned := 0
-	for _, item := range queued {
+	for _, item := range candidates {
 		if spawned >= freeSlots {
 			break
 		}
+		fromStatus := session.BacklogStatus(item.Status)
 		claimed, claimErr := s.transitionWithGuard(ctx, &item,
 			session.BacklogStatusInProgress,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued), Note: "dequeued: WIP slot freed"},
+			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
 			session.TriggeredBySystem)
 		if claimErr != nil {
 			switch {
@@ -600,24 +617,24 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 				// now that SpawnSessionFromItem's planning gate runs before the
-				// WIP-cap gate that queues an item, but refuse the claim rather
-				// than silently spawning an unapproved item if this is ever hit
-				// (e.g. a future call site regression, or a pre-existing queued
-				// row from before that ordering fix).
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s: %v — leaving queued", item.ID, claimErr)
+				// WIP-cap queue gate, but refuse the claim rather than silently
+				// spawning an unapproved item if this is ever hit (e.g. a future
+				// call site regression, or a pre-existing queued/ready row from
+				// before that ordering fix).
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s status=%s: %v — leaving as-is", item.ID, fromStatus, claimErr)
 			default:
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s: %v", item.ID, claimErr)
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s status=%s: %v", item.ID, fromStatus, claimErr)
 			}
 			continue
 		}
 
 		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
 		if spawnErr != nil {
-			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to queued", item.ID, spawnErr)
-			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued,
+			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to %s", item.ID, spawnErr, fromStatus)
+			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
 				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 				session.TriggeredBySystem); rbErr != nil {
-				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to queued failed item=%s: %v", item.ID, rbErr)
+				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to %s failed item=%s: %v", fromStatus, item.ID, rbErr)
 				// The same silent-stranding shape notifySpawnAndRollbackFailed was
 				// built for (BUG-030) — that fix only wired this helper into
 				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
@@ -628,9 +645,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			continue
 		}
 		spawned++
-		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s session=%s", item.ID, resp.Msg.SessionUuid)
+		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s (was %s, priority=%d) session=%s", item.ID, fromStatus, item.Priority, resp.Msg.SessionUuid)
 	}
 	return nil
+}
+
+// effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
+// uses: QueuedAt for a genuinely queued item, or CreatedAt for a "ready" candidate that
+// was never explicitly queued (QueuedAt is nil for those) — so older work still wins
+// ties within the same priority tier regardless of which status it's waiting in.
+func effectiveQueueTime(item session.BacklogItemData) time.Time {
+	if item.QueuedAt != nil {
+		return *item.QueuedAt
+	}
+	return item.CreatedAt
 }
 
 // spawnSessionAfterGates performs the actual session spawn for item once all gating

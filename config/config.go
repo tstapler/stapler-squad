@@ -309,6 +309,15 @@ type Config struct {
 	// "in_progress" at the same time. 0 = use the default (2). Values above
 	// maxConcurrentBacklogWorkItemsHardCeiling are clamped to the ceiling.
 	MaxConcurrentBacklogWorkItems int `json:"max_concurrent_backlog_work_items,omitempty"`
+	// AutoSpawnReadyItems controls whether "ready" backlog items (post-triage, plan
+	// approved or SkipPlanning) automatically claim a free WIP slot and spawn a work
+	// session — in priority order (P1 first) — the moment one is free, without a
+	// human clicking "Spawn Session". A *bool, not bool: the zero value of bool
+	// can't represent "unset" the way 0 does for the int settings above, and this
+	// setting's default is true (unlike SkipReviewGate/AutoCreatePR's per-item
+	// false-by-default opt-ins), so nil must mean "use the default", not "disabled".
+	// Pass explicit false to require manual spawning instead.
+	AutoSpawnReadyItems *bool `json:"auto_spawn_ready_items,omitempty"`
 
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
@@ -612,6 +621,17 @@ func (c *Config) MaxConcurrentBacklogWorkItemsOrDefault() int {
 		return maxConcurrentBacklogWorkItemsHardCeiling
 	}
 	return c.MaxConcurrentBacklogWorkItems
+}
+
+// AutoSpawnReadyItemsOrDefault reports whether "ready" items should be automatically
+// dequeued and spawned — in priority order, respecting the WIP cap — the moment a
+// slot frees up, without a human manually clicking "Spawn Session". Defaults to true
+// (nil or c == nil); pass explicit false to require manual spawning instead.
+func (c *Config) AutoSpawnReadyItemsOrDefault() bool {
+	if c == nil || c.AutoSpawnReadyItems == nil {
+		return true
+	}
+	return *c.AutoSpawnReadyItems
 }
 
 // AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,
