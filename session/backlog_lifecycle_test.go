@@ -3574,3 +3574,173 @@ func TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR(t *testing.T) {
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "no matching PR — item must stay in review")
 	assert.Equal(t, 0, fetched.PrNumber)
 }
+
+// ─── reconcilePlanNotApprovedItems / selfHealStuck (plan-approval-ux) ──────────
+
+// TestReconcilePlanNotApprovedItems_ReadyStatusStalePlan_MarksStuck: a
+// ready-status item with a stale unapproved plan (never queued) must be
+// flagged, matching what already happens for queued-status items. Regression
+// guard for the MarkStuck hardcoded-expectedStatus fix — before that fix,
+// MarkStuck silently no-ops on the status mismatch and `applied` is always
+// false for a ready-status item.
+func TestReconcilePlanNotApprovedItems_ReadyStatusStalePlan_MarksStuck(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setAt := time.Now().Add(-10 * time.Minute)
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "ready item with stale plan",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PlanArtifactsPath:  &artifactsPath,
+		PlanArtifactsSetAt: &setAt,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	row, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	require.True(t, ok, "ready-status item with a stale unapproved plan must be marked stuck")
+	assert.NotNil(t, row.NotifiedAt)
+	require.Len(t, notifier.calls, 1)
+}
+
+// TestReconcilePlanNotApprovedItems_QueuedStatusStalePlan_StillMarksStuck
+// regression-guards that passing item.Status instead of the old hardcoded
+// BacklogStatusQueued didn't silently break the pre-existing queued-item case.
+func TestReconcilePlanNotApprovedItems_QueuedStatusStalePlan_StillMarksStuck(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	queuedAt := time.Now().Add(-10 * time.Minute)
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "queued item with stale plan",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+	})
+	require.NoError(t, err)
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+		QueuedAt:          &queuedAt,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	require.True(t, ok, "queued-status item with a stale unapproved plan must still be marked stuck")
+	require.Len(t, notifier.calls, 1)
+}
+
+// TestReconcilePlanNotApprovedItems_UnrelatedFieldEditDoesNotResetStaleness
+// is the pre-mortem P1 regression guard: editing an unrelated field bumps
+// UpdatedAt but must not reset the staleness clock (PlanArtifactsSetAt is
+// untouched), or a genuinely stale plan would never trip this detector once
+// the item is touched for any other reason.
+func TestReconcilePlanNotApprovedItems_UnrelatedFieldEditDoesNotResetStaleness(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setAt := time.Now().Add(-10 * time.Minute)
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "ready item, unrelated edit",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PlanArtifactsPath:  &artifactsPath,
+		PlanArtifactsSetAt: &setAt,
+	}, nil)
+	require.NoError(t, err)
+
+	// Bump UpdatedAt via an unrelated field edit — must not touch PlanArtifactsSetAt.
+	newTitle := "ready item, unrelated edit (renamed)"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &newTitle}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	assert.True(t, ok, "an unrelated field edit must not reset the staleness clock away from PlanArtifactsSetAt")
+}
+
+// TestSelfHealStuck_PlanNotApproved_ResolvesOnApprovalEvenWhenStatusUnchanged
+// covers the resolve-on-condition fix: a ready-status item's status never
+// changes on plan approval (unlike a queued item, which DequeueNextQueuedItems
+// moves along shortly after), so a pure status-anchored resolve condition
+// would leave it stuck forever even after the actual blocker clears.
+func TestSelfHealStuck_PlanNotApproved_ResolvesOnApprovalEvenWhenStatusUnchanged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	setAt := time.Now().Add(-10 * time.Minute)
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "ready item to be approved",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusReady),
+	})
+	require.NoError(t, err)
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PlanArtifactsPath:  &artifactsPath,
+		PlanArtifactsSetAt: &setAt,
+	}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	er := storage.repo.(*EntRepository)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+	rows, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, ok := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	require.True(t, ok, "setup: item must be marked stuck before approval")
+
+	// Approve the plan WITHOUT changing item.Status (it stays "ready").
+	approved := true
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PlanApproved: &approved}, nil)
+	require.NoError(t, err)
+
+	listener.selfHealStuck(ctx, er)
+
+	rows, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, stillOpen := findOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+	assert.False(t, stillOpen, "selfHealStuck must resolve based on PlanApproved, not a status transition")
+}

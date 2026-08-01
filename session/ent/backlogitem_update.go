@@ -316,6 +316,66 @@ func (_u *BacklogItemUpdate) ClearPlanArtifactsPath() *BacklogItemUpdate {
 	return _u
 }
 
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdate) SetPlanRejectionReason(v string) *BacklogItemUpdate {
+	_u.mutation.SetPlanRejectionReason(v)
+	return _u
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePlanRejectionReason(v *string) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPlanRejectionReason(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdate) ClearPlanRejectionReason() *BacklogItemUpdate {
+	_u.mutation.ClearPlanRejectionReason()
+	return _u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_u *BacklogItemUpdate) SetPlanRejectedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetPlanRejectedAt(v)
+	return _u
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPlanRejectedAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (_u *BacklogItemUpdate) ClearPlanRejectedAt() *BacklogItemUpdate {
+	_u.mutation.ClearPlanRejectedAt()
+	return _u
+}
+
+// SetPlanArtifactsSetAt sets the "plan_artifacts_set_at" field.
+func (_u *BacklogItemUpdate) SetPlanArtifactsSetAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetPlanArtifactsSetAt(v)
+	return _u
+}
+
+// SetNillablePlanArtifactsSetAt sets the "plan_artifacts_set_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePlanArtifactsSetAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPlanArtifactsSetAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanArtifactsSetAt clears the value of the "plan_artifacts_set_at" field.
+func (_u *BacklogItemUpdate) ClearPlanArtifactsSetAt() *BacklogItemUpdate {
+	_u.mutation.ClearPlanArtifactsSetAt()
+	return _u
+}
+
 // SetUserModifiedFields sets the "user_modified_fields" field.
 func (_u *BacklogItemUpdate) SetUserModifiedFields(v string) *BacklogItemUpdate {
 	_u.mutation.SetUserModifiedFields(v)
@@ -975,6 +1035,24 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.PlanArtifactsPathCleared() {
 		_spec.ClearField(backlogitem.FieldPlanArtifactsPath, field.TypeString)
 	}
+	if value, ok := _u.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+	}
+	if _u.mutation.PlanRejectionReasonCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectionReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanRejectedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PlanArtifactsSetAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanArtifactsSetAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanArtifactsSetAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanArtifactsSetAt, field.TypeTime)
+	}
 	if value, ok := _u.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)
 	}
@@ -1626,6 +1704,66 @@ func (_u *BacklogItemUpdateOne) SetNillablePlanArtifactsPath(v *string) *Backlog
 // ClearPlanArtifactsPath clears the value of the "plan_artifacts_path" field.
 func (_u *BacklogItemUpdateOne) ClearPlanArtifactsPath() *BacklogItemUpdateOne {
 	_u.mutation.ClearPlanArtifactsPath()
+	return _u
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdateOne) SetPlanRejectionReason(v string) *BacklogItemUpdateOne {
+	_u.mutation.SetPlanRejectionReason(v)
+	return _u
+}
+
+// SetNillablePlanRejectionReason sets the "plan_rejection_reason" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePlanRejectionReason(v *string) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPlanRejectionReason(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (_u *BacklogItemUpdateOne) ClearPlanRejectionReason() *BacklogItemUpdateOne {
+	_u.mutation.ClearPlanRejectionReason()
+	return _u
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (_u *BacklogItemUpdateOne) SetPlanRejectedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetPlanRejectedAt(v)
+	return _u
+}
+
+// SetNillablePlanRejectedAt sets the "plan_rejected_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePlanRejectedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPlanRejectedAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (_u *BacklogItemUpdateOne) ClearPlanRejectedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearPlanRejectedAt()
+	return _u
+}
+
+// SetPlanArtifactsSetAt sets the "plan_artifacts_set_at" field.
+func (_u *BacklogItemUpdateOne) SetPlanArtifactsSetAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetPlanArtifactsSetAt(v)
+	return _u
+}
+
+// SetNillablePlanArtifactsSetAt sets the "plan_artifacts_set_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePlanArtifactsSetAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPlanArtifactsSetAt(*v)
+	}
+	return _u
+}
+
+// ClearPlanArtifactsSetAt clears the value of the "plan_artifacts_set_at" field.
+func (_u *BacklogItemUpdateOne) ClearPlanArtifactsSetAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearPlanArtifactsSetAt()
 	return _u
 }
 
@@ -2317,6 +2455,24 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.PlanArtifactsPathCleared() {
 		_spec.ClearField(backlogitem.FieldPlanArtifactsPath, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlanRejectionReason(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectionReason, field.TypeString, value)
+	}
+	if _u.mutation.PlanRejectionReasonCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectionReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlanRejectedAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanRejectedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanRejectedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanRejectedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PlanArtifactsSetAt(); ok {
+		_spec.SetField(backlogitem.FieldPlanArtifactsSetAt, field.TypeTime, value)
+	}
+	if _u.mutation.PlanArtifactsSetAtCleared() {
+		_spec.ClearField(backlogitem.FieldPlanArtifactsSetAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.UserModifiedFields(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedFields, field.TypeString, value)

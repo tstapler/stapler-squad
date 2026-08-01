@@ -49,6 +49,12 @@ const (
 	FieldQueuedAutonomous = "queued_autonomous"
 	// FieldPlanArtifactsPath holds the string denoting the plan_artifacts_path field in the database.
 	FieldPlanArtifactsPath = "plan_artifacts_path"
+	// FieldPlanRejectionReason holds the string denoting the plan_rejection_reason field in the database.
+	FieldPlanRejectionReason = "plan_rejection_reason"
+	// FieldPlanRejectedAt holds the string denoting the plan_rejected_at field in the database.
+	FieldPlanRejectedAt = "plan_rejected_at"
+	// FieldPlanArtifactsSetAt holds the string denoting the plan_artifacts_set_at field in the database.
+	FieldPlanArtifactsSetAt = "plan_artifacts_set_at"
 	// FieldUserModifiedFields holds the string denoting the user_modified_fields field in the database.
 	FieldUserModifiedFields = "user_modified_fields"
 	// FieldNotes holds the string denoting the notes field in the database.
@@ -157,6 +163,9 @@ var Columns = []string{
 	FieldQueuedAt,
 	FieldQueuedAutonomous,
 	FieldPlanArtifactsPath,
+	FieldPlanRejectionReason,
+	FieldPlanRejectedAt,
+	FieldPlanArtifactsSetAt,
 	FieldUserModifiedFields,
 	FieldNotes,
 	FieldExternalID,
@@ -336,6 +345,21 @@ func ByQueuedAutonomous(opts ...sql.OrderTermOption) OrderOption {
 // ByPlanArtifactsPath orders the results by the plan_artifacts_path field.
 func ByPlanArtifactsPath(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPlanArtifactsPath, opts...).ToFunc()
+}
+
+// ByPlanRejectionReason orders the results by the plan_rejection_reason field.
+func ByPlanRejectionReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanRejectionReason, opts...).ToFunc()
+}
+
+// ByPlanRejectedAt orders the results by the plan_rejected_at field.
+func ByPlanRejectedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanRejectedAt, opts...).ToFunc()
+}
+
+// ByPlanArtifactsSetAt orders the results by the plan_artifacts_set_at field.
+func ByPlanArtifactsSetAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanArtifactsSetAt, opts...).ToFunc()
 }
 
 // ByUserModifiedFields orders the results by the user_modified_fields field.

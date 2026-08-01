@@ -3001,6 +3001,9 @@ type BacklogItemMutation struct {
 	queued_at                       *time.Time
 	queued_autonomous               *bool
 	plan_artifacts_path             *string
+	plan_rejection_reason           *string
+	plan_rejected_at                *time.Time
+	plan_artifacts_set_at           *time.Time
 	user_modified_fields            *string
 	notes                           *string
 	external_id                     *string
@@ -3856,6 +3859,153 @@ func (m *BacklogItemMutation) PlanArtifactsPathCleared() bool {
 func (m *BacklogItemMutation) ResetPlanArtifactsPath() {
 	m.plan_artifacts_path = nil
 	delete(m.clearedFields, backlogitem.FieldPlanArtifactsPath)
+}
+
+// SetPlanRejectionReason sets the "plan_rejection_reason" field.
+func (m *BacklogItemMutation) SetPlanRejectionReason(s string) {
+	m.plan_rejection_reason = &s
+}
+
+// PlanRejectionReason returns the value of the "plan_rejection_reason" field in the mutation.
+func (m *BacklogItemMutation) PlanRejectionReason() (r string, exists bool) {
+	v := m.plan_rejection_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanRejectionReason returns the old "plan_rejection_reason" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPlanRejectionReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanRejectionReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanRejectionReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanRejectionReason: %w", err)
+	}
+	return oldValue.PlanRejectionReason, nil
+}
+
+// ClearPlanRejectionReason clears the value of the "plan_rejection_reason" field.
+func (m *BacklogItemMutation) ClearPlanRejectionReason() {
+	m.plan_rejection_reason = nil
+	m.clearedFields[backlogitem.FieldPlanRejectionReason] = struct{}{}
+}
+
+// PlanRejectionReasonCleared returns if the "plan_rejection_reason" field was cleared in this mutation.
+func (m *BacklogItemMutation) PlanRejectionReasonCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPlanRejectionReason]
+	return ok
+}
+
+// ResetPlanRejectionReason resets all changes to the "plan_rejection_reason" field.
+func (m *BacklogItemMutation) ResetPlanRejectionReason() {
+	m.plan_rejection_reason = nil
+	delete(m.clearedFields, backlogitem.FieldPlanRejectionReason)
+}
+
+// SetPlanRejectedAt sets the "plan_rejected_at" field.
+func (m *BacklogItemMutation) SetPlanRejectedAt(t time.Time) {
+	m.plan_rejected_at = &t
+}
+
+// PlanRejectedAt returns the value of the "plan_rejected_at" field in the mutation.
+func (m *BacklogItemMutation) PlanRejectedAt() (r time.Time, exists bool) {
+	v := m.plan_rejected_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanRejectedAt returns the old "plan_rejected_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPlanRejectedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanRejectedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanRejectedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanRejectedAt: %w", err)
+	}
+	return oldValue.PlanRejectedAt, nil
+}
+
+// ClearPlanRejectedAt clears the value of the "plan_rejected_at" field.
+func (m *BacklogItemMutation) ClearPlanRejectedAt() {
+	m.plan_rejected_at = nil
+	m.clearedFields[backlogitem.FieldPlanRejectedAt] = struct{}{}
+}
+
+// PlanRejectedAtCleared returns if the "plan_rejected_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) PlanRejectedAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPlanRejectedAt]
+	return ok
+}
+
+// ResetPlanRejectedAt resets all changes to the "plan_rejected_at" field.
+func (m *BacklogItemMutation) ResetPlanRejectedAt() {
+	m.plan_rejected_at = nil
+	delete(m.clearedFields, backlogitem.FieldPlanRejectedAt)
+}
+
+// SetPlanArtifactsSetAt sets the "plan_artifacts_set_at" field.
+func (m *BacklogItemMutation) SetPlanArtifactsSetAt(t time.Time) {
+	m.plan_artifacts_set_at = &t
+}
+
+// PlanArtifactsSetAt returns the value of the "plan_artifacts_set_at" field in the mutation.
+func (m *BacklogItemMutation) PlanArtifactsSetAt() (r time.Time, exists bool) {
+	v := m.plan_artifacts_set_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanArtifactsSetAt returns the old "plan_artifacts_set_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPlanArtifactsSetAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanArtifactsSetAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanArtifactsSetAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanArtifactsSetAt: %w", err)
+	}
+	return oldValue.PlanArtifactsSetAt, nil
+}
+
+// ClearPlanArtifactsSetAt clears the value of the "plan_artifacts_set_at" field.
+func (m *BacklogItemMutation) ClearPlanArtifactsSetAt() {
+	m.plan_artifacts_set_at = nil
+	m.clearedFields[backlogitem.FieldPlanArtifactsSetAt] = struct{}{}
+}
+
+// PlanArtifactsSetAtCleared returns if the "plan_artifacts_set_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) PlanArtifactsSetAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPlanArtifactsSetAt]
+	return ok
+}
+
+// ResetPlanArtifactsSetAt resets all changes to the "plan_artifacts_set_at" field.
+func (m *BacklogItemMutation) ResetPlanArtifactsSetAt() {
+	m.plan_artifacts_set_at = nil
+	delete(m.clearedFields, backlogitem.FieldPlanArtifactsSetAt)
 }
 
 // SetUserModifiedFields sets the "user_modified_fields" field.
@@ -5043,7 +5193,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 33)
+	fields := make([]string, 0, 36)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5094,6 +5244,15 @@ func (m *BacklogItemMutation) Fields() []string {
 	}
 	if m.plan_artifacts_path != nil {
 		fields = append(fields, backlogitem.FieldPlanArtifactsPath)
+	}
+	if m.plan_rejection_reason != nil {
+		fields = append(fields, backlogitem.FieldPlanRejectionReason)
+	}
+	if m.plan_rejected_at != nil {
+		fields = append(fields, backlogitem.FieldPlanRejectedAt)
+	}
+	if m.plan_artifacts_set_at != nil {
+		fields = append(fields, backlogitem.FieldPlanArtifactsSetAt)
 	}
 	if m.user_modified_fields != nil {
 		fields = append(fields, backlogitem.FieldUserModifiedFields)
@@ -5185,6 +5344,12 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.QueuedAutonomous()
 	case backlogitem.FieldPlanArtifactsPath:
 		return m.PlanArtifactsPath()
+	case backlogitem.FieldPlanRejectionReason:
+		return m.PlanRejectionReason()
+	case backlogitem.FieldPlanRejectedAt:
+		return m.PlanRejectedAt()
+	case backlogitem.FieldPlanArtifactsSetAt:
+		return m.PlanArtifactsSetAt()
 	case backlogitem.FieldUserModifiedFields:
 		return m.UserModifiedFields()
 	case backlogitem.FieldNotes:
@@ -5260,6 +5425,12 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldQueuedAutonomous(ctx)
 	case backlogitem.FieldPlanArtifactsPath:
 		return m.OldPlanArtifactsPath(ctx)
+	case backlogitem.FieldPlanRejectionReason:
+		return m.OldPlanRejectionReason(ctx)
+	case backlogitem.FieldPlanRejectedAt:
+		return m.OldPlanRejectedAt(ctx)
+	case backlogitem.FieldPlanArtifactsSetAt:
+		return m.OldPlanArtifactsSetAt(ctx)
 	case backlogitem.FieldUserModifiedFields:
 		return m.OldUserModifiedFields(ctx)
 	case backlogitem.FieldNotes:
@@ -5419,6 +5590,27 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPlanArtifactsPath(v)
+		return nil
+	case backlogitem.FieldPlanRejectionReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanRejectionReason(v)
+		return nil
+	case backlogitem.FieldPlanRejectedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanRejectedAt(v)
+		return nil
+	case backlogitem.FieldPlanArtifactsSetAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanArtifactsSetAt(v)
 		return nil
 	case backlogitem.FieldUserModifiedFields:
 		v, ok := value.(string)
@@ -5643,6 +5835,15 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	if m.FieldCleared(backlogitem.FieldPlanArtifactsPath) {
 		fields = append(fields, backlogitem.FieldPlanArtifactsPath)
 	}
+	if m.FieldCleared(backlogitem.FieldPlanRejectionReason) {
+		fields = append(fields, backlogitem.FieldPlanRejectionReason)
+	}
+	if m.FieldCleared(backlogitem.FieldPlanRejectedAt) {
+		fields = append(fields, backlogitem.FieldPlanRejectedAt)
+	}
+	if m.FieldCleared(backlogitem.FieldPlanArtifactsSetAt) {
+		fields = append(fields, backlogitem.FieldPlanArtifactsSetAt)
+	}
 	if m.FieldCleared(backlogitem.FieldUserModifiedFields) {
 		fields = append(fields, backlogitem.FieldUserModifiedFields)
 	}
@@ -5716,6 +5917,15 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldPlanArtifactsPath:
 		m.ClearPlanArtifactsPath()
+		return nil
+	case backlogitem.FieldPlanRejectionReason:
+		m.ClearPlanRejectionReason()
+		return nil
+	case backlogitem.FieldPlanRejectedAt:
+		m.ClearPlanRejectedAt()
+		return nil
+	case backlogitem.FieldPlanArtifactsSetAt:
+		m.ClearPlanArtifactsSetAt()
 		return nil
 	case backlogitem.FieldUserModifiedFields:
 		m.ClearUserModifiedFields()
@@ -5817,6 +6027,15 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldPlanArtifactsPath:
 		m.ResetPlanArtifactsPath()
+		return nil
+	case backlogitem.FieldPlanRejectionReason:
+		m.ResetPlanRejectionReason()
+		return nil
+	case backlogitem.FieldPlanRejectedAt:
+		m.ResetPlanRejectedAt()
+		return nil
+	case backlogitem.FieldPlanArtifactsSetAt:
+		m.ResetPlanArtifactsSetAt()
 		return nil
 	case backlogitem.FieldUserModifiedFields:
 		m.ResetUserModifiedFields()

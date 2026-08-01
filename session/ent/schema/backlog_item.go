@@ -66,6 +66,16 @@ func (BacklogItem) Fields() []ent.Field {
 			Comment("Preserves the Autonomous flag from the spawn request that got queued, so dequeue replays it faithfully."),
 		field.String("plan_artifacts_path").
 			Optional(),
+		field.String("plan_rejection_reason").
+			Optional().
+			Comment("Free-text reason from the most recent RejectPlan call. Cleared on ApprovePlan, on the next TriggerTriage completion, and on backward transition to idea/refining. See ADR-001."),
+		field.Time("plan_rejected_at").
+			Optional().
+			Nillable(),
+		field.Time("plan_artifacts_set_at").
+			Optional().
+			Nillable().
+			Comment("Timestamp of the most recent write that set plan_artifacts_path (i.e. the plan was (re)generated). Distinct from the whole-row UpdatedAt, which is bumped by any field edit and is therefore unsuitable as a staleness anchor. Used by reconcilePlanNotApprovedItems instead of UpdatedAt."),
 		field.String("user_modified_fields").
 			Optional().
 			Comment("JSON set of field names modified by the user"),

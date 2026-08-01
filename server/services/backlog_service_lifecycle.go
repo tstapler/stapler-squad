@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -595,9 +596,11 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	if to == session.BacklogStatusIdea || to == session.BacklogStatusRefining {
 		planApproved := false
 		planArtifactsPath := ""
+		rejectionReason := ""
 		if upd, resetErr := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, session.BacklogItemUpdate{
-			PlanApproved:      &planApproved,
-			PlanArtifactsPath: &planArtifactsPath,
+			PlanApproved:        &planApproved,
+			PlanArtifactsPath:   &planArtifactsPath,
+			PlanRejectionReason: &rejectionReason,
 		}, nil); resetErr != nil {
 			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to reset planning state for item %s: %v", req.Msg.ItemId, resetErr)
 		} else {
@@ -638,12 +641,18 @@ func (s *BacklogService) ApprovePlan(
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("plan artifacts path %q does not exist on disk — re-run TriggerTriage", item.PlanArtifactsPath))
 	}
+	if mismatchErr := checkPlanArtifactFreshness(item.PlanArtifactsPath, req.Msg.ExpectedModifiedAtUnixMs); mismatchErr != nil {
+		log.WarningLog.Printf("[ApprovePlan] stale content token item=%s", req.Msg.ItemId)
+		return nil, mismatchErr
+	}
 
 	now := time.Now()
 	approved := true
+	clearedReason := ""
 	update := session.BacklogItemUpdate{
-		PlanApproved:   &approved,
-		PlanApprovedAt: &now,
+		PlanApproved:        &approved,
+		PlanApprovedAt:      &now,
+		PlanRejectionReason: &clearedReason,
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
@@ -653,6 +662,156 @@ func (s *BacklogService) ApprovePlan(
 
 	return connect.NewResponse(&sessionv1.ApprovePlanResponse{
 		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
+}
+
+// checkPlanArtifactFreshness returns a FailedPrecondition connect error if
+// expectedModifiedAtUnixMs is non-zero and doesn't match plan.md's current
+// on-disk mtime, OR if expectedModifiedAtUnixMs is non-zero and the mtime
+// cannot be determined at all. 0 means "no check requested" — always
+// passes, preserving backward compatibility with callers that don't send
+// the token. A non-zero token means the caller asked for a freshness
+// guarantee; if the server can no longer verify it (e.g. a concurrent
+// TriggerTriage regeneration is mid-rewrite of plan.md), fail CLOSED rather
+// than silently proceeding — this is the exact race the token exists to
+// catch. The mtime itself is produced by GetPlanArtifactContent and
+// round-tripped through the frontend.
+func checkPlanArtifactFreshness(artifactsPath string, expectedModifiedAtUnixMs int64) error {
+	if expectedModifiedAtUnixMs == 0 {
+		return nil
+	}
+	info, statErr := os.Stat(filepath.Join(artifactsPath, "plan.md"))
+	if statErr != nil {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("plan artifact unavailable — reload and try again: %w", statErr))
+	}
+	if info.ModTime().UnixMilli() != expectedModifiedAtUnixMs {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("plan changed since you loaded it — reload and try again"))
+	}
+	return nil
+}
+
+// RejectPlan records a rejection reason for the item's current plan
+// artifacts. Does not itself trigger regeneration — see ADR-002
+// (project_plans/plan-approval-ux/decisions/ADR-002-reject-plan-manual-retrigger.md).
+// +api: backlog:reject-plan
+func (s *BacklogService) RejectPlan(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RejectPlanRequest],
+) (*connect.Response[sessionv1.RejectPlanResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	reason := strings.TrimSpace(req.Msg.Reason)
+	if reason == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("reason is required"))
+	}
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+	if item.PlanArtifactsPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	}
+	if mismatchErr := checkPlanArtifactFreshness(item.PlanArtifactsPath, req.Msg.ExpectedModifiedAtUnixMs); mismatchErr != nil {
+		log.WarningLog.Printf("[RejectPlan] stale content token item=%s", req.Msg.ItemId)
+		return nil, mismatchErr
+	}
+	now := time.Now()
+	approvalReset := false
+	update := session.BacklogItemUpdate{
+		PlanRejectionReason: &reason,
+		PlanRejectedAt:      &now,
+		PlanApproved:        &approvalReset,
+	}
+	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, nil)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to reject plan: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.RejectPlanResponse{
+		Item: backlogItemToProto(updated, s.buildCostLookup()),
+	}), nil
+}
+
+// isAllowedPlanArtifactFilename restricts GetPlanArtifactContent to the
+// known SDD artifact set — never an arbitrary client-supplied path, even
+// after traversal-cleaning.
+func isAllowedPlanArtifactFilename(filename string) bool {
+	switch filename {
+	case "plan.md", "requirements.md", "validation.md":
+		return true
+	}
+	return strings.HasPrefix(filename, "research/") && strings.HasSuffix(filename, ".md") &&
+		!strings.Contains(filename, "..")
+}
+
+// GetPlanArtifactContent reads a plan artifact file's content, resolved
+// server-side against the item's plan-artifacts directory — never a
+// client-supplied path.
+// +api: backlog:get-plan-artifact-content
+func (s *BacklogService) GetPlanArtifactContent(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetPlanArtifactContentRequest],
+) (*connect.Response[sessionv1.GetPlanArtifactContentResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if !isAllowedPlanArtifactFilename(req.Msg.Filename) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unsupported plan artifact filename %q", req.Msg.Filename))
+	}
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+	if item.PlanArtifactsPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("no plan artifacts found for this item"))
+	}
+	fullPath, pathErr := resolveAndValidatePath(item.PlanArtifactsPath, req.Msg.Filename)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	info, statErr := os.Lstat(fullPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("plan artifact %q not found — it may have been moved or deleted", req.Msg.Filename))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to stat plan artifact: %w", statErr))
+	}
+	if info.IsDir() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%q is a directory", req.Msg.Filename))
+	}
+	if info.Size() > maxFileSize {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("plan artifact too large (%d bytes)", info.Size()))
+	}
+	readLimit := info.Size()
+	truncated := false
+	if info.Size() > truncateSize {
+		readLimit = truncateSize
+		truncated = true
+	}
+	f, openErr := os.Open(fullPath)
+	if openErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open plan artifact: %w", openErr))
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, readLimit)
+	n, readErr := readFull(f, buf)
+	if readErr != nil && n == 0 {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read plan artifact content"))
+	}
+	return connect.NewResponse(&sessionv1.GetPlanArtifactContentResponse{
+		Content:          string(buf[:n]),
+		Truncated:        truncated,
+		SizeBytes:        info.Size(),
+		ModifiedAtUnixMs: info.ModTime().UnixMilli(),
 	}), nil
 }
 

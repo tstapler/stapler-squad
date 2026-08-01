@@ -698,3 +698,47 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 	assert.Equal(t, string(session.BacklogStatusReview), resp.Msg.Item.Status,
 		"PASS manual review whose work-session commit was never merged to main must stay in review for the Ship PR action")
 }
+
+// TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason: an
+// item in changes_requested state sent back to Idea must not leave a stale
+// rejection reason behind once it's re-triaged and re-approved.
+func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "reject then send back",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "it works", Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "needs more detail",
+	}))
+	require.NoError(t, err)
+
+	resp, err := svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusIdea),
+	}))
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Item.PlanRejectionReason, "backward transition must clear the stale rejection reason")
+	assert.False(t, resp.Msg.Item.PlanApproved)
+}

@@ -2078,7 +2078,15 @@ func (s *BacklogService) TriggerTriage(
 		}
 
 		pap := artifactAbsPath
-		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		approvalReset := false
+		clearedReason := ""
+		setAt := time.Now()
+		update := session.BacklogItemUpdate{
+			PlanArtifactsPath:   &pap,
+			PlanApproved:        &approvalReset,
+			PlanRejectionReason: &clearedReason,
+			PlanArtifactsSetAt:  &setAt,
+		}
 		applyTriageACToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)

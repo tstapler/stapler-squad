@@ -3414,7 +3414,7 @@ func TestReconcilePlanNotApprovedItems_should_writeDurableRowNotifyOnce_When_Que
 	require.Len(t, open, 1)
 	assert.Equal(t, item.ID, open[0].ItemID)
 	assert.Equal(t, domain.StuckReasonPlanNotApproved, open[0].Reason)
-	assert.Equal(t, []string{"Queued item blocked by unapproved plan"}, notifier.titles())
+	assert.Equal(t, []string{"Item blocked by unapproved plan"}, notifier.titles())
 
 	// Repeat tick must not re-notify (DB-backed notify-once dedup).
 	listener.reconcilePlanNotApprovedItems(ctx, er)

@@ -388,10 +388,13 @@ type BacklogItemData struct {
 	// resolves or applies the per-category automation-toggle defaults itself
 	// (that happens client-side, once, in BacklogItemForm.tsx at category-
 	// selection time).
-	Category          string
-	PlanApproved      bool
-	PlanApprovedAt    *time.Time
-	PlanArtifactsPath string
+	Category            string
+	PlanApproved        bool
+	PlanApprovedAt      *time.Time
+	PlanArtifactsPath   string
+	PlanRejectionReason string
+	PlanRejectedAt      *time.Time
+	PlanArtifactsSetAt  *time.Time
 	// QueuedAt is set when a fresh spawn hit the concurrency cap and the item
 	// was transitioned to "queued" instead of rejected. Nil unless Status ==
 	// BacklogStatusQueued (or the item was previously queued). Drives FIFO
@@ -515,11 +518,14 @@ type BacklogItemUpdate struct {
 	// item's stored category untouched", while a non-nil pointer (including
 	// one pointing at "") explicitly sets/clears it. See
 	// BacklogItemData.Category for the field's semantics.
-	Category          *string
-	Notes             *string
-	PlanApproved      *bool
-	PlanApprovedAt    *time.Time
-	PlanArtifactsPath *string
+	Category            *string
+	Notes               *string
+	PlanApproved        *bool
+	PlanApprovedAt      *time.Time
+	PlanArtifactsPath   *string
+	PlanRejectionReason *string
+	PlanRejectedAt      *time.Time
+	PlanArtifactsSetAt  *time.Time
 	// QueuedAt and QueuedAutonomous follow the same partial-update-presence
 	// convention as PlanApprovedAt: nil means "leave untouched".
 	QueuedAt         *time.Time

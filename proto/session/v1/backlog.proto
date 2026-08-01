@@ -148,6 +148,10 @@ message BacklogItem {
   // frontend uses to pre-fill sane automation-toggle defaults at creation
   // time. Unset/empty means uncategorized.
   optional string category = 29;
+  // plan_rejection_reason is the free-text reason from the most recent
+  // RejectPlan call. Empty means no rejection is currently recorded.
+  string plan_rejection_reason = 30;
+  google.protobuf.Timestamp plan_rejected_at = 31;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -441,10 +445,55 @@ message TriggerTriageResponse {
 
 message ApprovePlanRequest {
   string item_id = 1;
+  // expected_modified_at_unix_ms, if non-zero, must match the plan.md file's
+  // on-disk mtime at call time (echoed from
+  // GetPlanArtifactContentResponse.modified_at_unix_ms) or the call fails
+  // with FailedPrecondition — guards against approving content the user
+  // never actually saw (a regeneration raced their open tab). 0 skips the
+  // check, preserving backward compatibility with existing callers.
+  int64 expected_modified_at_unix_ms = 2;
 }
 
 message ApprovePlanResponse {
   BacklogItem item = 1;
+}
+
+message RejectPlanRequest {
+  string item_id = 1;
+  // reason is required free-text feedback explaining what should change,
+  // mirroring TriggerTriageRequest.feedback's refinement-input pattern.
+  // RejectPlan does not itself trigger regeneration — see ADR-002.
+  string reason = 2;
+  // expected_modified_at_unix_ms, if non-zero, must match the plan.md file's
+  // on-disk mtime at call time (echoed from
+  // GetPlanArtifactContentResponse.modified_at_unix_ms) or the call fails
+  // with FailedPrecondition — guards against rejecting content the user
+  // never actually saw (a regeneration raced their open tab).
+  int64 expected_modified_at_unix_ms = 3;
+}
+
+message RejectPlanResponse {
+  BacklogItem item = 1;
+}
+
+message GetPlanArtifactContentRequest {
+  string item_id = 1;
+  // filename relative to the item's plan-artifacts directory, e.g.
+  // "plan.md", "requirements.md", "validation.md", "research/stack.md".
+  // Server-validated against an allowlist — never resolved as an arbitrary
+  // client-supplied path.
+  string filename = 2;
+}
+
+message GetPlanArtifactContentResponse {
+  string content = 1;
+  bool truncated = 2;
+  int64 size_bytes = 3;
+  // modified_at_unix_ms is the artifact file's on-disk mtime at fetch time —
+  // echo this back as ApprovePlanRequest/RejectPlanRequest's
+  // expected_modified_at_unix_ms to guard against a stale rendered plan
+  // racing a concurrent regeneration.
+  int64 modified_at_unix_ms = 4;
 }
 
 message SuggestNextItemRequest {}
@@ -759,6 +808,14 @@ service BacklogService {
 
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
+
+  // RejectPlan records a rejection reason for the item's current plan
+  // artifacts. Does not itself trigger regeneration — see ADR-002.
+  rpc RejectPlan(RejectPlanRequest) returns (RejectPlanResponse) {}
+
+  // GetPlanArtifactContent reads a plan artifact file's content, resolved
+  // server-side against the item's plan-artifacts directory.
+  rpc GetPlanArtifactContent(GetPlanArtifactContentRequest) returns (GetPlanArtifactContentResponse) {}
 
   // SuggestNextItem recommends the highest-priority actionable backlog item.
   rpc SuggestNextItem(SuggestNextItemRequest) returns (SuggestNextItemResponse) {}

@@ -124,6 +124,9 @@ var (
 		{Name: "queued_at", Type: field.TypeTime, Nullable: true},
 		{Name: "queued_autonomous", Type: field.TypeBool, Default: false},
 		{Name: "plan_artifacts_path", Type: field.TypeString, Nullable: true},
+		{Name: "plan_rejection_reason", Type: field.TypeString, Nullable: true},
+		{Name: "plan_rejected_at", Type: field.TypeTime, Nullable: true},
+		{Name: "plan_artifacts_set_at", Type: field.TypeTime, Nullable: true},
 		{Name: "user_modified_fields", Type: field.TypeString, Nullable: true},
 		{Name: "notes", Type: field.TypeString, Nullable: true},
 		{Name: "external_id", Type: field.TypeString, Nullable: true},
@@ -150,7 +153,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[34]},
+				Columns:    []*schema.Column{BacklogItemsColumns[37]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -164,7 +167,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[33]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[36]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -174,7 +177,7 @@ var (
 			{
 				Name:    "backlogitem_external_id",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[20]},
+				Columns: []*schema.Column{BacklogItemsColumns[23]},
 			},
 			{
 				Name:    "backlogitem_status",

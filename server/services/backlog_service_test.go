@@ -766,6 +766,375 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	assert.NotNil(t, approveResp.Msg.Item.PlanApprovedAt)
 }
 
+// TestApprovePlan_ClearsExistingRejectionReason: reject then approve → the
+// stale rejection reason must not survive approval.
+func TestApprovePlan_ClearsExistingRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "missing caching plan",
+	}))
+	require.NoError(t, err)
+
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	assert.True(t, approveResp.Msg.Item.PlanApproved)
+	assert.Empty(t, approveResp.Msg.Item.PlanRejectionReason)
+}
+
+// TestApprovePlan_StaleContentToken_ReturnsFailedPrecondition: a mismatched
+// expected_modified_at_unix_ms must fail closed.
+func TestApprovePlan_StaleContentToken_ReturnsFailedPrecondition(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId:                   itemID,
+		ExpectedModifiedAtUnixMs: 1, // arbitrary mismatch vs. the file's real mtime
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestApprovePlan_PlanFileGoneMidRegeneration_FailsClosed: a stat error on
+// plan.md while a non-zero token was supplied must fail closed, not silently
+// pass the freshness check.
+func TestApprovePlan_PlanFileGoneMidRegeneration_FailsClosed(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir() // no plan.md written — simulates mid-regeneration
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
+		ItemId:                   itemID,
+		ExpectedModifiedAtUnixMs: 1,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// ─── RejectPlan ─────────────────────────────────────────────────────────────
+
+func TestRejectPlan_HappyPath_SetsReasonAndTimestamp(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "missing caching plan",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "missing caching plan", resp.Msg.Item.PlanRejectionReason)
+	assert.NotNil(t, resp.Msg.Item.PlanRejectedAt)
+	assert.False(t, resp.Msg.Item.PlanApproved)
+}
+
+func TestRejectPlan_EmptyReason_ReturnsInvalidArgument(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "   ",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testing.T) {
+	svc := newBacklogService(t)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item without plan",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: createResp.Msg.Item.Id,
+		Reason: "no plan yet",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestRejectPlan_ClearsExistingApproval is the mirror-image regression test
+// for the architecture-review.md Blocker 3 fix: rejecting an approved plan
+// must clear plan_approved at the same write site, and the backend spawn
+// gate must independently agree.
+func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:      "reject after approve",
+		RepoPath:   repoPath,
+		SkipTriage: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "it works", Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.True(t, approveResp.Msg.Item.PlanApproved, "setup: plan must be approved before rejecting")
+
+	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: itemID,
+		Reason: "actually needs more work",
+	}))
+	require.NoError(t, err)
+	assert.False(t, rejectResp.Msg.Item.PlanApproved, "reject must clear plan_approved in its own response")
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.False(t, getResp.Msg.Item.PlanApproved, "reject must clear plan_approved in a fresh read")
+
+	_, spawnErr := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId: itemID,
+	}))
+	require.Error(t, spawnErr, "backend spawn gate must independently block after reject-following-approve")
+}
+
+func TestRejectPlan_StaleContentToken_ReturnsFailedPrecondition(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# plan"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId:                   itemID,
+		Reason:                   "stale content",
+		ExpectedModifiedAtUnixMs: 1,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// TestRejectPlan_PlanFileGoneMidRegeneration_FailsClosed: adversarial-review.md
+// Blocker remediation — a stat error with a non-zero token must fail closed.
+func TestRejectPlan_PlanFileGoneMidRegeneration_FailsClosed(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir() // no plan.md written — simulates mid-regeneration
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId:                   itemID,
+		Reason:                   "should fail closed",
+		ExpectedModifiedAtUnixMs: 1,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+}
+
+// ─── GetPlanArtifactContent ─────────────────────────────────────────────────
+
+func TestGetPlanArtifactContent_HappyPath_ReturnsContentAndMtime(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "plan.md"), []byte("# Plan\n\nDo the thing."), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.GetPlanArtifactContent(t.Context(), connect.NewRequest(&sessionv1.GetPlanArtifactContentRequest{
+		ItemId:   itemID,
+		Filename: "plan.md",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "# Plan\n\nDo the thing.", resp.Msg.Content)
+	assert.False(t, resp.Msg.Truncated)
+	assert.Greater(t, resp.Msg.SizeBytes, int64(0))
+	assert.Greater(t, resp.Msg.ModifiedAtUnixMs, int64(0))
+}
+
+func TestGetPlanArtifactContent_DisallowedFilename_ReturnsInvalidArgument(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(artifactsPath, "notes.txt"), []byte("hi"), 0o644))
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.GetPlanArtifactContent(t.Context(), connect.NewRequest(&sessionv1.GetPlanArtifactContentRequest{
+		ItemId:   itemID,
+		Filename: "notes.txt",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestGetPlanArtifactContent_TraversalAttempt_ReturnsInvalidArgument(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir()
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.GetPlanArtifactContent(t.Context(), connect.NewRequest(&sessionv1.GetPlanArtifactContentRequest{
+		ItemId:   itemID,
+		Filename: "../../../etc/passwd",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestGetPlanArtifactContent_MissingFile_ReturnsNotFound(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item with plan",
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	artifactsPath := t.TempDir() // plan.md not written
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+	}, nil)
+	require.NoError(t, err)
+
+	_, err = svc.GetPlanArtifactContent(t.Context(), connect.NewRequest(&sessionv1.GetPlanArtifactContentRequest{
+		ItemId:   itemID,
+		Filename: "plan.md",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
 // initGitRepoWithCommit initialises a minimal git repository with an initial commit so
 // that git worktree operations (which require at least one commit) work in tests.
 // Skips the test if git is unavailable.
@@ -2830,6 +3199,102 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	require.Len(t, sessions, 2)
 	assert.Contains(t, sessions[1].TriageResult, "revised summary")
 	assert.Contains(t, sessions[1].TriageResult, `"iteration":2`)
+}
+
+// TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved: an already-approved
+// plan must not silently stay "approved" after TriggerTriage regenerates it.
+func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
+	storage := createTestStorage(t)
+	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
+	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "approve then refine",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
+
+	approveResp, approveErr := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: item.ID}))
+	require.NoError(t, approveErr)
+	require.True(t, approveResp.Msg.Item.PlanApproved, "setup: plan must be approved before refining")
+
+	_, refineErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId:   item.ID,
+		Feedback: "add caching",
+	}))
+	require.NoError(t, refineErr)
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 2
+	}, 5*time.Second, 50*time.Millisecond, "refine should make a second headless call")
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && !updated.PlanApproved
+	}, 5*time.Second, 50*time.Millisecond, "regeneration must reset plan_approved to false")
+
+	final, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, loadErr)
+	require.NotNil(t, final.PlanArtifactsSetAt, "plan_artifacts_set_at must be stamped on every TriggerTriage completion")
+	assert.WithinDuration(t, time.Now(), *final.PlanArtifactsSetAt, 10*time.Second)
+}
+
+// TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason: a freshly
+// regenerated plan must not display stale rejection feedback the
+// regeneration was meant to address (adversarial-review.md Blocker
+// remediation).
+func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
+	storage := createTestStorage(t)
+	secondResponse := `{"summary":"revised summary","suggestions":[],"tasks":[{"text":"revised task","estimate":"3h","category":"backend"}]}`
+	pool := &fakeHeadlessPool{responses: []string{validTriageJSON(), secondResponse}}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "reject then refine",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+	require.NoError(t, trigErr)
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
+
+	rejectResp, rejectErr := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
+		ItemId: item.ID,
+		Reason: "missing caching plan",
+	}))
+	require.NoError(t, rejectErr)
+	require.Equal(t, "missing caching plan", rejectResp.Msg.Item.PlanRejectionReason, "setup: rejection reason must be recorded")
+
+	_, refineErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId:   item.ID,
+		Feedback: "missing caching plan",
+	}))
+	require.NoError(t, refineErr)
+	require.Eventually(t, func() bool {
+		return pool.callCount() == 2
+	}, 5*time.Second, 50*time.Millisecond, "refine should make a second headless call")
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.PlanRejectionReason == ""
+	}, 5*time.Second, 50*time.Millisecond, "regeneration must clear the stale plan_rejection_reason")
 }
 
 // TestTriggerTriage_RefineWithFeedback_RequiresPriorResult: feedback on an item

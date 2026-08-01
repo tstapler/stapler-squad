@@ -2520,7 +2520,7 @@ const planApprovalStaleness = 5 * time.Minute
 // architecture question out of scope for this fix; see BUG-038.
 func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
-		Statuses: []string{string(BacklogStatusQueued)},
+		Statuses: []string{string(BacklogStatusQueued), string(BacklogStatusReady)},
 	})
 	if err != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems list error: %v", err)
@@ -2531,12 +2531,25 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		if item.SkipPlanning || item.PlanApproved {
 			continue
 		}
-		if item.QueuedAt == nil || time.Since(*item.QueuedAt) <= planApprovalStaleness {
+		// ready-status items have no QueuedAt — fall back to when the plan was
+		// last (re)generated. Deliberately NOT item.UpdatedAt: that whole-row
+		// timestamp is bumped by any unrelated field edit (title, tags,
+		// description), which would silently defeat this detector for a plan
+		// that has genuinely sat unreviewed for weeks.
+		var since time.Time
+		if item.QueuedAt != nil {
+			since = *item.QueuedAt
+		} else if item.PlanArtifactsSetAt != nil {
+			since = *item.PlanArtifactsSetAt
+		} else {
+			continue // no plan generated yet and never queued — nothing to be stale about
+		}
+		if time.Since(since) <= planApprovalStaleness {
 			continue // still plausibly about to be approved/dequeued
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatusQueued,
-			"queued item blocked by DequeueNextQueuedItems' planning gate (plan not approved, skip_planning not set)")
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatus(item.Status),
+			"queued or ready item blocked by the planning gate (plan not approved, skip_planning not set)")
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -2554,10 +2567,10 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			continue
 		}
 
-		log.WarningLog.Printf("[BacklogLifecycle] item %s queued but blocked by unapproved plan", item.ID)
+		log.WarningLog.Printf("[BacklogLifecycle] item %s blocked by unapproved plan", item.ID)
 		l.notify(item.ID,
-			"Queued item blocked by unapproved plan",
-			fmt.Sprintf("%s — this item cannot be dequeued until its plan is approved (or skip_planning is set). Approve the plan or update the item to unblock it.", item.Title),
+			"Item blocked by unapproved plan",
+			fmt.Sprintf("%s — this item's plan has been awaiting approval for over %s. Approve the plan or update the item to unblock it.", item.Title, planApprovalStaleness),
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
@@ -2565,8 +2578,11 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			log.WarningLog.Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuckNotified item=%s: %v", item.ID, notifyErr)
 		}
 	}
-	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
-	// reason once the item leaves 'queued' (dequeued, manually reopened, etc.).
+	// No resolve pass needed here: selfHealStuck clears this reason once the
+	// underlying condition (PlanApproved/SkipPlanning) is satisfied — see its
+	// StuckReasonPlanNotApproved case, which fetches the item directly since
+	// (unlike every sibling reason) resolution here depends on a field, not a
+	// status transition.
 }
 
 // reconcilePRPendingWithoutPRItems is the pr_pending_no_pr detector (BUG-040):
@@ -3050,7 +3066,19 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonOrphanedTriage:
 			resolve = row.ItemStatus != BacklogStatusIdea
 		case domain.StuckReasonPlanNotApproved:
-			resolve = row.ItemStatus != BacklogStatusQueued
+			// The one reason in this switch whose resolution depends on a field
+			// (PlanApproved/SkipPlanning), not a status transition: approving a
+			// ready-status item's plan does not itself change item.Status (unlike
+			// a queued item, which DequeueNextQueuedItems moves out of 'queued'
+			// shortly after approval) — a pure status-anchored check would leave
+			// a ready-status item stuck forever even after the blocker clears.
+			planItem, itemErr := l.storage.GetBacklogItem(ctx, row.ItemID)
+			if itemErr != nil {
+				// Fetch failure — leave open rather than guess; the blanket
+				// terminal rule above already handles archived/done items.
+				continue
+			}
+			resolve = planItem.SkipPlanning || planItem.PlanApproved
 		case domain.StuckReasonPRPendingNoPR:
 			resolve = row.ItemStatus != BacklogStatusPRPending
 		case domain.StuckReasonPRNeedsFix:
