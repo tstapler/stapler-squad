@@ -2669,6 +2669,78 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
 }
 
+// TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem guards
+// the fix making triage actually assign priority/category instead of leaving every item
+// at DefaultBacklogPriority forever (which defeats DequeueNextQueuedItems' priority-order
+// auto-spawn — every item tied at the same priority is effectively still FIFO). The LLM's
+// assessed priority and item_category must land on the item once triage completes.
+func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "assessed priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: session.DefaultBacklogPriority,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated.Priority, "the LLM's assessed priority must be applied to the item")
+	assert.Equal(t, "bugfix", updated.Category, "the LLM's assessed item_category must be applied to the item")
+}
+
+// TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem
+// guards the "don't clobber" half of the same fix: a triage result with no priority/
+// item_category (the model didn't provide one, or ParseHeadlessTriageResult zero-values
+// them) must leave whatever the item already had untouched, not reset it.
+func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()} // no priority/item_category field
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "pre-set priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 2,
+		Category: string(session.BacklogCategoryChore),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Priority, "an omitted priority must not clobber the item's existing priority")
+	assert.Equal(t, string(session.BacklogCategoryChore), updated.Category, "an omitted item_category must not clobber the item's existing category")
+}
+
 // TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick verifies the
 // opt-in auto-spawn-session toggle: when AutoSpawnSession is true, TriggerTriage's
 // completion goroutine spawns a work session automatically (Autonomous: true, bypassing

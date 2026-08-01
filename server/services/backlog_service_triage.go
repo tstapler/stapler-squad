@@ -2107,7 +2107,7 @@ func (s *BacklogService) TriggerTriage(
 
 		pap := artifactAbsPath
 		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
-		applyTriageACToUpdate(&result, &update)
+		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
@@ -2712,21 +2712,41 @@ func findPriorTriageResult(sessions []session.ItemSessionSummary) (session.Headl
 	return session.HeadlessTriageResult{}, false
 }
 
-// applyTriageACToUpdate re-indexes and status-normalises the AC criteria from a triage
-// result, then writes the serialized JSON into the provided update struct.
-func applyTriageACToUpdate(result *session.HeadlessTriageResult, update *session.BacklogItemUpdate) {
-	if len(result.AcceptanceCriteria) == 0 {
-		return
-	}
-	// Re-index to ensure 0-based contiguous indices regardless of what the model output.
-	for i := range result.AcceptanceCriteria {
-		result.AcceptanceCriteria[i].Index = i
-		if result.AcceptanceCriteria[i].Status == "" {
-			result.AcceptanceCriteria[i].Status = "pending"
+// applyTriageResultToUpdate re-indexes and status-normalises the AC criteria from a
+// triage result, then writes the serialized JSON into the provided update struct.
+// Also applies the LLM's assessed priority and item category, when it provided valid
+// ones — this is what makes triage assign labels/priority rather than leaving every
+// item at DefaultBacklogPriority forever, which is otherwise indistinguishable from
+// "genuinely assessed as normal" and defeats priority-ordered auto-spawn (see
+// DequeueNextQueuedItems). Each field is independently optional: a missing or invalid
+// value leaves the item's existing priority/category untouched rather than
+// clobbering it with a zero value — same convention AcceptanceCriteria already uses
+// here (an empty result means "no assessment", not "clear the existing value").
+func applyTriageResultToUpdate(result *session.HeadlessTriageResult, update *session.BacklogItemUpdate) {
+	if len(result.AcceptanceCriteria) > 0 {
+		// Re-index to ensure 0-based contiguous indices regardless of what the model output.
+		for i := range result.AcceptanceCriteria {
+			result.AcceptanceCriteria[i].Index = i
+			if result.AcceptanceCriteria[i].Status == "" {
+				result.AcceptanceCriteria[i].Status = "pending"
+			}
+		}
+		if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
+			update.AcceptanceCriteria = &acJSON
 		}
 	}
-	if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
-		update.AcceptanceCriteria = &acJSON
+
+	if result.Priority >= 1 && result.Priority <= 5 {
+		p := result.Priority
+		update.Priority = &p
+	}
+
+	// IsValidBacklogCategory also accepts "" (its own "uncategorized" convention),
+	// which must NOT be treated as a real assessment here — an omitted
+	// item_category means "no assessment", not "clear the existing category".
+	if result.ItemCategory != "" && session.IsValidBacklogCategory(result.ItemCategory) {
+		c := result.ItemCategory
+		update.Category = &c
 	}
 }
 

@@ -53,6 +53,50 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 	}
 }
 
+// TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory covers the
+// decision table for what triage's assessed priority/item_category actually get
+// applied vs. left alone: out-of-range priority, invalid/empty category, and the
+// happy path all need to behave correctly for auto-spawn's priority ordering to be
+// trustworthy (a clobbered or garbage value would be worse than never assigning one).
+func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *testing.T) {
+	tests := []struct {
+		name         string
+		priority     int
+		itemCategory string
+		wantPriority *int
+		wantCategory *string
+	}{
+		{"valid priority and category", 1, "bugfix", intPtr(1), strPtr("bugfix")},
+		{"zero priority (omitted) leaves it unset", 0, "feature", nil, strPtr("feature")},
+		{"negative priority rejected", -1, "", nil, nil},
+		{"priority above range rejected", 6, "", nil, nil},
+		{"empty category leaves it unset", 3, "", intPtr(3), nil},
+		{"invalid category rejected", 2, "not-a-real-category", intPtr(2), nil},
+		{"all valid categories accepted", 3, "chore", intPtr(3), strPtr("chore")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &session.HeadlessTriageResult{Priority: tc.priority, ItemCategory: tc.itemCategory}
+			update := &session.BacklogItemUpdate{}
+			applyTriageResultToUpdate(result, update)
+			if tc.wantPriority == nil {
+				assert.Nil(t, update.Priority)
+			} else {
+				require.NotNil(t, update.Priority)
+				assert.Equal(t, *tc.wantPriority, *update.Priority)
+			}
+			if tc.wantCategory == nil {
+				assert.Nil(t, update.Category)
+			} else {
+				require.NotNil(t, update.Category)
+				assert.Equal(t, *tc.wantCategory, *update.Category)
+			}
+		})
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
 // --- Story 2.1.2: rework_cap durable write (notifyReworkCapHit) ---
 
 // TestNotifyReworkCapHit_should_markStuckReworkCapImmediately_When_CapHit
