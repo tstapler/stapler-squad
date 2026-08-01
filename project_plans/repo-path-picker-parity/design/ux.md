@@ -222,7 +222,7 @@ Before Escape                          After Escape (1st press)
 │ │ 🕒 ~/Projects/y       │    │          │  mode still selected,        │
 │ └─────────────────────┘    │          │  panel still open)           │
 └───────────────────────────┘          └───────────────────────────┘
-     RepoPathInput: open=true               RepoPathInput: open=false
+     RepoPathInput: showDropdown=true       RepoPathInput: showDropdown=false
      (dropdown visible)                     event.nativeEvent
                                              .stopImmediatePropagation()
                                              called → Omnibar's own
@@ -230,9 +230,15 @@ Before Escape                          After Escape (1st press)
 ```
 
 **Flow**
-1. Dropdown is open (`open===true`). User presses Escape while the input has focus.
+1. Dropdown is visibly rendered (`showDropdown === true`, i.e. `open === true` AND
+   (`allEntries.length > 0` OR `isLoading`)). User presses Escape while the input has focus.
 2. `RepoPathInput`'s `handleKeyDown` "Escape" case (fixed by this project, Task 1.1.1a) checks
-   `open` — true — and calls `e.nativeEvent.stopImmediatePropagation()` before closing.
+   `showDropdown` — **not** `open` — and calls `e.nativeEvent.stopImmediatePropagation()`
+   before closing, only when `showDropdown` is `true`. Gating on `open` alone would be wrong:
+   `open` becomes `true` on mere focus even when the dropdown renders nothing (e.g. empty
+   history and no filesystem matches), which would wrongly swallow Escape in that case too
+   — see Surface 8's "focused-but-empty" sub-case below and the plan's Domain Glossary
+   `open`/`showDropdown` distinction.
 3. Local state closes (`setOpen(false)`, `setSelectedIndex(-1)`); the typed `value` is **not**
    altered.
 4. Because propagation is stopped at the native-event level, `Omnibar.tsx`'s `modal`-level
@@ -240,13 +246,14 @@ Before Escape                          After Escape (1st press)
    Escape listener (which would otherwise call `onClose()`) never observe this keydown at all.
    Net effect: exactly one Escape press closes only the suggestion list; the New Project /
    Existing Branch panel, its selected mode, and all other field values remain untouched.
-5. A second Escape press (dropdown now closed) behaves as Surface 8 below — this is the
-   "two presses to fully back out" model, matching how VS Code's command palette and browser
-   omniboxes handle a nested suggestion list under a larger dismissible surface.
+5. A second Escape press (dropdown now closed, `showDropdown === false`) behaves as Surface 8
+   below — this is the "two presses to fully back out" model, matching how VS Code's command
+   palette and browser omniboxes handle a nested suggestion list under a larger dismissible
+   surface.
 
 ---
 
-## Surface 8 — Escape key: dropdown already closed
+## Surface 8 — Escape key: dropdown not visibly rendered (`showDropdown === false`)
 
 ```
 ┌───────────────────────────┐          ┌──────────────────────────────┐
@@ -256,18 +263,32 @@ Before Escape                          After Escape (1st press)
 └───────────────────────────┘          │  omnibar, per pre-existing    │
                                           │  Omnibar.tsx logic, unchanged)│
                                           └──────────────────────────────┘
-     RepoPathInput: open=false
+     RepoPathInput: showDropdown=false
 ```
 
 **Flow**
-1. Dropdown is not open — either the user never focused/opened it, or a prior Escape already
-   closed it (see Surface 7 step 5).
-2. `RepoPathInput`'s Escape case sees `open===false` and does **not** call
-   `stopImmediatePropagation()` (Task 1.1.1a's guard).
+1. `showDropdown` is `false` — either the field was never focused (`open === false`), a
+   prior Escape already closed it (see Surface 7 step 5), **or the field is focused with
+   `open === true` but the dropdown has nothing to render** (see the "focused-but-empty"
+   sub-case below). All three collapse to the same observable behavior.
+2. `RepoPathInput`'s Escape case checks `showDropdown` — not `open` — sees it is `false`, and
+   does **not** call `stopImmediatePropagation()` (Task 1.1.1a's guard).
 3. The keydown bubbles normally to `Omnibar.tsx`'s `modal`-level handler and, if that doesn't
    consume it, to the `document`-level listener — both fire exactly as they did before this
    project touched anything (R6's explicit "no regression to existing Escape-to-reset
    behavior when no dropdown is open" requirement).
+
+**Sub-case — focused but empty (`open === true`, `showDropdown === false`).** This is the
+case an Escape guard gated on `open` alone would get wrong, and it is exactly why the fix
+gates on `showDropdown` instead (see Surface 7 step 2 and the plan's Domain Glossary
+`open`/`showDropdown` distinction). A user focuses the field (`open` becomes `true`) while
+it has no session history and no filesystem matches yet (`allEntries.length === 0`,
+`isLoading === false`) — per Surface 1's "zero session history ever" edge case, no dropdown
+renders at all. Pressing Escape here must **not** stop propagation, even though `open` is
+technically `true`: there is nothing visible to the user to dismiss, so the keydown should
+bubble exactly like the fully-closed case above and let `Omnibar.tsx`'s own Escape handler
+fire normally. Plan Task 1.1.1c's third unit test case exists specifically to pin this
+behavior.
 
 ---
 
@@ -347,8 +368,9 @@ New-Project hint.
 ```
 
 Same on-screen-keyboard-occlusion risk as Surface 9 — same e2e check pattern applies to both
-fields (Task 3.1.1f explicitly targets Parent Directory as the "deepest-in-form" worst case;
-this surface should get at minimum a spot-check, ideally the same automated assertion).
+fields (Task 3.1.1f targets Parent Directory as the "deepest-in-form" worst case; this
+surface gets the same automated `getBoundingClientRect()` assertion, including the row-size
+tap-target check, via plan.md's Task 3.1.1f-worktree / `T-E2E-RPP-008`).
 
 ---
 
@@ -401,15 +423,22 @@ requirements doc's `AC#` and plan Story numbers where applicable.
 ### Mobile (390×844)
 
 10. **UX-AC-10** — At 390×844, the dropdown for both fields renders with zero horizontal
-    overflow: `dropdown.boundingBox().x + width <= 390`. (Maps to AC5, Surfaces 9–10.)
+    overflow, verified via `page.evaluate()` + `getBoundingClientRect()` inside the browser
+    context (`dropdown.right <= 390`), **not** Playwright's `boundingBox()` — `boundingBox()`
+    reports the element's own box regardless of visual clipping by an `overflow: hidden`
+    ancestor (the Omnibar modal), which would produce a false-positive pass on exactly the
+    bug this AC exists to catch. This is the same method and rationale plan.md's Task 3.1.1f
+    commits to; see that task for the full snippet. (Maps to AC5, Surfaces 9–10.)
 11. **UX-AC-11** — At 390×844, with the on-screen keyboard visible, the dropdown for the
     Parent Directory field (the deepest/lowest field in the New Project panel, the worst-case
     position) is not clipped below the visible viewport — its full row set is either fully
     visible or scrollable via touch within its own `overflowY:auto` container, never hidden
     entirely behind the keyboard with no way to reveal it. (Maps to AC5, Surface 9.)
 12. **UX-AC-12** — Every dropdown row is a full-width tap target ≥ 24×24 CSS px (WCAG 2.2 AA
-    SC 2.5.8), verified at 390×844. (Surfaces 9–10; current ~30–32px rows already clear this —
-    criterion exists to catch a future regression, not a known gap today.)
+    SC 2.5.8), verified at 390×844 via the same `getBoundingClientRect()` pass used for
+    UX-AC-10/11 (plan.md Tasks 3.1.1f and 3.1.1f-worktree). (Surfaces 9–10; current ~30–32px
+    rows already clear this — criterion exists to catch a future regression, not a known gap
+    today.)
 
 ### Accessibility
 

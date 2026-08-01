@@ -67,6 +67,8 @@ Phase 1: Foundational fixes (shared component + selector — no consumer changes
 │  1.1.1b combobox a11y attributes     │   │  1.2.1b useSessionRepoPaths swap       │
 │  1.1.2a Unit test: Escape isolated   │   │  1.2.2a Unit tests: tiebreak           │
 │  1.1.2b Unit test: Escape nested     │   │                                        │
+│  1.1.1d NewShellDialog Escape fix    │   │                                        │
+│         verification test            │   │                                        │
 └───────────────┬───────────────────────┘   └──────────────┬───────────────────────┘
                 │                                          │
                 └───────────────┬──────────────────────────┘
@@ -89,8 +91,13 @@ Phase 3: Verification (depends on Phase 2 code existing)
 │  3.1.1e Escape closes dropdown only vs. resets panel               │
 │  3.1.1f 390×844 viewport — no h-overflow, no v-clip                │
 │  3.1.1f-contingency Open-upward fallback IF 3.1.1f finds clipping  │
+│  3.1.1f-worktree 390×844 viewport spot-check — Existing Worktree   │
+│         Path fallback field (mirrors 3.1.1f, T-E2E-RPP-008)        │
 │  3.1.1g Existing session-create-new-project.spec.ts still passes   │
 │  3.1.1h Existing session-create-existing-worktree.spec.ts passes   │
+│  3.1.1i Regression gate: existing test suites for the other        │
+│         RepoPathInput consumers (BacklogItemForm, WorkflowForm,    │
+│         LocalFileBrowser, NewShellDialog)                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │ Epic 3.2: Feature registry                                        │
 │  3.2.1a Create registry JSON                                      │
@@ -131,7 +138,7 @@ close the whole panel/dialog I was still using.
     runs its own "reset to discovery" / "close" logic, or `NewShellDialog.tsx`'s
     Escape→`onCancel()` still fires). This is the case a gate on `open` alone would get
     wrong — see the `open`/`showDropdown` Domain Glossary rows above.
-**Files**: `web-app/src/components/ui/RepoPathInput.tsx`, `web-app/src/components/ui/RepoPathInput.test.tsx`
+**Files**: `web-app/src/components/ui/RepoPathInput.tsx`, `web-app/src/components/ui/RepoPathInput.test.tsx`, `web-app/src/components/sessions/__tests__/NewShellDialog.test.tsx`
 
 Note: `usePathCompletions`'s RPC failures degrade silently to history-only suggestions
 today (its `error` field is discarded by `RepoPathInput`) — this is pre-existing behavior
@@ -216,6 +223,28 @@ across all current consumers, unchanged and not fixed by this plan.
   Escape-to-close.
 - Files: `web-app/src/components/ui/RepoPathInput.test.tsx`
 
+##### Task 1.1.1d: Unit test — verify Task 1.1.1a's fix also closes NewShellDialog's already-shipping identical bug (~5 min)
+- This proves the plan's claim (Domain Glossary "Escape-propagation hazard" row, Pattern
+  Decisions table) that fixing the Escape guard component-locally in `RepoPathInput.tsx`
+  also fixes `NewShellDialog.tsx`'s pre-existing, unconditional
+  `document.addEventListener("keydown", handler)` → `onCancel()` listener
+  (`NewShellDialog.tsx:31-38`), which today closes the whole dialog on any Escape,
+  including one meant only to dismiss its `workingDir` field's `RepoPathInput` dropdown.
+  That claim currently has zero test coverage anywhere in the plan.
+- Add a test to the existing `web-app/src/components/sessions/__tests__/NewShellDialog.test.tsx`
+  (create the file's own `describe` block if none of its existing blocks fit, e.g.
+  `describe("NewShellDialog — Escape key scoping", ...)`): render `NewShellDialog`, mock
+  `useSessionRepoPaths` to return at least one path so the `workingDir` field's
+  `RepoPathInput` dropdown has content, focus that field (`fireEvent.focus`) to open the
+  dropdown, press Escape once, and assert BOTH: the dropdown/listbox is no longer present
+  AND `onCancel` (the mock passed as a prop) was NOT called — proving one Escape press
+  closes only the suggestion dropdown, not the dialog.
+- Add a second case (no-regression half, mirroring Task 1.1.1c's second case): with the
+  dropdown not open (field never focused, or a prior Escape already closed it), press
+  Escape and assert `onCancel` WAS called — proving `NewShellDialog`'s own
+  Escape-to-cancel still works when there's no local dropdown to close first.
+- Files: `web-app/src/components/sessions/__tests__/NewShellDialog.test.tsx`
+
 #### Story 1.1.2: RepoPathInput's input is announced as a combobox to assistive tech
 **As a** screen-reader user interacting with any `RepoPathInput` field, **I want** the
 input to be announced with combobox semantics, **so that** I understand it drives a
@@ -299,6 +328,16 @@ that** the resulting order never depends on incidental array/adapter ordering.
   ```
 - No import changes needed — `createSelector` and `SessionStatus` are already imported
   at the top of the file; `Session.createdAt` is already on the generated proto type.
+- **Out-of-scope surface affected by this shared-selector change**: `selectActiveSessionsSortedByUpdatedAt`
+  is also consumed directly by `Omnibar.tsx`'s own main search-box "recent sessions"
+  fallback (`Omnibar.tsx:391,395` — `activeSortedSessions.slice(0, 5)` shown when the
+  search input is empty), a surface `requirements.md`'s "Out of scope" section does not
+  mention. This is expected and desired (the plan's stated strategy is "fix the shared
+  selector once, benefit everyone"), but since the tiebreak changes this list's ordering
+  for sessions sharing a missing/zero `updatedAt`, manually verify Omnibar's own "recent
+  sessions" list still renders sensibly after this change (no existing automated test
+  targets that specific list's ordering, so this is a manual spot-check, not a new test
+  suite) as part of Task 3.1.1i's regression pass.
 - Files: `web-app/src/lib/store/sessionsSlice.ts`
 
 ##### Task 1.2.1b: Unit tests for the tiebreak comparator (~5 min)
@@ -531,6 +570,15 @@ or break suggestion ordering.
   - *Given* the check above finds clipping, *Then* Task 3.1.1f-contingency's open-upward
     fallback is implemented and this assertion is re-run to confirm it now passes (see
     Task 3.1.1f-contingency below for the fallback approach).
+  - Every dropdown row clears the WCAG 2.2 AA 24×24 CSS px minimum tap-target size at
+    390×844 (R5's "tappable row targets" requirement, UX-AC-12) — asserted via the same
+    `getBoundingClientRect()` pass as the overflow/clip check, both for the Parent
+    Directory field (Task 3.1.1f) and the Existing Worktree Path fallback field
+    (Task 3.1.1f-worktree, `T-E2E-RPP-008`).
+  - The same overflow/clip/row-size verification is repeated for the Existing Worktree
+    Path fallback field, not just Parent Directory (Task 3.1.1f-worktree, `T-E2E-RPP-008`)
+    — R5/AC5 requires both fields be verified at 390×844, and `ux.md` Surface 10 explicitly
+    flags this field as needing at minimum a spot-check.
 - Existing `session-create-new-project.spec.ts` locators still pass (AC1/AC7 regression guard).
   - *Given* this change is applied, *When* `tests/e2e/session-create-new-project.spec.ts`
     is run unmodified, *Then* all 7 existing `T-E2E-NP-*` tests pass, in particular
@@ -609,17 +657,29 @@ or break suggestion ordering.
   const rects = await page.evaluate(() => {
     const dropdown = document.querySelector('[data-testid="path-completion-dropdown"]');
     const modal = document.querySelector('[role="dialog"]'); // or the modal's actual selector
+    const rows = dropdown ? Array.from(dropdown.querySelectorAll('[role="option"]')) : [];
     return {
       dropdown: dropdown?.getBoundingClientRect().toJSON(),
       modal: modal?.getBoundingClientRect().toJSON(),
+      rowRects: rows.map((r) => r.getBoundingClientRect().toJSON()),
     };
   });
   expect(rects.dropdown.right).toBeLessThanOrEqual(390);
   expect(rects.dropdown.bottom).toBeLessThanOrEqual(rects.modal.bottom);
+  // UX-AC-12 / R5 "tappable row targets": every dropdown row clears the WCAG 2.2 AA
+  // 24×24 CSS px minimum target size (`PathCompletionDropdown.tsx` rows are ~30-32px
+  // today, so this is a regression guard, not a known gap — see ux.md UX-AC-12).
+  for (const row of rects.rowRects) {
+    expect(row.height).toBeGreaterThanOrEqual(24);
+    expect(row.width).toBeGreaterThanOrEqual(24);
+  }
   ```
-- If both assertions pass, this task is done. If either fails (clipping detected), proceed
-  to Task 3.1.1f-contingency below — this is a required next step during Phase 3, not an
-  open-ended "investigate later."
+- If all assertions pass, this task is done. If the overflow/clip assertions fail (clipping
+  detected), proceed to Task 3.1.1f-contingency below — this is a required next step during
+  Phase 3, not an open-ended "investigate later." (A row-size assertion failure indicates an
+  unrelated regression in `PathCompletionDropdown.css.ts` row sizing, not something
+  Task 3.1.1f-contingency's open-upward positioning fix addresses — fix the CSS directly if
+  this ever fails.)
 - Files: `tests/e2e/repo-path-picker-parity.spec.ts`
 
 ##### Task 3.1.1f-contingency: Open-upward fallback IF Task 3.1.1f detects clipping (conditional; ~15 min if triggered)
@@ -640,6 +700,46 @@ or break suggestion ordering.
 - Re-run Task 3.1.1f's assertions after implementing the fallback to confirm the dropdown
   is no longer clipped at 390×844.
 - Files: `web-app/src/components/ui/RepoPathInput.tsx`, `web-app/src/components/ui/RepoPathInput.css.ts`, `tests/e2e/repo-path-picker-parity.spec.ts`
+
+##### Task 3.1.1f-worktree: Test — 390×844 viewport spot-check for the Existing Worktree Path fallback field (~4 min)
+- Closes a coverage gap `ux.md` Surface 10 itself flags ("the Existing Worktree Path
+  fallback should get at minimum a spot-check, ideally the same automated assertion") and
+  R5/AC5's explicit requirement that dropdown verification at 390×844 cover BOTH fields,
+  not just Parent Directory. `validation.md` independently flagged this same gap and
+  assigned it test ID `T-E2E-RPP-008` — use that ID here for consistency.
+- Mirrors Task 3.1.1f's structure exactly, targeting `omnibar-existing-worktree` instead of
+  `omnibar-parent-dir`: switch to Existing Branch mode (worktree-discovery-empty state, per
+  Task 3.1.1c's trigger pattern) instead of New Project mode, set the same 390×844 viewport,
+  focus the Existing Worktree Path fallback field, open its dropdown, and reuse the same
+  `page.evaluate()` + `getBoundingClientRect()` verification method (not `boundingBox()`,
+  same rationale as Task 3.1.1f) against `[data-testid="path-completion-dropdown"]` and the
+  modal element, including the same row-size (`>= 24×24`) assertion added to Task 3.1.1f.
+  ```ts
+  const rects = await page.evaluate(() => {
+    const dropdown = document.querySelector('[data-testid="path-completion-dropdown"]');
+    const modal = document.querySelector('[role="dialog"]');
+    const rows = dropdown ? Array.from(dropdown.querySelectorAll('[role="option"]')) : [];
+    return {
+      dropdown: dropdown?.getBoundingClientRect().toJSON(),
+      modal: modal?.getBoundingClientRect().toJSON(),
+      rowRects: rows.map((r) => r.getBoundingClientRect().toJSON()),
+    };
+  });
+  expect(rects.dropdown.right).toBeLessThanOrEqual(390);
+  expect(rects.dropdown.bottom).toBeLessThanOrEqual(rects.modal.bottom);
+  for (const row of rects.rowRects) {
+    expect(row.height).toBeGreaterThanOrEqual(24);
+    expect(row.width).toBeGreaterThanOrEqual(24);
+  }
+  ```
+- If Task 3.1.1f-contingency was triggered (open-upward CSS fallback implemented), this
+  task's assertions should already pass without a second, field-specific contingency —
+  the fallback lives in `RepoPathInput.tsx`/`RepoPathInput.css.ts` at the component level,
+  so it applies to every consumer including this field. If this task's assertions fail even
+  after Task 3.1.1f-contingency passed for Parent Directory, that indicates a field-specific
+  regression (e.g. this field sitting at a different vertical position in the Existing
+  Branch panel) and needs its own investigation — do not silently skip it.
+- Files: `tests/e2e/repo-path-picker-parity.spec.ts`
 
 ##### Task 3.1.1g: Verify existing session-create-new-project.spec.ts still passes (~3 min)
 - Run `cd tests/e2e && npx playwright test session-create-new-project.spec.ts` after Phase 2
@@ -662,6 +762,27 @@ or break suggestion ordering.
   the failure indicates a real regression in Task 2.1.2a's replacement and must be fixed
   there, not by editing this pre-existing spec to work around it.
 - Files: `tests/e2e/session-create-existing-worktree.spec.ts` (read-only verification)
+
+##### Task 3.1.1i: Regression gate — run existing test suites for the other RepoPathInput consumers (~5 min)
+- Epic 1.1's shared-component changes (Escape fix, combobox a11y triad) touch every
+  `RepoPathInput` consumer, but Tasks 3.1.1g/h only re-run the 2 Omnibar-specific e2e
+  specs. Run each of the following, blocking on all passing, after Epic 1.1 lands (and
+  again after Phase 2, since this is one atomic PR per Risk Control):
+  - `cd web-app && npx jest --no-coverage --testPathPatterns="BacklogItemForm.test"`
+  - `cd web-app && npx jest --no-coverage --testPathPatterns="WorkflowForm.test"`
+  - `cd web-app && npx jest --no-coverage --testPathPatterns="LocalFileBrowser.test"`
+  - `cd web-app && npx jest --no-coverage --testPathPatterns="NewShellDialog.test"`
+    (includes Task 1.1.1d's new Escape-scoping cases)
+- Also perform the manual spot-check noted in Task 1.2.1a: open the Omnibar's main search
+  box (not the New Project / Existing Branch panel) with an empty query and confirm its
+  "recent sessions" fallback list (`Omnibar.tsx:391,395`) still renders sensibly after the
+  tiebreak change — no existing automated test targets this list's ordering specifically,
+  so this one check is manual/visual, not a new automated test.
+- No file changes expected unless a real regression is found — if any suite fails, the
+  failure indicates a real regression from Epic 1.1's shared-component change and must be
+  fixed at the source (`RepoPathInput.tsx`), not by editing these pre-existing consumer
+  test files to work around it.
+- Files: `web-app/src/components/backlog/BacklogItemForm.test.tsx`, `web-app/src/components/workflows/WorkflowForm.test.tsx`, `web-app/src/components/files/LocalFileBrowser.test.tsx`, `web-app/src/components/sessions/__tests__/NewShellDialog.test.tsx` (all read-only verification, except NewShellDialog.test.tsx which also gains Task 1.1.1d's new cases)
 
 ---
 
@@ -689,9 +810,37 @@ correctly reports it as tested.
     them before).
 **Files**: `docs/registry/features/frontend/ui/repo-path-picker-parity.json` (new)
 
-##### Task 3.2.1a: Create the feature registry entry (~4 min)
+##### Task 3.2.1a: Create the feature registry entry (~5 min)
+- **Marker coexistence check (do this first)**: `OmnibarCreationPanel.tsx` already carries
+  `// +feature: session-image-attach` on line 2 (a pre-existing, unrelated feature for
+  image-attach support — not this project's concern). Per
+  `tools/scanner/frontend/src/component-scanner.ts`'s `scanFile()`, the scanner reads only
+  the *first* `// +feature:` line found in a file's first 10 lines, and even when that line
+  lists multiple space-separated IDs, only `rawIds[0]` (the first token) becomes the
+  canonical feature ID for that file — a file can only ever be scanner-attributed to ONE
+  feature ID. Appending `repo-path-picker-parity` as a second token to the existing marker
+  line (`// +feature: session-image-attach repo-path-picker-parity`) would therefore NOT
+  register a second, independent entry via the scanner — do not do this, it would be
+  cosmetic only and could mislead a future reader into thinking the scanner cross-checks it.
+- **Do not add or edit any `// +feature:` marker in `OmnibarCreationPanel.tsx` for this
+  task.** It is unnecessary: `docs/registry/features/frontend/ui/*.json` files (including
+  this new one) are hand-authored, matching the existing convention (e.g.
+  `local-file-browser.json`), and `tools/scanner/aggregate.py`'s `aggregate_frontend()`
+  unconditionally globs every `*.json` file under `docs/registry/features/frontend/` into
+  the aggregated `frontend-features.json` with no marker cross-check — unlike the backend
+  path (which has a `markerFound` field and `prune-stale-backend.sh`), there is no frontend
+  pruning step that could silently drop this entry. `make registry-generate`'s
+  `registry-generate-frontend` step (source-marker scan) and `registry-aggregate` step
+  (per-feature-file glob) are independent code paths; only the latter determines what ships
+  in the committed aggregate. Confirmed by reading both
+  `tools/scanner/frontend/src/component-scanner.ts` and `tools/scanner/aggregate.py`.
 - Create `docs/registry/features/frontend/ui/repo-path-picker-parity.json`, following the
-  shape of `docs/registry/features/frontend/ui/local-file-browser.json`:
+  shape of `docs/registry/features/frontend/ui/local-file-browser.json`. `testIds` must
+  reference the exact test names/IDs `validation.md` (the authoritative source) uses — the
+  8 `T-E2E-RPP-*` e2e test IDs (including `T-E2E-RPP-008`, the new Existing-Worktree-Path
+  mobile spot-check from Task 3.1.1f-worktree) plus the 4 unit-test `describe` block names,
+  including `useSessionRepoPaths`'s new describe block (see `validation.md`'s
+  "Note on additions"):
   ```json
   {
     "id": "repo-path-picker-parity",
@@ -700,10 +849,18 @@ correctly reports it as tested.
     "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
     "tested": true,
     "testIds": [
-      "repo-path-picker-parity.spec.ts",
+      "T-E2E-RPP-001",
+      "T-E2E-RPP-002",
+      "T-E2E-RPP-003",
+      "T-E2E-RPP-004",
+      "T-E2E-RPP-005",
+      "T-E2E-RPP-006",
+      "T-E2E-RPP-007",
+      "T-E2E-RPP-008",
       "RepoPathInput — Escape key handling",
       "RepoPathInput — combobox a11y",
-      "selectActiveSessionsSortedByUpdatedAt — tiebreak"
+      "selectActiveSessionsSortedByUpdatedAt — tiebreak",
+      "useSessionRepoPaths — recency-ordered paths"
     ],
     "lastModified": "2026-08-01T00:00:00Z"
   }
