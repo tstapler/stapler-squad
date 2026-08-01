@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, act, fireEvent, within } from "@testing-library/react";
+import { render, screen, act, fireEvent, within, waitFor } from "@testing-library/react";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { BacklogItemDetail } from "./BacklogItemDetail";
@@ -96,6 +96,13 @@ const updateBacklogItem = jest.fn().mockResolvedValue(null);
 // can control resolution timing — needed for the actionLoading polling-
 // suspend regression test (Story 3.1.3, Task 3.1.3c).
 const overrideVerdict = jest.fn();
+// Hoisted (plan-approval-ux Task 6.1.5) — the cross-artifact-consistency
+// regression test needs to control getPlanArtifactContent's resolved mtime
+// and assert on approvePlan/rejectPlan's actual call arguments.
+const approvePlan = jest.fn().mockResolvedValue(null);
+const rejectPlan = jest.fn().mockResolvedValue(null);
+const getPlanArtifactContent = jest.fn().mockResolvedValue(null);
+const triggerTriage = jest.fn();
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
   // mapBacklogItem is a real (unmocked) named export — BacklogItemDetail's
@@ -105,10 +112,12 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({
     getBacklogItem,
     transitionStatus: jest.fn().mockResolvedValue(true),
-    triggerTriage: jest.fn(),
+    triggerTriage,
     cancelTriage: jest.fn(),
     spawnSessionFromItem: jest.fn(),
-    approvePlan: jest.fn(),
+    approvePlan,
+    rejectPlan,
+    getPlanArtifactContent,
     overrideVerdict,
     triggerReReview: jest.fn(),
     triggerShipPR: jest.fn(),
@@ -174,6 +183,10 @@ beforeEach(() => {
   updateBacklogItem.mockClear().mockResolvedValue(null);
   useStuckBacklogItemsMock.mockReturnValue({ items: [], isLoading: false, error: null });
   overrideVerdict.mockReset();
+  approvePlan.mockReset().mockResolvedValue(null);
+  rejectPlan.mockReset().mockResolvedValue(null);
+  getPlanArtifactContent.mockReset().mockResolvedValue(null);
+  triggerTriage.mockReset();
   // Story 3.1.4's per-section expand state (useSectionExpandState) and
   // "Show N more" state (useShowMore) both persist to localStorage keyed
   // by itemId — clear between tests so one test's expand/collapse
@@ -1011,15 +1024,22 @@ describe("BacklogItemDetail — Story 3.1.4 Task 3.1.4i/3.1.4j: shared Collapsib
     // Collapsible.test.tsx's unit-level proof) — asserting the real
     // sibling sections wired into one CollapsibleGroup (Task 3.1.4i)
     // actually deliver ADR-027's cross-header keyboard-nav benefit.
+    // PlanArtifactsSection is no longer a member of this shared group
+    // (plan-approval-ux Task 6.1.3): it now renders above ActionsSection,
+    // outside CollapsibleGroup, so its Request Changes/Approve actions are
+    // reachable without expanding anything and so its content is visible
+    // before those actions — the next sibling inside the group after
+    // Description is now Sessions (this item's status leaves
+    // VersionControlSection without a renderable header).
     const descriptionHeader = screen.getByTestId("collapsible-header-description");
-    const planArtifactsHeader = screen.getByTestId("collapsible-header-plan-artifacts");
+    const sessionsHeader = screen.getByTestId("collapsible-header-sessions");
 
     descriptionHeader.focus();
     expect(descriptionHeader).toHaveFocus();
 
     fireEvent.keyDown(descriptionHeader, { key: "ArrowDown", code: "ArrowDown" });
 
-    expect(planArtifactsHeader).toHaveFocus();
+    expect(sessionsHeader).toHaveFocus();
   });
 });
 
@@ -1191,5 +1211,44 @@ describe("BacklogItemDetail — regression: Collapsible's defaultExpanded-in-gro
     expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("BacklogItemDetail — plan-approval-ux Task 6.1.5: mtime threading regression", () => {
+  it("threads PlanArtifactsSection's fetched mtime into both approvePlan and rejectPlan calls", async () => {
+    getBacklogItem.mockReset().mockResolvedValue({
+      ...makeItem([]),
+      status: "ready",
+      planArtifactsPath: "/tmp/plans/item-1.md",
+    });
+    listPipelineModes.mockReset().mockResolvedValue([]);
+    getPlanArtifactContent.mockResolvedValue({
+      content: "# Plan",
+      truncated: false,
+      sizeBytes: 10n,
+      modifiedAtUnixMs: 424242n,
+    });
+
+    render(<BacklogItemDetail itemId="item-1" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Wait for PlanArtifactsSection's fetch to report the mtime up to the parent.
+    await waitFor(() => expect(getPlanArtifactContent).toHaveBeenCalledWith("item-1", "plan.md"));
+
+    fireEvent.click(screen.getByTestId("backlog-action-approve-plan"));
+    await waitFor(() =>
+      expect(approvePlan).toHaveBeenCalledWith("item-1", 424242n)
+    );
+
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan"));
+    fireEvent.change(screen.getByTestId("plan-reject-reason"), { target: { value: "needs more detail" } });
+    fireEvent.click(screen.getByTestId("backlog-action-reject-plan-submit"));
+
+    await waitFor(() =>
+      expect(rejectPlan).toHaveBeenCalledWith("item-1", "needs more detail", 424242n)
+    );
   });
 });

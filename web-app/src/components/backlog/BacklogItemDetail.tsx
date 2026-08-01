@@ -42,6 +42,8 @@ import { PullRequestSection } from "./detail/PullRequestSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
+import { PlanVerdictBox } from "./PlanVerdictBox";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
@@ -83,6 +85,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     cancelTriage,
     spawnSessionFromItem,
     approvePlan,
+    rejectPlan,
     overrideVerdict,
     triggerReReview,
     triggerShipPR,
@@ -100,6 +103,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [error, setError] = useState<string | null>(null);
   /** The action key currently in flight (e.g. "mark_ready"), or null when idle. */
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  /** plan.md's on-disk mtime as last reported by PlanArtifactsSection — threaded into ApprovePlan/RejectPlan's expected_modified_at_unix_ms. */
+  const [planContentMtime, setPlanContentMtime] = useState<number | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<"id" | "link" | null>(null);
@@ -511,7 +516,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             await spawnSessionFromItem(item.id, { force: true });
             break;
           case "approve_plan":
-            await approvePlan(item.id);
+            await approvePlan(item.id, planContentMtime !== null ? BigInt(planContentMtime) : undefined);
             break;
           case "mark_done":
             await transitionStatus(item.id, "done");
@@ -568,7 +573,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, planContentMtime, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler
@@ -825,6 +830,28 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (mountedRef.current) setActionLoading(null);
     }
   }, [item, transitionStatus, spawnSessionFromItem, updateBacklogItem, load, currentFlags, showActionToast]);
+
+  const handleRejectPlan = useCallback(async (reason: string) => {
+    if (!item) return;
+    const toastKey = `${item.id}:reject_plan`;
+    setActionLoading("reject_plan");
+    try {
+      await rejectPlan(item.id, reason, planContentMtime !== null ? BigInt(planContentMtime) : undefined);
+      showActionToast("Changes requested.", "success", toastKey);
+      await load();
+    } catch (e) {
+      showActionToast(e instanceof Error ? e.message : "Reject failed.", "error", toastKey);
+      throw e;
+    } finally {
+      if (mountedRef.current) setActionLoading(null);
+    }
+  }, [item, rejectPlan, load, showActionToast, planContentMtime]);
+
+  const handleRegeneratePlanWithFeedback = useCallback(async () => {
+    if (!item?.planRejectionReason) return;
+    await triggerTriage(item.id, item.planRejectionReason);
+    await load();
+  }, [item, triggerTriage, load]);
 
   const handleGateOverride = useCallback(
     async (reason: string) => {
@@ -1151,6 +1178,30 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           <AcCriteriaList criteria={item.acCriteria} />
         </div>
 
+        {/* Plan content + review verdict render above the Actions row —
+            deliberately outside CollapsibleGroup (unlike every other
+            Collapsible-wrapped section) so the plan is visible, and its
+            Request Changes action reachable, before the Approve Plan button
+            in ActionsSection below — design/ux.md's "never put an
+            approve/reject action above content the user hasn't seen yet". */}
+        {item.planArtifactsPath && (
+          <PlanArtifactsSection
+            item={item}
+            defaultExpanded={planArtifactsExpanded || derivePlanReviewStatus(item) === "pending_review"}
+            onMtimeChange={setPlanContentMtime}
+          />
+        )}
+        {(item.status === "ready" || item.status === "queued" || derivePlanReviewStatus(item) !== "no_plan") && (
+          <PlanVerdictBox
+            status={derivePlanReviewStatus(item)}
+            rejectionReason={item.planRejectionReason}
+            readOnly={terminalState !== null}
+            actionPending={actionLoading === "reject_plan"}
+            onReject={handleRejectPlan}
+            onRegenerateWithFeedback={handleRegeneratePlanWithFeedback}
+          />
+        )}
+
         {/* Actions */}
         <ActionsSection
           item={item}
@@ -1213,10 +1264,6 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           )}
 
           <DescriptionSection item={item} />
-
-          {item.planArtifactsPath && (
-            <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />
-          )}
 
           <VersionControlSection
             item={item}

@@ -60,3 +60,20 @@ globalStyle(`${markdownBody} blockquote`, {
   color: vars.color.textMuted,
   marginLeft: 0,
 });
+
+globalStyle(`${markdownBody} table`, {
+  borderCollapse: "collapse",
+  width: "100%",
+  marginBottom: vars.space["3"],
+});
+
+globalStyle(`${markdownBody} th, ${markdownBody} td`, {
+  border: `1px solid ${vars.color.borderColor}`,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  textAlign: "left",
+});
+
+globalStyle(`${markdownBody} th`, {
+  background: vars.color.cardBackground,
+  fontWeight: 600,
+});

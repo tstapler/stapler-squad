@@ -105,6 +105,8 @@ export interface BacklogItem {
   autoCreatePR: boolean;
   planApproved: boolean;
   planArtifactsPath?: string;
+  planRejectionReason?: string;
+  planRejectedAt?: string;
   acCriteria: AcCriterion[];
   linkedSessions: LinkedSession[];
   notes?: string;
@@ -435,6 +437,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     autoCreatePR: p.autoCreatePr,
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
+    planRejectionReason: p.planRejectionReason || undefined,
+    planRejectedAt: p.planRejectedAt ? new Date(Number(p.planRejectedAt.seconds) * 1000).toISOString() : undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
     linkedSessions,
     notes: p.notes || undefined,
@@ -523,7 +527,12 @@ interface UseBacklogServiceReturn {
   spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string; queued: boolean } | null>;
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
   cancelTriage: (id: string) => Promise<boolean>;
-  approvePlan: (id: string) => Promise<BacklogItem | null>;
+  approvePlan: (id: string, expectedModifiedAtUnixMs?: bigint) => Promise<BacklogItem | null>;
+  rejectPlan: (id: string, reason: string, expectedModifiedAtUnixMs?: bigint) => Promise<BacklogItem | null>;
+  getPlanArtifactContent: (
+    id: string,
+    filename: string
+  ) => Promise<{ content: string; truncated: boolean; sizeBytes: bigint; modifiedAtUnixMs: bigint } | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
   /** Self-service "Ship PR" action — runs the one-shot PR-creation prompt for an item in review with no PR yet. */
@@ -768,14 +777,37 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
-  const approvePlan = useCallback(async (id: string): Promise<BacklogItem | null> => {
+  const approvePlan = useCallback(async (id: string, expectedModifiedAtUnixMs?: bigint): Promise<BacklogItem | null> => {
     if (!clientRef.current) return null;
     try {
-      const resp = await clientRef.current.approvePlan({ itemId: id });
+      const resp = await clientRef.current.approvePlan({ itemId: id, expectedModifiedAtUnixMs: expectedModifiedAtUnixMs ?? 0n });
       return resp.item ? mapBacklogItem(resp.item) : null;
     } catch (err) {
       console.error("[useBacklogService] approvePlan:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  const rejectPlan = useCallback(async (id: string, reason: string, expectedModifiedAtUnixMs?: bigint): Promise<BacklogItem | null> => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.rejectPlan({ itemId: id, reason, expectedModifiedAtUnixMs: expectedModifiedAtUnixMs ?? 0n });
+      return resp.item ? mapBacklogItem(resp.item) : null;
+    } catch (err) {
+      console.error("[useBacklogService] rejectPlan:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
+  const getPlanArtifactContent = useCallback(async (id: string, filename: string) => {
+    if (!clientRef.current) return null;
+    try {
+      const resp = await clientRef.current.getPlanArtifactContent({ itemId: id, filename });
+      return { content: resp.content, truncated: resp.truncated, sizeBytes: resp.sizeBytes, modifiedAtUnixMs: resp.modifiedAtUnixMs };
+    } catch (err) {
+      console.error("[useBacklogService] getPlanArtifactContent:", err);
       throw err;
     }
   }, []);
@@ -1039,6 +1071,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
       triggerTriage,
       cancelTriage,
       approvePlan,
+      rejectPlan,
+      getPlanArtifactContent,
       overrideVerdict,
       triggerReReview,
       triggerShipPR,

@@ -2,6 +2,7 @@
 
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
+import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
 
@@ -56,9 +57,8 @@ export function ActionsSection({
   // review follow-up) — nothing outside this component consumed them, so
   // there was no reason to compute them in the parent and thread them
   // through as props.
-  const canSpawnSession =
-    item.status === "ready" &&
-    (item.skipPlanning || item.planApproved);
+  const planStatus = derivePlanReviewStatus(item);
+  const canSpawnSession = item.status === "ready" && (planStatus === "skipped" || planStatus === "approved");
   // Autonomous mode does its own planning — no plan-approval gate needed.
   const canRunAutonomously = item.status === "ready";
 
