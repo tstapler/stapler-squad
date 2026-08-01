@@ -1,0 +1,20 @@
+{
+  "id": "backlog-plan-verdict-box",
+  "type": "frontend",
+  "name": "Persistent plan-review status card with reject-with-reason and regenerate actions",
+  "component": "PlanVerdictBox",
+  "path": "web-app/src/components/backlog/PlanVerdictBox.tsx",
+  "filePath": "web-app/src/components/backlog/PlanVerdictBox.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "PlanVerdictBox — status rendering > renders the matching icon+label pair for $status",
+    "PlanVerdictBox — status rendering > sets role=status aria-live=polite aria-atomic=true on the root",
+    "PlanVerdictBox — reject form > disables submit while the reason textarea is empty or whitespace",
+    "PlanVerdictBox — reject form > calls onReject with the trimmed reason on submit",
+    "PlanVerdictBox — reject form > returns focus to the Request Changes toggle button on Cancel",
+    "PlanVerdictBox — regenerate button > only renders in changes_requested state",
+    "PlanVerdictBox — regenerate button > shows the persisted rejection reason in changes_requested state"
+  ],
+  "lastModified": "2026-08-01T00:00:00Z"
+}

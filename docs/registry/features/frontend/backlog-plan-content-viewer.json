@@ -1,0 +1,18 @@
+{
+  "id": "backlog-plan-content-viewer",
+  "type": "frontend",
+  "name": "In-app rendering of the SDD plan document as formatted markdown",
+  "component": "PlanArtifactsSection",
+  "path": "web-app/src/components/backlog/detail/PlanArtifactsSection.tsx",
+  "filePath": "web-app/src/components/backlog/detail/PlanArtifactsSection.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "PlanArtifactsSection > renders nothing when there is no plan artifacts path",
+    "PlanArtifactsSection > is collapsed by default and reveals the path once expanded",
+    "PlanArtifactsSection > renders fetched markdown content",
+    "PlanArtifactsSection > shows InlineError on fetch failure",
+    "PlanArtifactsSection > shows a 'newer plan available' notice instead of silently swapping content on background re-fetch mtime drift, and Reload applies it"
+  ],
+  "lastModified": "2026-08-01T00:00:00Z"
+}

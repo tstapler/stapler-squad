@@ -10,7 +10,10 @@
   "testIds": [
     "TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp",
     "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
-    "TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning"
+    "TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning",
+    "TestApprovePlan_ClearsExistingRejectionReason",
+    "TestApprovePlan_StaleContentToken_ReturnsFailedPrecondition",
+    "TestApprovePlan_PlanFileGoneMidRegeneration_FailsClosed"
   ],
-  "lastModified": "2026-07-19T00:00:00Z"
+  "lastModified": "2026-08-01T00:00:00Z"
 }

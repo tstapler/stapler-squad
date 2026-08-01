@@ -1,0 +1,17 @@
+{
+  "id": "backlog:get-plan-artifact-content",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "GetPlanArtifactContent",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "tested": true,
+  "testIds": [
+    "TestGetPlanArtifactContent_HappyPath_ReturnsContentAndMtime",
+    "TestGetPlanArtifactContent_DisallowedFilename_ReturnsInvalidArgument",
+    "TestGetPlanArtifactContent_TraversalAttempt_ReturnsInvalidArgument",
+    "TestGetPlanArtifactContent_MissingFile_ReturnsNotFound"
+  ],
+  "lastModified": "2026-08-01T00:00:00Z"
+}
