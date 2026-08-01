@@ -109,7 +109,7 @@ under-report counts if skipped. See `decisions/ADR-001-subagent-count-cache-cohe
 | Cache coherence between `GetCurrentStatus` and `GetStatusAndIdleInfo` | Both methods write `subagentCount` into every `statusCacheEntry{...}` they `Store()` | Only update `GetStatusAndIdleInfo`; leave `GetCurrentStatus` writing the zero value | Both share the same `atomic.Pointer[statusCacheEntry]` keyed by tail hash. If `GetCurrentStatus` runs first on a tail and stores a stale/zero count, a later `GetStatusAndIdleInfo` cache-*hit* on that same hash would silently under-report the count until the next miss. See ADR-001. |
 | Proto field gating | `subagent_count` set unconditionally in `InstanceToProto` (no `IsControllerActive`/`ClaudeStatus != Unknown` guard) | Gate it behind the same guard as `DetectedStatus`/`DetectedContext` | `InstanceStatusInfo.SubagentCount` is already `0` by construction when the controller is inactive (per the reset-to-0 decision above); proto3 scalars don't distinguish unset from zero, so a guard branch would be a no-op that only adds a conditional for readers to double-check. |
 | Frontend badge rendering | Extend the existing `WAITING_FOR_AGENT` case's chip text in place (`⏳ Waiting for {N} Agents` when `subagentCount > 0`, unchanged `⏳ Waiting for Agents` otherwise) | New standalone `SubagentCountBadge` component matching requirements' illustrative "⊕ N tasks" copy literally | `stack.md` confirms `SubStatusChip`/`SubStatusChip.css.ts` is the established pattern for this exact status; "⊕ N tasks" is illustrative product copy in the requirements doc, not a literal spec. A second component for the same status would duplicate `chipWaitingForAgent` styling for no behavioral gain. |
-| Debounce for count flicker | None added | Minimum-count-hold or only-decrease-after-N-reads smoothing | Matches existing precedent — no debounce exists anywhere in this detection→proto→UI pipeline today for any field, including `DetectedStatus` itself. Flagged in Unresolved Questions, not built, per research's own recommendation. |
+| Debounce for count flicker | None added | Minimum-count-hold, only-decrease-after-N-reads smoothing, or reusing `IdleDetectorConfig.DebounceDelay`'s pattern | Correction (pre-mortem.md top P1): an earlier draft of this row claimed no debounce precedent exists anywhere in this pipeline — that's false. `session/detection/idle.go`'s `IdleDetector` already has a `DebounceDelay` (500ms, `id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay`) that smooths `IdleState` transitions, and `IdleStateInfo` is returned in the *same tuple* as this feature's new count by `GetStatusAndIdleInfo`. The real distinction is narrower than "no precedent exists": `IdleDetector`'s debounce smooths its own `IdleState` field only — nothing in the codebase debounces `StatusDetector`'s `DetectedStatus`/count output, and `IdleDetector` is a structurally separate detector with its own state/config, not a shared mechanism `StatusDetector` could call into without new plumbing. Given the count is cosmetic-only (matches this feature's own accepted risk rating — see requirements.md Risk section), V1 still ships without debounce, but the decision is now stated honestly as "no *StatusDetector*-level precedent, despite one existing one level up in the same tuple" rather than "no precedent at all" — revisit with `IdleDetector`'s `DebounceDelay` as the concrete implementation template if flicker proves annoying in practice (Unresolved Question #4, updated). |
 | Proto field number | `72` (verified: highest existing field on `Session` message is `71` / `workspace_key`, field `61` and `72+` are the only gaps/free slots — `61` skipped historically, so `72` is the first genuinely free number after the highest in-use field) | `57` (as research doc guessed) | Research was stale — `estimated_savings_mb=56`/`hidden=57` already existed at research time and the message has grown since to field `71` (`workspace_key`). Verified directly via `grep -noE "= [0-9]+;" proto/session/v1/types.proto` scoped to the `Session` message before writing this plan. |
 
 *(Migration Plan section intentionally omitted — no database/ent schema changes in this feature.)*
@@ -149,7 +149,8 @@ under-report counts if skipped. See `decisions/ADR-001-subagent-count-cache-cohe
    scrollback truncation/clearing can cause a false reset to 0 while subagents are still
    running; reconnect/resume can show a stale/absent count if the replay window is smaller
    than the time since the last status line; the count can flicker in lockstep with poll
-   cadence (no debounce, matching every other field in this pipeline). None of these are
+   cadence (no `StatusDetector`-level debounce exists to smooth it — see the corrected Pattern
+   Decisions row above; `IdleDetector` has one but it doesn't cover this field). None of these are
    regressions introduced by this feature — they're pre-existing characteristics of the
    regex-over-scrollback detection model this feature reuses as-is.
 
@@ -161,8 +162,13 @@ under-report counts if skipped. See `decisions/ADR-001-subagent-count-cache-cohe
 3. Distinguishing real Task-tool subagents from background shells/monitors — all three
    patterns intentionally collapse into one `subagent_count`; the badge shows one combined
    number in V1, per requirements' explicit scope decision.
-4. Debounce/flicker smoothing — revisit only if flicker proves annoying in real usage; no
-   precedent for it anywhere else in this pipeline today.
+4. Debounce/flicker smoothing — revisit only if flicker proves annoying in real usage. A
+   precedent *does* exist one level up in the same status tuple (`IdleDetector.DebounceDelay`
+   in `session/detection/idle.go`, smoothing `IdleState` transitions) — corrected from an
+   earlier draft that claimed no precedent existed at all (see Pattern Decisions and
+   pre-mortem.md P1). If revisited, `IdleDetectorConfig.DebounceDelay`'s 500ms
+   last-state-change-timestamp pattern is the concrete template to copy for a `StatusDetector`-
+   level equivalent — it does not exist there today and would be new plumbing, not a reuse.
 5. Gating session-close/pause confirmation on a non-zero subagent count ("is it safe to end
    this session?") — noted by research as a real unstated need, out of scope for this feature.
 6. Exact badge copy: this plan resolves it as "extend the existing chip text" (see Pattern
@@ -247,7 +253,10 @@ repo as of this planning pass.
   `(DetectedStatus, string, string, int)`. Add `"strconv"` import. In the `waitingForAgentRegexes`
   loop (currently `for i, regex := range ps.waitingForAgentRegexes { if regex.MatchString(text) { return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description } }`),
   switch to `FindStringSubmatch`, and on match extract `SubagentCount` via
-  `if m := regex.FindStringSubmatch(text); m != nil { count := 0; if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 { count = n }; return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description, count }`
+  `if m := regex.FindStringSubmatch(text); m != nil { count := 0; if len(m) > 1 { if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 { count = n } }; return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description, count }`
+  — the `len(m) > 1` guard (flagged in adversarial-review.md) is defensive insurance against a
+  future pattern edit dropping/reordering the capture group; today's 3 patterns always produce
+  `len(m) == 2` on match, so this guard is currently a no-op, not a behavior change
   (idiom from `session/git/worktree_git.go:372-375`). All other `return` statements in the
   function gain a trailing `, 0`. 1 file, ~5 min.
 - **Task 1.2.1.2** (`session/detection/pattern_set_test.go`): Update the 3 existing calls
@@ -275,12 +284,14 @@ repo as of this planning pass.
 - **Task 1.3.1.2** (`session/detection/detector.go:292`): Change
   `detectWithContextFromString(line string) (DetectedStatus, string)` to
   `(DetectedStatus, string, int)`. Body: `status, patternName, context, count := sd.detectFromText(text, rawPTY); sd.appendDetectionEvent(status, patternName, text); return status, context, count`. 1 file, ~3 min.
-- **Task 1.3.1.3** (`session/detection/detector.go`): Update the *other* 4 call sites of
+- **Task 1.3.1.3** (`session/detection/detector.go`): Update the *other* 3 call sites of
   `detectFromText` that don't yet need the count — `Detect` (line 275), `DetectWithContext`
-  (line 284), the raw-bytes variant (line 298), and `DetectForProgram`'s fallback (line 756) —
-  to unpack the new 4th value with `_` (these public methods keep their existing 2/1-value
-  signatures; count is intentionally NOT threaded further here, since none of them feed the
-  live count pipeline — see Pattern Decisions). 1 file, ~4 min.
+  (line 284), and `DetectForProgram`'s fallback (`bsd.detectFromText`, line 756) — to unpack the
+  new 4th value with `_`. (Correction from an earlier draft: the line-298 call site is inside
+  `detectWithContextFromString` itself, already handled by Task 1.3.1.2 above — it is not a
+  separate 4th call site and must NOT be touched again here.) These 3 public methods keep their
+  existing 2/1-value signatures; count is intentionally NOT threaded further here, since none of
+  them feed the live count pipeline — see Pattern Decisions. 1 file, ~3 min.
 
 **Story 1.3.2 — Multi-line reverse scan (`detectFromLines`) — the delicate one**
 
@@ -335,6 +346,21 @@ repo as of this planning pass.
   `["✻ Waiting for 2 background agents to finish", "1 shell still running"]`, asserting the
   returned count is the winning line's count (per the "winning line wins" decision), not `3`.
   1 file, ~4 min.
+- **Task 1.3.3.3** (`session/detection/detector_test.go`) — added per architecture-review.md
+  CONCERN #2 (Task 1.3.2.1/1.3.2.2's two edited branches — the CR-segment (`\r`-split) inner
+  loop and the `bestStatus == StatusExecuting` override switch — had no count-specific
+  coverage; the reused status/desc-only regression tests can't catch a threading bug isolated
+  to `bestCount`). Add
+  `TestStatusDetector_DetectWithContextAndCountFromLines_should_carryCount_When_lineContainsCRSegments`,
+  feeding a single line with an embedded `\r` where the segment *after* the final `\r` is the
+  one containing `"✻ Waiting for 2 background agents to finish"` (mirrors the CR-collapsing
+  fixture style already used in `detector_test.go`'s screen-overwrite tests), asserting count
+  `2` survives the CR-segment loop. Add
+  `TestStatusDetector_DetectWithContextAndCountFromLines_should_dropCount_When_laterStatusExecutingOverridesWaitingForAgent`,
+  feeding `lines = []string{"✻ Waiting for 3 background agents to finish", "> "}` (a later
+  `StatusReady`/`StatusExecuting`-candidate line overriding the earlier WaitingForAgent match
+  per the existing override switch), asserting `bestCount` resets to `0` alongside the status
+  override rather than leaking the stale `3`. 1 file, ~5 min.
 
 ## Phase 2 — Controller & Status Manager Plumbing
 
@@ -448,7 +474,13 @@ repo as of this planning pass.
     `githubApprovedCount` (`types_pb.ts:275`).
 
 - **Task 3.1.1.1** (`proto/session/v1/types.proto`, after line 239 / `workspace_key = 71;`):
-  Add
+  Before editing, re-run `grep -oE '= [0-9]+;' proto/session/v1/types.proto | ... ` (or open the
+  `Session` message and scan its field numbers directly) to reconfirm `71`/`workspace_key` is
+  still the highest-used field number at implementation time — the plan's own research draft
+  guessed `57` and was later found stale during planning (drifted to `71`/`72` by the time this
+  plan was written), so it can drift again between planning and implementation if other stories
+  land first (per adversarial-review.md CONCERN #2). If the highest field number has changed,
+  use the next free one instead of `72` and update this task's line/value accordingly. Then add
   ```protobuf
   // Count of active background agents/shells/monitors from the WaitingForAgent detector.
   // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
@@ -499,29 +531,57 @@ repo as of this planning pass.
 - **Given/When/Then:**
   - Given `<SubStatusChip subStatus={SubStatus.WAITING_FOR_AGENT} subagentCount={2} />`
   - When it renders
-  - Then `screen.getByText(/2 Agents/)` is present and the chip's `aria-label` remains
-    `"Waiting for agents"` (unchanged, so no `aria-live` announcement spam on count-only churn).
+  - Then `screen.getByText(/2 Agents/)` is present, the chip's `aria-label` remains
+    `"Waiting for agents"` (unchanged — no `aria-live` announcement spam on count-only churn,
+    per design/ux.md AC-4's own reasoning), and its `title` attribute becomes
+    `"Claude is waiting for 2 background agents to finish"` (changed from the static string —
+    corrects a plan/UX contradiction flagged by cross-artifact consistency review: design/ux.md
+    AC-4 requires `title` to carry the count for hover-only sighted users, since `aria-label`
+    intentionally does not).
   - Given `<SubStatusChip subStatus={SubStatus.WAITING_FOR_AGENT} />` (no `subagentCount` prop,
     matching the existing `SubStatusChip.test.tsx` fixture at line 19)
   - When it renders
-  - Then `screen.getByText(/Waiting for Agents/)` is present exactly as before — the existing
-    assertion at `SubStatusChip.test.tsx:26` continues to pass unmodified.
+  - Then `screen.getByText(/Waiting for Agents/)` is present exactly as before, and `title`
+    remains the original static `"Claude is waiting for background agents to finish"` — the
+    existing assertion at `SubStatusChip.test.tsx:26` continues to pass unmodified.
+  - Given `<SubStatusChip subStatus={SubStatus.WAITING_FOR_AGENT} subagentCount={-1} />` (or
+    `NaN`, per design/ux.md AC-3 — an out-of-band value from a hypothetical future upstream
+    parsing bug, not reachable via this plan's own `strconv.Atoi` guard which never produces
+    negative/NaN, but tested here defensively since the chip is the last line of defense)
+  - When it renders
+  - Then it degrades to the plain `"Waiting for Agents"` / unchanged-`title` chip, identical to
+    the no-prop case — never rendering `"-1 Agents"` or `"NaN Agents"`.
 
 - **Task 5.1.1.1** (`web-app/src/components/sessions/SubStatusChip.tsx:18-20`): Add
   `subagentCount?: number;` to `SubStatusChipProps`. 1 file, ~2 min.
 - **Task 5.1.1.2** (`web-app/src/components/sessions/SubStatusChip.tsx:30,34-44`): Update the
   function signature to `({ subStatus, subagentCount }: SubStatusChipProps)`. In the
-  `SubStatus.WAITING_FOR_AGENT` case, change the label from the literal
-  `⏳ Waiting for Agents` to a conditional:
-  `⏳ Waiting for {subagentCount && subagentCount > 0 ? `${subagentCount} ${subagentCount === 1 ? "Agent" : "Agents"}` : "Agents"}`.
-  Leave `className`, `role`, `aria-label`, `title` unchanged. 1 file, ~3 min.
+  `SubStatus.WAITING_FOR_AGENT` case, compute
+  `const hasCount = typeof subagentCount === "number" && Number.isFinite(subagentCount) && subagentCount > 0;`
+  once, then use it for both the label and the title (guarding `NaN`/negative/non-finite per
+  design/ux.md AC-3 — `Number.isFinite` rejects `NaN`, `subagentCount > 0` rejects negatives and
+  `0`): change the label from the literal `⏳ Waiting for Agents` to
+  `⏳ Waiting for {hasCount ? `${subagentCount} ${subagentCount === 1 ? "Agent" : "Agents"}` : "Agents"}`,
+  and change `title="Claude is waiting for background agents to finish"` to
+  `title={hasCount ? `Claude is waiting for ${subagentCount} background agent${subagentCount === 1 ? "" : "s"} to finish` : "Claude is waiting for background agents to finish"}`.
+  Leave `className`, `role`, `aria-label` unchanged (this is the corrected version of this task —
+  an earlier draft said "leave title unchanged," which cross-artifact consistency review
+  flagged as contradicting design/ux.md AC-4; that contradiction is resolved here). 1 file,
+  ~4 min.
 - **Task 5.1.1.3** (`web-app/src/components/sessions/__tests__/SubStatusChip.test.tsx`): Update
   `renderChip` helper to accept an optional `subagentCount` param, or add a second helper.
   Add tests: `"renders count in Waiting for Agents chip when subagentCount > 0"` (assert
-  `screen.getByText(/2 Agents/)`), `"renders singular Agent for subagentCount === 1"` (assert
-  `screen.getByText(/1 Agent\b/)`, not `/Agents/`), `"omits count when subagentCount is 0"`
-  (assert plain `screen.getByText(/Waiting for Agents/)`, matching the existing test's
-  behavior). Do not modify the existing test at line 23-27. 1 file, ~5 min.
+  `screen.getByText(/2 Agents/)` and `title` contains `"2 background agents"`), `"renders
+  singular Agent for subagentCount === 1"` (assert `screen.getByText(/1 Agent\b/)`, not
+  `/Agents/`, and `title` contains `"1 background agent to"`, not `"agents"`), `"omits count
+  when subagentCount is 0"` (assert plain `screen.getByText(/Waiting for Agents/)` and the
+  original static `title`, matching the existing test's behavior), `"omits count when
+  subagentCount is negative"` (`subagentCount={-1}`, same plain-chip assertion — design/ux.md
+  AC-3), `"omits count when subagentCount is NaN"` (`subagentCount={NaN}`, same plain-chip
+  assertion — design/ux.md AC-3), `"renders large counts verbatim without clamping"`
+  (`subagentCount={847}`, assert `screen.getByText(/847 Agents/)` — design/ux.md AC-6, added per
+  cross-artifact consistency review NITPICK #4). Do not modify the existing test at line 23-27.
+  1 file, ~7 min.
 
 ### Epic 5.2 — `SessionRow`
 
