@@ -284,6 +284,15 @@ const (
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 )
 
+// triageCallBudget bounds a single headless triage LLM call (TriggerTriage's own
+// triageCtx). session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle.go)
+// — the periodic sweep's threshold for treating a still-open triage session as
+// dead — MUST stay strictly greater than this, with enough margin that a call
+// finishing at (or timing out at) its own full budget has already ended by the
+// time the sweep's next tick considers it stale; otherwise the sweep and this
+// call's own natural completion/timeout race on every slow call. See BUG-055.
+const triageCallBudget = 30 * time.Minute
+
 // The auto-rework iteration cap bounds how many automated work sessions can be
 // spawned for a single backlog item by the auto-reopen loop. When this ceiling
 // is hit, the item stays in review so a human can inspect it rather than
@@ -1728,6 +1737,18 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	return nil
 }
 
+// IsTriageLive reports whether this process itself still has a headless triage call
+// genuinely in flight for itemID, per the triageInFlight field's doc comment. This is
+// the single source of truth both tombstoneOrphanTriageSessions (in this file) and
+// session.BacklogLifecycleListener's periodic staleness sweep (reconcileOrphanedTriageItems,
+// via the TriageRespawner interface this method satisfies) consult — see BUG-055: before
+// this method existed, that sweep had its own separate, liveness-blind staleness-only gate
+// that could tombstone a call genuinely still running past maxHeadlessTriageSessionStaleness.
+func (s *BacklogService) IsTriageLive(itemID string) bool {
+	_, live := s.triageInFlight.Load(itemID)
+	return live
+}
+
 // syncPRBranchWithMain merges prFixMainBranch into the worktree of item's most recent
 // work session — the branch behind the currently open, failing PR — and pushes the
 // merge when it brings in new commits, so the live PR is resynced with main before the
@@ -1793,9 +1814,8 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //     problem, not a per-call one.
 //   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
 func classifyHeadlessCallError(err error, elapsed time.Duration) string {
-	const timeoutBudget = 30 * time.Minute
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), timeoutBudget-elapsed < 5*time.Second:
+	case errors.Is(err, context.DeadlineExceeded), triageCallBudget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "shutdown"
@@ -1979,7 +1999,7 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
 		defer cancel()
 
 		callStart := time.Now()
@@ -2632,7 +2652,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
 		var live bool
 		if isHeadless {
-			_, live = s.triageInFlight.Load(itemID)
+			live = s.IsTriageLive(itemID)
 		} else {
 			live = s.sessionStopper != nil && s.sessionStopper.IsSessionLive(is.SessionUUID)
 		}
