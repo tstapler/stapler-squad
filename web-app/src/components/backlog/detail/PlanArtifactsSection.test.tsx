@@ -123,4 +123,43 @@ describe("PlanArtifactsSection", () => {
     await waitFor(() => expect(screen.getByTestId("backlog-plan-content-rendered")).toHaveTextContent("Plan v2"));
     expect(notice).not.toBeInTheDocument();
   });
+
+  it("ignores an older in-flight response that resolves after a newer one (out-of-order request guard)", async () => {
+    let resolveFirst!: (v: unknown) => void;
+    const firstCall = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    getPlanArtifactContent.mockReturnValueOnce(firstCall);
+
+    const { rerender } = render(
+      <PlanArtifactsSection
+        item={makeItem({ id: "item-1", planArtifactsPath: "/tmp/plans/item-1.md", updatedAt: "2026-08-01T00:00:00Z" })}
+        defaultExpanded={true}
+      />
+    );
+
+    // Second (newer) request fires and resolves before the first one does.
+    getPlanArtifactContent.mockResolvedValueOnce({
+      content: "# Newer Plan",
+      truncated: false,
+      sizeBytes: 12n,
+      modifiedAtUnixMs: 2000n,
+    });
+    rerender(
+      <PlanArtifactsSection
+        item={makeItem({ id: "item-1", planArtifactsPath: "/tmp/plans/item-1.md", updatedAt: "2026-08-01T00:01:00Z" })}
+        defaultExpanded={true}
+      />
+    );
+    await screen.findByTestId("backlog-plan-content-rendered");
+    expect(screen.getByTestId("backlog-plan-content-rendered")).toHaveTextContent("Newer Plan");
+
+    // The stale first request finally resolves — must not overwrite the newer content.
+    resolveFirst({ content: "# Stale Plan", truncated: false, sizeBytes: 11n, modifiedAtUnixMs: 1000n });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.getByTestId("backlog-plan-content-rendered")).toHaveTextContent("Newer Plan");
+    expect(screen.queryByTestId("plan-content-stale-notice")).not.toBeInTheDocument();
+  });
 });

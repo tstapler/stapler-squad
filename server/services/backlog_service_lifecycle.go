@@ -740,7 +740,11 @@ func (s *BacklogService) RejectPlan(
 
 // isAllowedPlanArtifactFilename restricts GetPlanArtifactContent to the
 // known SDD artifact set — never an arbitrary client-supplied path, even
-// after traversal-cleaning.
+// after traversal-cleaning. Deliberately scoped to what plan-approval-ux's
+// v1 UI actually renders (plan.md only, per plan.md's own Minor note);
+// other real SDD outputs (decisions/ADR-*.md, pre-mortem.md,
+// implementation/plan.md's siblings) are not yet allowlisted — extend this
+// switch alongside whichever UI change first needs to render them.
 func isAllowedPlanArtifactFilename(filename string) bool {
 	switch filename {
 	case "plan.md", "requirements.md", "validation.md":
