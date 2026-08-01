@@ -20,8 +20,74 @@ its terminal output.
 
 ## Goal
 
-Let users define new detectors via a TOML file dropped into
-`~/.stapler-squad/detectors/`, with no code change or rebuild required.
+Let users define new detectors via a TOML file dropped into the app's config
+directory's `detectors/` subfolder (`~/.stapler-squad/detectors/` by
+default; resolved via `config.GetConfigDir()` so it stays isolated under
+`STAPLER_SQUAD_TEST_DIR`/`STAPLER_SQUAD_INSTANCE`, same as every other
+per-instance state path), with no code change or rebuild required.
+
+## Target User
+
+Someone already running stapler-squad against an agent CLI that isn't one of
+the 5 built-ins (`claude`, `gemini`, `aider`, `opencode`, `agy`) — a private
+fork, an internal company tool, or a new public agent CLI that hasn't landed
+a built-in detector yet — who wants working status detection today, not
+after a stapler-squad release cycle. This is explicitly *not* aimed at
+stapler-squad's committers (who can already just add a `binaries/*.go` file
+and open a PR); it's aimed at the class of user for whom that path doesn't
+exist (no write access to the fork, or the agent binary is private/internal
+and can never be upstreamed).
+
+## Success Metric
+
+Since stapler-squad is a personal/small-team desktop tool (`Risk Control` in
+`implementation/plan.md` — "no server fleet, no cohorts"), there is no
+adoption dashboard to instrument against. The falsifiable success signal,
+with a concrete checkpoint so it can actually fail rather than being
+revisited indefinitely: **within 90 days of this feature shipping (checkpoint
+date to be set in the shipping PR/changelog entry), the next non-built-in
+agent CLI the author personally adopts gets a dropped-in
+`~/.stapler-squad/detectors/*.toml` file, with zero commits to this repo.
+(Scoped to the author's own usage, not "any stapler-squad user," because
+there is genuinely no telemetry or usage-reporting mechanism to observe
+other users' behavior — see `Risk Control` — so tracking a population this
+doc cannot instrument would make the metric unfalsifiable in practice, the
+same flaw being fixed here.) A community member independently reporting the
+same outcome — via a backlog item, PR, or issue comment referencing a
+plugin file instead of a `binaries/*.go` change — counts as corroborating,
+bonus evidence, but is not required for the metric to resolve.** Owner of
+the checkpoint: whoever ships this item (self-tracked via a backlog item or
+calendar reminder set at ship time, since there is no PM/analytics team to
+assign it to). If 90 days pass with no new agent onboarded either way, the
+metric is inconclusive (not failed) and the checkpoint rolls to the next
+new-agent event. If a new agent *is* onboarded in that window and
+it still ships as a `binaries/*.go` PR instead of a `.toml` file, the demand
+assumption below was wrong and the feature should not be extended further
+(e.g. the deferred remote-manifest/issue-#178 work should not proceed, and
+the cheaper alternative below should be tried instead).
+
+## Risky Assumption
+
+**Named, not yet validated:** that there exists real (not hypothetical)
+demand for detecting non-built-in agents, sufficient to justify a TOML
+schema, validator, and hot-reload watcher over the alternative of "just PR a
+`binaries/*.go` file, it's a ~40-line addition." The originating backlog
+item cites one GitHub issue as evidence; there is no usage data, user
+request thread, or count of "I run a private agent CLI" reports backing it.
+If this assumption is wrong, the cheaper true minimum is: keep detection
+Go-only, and lower the bar for landing a new built-in detector PR (faster
+review, a documented template) instead of building a parallel
+user-extensible system. **That cheaper alternative was not tried before this
+item was scoped** — this is a conscious sequencing choice, not an oversight:
+the source backlog item already carries a "PLAN ADOPTION" verdict from prior
+triage, and the cheaper alternative (faster-PR-review process) has no code
+artifact this SDD pipeline can produce or validate, so testing it isn't
+something a planning pass can do. It's recorded here so whoever owns the
+Success Metric checkpoint has a concrete fallback in hand if the assumption
+turns out wrong, rather than defaulting to "build more plugin features
+instead." This item proceeds on the assumption as stated in the source
+backlog item (`a8a2505e-ccaf-4120-ac2f-a77582853290`), but the Success
+Metric above is the checkpoint for revisiting it.
 
 ## Scope (this item)
 
@@ -35,8 +101,10 @@ non-goal — this item is the local foundation it would build on.
    - `id` (string, required, unique) — detector identifier.
    - `binary_names` (list of strings, required, non-empty) — process/binary
      names this detector matches.
-   - `version` (string, optional) — plugin schema/content version for the
-     author's own tracking.
+   - `version` (string, optional) — plugin schema version, validated against
+     the set of versions this build supports (currently only `"1"`, or
+     absent); a value naming an unsupported version is rejected at load with
+     a clear error (ADR-003), it is not free-form author metadata.
    - `[[patterns]]` blocks, each with `name`, `regex`, and `status` (must map
      to one of the existing `StatusPatterns` categories in
      `session/detection/pattern_set.go`).

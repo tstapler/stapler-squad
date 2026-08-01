@@ -146,6 +146,32 @@ does not import `session/detection`, so `session/detection` may import
 
 ---
 
+## Hardening Addendum (Triad Review, 2026-08-01)
+
+The engineering-lens triad review independently re-surfaced five of
+`adversarial-review.md`'s open Concerns (not Blockers) as readiness gaps,
+and its second pass flagged that an earlier version of this addendum only
+described the fixes here rather than editing the actual tasks — that has
+been corrected: **each fix below is now written directly into its owning
+task**, not just summarized here. This section is now an index, not the
+source of truth:
+
+| # | Gap | Fixed in |
+|---|-----|----------|
+| 1 | Aggregate regex compile time unbounded within per-pattern caps (6.1s empirically) | Task 1.2.1b (`validatePluginFile`, `maxPluginCompileTime`) + boundary test in Task 1.2.1c |
+| 2 | Seed-file-write failure aborts the whole `InitPlugins` flow | Task 2.3.1a (`EnsurePluginDir`) |
+| 3 | No cap on total plugin file count | Task 1.2.3c (`LoadPluginDir`, `maxPluginFiles`) + test in Task 1.2.3d |
+| 4 | `rebuildSnapshot` can't be cancelled mid-rebuild | Task 2.2.2a (added `ctx` param), call sites updated in Task 2.3.2a (`InitPlugins`) and Task 2.3.3c (`watchLoop`) |
+| 5 | `InitPlugins` has no re-entrancy guard | Task 2.3.2a (`initPluginsOnce sync.Once`) |
+| 6 | Task time estimates (2-5 min) read as human-hour sizing but aren't | Clarification only, no task change: every `##### Task` estimate here is sized for LLM-subagent execution (`subagent-driven-development`), not human wall-clock |
+
+These are additive constraints on tasks already in Phases 1-2, not new
+stories — the Dependency Visualization and critical path are unchanged
+except where noted (`rebuildSnapshot`'s signature gaining a `ctx`
+parameter, item 4, is a same-task change, not a new node in the graph).
+
+---
+
 ## Unresolved Questions
 
 None. The four questions flagged by research are resolved and recorded:
@@ -162,11 +188,24 @@ None. The four questions flagged by research are resolved and recorded:
 - Expose `priority` in the TOML schema? **No** — it is a dead field in
   `PatternSet.compile()`/`MatchLines()`. ADR-003.
 - Does the plugin loader also feed the generic `NewStatusDetector()` /
-  `getDefaultPatterns()` path? **No** — per-binary
-  `DetectForProgram` only. `session/claude_controller.go`,
-  `session/detection/idle.go`, `session/startup_scanner.go`, and
-  `session/review_queue_poller.go` are deliberately untouched. ADR-002
-  §"Scope boundary".
+  `getDefaultPatterns()` path? **Superseded — see below.** ADR-002's original
+  answer ("No — `session/claude_controller.go` deliberately untouched") is
+  reversed by the pre-mortem finding recorded 2026-08-01 (P1 #1,
+  `pre-mortem.md`): `DetectForProgram`/`lookupBinaryDetector` has **zero**
+  production call sites anywhere in the repo (`grep -rln DetectForProgram
+  --include='*.go' .` matches only `detector.go` itself and its own tests).
+  The live status badge a user actually sees is produced by
+  `session/claude_controller.go:221-228`, which constructs a program-agnostic
+  `sd := detection.NewStatusDetector()` (Claude-only `getDefaultPatterns()`)
+  and hands it to `NewIdleDetectorWithDetector`. Without a change there, a
+  user's override or new-binary plugin can load, validate, pass every unit
+  test in `validation.md`, and appear in `DetectorProvenance()` — while never
+  once changing what the web UI shows, which directly falsifies acceptance
+  criterion #1. **Resolution: option (b), this plan's scope is expanded** —
+  see new Epic 2.4 below — rather than (a) deferring to a follow-up item or
+  (c) relabeling the shipped feature as invisible-by-design; the wiring is a
+  ~3-line change at a single, already-identified call site, so deferring it
+  would cost more in follow-up-item overhead than it saves.
 
 ---
 
@@ -208,9 +247,13 @@ None. The four questions flagged by research are resolved and recorded:
                                    DetectForProgram (detector.go:753)
 ```
 
-Critical path: 1.1.1 → 1.1.2 → 1.2.1 → 1.2.3 → 2.1.1 → 2.1.2 → 2.2.1 → 2.2.2 → 2.3.1 → 2.3.2 → 2.3.3.
+Critical path: 1.1.1 → 1.1.2 → 1.2.1 → 1.2.3 → 2.1.1 → 2.1.2 → 2.2.1 → 2.2.2 → 2.3.1 → 2.3.2 → 2.3.3 → 2.4.1.
 Epics 1.1 and 1.2 are pure functions with no globals, so 2.1.1 (`Upsert`) can be
-written in parallel with all of Phase 1.
+written in parallel with all of Phase 1. Epic 2.4 (production wiring) depends
+only on 2.2.1 (`lookupBinaryDetector`) and can land any time after it — it does
+not depend on 2.3 (bootstrap/watcher), since the built-ins-only snapshot from
+package `init()` already makes `lookupBinaryDetector` safe to call before
+`InitPlugins` ever runs.
 
 ---
 
@@ -375,6 +418,17 @@ the offending field, and why, **so that** I can fix it without guessing.
   each entry non-empty; at least one `[[patterns]]`; per pattern: `name`
   non-empty, `status` resolves via `statusField`, `regex` non-empty and
   `regexp.Compile`s.
+- **Wall-clock compile budget (Hardening Addendum item 1, corrected
+  location — not Task 1.1.2b as originally noted, since `regexp.Compile` is
+  called here, in `validatePluginFile`, not in `toStatusPatterns`)**: track
+  elapsed time across the per-pattern `regexp.Compile` loop with
+  `const maxPluginCompileTime = 500 * time.Millisecond`; if cumulative
+  compile time for the file exceeds it, stop compiling further patterns and
+  append `PluginLoadError{Path: path, Field: "patterns", Err:
+  fmt.Errorf("compiling took longer than %s, rejected", maxPluginCompileTime)}`
+  — same log-and-skip contract as every other rejection, verified in
+  `adversarial-review.md`'s empirical case (50 patterns of
+  `(4000-byte-literal){500}` measured at 6.1s).
 - Field names use path expressions: `id`, `version`, `binary_names`,
   `binary_names[1]`, `patterns`, `patterns[0].name`, `patterns[0].status`,
   `patterns[0].regex`.
@@ -385,6 +439,12 @@ the offending field, and why, **so that** I can fix it without guessing.
   `Error()` containing the required substring.
 - One case asserting a file with three separate problems yields three
   `PluginLoadError`s.
+- One case asserting the `maxPluginCompileTime` budget: 50 patterns (at the
+  `maxPatternsPerPlugin` cap) each shaped as `(4000-byte-literal){500}` (at
+  the `maxRegexLength` cap) is rejected on `Field: "patterns"` rather than
+  hanging the test — this is the adversarial-review boundary case
+  (cap-compliant but expensive), generated programmatically with
+  `strings.Repeat`, not a fixture file.
 - Files: `session/detection/plugins_test.go`
 
 ---
@@ -494,8 +554,19 @@ the rest to load, **so that** a typo doesn't disable everything.
   return one `PluginLoadError{Path: dir, Field: "directory"}`.
 - Skip entries that are directories, that don't end in `.toml`, or whose
   `os.Lstat` mode has `os.ModeSymlink` (log the symlink case).
+- **Total-file-count cap (Hardening Addendum item 3)**: `const
+  maxPluginFiles = 200`; after filtering to `.toml` entries (sorted by
+  `os.ReadDir`), process only the first `maxPluginFiles` and append one
+  `PluginLoadError{Path: dir, Field: "file_count", Err: fmt.Errorf("directory
+  contains more than %d .toml files, remainder skipped", maxPluginFiles)}`
+  for the rest. **Field is deliberately `"file_count"`, not `"directory"`**
+  — `rebuildSnapshot` (Task 2.2.2a) treats a `Field == "directory"` error as
+  a fatal "the whole scan failed, keep the previous snapshot" signal; the
+  count cap is a successful, partial scan (200 detectors still load fine)
+  and must not trip that fatal path.
 - Per file: size check (`maxPluginFileSize`) → `os.ReadFile` →
-  `parsePluginFile` → `validatePluginFile` → `toStatusPatterns`.
+  `parsePluginFile` → `validatePluginFile` (now with the compile-time budget
+  from Task 1.2.1b) → `toStatusPatterns`.
 - Track `seenIDs map[string]string` and `seenBinaries map[string]string`
   (value = winning filename) for the two collision passes; `os.ReadDir` already
   returns entries sorted by filename, which is what makes winners deterministic.
@@ -508,6 +579,11 @@ the rest to load, **so that** a typo doesn't disable everything.
 - One test per acceptance criterion above, including the ten-iteration
   determinism loop and the `os.Symlink` case (skip on Windows via
   `runtime.GOOS`).
+- One test for the `maxPluginFiles` cap: write 201 trivially-valid `.toml`
+  files, assert exactly 200 detectors are returned and one
+  `PluginLoadError{Field: "file_count"}` (**not** `"directory"` — see Task
+  1.2.3c's note on why the count cap must use a distinct `Field` from the
+  fatal directory-read-failure case) mentions the count.
 - Files: `session/detection/plugins_test.go`
 
 ---
@@ -667,42 +743,69 @@ all-or-nothing.
 - A rebuild with a valid plugin makes it detectable.
   - *Given* `<dir>/my-agent.toml` declaring binary `my-agent` and a `processing`
     pattern `Thinking\.\.\.`,
-    *When* `rebuildSnapshot(dir)` completes,
+    *When* `rebuildSnapshot(ctx, dir)` completes,
     *Then* `DetectForProgram([]byte("Thinking..."), "my-agent")` returns
     `StatusProcessing` and `DetectorProvenance()["my-agent"]` is that file's path.
 - A directory-level failure leaves the previous snapshot intact.
   - *Given* a successful rebuild has loaded `my-agent`, and the directory is
     then replaced by a regular file (making `os.ReadDir` fail with `ENOTDIR`),
-    *When* `rebuildSnapshot(dir)` runs again,
+    *When* `rebuildSnapshot(ctx, dir)` runs again,
     *Then* it returns an error, `DetectorProvenance()` still contains
     `my-agent`, and no `Store` occurred.
 - Per-file rejections do not block the rest of the rebuild.
   - *Given* a directory with valid `my-agent.toml` and invalid `broken.toml`,
-    *When* `rebuildSnapshot(dir)` runs,
+    *When* `rebuildSnapshot(ctx, dir)` runs,
     *Then* it returns nil error, `my-agent` is detectable, `claude` still
     resolves to the built-in, and one `detector plugin rejected` warning was
     logged naming `broken.toml`.
+- An already-cancelled context short-circuits before any work (Hardening
+  Addendum item 4).
+  - *Given* a `ctx` whose `context.CancelFunc` has already been called,
+    *When* `rebuildSnapshot(ctx, dir)` runs,
+    *Then* it returns `ctx.Err()` immediately, `snapshotWriteMu` is never
+    locked, and no `Store` occurs.
+- The `file_count` cap error does not trip the directory-level fatal path
+  (Hardening Addendum item 3, regression guard for the `Field`
+  disambiguation).
+  - *Given* a directory with 201 valid `.toml` files,
+    *When* `rebuildSnapshot(ctx, dir)` runs,
+    *Then* it returns nil error, 200 of the 201 detectors are published in
+    the new snapshot, and one `PluginLoadError{Field: "file_count"}` was
+    logged rather than the rebuild being skipped.
 **Files**: `session/detection/detector_snapshot.go`, `session/detection/detector_snapshot_test.go`
 
 ##### Task 2.2.2a: Implement `rebuildSnapshot` (~5 min)
-- `func rebuildSnapshot(dir string) error`:
-  1. `snapshotWriteMu.Lock(); defer Unlock()` — held across the whole sequence.
-  2. `LoadPluginDir(dir)`; if the returned errors contain one with
-     `Field == "directory"`, log and `return` **without** storing.
-  3. `log.Warn` each remaining `PluginLoadError`.
-  4. Build `provenance`: every built-in name → `""`, then each plugin's
+- `func rebuildSnapshot(ctx context.Context, dir string) error` — **`ctx`
+  parameter added per Hardening Addendum item 4** (original signature had no
+  `ctx`; threaded from `InitPlugins(ctx)` and `watchLoop`'s already-in-scope
+  `ctx`):
+  1. If `ctx.Err() != nil`, return it immediately, before taking the lock —
+     coarse-grained shutdown check, not mid-file cancellation (a single
+     file's compile is already time-bounded by `maxPluginCompileTime`, Task
+     1.2.1b, so it can't block shutdown indefinitely on its own).
+  2. `snapshotWriteMu.Lock(); defer Unlock()` — held across the whole sequence.
+  3. `LoadPluginDir(dir)`; if the returned errors contain one with
+     `Field == "directory"`, log and `return` **without** storing. (A
+     `Field == "file_count"` error from the Hardening Addendum item 3 cap is
+     *not* this case — it accompanies a successful partial load and falls
+     through to steps 4-7 normally.)
+  4. `log.Warn` each remaining `PluginLoadError`.
+  5. Build `provenance`: every built-in name → `""`, then each plugin's
      `Name()` → its `SourcePath()`.
-  5. `MergedRegistry(DefaultRegistry(), asBinaryDetectors(plugins))`.
-  6. `buildSnapshot(merged, provenance)` → `activeSnapshot.Store(...)`.
-  7. `log.Info("detector plugins loaded", ...)`.
+  6. `MergedRegistry(DefaultRegistry(), asBinaryDetectors(plugins))`.
+  7. `buildSnapshot(merged, provenance)` → `activeSnapshot.Store(...)`.
+  8. `log.Info("detector plugins loaded", ...)`.
 - Note in a comment that the whole directory is rebuilt on every reload rather
   than incrementally patching the changed file: `id`/`binary_names` collision
   detection and override precedence are **directory-global** properties that a
-  per-file update cannot evaluate, and the directory is single-digit sized.
+  per-file update cannot evaluate, and the directory is single-digit sized
+  (now enforced up to `maxPluginFiles`, Task 1.2.3c).
 - Files: `session/detection/detector_snapshot.go`
 
-##### Task 2.2.2b: Tests for `rebuildSnapshot` (~5 min)
-- Three tests, one per acceptance criterion, using `t.TempDir()`.
+##### Task 2.2.2b: Tests for `rebuildSnapshot` (~6 min)
+- Five tests, one per acceptance criterion (including the two Hardening
+  Addendum criteria added above — `rebuildSnapshot_should_returnCtxErr_When_contextAlreadyCancelled`
+  and the 201-file `file_count`-cap case), using `t.TempDir()`.
 - Because `activeSnapshot` is package-global, each test must restore the
   built-ins-only snapshot in `t.Cleanup` via
   `activeSnapshot.Store(buildSnapshot(DefaultRegistry(), nil))` so tests don't
@@ -744,8 +847,15 @@ documented example, **so that** I know where to put a file and what to write.
 **Files**: `session/detection/plugins.go`, `session/detection/plugins_test.go`
 
 ##### Task 2.3.1a: Implement `EnsurePluginDir` (~3 min)
-- `func EnsurePluginDir() (string, error)` — `PluginDir()`, `os.MkdirAll(dir, 0o755)`,
-  then write the example only if `os.Stat` reports it absent.
+- `func EnsurePluginDir() (string, error)` — `PluginDir()`, `os.MkdirAll(dir, 0o755)`.
+  A failure here **is** returned — the directory itself is essential.
+- Then write the example only if `os.Stat` reports it absent. **Per
+  Hardening Addendum item 2: a failure writing the seed file is
+  `log.Warn`'d and swallowed, not returned** — it's cosmetic (requirement
+  #6 says "optionally seeded"), and propagating it as a fatal
+  `EnsurePluginDir` error would abort the caller's subsequent scan+watch
+  steps (Task 2.3.2a) even when the directory itself, and any real
+  pre-existing plugin files in it, are perfectly readable.
 - Files: `session/detection/plugins.go`
 
 ##### Task 2.3.1b: Write the example seed content (~4 min)
@@ -796,13 +906,20 @@ exists before the first scan.
 **Files**: `session/detection/plugins.go`, `main.go`, `session/detection/plugins_test.go`
 
 ##### Task 2.3.2a: Implement `InitPlugins` (~4 min)
-- `func InitPlugins(ctx context.Context) error`:
+- `var initPluginsOnce sync.Once` at package scope (Hardening Addendum item
+  5 — re-entrancy guard).
+- `func InitPlugins(ctx context.Context) error`, body wrapped in
+  `initPluginsOnce.Do(func() { ... })` — a second call in the same process
+  is a documented no-op instead of starting a duplicate watcher:
   1. `if os.Getenv("STAPLER_SQUAD_DISABLE_DETECTOR_PLUGINS") != "" { log.Info(...); return nil }`
   2. `dir, err := EnsurePluginDir()` — on error, `log.Warn` and `return nil`
      (never fatal; a broken plugin directory must not stop the daemon).
-  3. `_ = rebuildSnapshot(dir)` — errors already logged inside.
+  3. `_ = rebuildSnapshot(ctx, dir)` — errors already logged inside; `ctx`
+     threaded per Task 2.2.2a's updated signature.
   4. `StartPluginWatcher(ctx, dir)` — on error, `log.Warn` and continue.
-- Doc comment: call exactly once, from `main.go`, after logging init.
+- Doc comment: safe to call more than once (the `sync.Once` makes later
+  calls no-ops), but intended call site is exactly once, from `main.go`,
+  after logging init.
 - Files: `session/detection/plugins.go`
 
 ##### Task 2.3.2b: Wire the call into `main.go` (~2 min)
@@ -903,8 +1020,9 @@ restart that would kill every live tmux session.
   which is why this loop is new code rather than a reuse.
 - Filter to `filepath.Ext(event.Name) == ".toml"` before arming the timer.
 - Debounce: `time.NewTimer` armed/reset to `pluginReloadDebounce` on each
-  qualifying event; on fire, call `rebuildSnapshot(w.dir)`.
-- Ticker fires `rebuildSnapshot` unconditionally as the safety net.
+  qualifying event; on fire, call `rebuildSnapshot(ctx, w.dir)` (`ctx` is
+  `watchLoop`'s own parameter, already in scope for the `select`).
+- Ticker fires `rebuildSnapshot(ctx, w.dir)` unconditionally as the safety net.
 - `w.watcher.Errors` → `log.Warn("fsnotify error", "err", err)`, matching
   `watcher.go:184`.
 - `defer w.watcher.Close()` guarded for the nil (periodic-only) case.
@@ -931,6 +1049,77 @@ restart that would kill every live tmux session.
   introduces a concurrent write to a structure that was previously
   write-once at package init.
 - Files: none (verification only)
+
+---
+
+### Epic 2.4: Wire plugin-aware detection into the live status path
+**Goal**: Close the gap identified in `pre-mortem.md` P1 #1 — make
+`DetectForProgram`/`lookupBinaryDetector` (Epic 2.2) actually reachable from
+the code path that produces the status badge a user sees, so a loaded
+override or new-binary plugin changes real behavior, not just
+`DetectorProvenance()`. Without this epic, acceptance criterion #1 is false
+for the shipped app even though every test in `validation.md` passes.
+
+#### Story 2.4.1: `ClaudeController.Start` resolves its detector per-program
+**As a** user whose plugin overrides `claude` (or adds a new binary),
+**I want** my session's actual status detector to be the one my plugin
+declares, **so that** the plugin I loaded is the plugin that runs.
+**Acceptance Criteria**:
+- A per-program detector is used when one is registered.
+  - *Given* a loaded `*PluginDetector` claiming binary `my-agent` (or an
+    override of `claude`), and a session whose `Instance.Program` is that
+    name,
+    *When* `ClaudeController.Start` runs,
+    *Then* the `StatusDetector` it constructs was built from
+    `lookupBinaryDetector("my-agent")`'s pattern set, not
+    `getDefaultPatterns()` — verified by asserting the constructed
+    detector's compiled patterns match the plugin's, not Claude's built-in
+    `esc_to_interrupt` pattern.
+- Behavior is unchanged for a program with no matching detector.
+  - *Given* `Instance.Program` is some value with no built-in or plugin
+    detector registered for it (e.g. a bare shell),
+    *When* `ClaudeController.Start` runs,
+    *Then* the constructed `StatusDetector` falls back to today's
+    `getDefaultPatterns()` behavior exactly — this is not a regression for
+    the common case, only an addition for the matched case.
+- A hot-reload while a session is running is picked up by *new* sessions
+  immediately and does not require restarting already-running sessions to
+  benefit from a plugin fix (existing sessions keep whatever detector they
+  were constructed with — no requirement to hot-swap a live session's
+  in-flight `StatusDetector`, since `Start` runs once per session lifecycle).
+**Files**: `session/claude_controller.go`, `session/claude_controller_test.go`
+
+##### Task 2.4.1a: Resolve the detector by program name in `Start` (~4 min)
+- In `session/claude_controller.go`, replace the unconditional
+  `sd := detection.NewStatusDetector()` (currently line ~221) with: look up
+  `cc.instance.Program` via `detection.DetectorForProgram(program string)
+  (*detection.StatusDetector, bool)` — a small new exported wrapper around
+  `lookupBinaryDetector` (package-private today; Epic 2.2 built it
+  unexported since it previously had no external caller) — and fall back to
+  `detection.NewStatusDetector()` when the lookup misses.
+- Keep the existing `sd.SetSessionID(cc.sessionName)` call on whichever
+  detector is chosen, so detection-event attribution keeps working for both
+  paths.
+- Files: `session/claude_controller.go`
+
+##### Task 2.4.1b: Export `DetectorForProgram` from the snapshot (~2 min)
+- Add `func DetectorForProgram(program string) (*StatusDetector, bool)` to
+  `session/detection/detector_snapshot.go` as a thin exported alias of
+  `lookupBinaryDetector` — same nil-guard, same lock-free `Load()`. Keeping
+  `lookupBinaryDetector` itself unexported and used internally by
+  `DetectForProgram` (the method) avoids two names colliding in godoc for
+  what would otherwise be the same lookup exposed twice.
+- Files: `session/detection/detector_snapshot.go`
+
+##### Task 2.4.1c: Tests (~5 min)
+- `session/claude_controller_test.go`: one test per acceptance criterion
+  above, using a fake/injected registry snapshot (via the same
+  `t.Cleanup`-restore pattern Task 2.2.2b established) rather than a real
+  plugin file on disk.
+- `session/detection/detector_snapshot_test.go`: test `DetectorForProgram`
+  directly (thin wrapper, but still a public API surface — cover the hit and
+  miss cases).
+- Files: `session/claude_controller_test.go`, `session/detection/detector_snapshot_test.go`
 
 ---
 
