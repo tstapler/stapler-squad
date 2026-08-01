@@ -2340,6 +2340,26 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		} else {
 			// Shape 2: already ended, item still in idea. Nothing to tombstone —
 			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			if latestTriage.EndReason == "shutdown" { // must match classifyHeadlessCallError's bucket name (server/services/backlog_service_triage.go)
+				// The prior attempt was killed by our OWN graceful shutdown (a routine
+				// deploy restart cancelling s.shutdownCtx mid-call, not a failure of
+				// triage itself — see classifyHeadlessCallError). That carries zero
+				// evidence retrying would fail, so treat it as "never happened" rather
+				// than feeding it into MarkStuck/RemediationDue's exponential backoff
+				// (30m/2h/8h/.../72h, sized for OOM-crash bursts): respawn immediately,
+				// silently, with no remediation-attempt penalty and no user-facing
+				// "may be stuck" notification for what is an expected, self-inflicted event.
+				respawner := l.getTriageRespawner()
+				if respawner != nil {
+					log.InfoLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned by graceful shutdown, respawning immediately with no penalty", item.ID, latestTriage.SessionUUID)
+					go func(itemID string) {
+						if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+							log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn item=%s: %v", itemID, err)
+						}
+					}(item.ID)
+				}
+				continue
+			}
 			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
 		}
 

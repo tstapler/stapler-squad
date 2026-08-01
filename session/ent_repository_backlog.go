@@ -116,6 +116,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		CommitCountSinceSpawn:    is.CommitCountSinceSpawn,
 		StartedAt:                is.StartedAt,
 		EndedAt:                  is.EndedAt,
+		EndReason:                is.EndReason,
 		LastCommitAt:             is.LastCommitAt,
 		LastFileTouchAt:          is.LastFileTouchAt,
 		LastProgressAt:           is.LastProgressAt,

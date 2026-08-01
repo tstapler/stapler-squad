@@ -1193,6 +1193,59 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	assert.Len(t, notifier.calls, 1)
 }
 
+// TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown
+// guards the fix for the 2026-08-01 live incident (docs/bugs/fixed/BUG-053): a
+// routine service restart (e.g. `make install-service`) cancels shutdownCtx,
+// which kills any in-flight triage call via classifyHeadlessCallError's
+// "shutdown" bucket — a self-inflicted, zero-evidence event, not a real
+// triage failure. Before this fix, shape 2 treated a shutdown-caused orphan
+// identically to a genuine failure: MarkStuck + a "may be stuck" notification
+// + RemediationDue's exponential backoff (30m/2h/8h/24h/72h, sized for OOM
+// bursts) before the next retry. This must instead respawn immediately with
+// no remediation-attempt penalty and no alarming notification.
+func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Shutdown-orphaned triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "shutdown"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched immediately for a shutdown-caused orphan")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a shutdown-caused orphan must not consume a remediation attempt or create a stuck-state row")
+	assert.Empty(t, notifier.titles(), "a shutdown-caused orphan is expected/self-inflicted and must not trigger a \"may be stuck\" notification")
+}
+
 // TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists
 // guards the latestTriage selection added alongside the two-shape detector
 // above: an item can accumulate more than one triage-role ItemSession (e.g. an

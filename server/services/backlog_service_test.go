@@ -2961,6 +2961,59 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+// TestTriggerTriage_AlreadyExists_LiveHeadlessSession guards the fix for BUG-054:
+// before triageInFlight existed, a headless triage session with EndedAt == nil was
+// *always* treated as dead (see the removed isHeadless-implies-notLive branch this
+// test replaces the assumption behind), so retriggering triage for an item whose
+// headless call was genuinely still running silently tombstoned the live session in
+// the DB and started a fully redundant duplicate LLM call — confirmed live
+// 2026-08-01 (docs/bugs/fixed/BUG-054): a manual "Retry now" click raced a still-running
+// auto-respawned triage call, producing a real "concurrent modification detected"
+// error when the older call finally finished and tried to also transition idea->ready.
+// A headless triage session must now be treated as live exactly when this process's
+// own triageInFlight record says so.
+func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "live headless triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// Open headless triage session, exactly like the genuinely-still-running case:
+	// no EndedAt, headless-prefixed UUID.
+	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-11111111-live-0000-000000000000",
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, isErr)
+
+	// Simulate the goroutine actually still running this call, the way TriggerTriage
+	// itself would have set it before launching that goroutine.
+	svc.triageInFlight.Store(item.ID, struct{}{})
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr, "a live headless triage call must block re-trigger instead of being silently tombstoned and duplicated")
+	var connErr *connect.Error
+	require.ErrorAs(t, trigErr, &connErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connErr.Code())
+
+	// The original session must NOT have been tombstoned.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a genuinely live headless session must not be marked ended")
+}
+
 // ─── TriggerSync / GetSyncHistory ──────────────────────────────────────────────
 
 // fakeSourcePlugin is a minimal session.ItemSourcePlugin stub for TriggerSync tests.

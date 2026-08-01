@@ -76,6 +76,11 @@ func EndedAt(v time.Time) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldEndedAt, v))
 }
 
+// EndReason applies equality check predicate on the "end_reason" field. It's identical to EndReasonEQ.
+func EndReason(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldEndReason, v))
+}
+
 // AcSnapshot applies equality check predicate on the "ac_snapshot" field. It's identical to AcSnapshotEQ.
 func AcSnapshot(v string) predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldEQ(FieldAcSnapshot, v))
@@ -369,6 +374,81 @@ func EndedAtIsNil() predicate.ItemSession {
 // EndedAtNotNil applies the NotNil predicate on the "ended_at" field.
 func EndedAtNotNil() predicate.ItemSession {
 	return predicate.ItemSession(sql.FieldNotNull(FieldEndedAt))
+}
+
+// EndReasonEQ applies the EQ predicate on the "end_reason" field.
+func EndReasonEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEQ(FieldEndReason, v))
+}
+
+// EndReasonNEQ applies the NEQ predicate on the "end_reason" field.
+func EndReasonNEQ(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNEQ(FieldEndReason, v))
+}
+
+// EndReasonIn applies the In predicate on the "end_reason" field.
+func EndReasonIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIn(FieldEndReason, vs...))
+}
+
+// EndReasonNotIn applies the NotIn predicate on the "end_reason" field.
+func EndReasonNotIn(vs ...string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotIn(FieldEndReason, vs...))
+}
+
+// EndReasonGT applies the GT predicate on the "end_reason" field.
+func EndReasonGT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGT(FieldEndReason, v))
+}
+
+// EndReasonGTE applies the GTE predicate on the "end_reason" field.
+func EndReasonGTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldGTE(FieldEndReason, v))
+}
+
+// EndReasonLT applies the LT predicate on the "end_reason" field.
+func EndReasonLT(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLT(FieldEndReason, v))
+}
+
+// EndReasonLTE applies the LTE predicate on the "end_reason" field.
+func EndReasonLTE(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldLTE(FieldEndReason, v))
+}
+
+// EndReasonContains applies the Contains predicate on the "end_reason" field.
+func EndReasonContains(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContains(FieldEndReason, v))
+}
+
+// EndReasonHasPrefix applies the HasPrefix predicate on the "end_reason" field.
+func EndReasonHasPrefix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasPrefix(FieldEndReason, v))
+}
+
+// EndReasonHasSuffix applies the HasSuffix predicate on the "end_reason" field.
+func EndReasonHasSuffix(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldHasSuffix(FieldEndReason, v))
+}
+
+// EndReasonIsNil applies the IsNil predicate on the "end_reason" field.
+func EndReasonIsNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldIsNull(FieldEndReason))
+}
+
+// EndReasonNotNil applies the NotNil predicate on the "end_reason" field.
+func EndReasonNotNil() predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldNotNull(FieldEndReason))
+}
+
+// EndReasonEqualFold applies the EqualFold predicate on the "end_reason" field.
+func EndReasonEqualFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldEqualFold(FieldEndReason, v))
+}
+
+// EndReasonContainsFold applies the ContainsFold predicate on the "end_reason" field.
+func EndReasonContainsFold(v string) predicate.ItemSession {
+	return predicate.ItemSession(sql.FieldContainsFold(FieldEndReason, v))
 }
 
 // AcSnapshotEQ applies the EQ predicate on the "ac_snapshot" field.

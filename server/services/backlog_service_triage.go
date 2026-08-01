@@ -1842,8 +1842,9 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
-	// genuinely still running. Headless sessions are always orphaned if not ended
-	// (no live tmux session to check) — tombstone them and allow re-trigger.
+	// genuinely still running — via s.triageInFlight for a headless call (this
+	// process's own in-memory liveness record, see that field's doc comment) or via
+	// sessionStopper for a live tmux session — and tombstone it only if it is not.
 	existingSessions, listErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	if listErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list triage sessions: %w", listErr))
@@ -1851,6 +1852,25 @@ func (s *BacklogService) TriggerTriage(
 	if err := s.tombstoneOrphanTriageSessions(ctx, req.Msg.ItemId, item.Status, existingSessions); err != nil {
 		return nil, err
 	}
+
+	// 3a-i. Atomic check-and-set, closing the TOCTOU window between the check above
+	// (which only sees already-persisted session rows) and this item's new
+	// ItemSession row being created below: two concurrent TriggerTriage calls for the
+	// same item (a manual "Retry now" racing the periodic reconciliation sweep, say)
+	// could otherwise both pass the check above before either has written its row.
+	// Mirrors spawnInFlight's identical guard on SpawnSessionFromItem above. Cleared
+	// via triageStarted below if this call returns before actually launching the
+	// goroutine, or via the goroutine's own defer once it does launch.
+	if _, alreadyInFlight := s.triageInFlight.LoadOrStore(req.Msg.ItemId, struct{}{}); alreadyInFlight {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("triage session already running for item %s", req.Msg.ItemId))
+	}
+	triageStarted := false
+	defer func() {
+		if !triageStarted {
+			s.triageInFlight.Delete(req.Msg.ItemId)
+		}
+	}()
 
 	// 3b. If re-triggering on a "ready" item, move it back to "idea".
 	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
@@ -1939,7 +1959,12 @@ func (s *BacklogService) TriggerTriage(
 	itemRepoPath := item.RepoPath
 	isID := is.ID
 	iteration := nextIteration
+	triageStarted = true
 	go func() {
+		// Clears the triageInFlight entry set at 3a-i above no matter how this
+		// goroutine exits, so the item is never left permanently un-retriggerable.
+		defer s.triageInFlight.Delete(itemID)
+
 		// Acquire concurrency semaphore (max 8 concurrent triage calls).
 		select {
 		case s.triageSem <- struct{}{}:
@@ -1998,9 +2023,10 @@ func (s *BacklogService) TriggerTriage(
 			// the 2026-07-24 stuck-triage incident. errType classifies the error
 			// into a few high-signal buckets so a grep over historical logs can
 			// answer "how often do we hit each failure mode" without parsing %v text.
+			errType := classifyHeadlessCallError(callErr, callElapsed)
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
-				itemID, callElapsed.Round(time.Second), classifyHeadlessCallError(callErr, callElapsed), callErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+				itemID, callElapsed.Round(time.Second), errType, callErr)
+			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
 			return
 		}
 
@@ -2596,12 +2622,21 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		if is.Role != string(session.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
-		// Headless triage sessions have no live in-memory instance; treat as orphaned.
-		// Sessions older than maxTriageSessionAge are also treated as orphaned to prevent
-		// a hung or leaked session from blocking re-trigger indefinitely.
+		// A headless triage session has no live tmux instance to query — check this
+		// process's own triageInFlight record instead (see that field's doc comment;
+		// BUG-054). A non-headless (tmux-backed) session falls back to sessionStopper
+		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
+		// regardless, to prevent a genuinely hung or leaked call from blocking
+		// re-trigger indefinitely.
 		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
-		notLive := isHeadless || isStale || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
+		var live bool
+		if isHeadless {
+			_, live = s.triageInFlight.Load(itemID)
+		} else {
+			live = s.sessionStopper != nil && s.sessionStopper.IsSessionLive(is.SessionUUID)
+		}
+		notLive := isStale || !live
 		statusAdvanced := itemStatus != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
 			_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
