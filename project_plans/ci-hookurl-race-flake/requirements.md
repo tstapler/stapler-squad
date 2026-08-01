@@ -53,8 +53,11 @@ introduced by that PR's diff.
 ## Acceptance Criteria
 
 1. The CI `test` job's hook-URL/MCP-URL integration tests do not intermittently time out
-   under normal CI load (verified by N consecutive green CI runs post-fix, or a documented
-   equivalent stress-test result — exact N and method decided during planning).
+   under normal CI load. **Resolved during planning (this project's own Success Metric, not
+   borrowed from the sibling project below): N = 20 consecutive green CI runs of the `test`
+   job post-fix on `main`/PRs, OR, as a pre-merge stand-in when 20 CI runs haven't yet
+   accumulated, a local stress-test result of `-count=10` runs of both named tests under
+   artificial CPU contention (the repro command added in Task 3.1.1) passing consistently.**
 2. Any change to test/CI configuration (timeout values, `-race` scope, job parallelism,
    runner sizing) is captured with a rationale, not a bare number bump.
 3. If the fix narrows or removes `-race` coverage for any package, that trade-off is
@@ -63,9 +66,21 @@ introduced by that PR's diff.
 4. The hook-injection pipeline's actual latency under `-race` + concurrent-suite load is
    measured (not assumed) before deciding between "raise the timeout further" and "make
    the pipeline faster/more deterministic."
-5. No source behavior in `session/services/approval_handler.go` or the hook-injection path
+5. No source behavior in `server/services/approval_handler.go` or the hook-injection path
    is changed unless the investigation shows the pipeline itself (not just test
    infrastructure) is the bottleneck.
+
+## Success Metrics
+
+- **N = 20** consecutive green CI runs of the `test` job (`.github/workflows/build.yml`) on
+  `main`/PRs post-fix, with zero recurrences of
+  `TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort` or
+  `TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPortZeroThenSessionCreated`
+  timing out. This is this project's own decision (see AC #1) — not inherited from the
+  sibling `flaky-hook-url-tests` project, though it happens to match that project's number.
+- Pre-merge stand-in (since 20 CI runs can't accumulate before merge): the stress-repro
+  command from plan.md Task 3.1.1 (`-count=10` under artificial `yes`-loop CPU contention)
+  passing consistently across at least 2 separate local invocations.
 
 ## Out of Scope
 

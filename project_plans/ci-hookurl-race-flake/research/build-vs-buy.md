@@ -86,6 +86,16 @@ hook-URL/MCP-URL tests, rather than inventing a custom runner. This directly sat
 ("documented rationale, not a bare number bump") and AC #3 (explicit about what's narrowed) since
 the existing convention's rationale is already documented at each of its other call sites.
 
+**Not adopted for `ci-hookurl-race-flake`** — evaluated and closed, not left open: see
+`implementation/plan.md`'s Pattern Decisions table, "Test-isolation mechanism for the two
+flaky tests specifically" row. Short version: tagging these two tests wouldn't narrow
+*package*-level `-race` coverage (this recommendation's own framing above), but it would move
+these two tests' own coverage contribution from the gating invocation into the `-tags
+integration` advisory lane (`continue-on-error: true`) — a real, narrow regression `-p 1`
+avoids entirely by achieving the same contention-reduction goal with zero coverage-gating
+impact. If a future reviewer wants to revisit this, argue against that specific trade-off, not
+just this section's own AC #2/#3 framing in isolation.
+
 ---
 
 ## 3. Flaky test retry tooling

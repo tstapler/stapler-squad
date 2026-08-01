@@ -54,6 +54,18 @@ written here** — this plan cites and reuses
 `project_plans/flaky-hook-url-tests/decisions/ADR-001-p1-flag-over-isolated-invocation.md`
 by reference; do not create a competing `ADR-001` under this project's `decisions/`.
 
+### Required reading before Phase 5 (pre-mortem P1 #1)
+
+This project's own `implementation/adversarial-review.md` and `implementation/architecture-review.md`
+(both verdict **CONCERNS**, no blockers) found 4 remaining Concerns not yet folded into this
+plan's prose. The two cheaply-actionable ones are folded directly into this plan below (see
+the "PR description must-includes" list at the top of Step 4, and Task 3.1.3's revised framing
+under Epic 3). **Before starting implementation, skim both review files in full** — the
+build-vs-buy rebuttal is now addressed in the Pattern Decisions table below; the remaining
+minors (task-sizing units meaning authoring effort not wall-clock, `gotestsum` being a
+local-only non-committed dependency) are lower-value but worth a glance so nothing is
+silently re-litigated during implementation.
+
 ### Line-reference verification (2026-08-01)
 
 Every file:line reference in the adopted plan/ADR was re-verified against the current tree
@@ -148,6 +160,7 @@ line numbers re-verified current as of 2026-08-01 — see table above.)*
 | Poll mechanism in `server_integration_test.go` | `require.Eventually` (matches sibling `approval_handler_integration_test.go` pattern; testify already a direct dep) | Hand-rolled `for time.Now().Before(deadline) { ...; time.Sleep(x) }` loop (status quo) | This file is the *only* holdout of this pattern in the area; build-vs-buy analysis (in `flaky-hook-url-tests/research/build-vs-buy.md`) found zero justification to keep it — no cycle risk, no missing capability `require.Eventually` lacks for this use case. **Scope note**: Tasks 1.2.2/1.2.3 touch `waitForLiveInstance`/`waitForResolvedAddr`, which are *not* implicated in the reported flakiness. These two tasks are pure mechanism swaps — no budget, poll-interval, or behavior change, only replacing hand-rolled loops with an equivalent library call. If in doubt, defer Tasks 1.2.2/1.2.3 and ship only 1.2.1/1.2.4 (the two helpers actually on Race B's critical path) without weakening the fix. |
 | `waitForPermissionRequestHookCommand`'s timeout value | `60*time.Second` at both call sites (lines 338, 409), matching the helper's own doc comment (lines 458-462) | (a) Leave at 30s (status quo); (b) widen `waitForLiveInstance` too | (a) is the exact stale bug this ticket exists to fix — the comment already documents the justification, it was simply never applied. (b) is unjustified: no documented mismatch found for `waitForLiveInstance`'s budget specifically, and widening it too would grow the tests' runtime budget beyond what's "demonstrably needed." |
 | CI contention mitigation mechanism | Add `-p 1` to the existing single gating invocation (`.github/workflows/build.yml:155-157`) | Isolate this file into a second, still-gating invocation with a merged `-coverprofile` (via `go tool covdata` or text concatenation) | Heavier lever than it looks: no `gocovmerge` dependency exists (violates "no new external dependencies"), profile-merge correctness for two `mode: atomic` outputs is unverified here, and it duplicates job-setup steps (tmux build/cache, Go setup) as an ongoing drift risk. `-p 1` achieves the same "less CPU contention" goal with a single flag, zero new invocations, and zero coverage-merge surface. See ADR-001 (cited below, not duplicated). |
+| Test-isolation mechanism for the two flaky tests specifically | Leave both tests untagged, gated by the same `-race` invocation as today (mitigated only by `-p 1` + the 60s budget) | Apply this project's own `research/build-vs-buy.md` recommendation: tag the two tests `//go:build integration` (or a `testing.Short()` guard), matching the repo's existing convention for slow/integration tests elsewhere | **Direct rebuttal, not just an appeal to ADR-001's authority** (folding in adversarial-review.md's Concern #4): `build-vs-buy.md` is right that tagging these two tests wouldn't narrow *package*-level `-race` coverage — the `server` package as a whole would remain fully gated, so AC #3's literal "for any package" wording is technically satisfied either way. But tagging moves *these two tests'* own coverage contribution out of the gating invocation and into the `-tags integration` advisory lane (`build.yml:244-255`, `continue-on-error: true`) — a real, if narrow, regression in what actually gets verified on every PR, which is the trade-off AC #3 requires being explicit about. It is not adopted because `-p 1` achieves the contention-reduction goal with **zero** coverage-gating impact of any kind, narrow or otherwise — a strictly better trade than accepting even a two-test regression to gain the same CPU-contention relief. `build-vs-buy.md` §2 is cross-referenced with this rebuttal so a reader of that file alone also sees the decision was made and closed, not left open for independent re-litigation. |
 | Where isolation/gating lives | Same single `go test -race -coverprofile=coverage.out` command, `-p 1` appended | Move to the `-tags integration` advisory lane (`build.yml:244-255`) | That lane is `continue-on-error: true` and does not feed `coverage.out`/the 60%-threshold gate — moving these tests there stops them from gating merges. |
 | Determinism source for "hook injected" | Continue polling the file (`require.Eventually` wrapping the existing read-and-parse logic) | Add a new production `EventBus` "hook injected" signal | No such signal exists today; adding one is new production surface for a test-only need (`.claude/rules/interface-pollution-checklist.md`'s "speculative interface"/"forwarding-only wrapper" smells), and it still wouldn't remove `waitForLiveInstance`'s poll (no analogous "tmux session is live" event exists either) — so it only partially solves the problem at a disproportionate cost. |
 | Scope boundary vs. Race A | Leave `sessionCreateTimeout` and all poll intervals inside `session/tmux/tmux.go`'s readiness-check loop untouched | Tune `sessionCreateTimeout` or the tmux-side poll interval "while we're in here" | That's Race A's territory (the already-mitigated early-exit hang), a causally-chained but *decoupled* failure mode from Race B. Touching it risks reintroducing/interacting with a race this ticket is not scoped to re-verify. |
@@ -216,6 +229,12 @@ Omitted — no schema or data changes. This is a test-file and CI-workflow-only 
   post-merge recurrence of `TestServer_should_Write*HookURL` flakiness should first be checked
   against the already-known, explicitly-out-of-scope `testSocketOnce` shared-tmux-socket
   mechanism before reflexively re-tuning timeouts or CI topology again.
+- **AC #4 evidence gate** (pre-mortem P1 #3): Task 2.1.2b is off the merge-blocking critical
+  path by design (it's diagnostic-only), but that must not become "AC #4 silently never
+  verified." The PR is not ready-to-ship until `implementation/validation.md`'s AC #4 evidence
+  row is actually filled in with Task 2.1.2b's measured latency distribution (or an explicit
+  note of why it was skipped) — a listed task existing in `plan.md` is not the same as its
+  evidence existing in `validation.md`.
 
 ---
 
@@ -315,6 +334,22 @@ without blocking on sequencing relative to each other.
 *(Reproduced in full from `flaky-hook-url-tests/implementation/plan.md` Step 4, attributed;
 task numbering and file:line references unchanged and re-verified current as of 2026-08-01.)*
 
+### PR description must-includes (closes AC #2's enforcement gap — adversarial-review.md Concern #3)
+
+Prose instructions buried in individual tasks below are easy for a shipping session to forget.
+The PR that lands this fix **must include these in its description**, not just in this plan:
+
+- [ ] Task 2.1.2's measured wall-clock delta (median of ≥3 runs each way) for `-p 1`, stated
+  as an explicit accepted trade-off, not silently absorbed.
+- [ ] Task 3.1.3's one-sentence pointer to `testSocketOnce` as the presumptive cause of any
+  post-merge recurrence, so a future investigator sees it without needing to find the source
+  comment first.
+- [ ] This project's own Success Metric (`requirements.md` → Success Metrics): N=20
+  consecutive green CI runs is the post-merge closure bar for AC #1; state how it will be
+  tracked (GitHub Actions run history for `main`/PRs, no new dashboard).
+- [ ] Task 2.1.2b's latency-distribution finding (or an explicit note that it wasn't run before
+  merge and why) — see the Risk Control sentence below.
+
 ### Epic 1: Deterministic, correctly-budgeted test-side waits
 
 #### Story 1.1: Fix the stale 30s→60s call-site bug
@@ -395,6 +430,17 @@ task numbering and file:line references unchanged and re-verified current as of 
 - Detail: Confirm (a) whether the `test` job runs concurrently with other jobs in the same workflow run, and (b) whether any workflow-level `concurrency:` group serializes runs in a way relevant here. **Already answered by this project's own research** (`research/architecture.md` §3, `research/stack.md` §2, re-verified directly in this plan's Provenance section above): `build`, `install-check`, `benchmark-gate`, `web-build-smoke` all declare `needs: prepare` (not `needs: test`) — except `benchmark-gate`, which declares `needs: [prepare, test]` and only runs on `main` push, so it is serialized *after* `test`, not concurrent with it. This task is effectively closed by that research; retain it in the breakdown only as a checklist item confirming the finding is carried into the shipping PR description, not as unfinished investigative work.
 - **Given/When/Then**: Given `build.yml`'s job headers (re-verified: `prepare` at line 47, `web-build-smoke` at 78, `test` at 119, `build` at 270, `install-check` at 323, `benchmark-gate` at 362), when this task inspects the job graph, then it confirms `build`/`install-check`/`web-build-smoke` run concurrently with `test` on separate GitHub-hosted VMs (not competing for `test`'s own 4 vCPUs) and `benchmark-gate` runs strictly after `test` — ruling out same-VM cross-job contention as a factor, while noting that GitHub's account-level concurrent-job quota (a separate, org-level resource this item cannot inspect or change) remains a theoretically possible but unverifiable residual contributor.
 
+### Epic 3.0 — AC #1 closure note
+
+This project's own `requirements.md` "Success Metrics" section (added during Phase 4
+validation, resolving a cross-artifact-review BLOCKER) decides AC #1's previously-open
+"exact N and method": **N = 20 consecutive green `test`-job CI runs post-merge**, with the
+stress-repro command (Task 3.1.1, `-count=10` under artificial contention) as the pre-merge
+stand-in since 20 CI runs can't accumulate before merge. No new task is needed to "do" this —
+it is an observation criterion satisfied by the existing CI run history post-merge — but the
+shipping PR description must state this explicitly (N=20, tracked via GitHub Actions run
+history for `main`/PRs) so AC #1's closure is auditable rather than left implicit.
+
 ### Epic 3: Regression check / observability artifact
 
 #### Story 3.1: Document a reusable stress-repro command
@@ -423,7 +469,12 @@ task numbering and file:line references unchanged and re-verified current as of 
 - Size: 2 min
 - Detail: Append one sentence to the existing doc comment: "See the repro-command comments above the two call sites for a local stress-repro of the load-sensitive failure mode this budget accounts for." Do not rewrite the rest of the comment — it remains accurate after Task 1.1.1 (the call sites now do pass 60s, so "callers pass 60s" is no longer stale).
 
-**Task 3.1.3** — Pre-register `testSocketOnce` as the presumptive cause of any post-merge recurrence (pre-mortem P1 fix — the one item both adopted reviews treat as address-before-implementation).
+**Task 3.1.3** — Pre-register `testSocketOnce` as the presumptive *diagnosis aid* for any post-merge recurrence (pre-mortem P1 fix — the one item both adopted reviews treat as address-before-implementation).
+- **Framing note** (adversarial-review.md Concern #2): this task is a diagnosis-time aid, not
+  risk control in the sense of changing recurrence probability or impact — it only helps if a
+  future engineer notices the recurrence, finds this comment or the PR description, and reads
+  it before reflexively re-tuning the timeout again. It is listed under Epic 3
+  (observability) rather than relabeled as "Risk Control" for that reason.
 - Files: `server/server_integration_test.go` (comment near `waitForTmuxTeardown`, lines 503-526), shipping PR description (not a file, but a required step)
 - Size: 2 min
 - Detail: Because this plan explicitly does NOT fix the already-documented `testSocketOnce` shared-tmux-socket contention, a post-merge recurrence of `TestServer_should_Write*HookURL` flakiness could be misdiagnosed as "the 60s/`-p 1` fix didn't work" rather than "a different, already-known, out-of-scope mechanism is still live" — triggering a reflexive further timeout bump the file's own comments already warn against. Add one sentence next to `waitForTmuxTeardown`'s existing comment: "If `TestServer_should_Write*HookURL` flakes again after this fix, check whether it's this shared-tmux-socket contention before re-tuning timeouts or CI topology — file a follow-up ticket for that root cause instead of widening a budget further." Include the same sentence in the shipping PR description.
