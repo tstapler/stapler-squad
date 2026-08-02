@@ -22,9 +22,15 @@ But `requirements.md`'s FR6 — the actual, ratified acceptance-criteria text fo
 > - callers whose session role is not `work`
 > - callers whose session is not linked to the target item
 
-No fourth condition ("active review session exists") appears. And FR5, a separate, explicit
-requirement, only makes sense if `report_duplicate` *can* succeed while a review session is
-already active:
+No fourth condition ("active review session exists") appears. (This decision does not lean on
+FR6's list being *exhaustive of every refusal `report_duplicate` may have* — the plan separately,
+correctly adds a source-status whitelist refusal that also isn't one of FR6's three literal
+items, justified independently by FR1/FR3's CAS-safety logic, not by FR6's text. The point here
+is narrower: FR6 is the specific, ratified list of conditions this requirement asks for, and
+"active review session" was never one of them — silence on a specific condition FR2 imposes on
+a *different* tool is not itself evidence that condition was meant to carry over.) And FR5, a
+separate, explicit requirement, only makes sense if `report_duplicate` *can* succeed while a
+review session is already active:
 
 > If a review-role session is already active for the item when `report_duplicate` succeeds,
 > the success text must say the duplicate evidence will land on the next review pass...

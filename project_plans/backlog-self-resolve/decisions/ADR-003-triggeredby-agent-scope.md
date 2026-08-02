@@ -1,7 +1,7 @@
 # ADR-003: `TriggeredByAgent` Applies to Both `request_review` Source-Status Paths
 
 ## Status
-Proposed
+Accepted (2026-08-02, ratified by item owner). Per the review-flagged "grep check before merging" in Consequences: the check was run during architecture review and confirmed low-risk (every `TriggeredBySystem` hit is a write site or doc comment, no read-side filter) — Phase 5's implementer should still re-run it against the code as it stands at implementation time, since this is not a substitute for that.
 
 ## Context
 

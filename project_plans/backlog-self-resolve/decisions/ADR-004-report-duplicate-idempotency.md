@@ -1,7 +1,7 @@
 # ADR-004: `report_duplicate` Idempotency — Reject, Don't Merge, a Differing Second Ref
 
 ## Status
-Proposed
+Accepted (2026-08-02, ratified by item owner)
 
 ## Context
 
