@@ -1,11 +1,13 @@
 # Adversarial Review: backlog-self-resolve
 
 **Date**: 2026-08-02
-**Verdict**: BLOCKED
+**Verdict**: CONCERNS (updated — see "Iteration 2 Re-Verification" below, which confirms the
+blocker below is resolved and the overall verdict is CONCERNS, not BLOCKED. This top section is
+kept verbatim as the original iteration-1 finding for traceability.)
 
-## Blockers
+## Blockers (resolved — see Iteration 2 Re-Verification §1 below)
 
-- [ ] **FR10's "eventually surfaces through the existing stuck-item notification path(s)" claim is
+- [x] **FR10's "eventually surfaces through the existing stuck-item notification path(s)" claim is
   false for the scenario the requirement is actually about — code-verified, not inferred.** The plan's
   Observability Plan and pitfalls.md §6 both assert FR10 is satisfied entirely by the pre-existing
   `pr_pending_no_pr` detector (`reconcilePRPendingWithoutPRItems`,
