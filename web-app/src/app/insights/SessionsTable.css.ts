@@ -67,9 +67,6 @@ export const thRight = style([
 export const sortableTh = style({
   cursor: "pointer",
   display: "inline-block",
-});
-
-export const sortableThFocus = style({
   selectors: {
     "&:focus-visible": {
       outline: `2px solid ${vars.color.primary}`,

@@ -24,7 +24,7 @@ import {
   unpricedLabel,
   cacheHitLabel,
 } from "./ModelBreakdownChart.css";
-import { fmtPct } from "./insightsFormatters";
+import { fmtPct, computeCacheHitRate } from "./insightsFormatters";
 
 interface Props {
   models: ModelBreakdown[];
@@ -53,18 +53,13 @@ interface DataPoint {
 function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
   return [...models]
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
-    .map((m, i) => {
-      const input = Number(m.totalInputTokens);
-      const cacheRead = Number(m.cacheReadTokens);
-      const denom = input + cacheRead;
-      return {
-        family: m.modelFamily || "unknown",
-        cost: m.estimatedCostUsd,
-        color: PALETTE[i % PALETTE.length],
-        pricingUnavailable: m.pricingUnavailable,
-        cacheHitRate: denom === 0 ? 0 : cacheRead / denom,
-      };
-    });
+    .map((m, i) => ({
+      family: m.modelFamily || "unknown",
+      cost: m.estimatedCostUsd,
+      color: PALETTE[i % PALETTE.length],
+      pricingUnavailable: m.pricingUnavailable,
+      cacheHitRate: computeCacheHitRate(Number(m.totalInputTokens), Number(m.cacheReadTokens)),
+    }));
 }
 
 function fmtDollar(v: number): string {

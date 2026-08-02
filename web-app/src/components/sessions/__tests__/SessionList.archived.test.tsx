@@ -10,7 +10,10 @@ import { timestampNow } from "@bufbuild/protobuf/wkt";
 // "Show Archived" checkbox under test here since it lives inside ActionBar).
 
 jest.mock("@connectrpc/connect", () => ({
-  createClient: jest.fn(() => ({})),
+  createClient: jest.fn(() => ({
+    getInsightsSummary: jest.fn(async () => ({ sessions: [] })),
+    watchInsights: async function* () {},
+  })),
 }));
 
 jest.mock("@connectrpc/connect-web", () => ({

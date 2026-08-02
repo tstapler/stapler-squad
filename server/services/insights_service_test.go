@@ -591,6 +591,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 
 	sender := &fakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
 	done := make(chan error, 1)
 	go func() { done <- svc.watchInsights(runCtx, sender) }()
 
@@ -673,6 +674,7 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 
 	sender := &fakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
+	t.Cleanup(runCancel)
 	done := make(chan error, 1)
 	go func() { done <- svc.watchInsights(runCtx, sender) }()
 

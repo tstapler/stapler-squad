@@ -28,7 +28,6 @@ import {
   virtualContainer,
   clickableRow,
   sortableTh,
-  sortableThFocus,
 } from "./SessionsTable.css";
 import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
@@ -136,15 +135,19 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
   }, [sessions, searchText, modelFilter, showOrphans, fuse, sortCol, sortAsc]);
 
   const handleSortClick = useCallback((col: SortColumn) => {
-    setSortCol((prevCol) => {
-      if (prevCol === col) {
-        setSortAsc((prevAsc) => !prevAsc);
-        return col;
-      }
+    // Reads sortCol from closure rather than nesting setSortAsc inside
+    // setSortCol's updater — a state setter called as a side effect of
+    // another setter's functional update breaks under React.StrictMode's
+    // double-invocation of updater functions (the toggle would fire twice
+    // and cancel out). Mirrors app/backlog/page.tsx's independent-calls
+    // precedent for the same sort-toggle shape.
+    if (sortCol === col) {
+      setSortAsc((prevAsc) => !prevAsc);
+    } else {
+      setSortCol(col);
       setSortAsc(false);
-      return col;
-    });
-  }, []);
+    }
+  }, [sortCol]);
 
   const sortIndicator = useCallback(
     (col: SortColumn) => (sortCol === col ? (sortAsc ? " ↑" : " ↓") : " ↕"),
@@ -171,7 +174,7 @@ export function SessionsTable({ sessions, onSessionClick, backlogIndex }: Props)
       aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}
     >
       <span
-        className={`${sortableTh} ${sortableThFocus}`}
+        className={sortableTh}
         role="button"
         tabIndex={0}
         onClick={() => handleSortClick(col)}

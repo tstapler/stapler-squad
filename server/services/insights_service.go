@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -561,17 +562,20 @@ func (s *InsightsService) GetSessionTurnTimeline(
 		return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{}), nil
 	}
 	turns := make([]*sessionv1.TurnTokenStat, 0, len(r.TurnTimeline))
-	for _, t := range r.TurnTimeline {
+	for _, turn := range r.TurnTimeline {
 		stat := &sessionv1.TurnTokenStat{
-			Model:               t.Model,
-			InputTokens:         t.Input,
-			OutputTokens:        t.Output,
-			CacheCreationTokens: t.CacheCreation,
-			CacheReadTokens:     t.CacheRead,
-			ToolNames:           t.ToolNames,
+			Model:               turn.Model,
+			InputTokens:         turn.Input,
+			OutputTokens:        turn.Output,
+			CacheCreationTokens: turn.CacheCreation,
+			CacheReadTokens:     turn.CacheRead,
+			// Cloned defensively: turn.ToolNames aliases the TokenStore's
+			// cached ParseResult backing array; the outbound proto message
+			// must not share that slice.
+			ToolNames: slices.Clone(turn.ToolNames),
 		}
-		if !t.Timestamp.IsZero() {
-			stat.Timestamp = timestamppb.New(t.Timestamp)
+		if !turn.Timestamp.IsZero() {
+			stat.Timestamp = timestamppb.New(turn.Timestamp)
 		}
 		turns = append(turns, stat)
 	}

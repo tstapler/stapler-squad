@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
 import type { BacklogIndexEntry } from "@/lib/hooks/useBacklogService";
@@ -29,7 +29,7 @@ import {
   backlogLink,
   outlierCell,
 } from "./SessionDetailDrawer.css";
-import { fmtCost, fmtPct, fmtDate, shortId } from "./insightsFormatters";
+import { fmtCost, fmtPct, fmtDate, shortId, computeCacheHitRate } from "./insightsFormatters";
 import { useSessionTurnTimeline } from "@/lib/hooks/useInsightsService";
 import {
   sortTurnsByTokensDesc,
@@ -43,13 +43,6 @@ interface Props {
   backlogEntry?: BacklogIndexEntry;
 }
 
-function turnCacheHitRate(t: { inputTokens: bigint; cacheReadTokens: bigint }): number {
-  const input = Number(t.inputTokens);
-  const cacheRead = Number(t.cacheReadTokens);
-  const denom = input + cacheRead;
-  return denom === 0 ? 0 : cacheRead / denom;
-}
-
 export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
   useEffect(() => {
     if (!session) return;
@@ -61,11 +54,10 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
   }, [session, onClose]);
 
   const { turns } = useSessionTurnTimeline(session?.conversationId);
+  const sortedTurns = useMemo(() => sortTurnsByTokensDesc(turns), [turns]);
+  const outlierThreshold = useMemo(() => computeOutlierThreshold(turns), [turns]);
 
   if (!session || typeof document === "undefined") return null;
-
-  const sortedTurns = sortTurnsByTokensDesc(turns);
-  const outlierThreshold = computeOutlierThreshold(turns);
 
   const displayId = session.sessionId || session.conversationId;
 
@@ -185,7 +177,9 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
                           {t.outputTokens.toString()}
                         </span>
                       </td>
-                      <td className={toolsTdRight}>{fmtPct(turnCacheHitRate(t))}</td>
+                      <td className={toolsTdRight}>
+                        {fmtPct(computeCacheHitRate(Number(t.inputTokens), Number(t.cacheReadTokens)))}
+                      </td>
                       <td className={toolsTd}>{t.toolNames.join(", ") || "—"}</td>
                     </tr>
                   );

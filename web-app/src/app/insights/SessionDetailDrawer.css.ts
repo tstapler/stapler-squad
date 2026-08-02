@@ -153,7 +153,7 @@ export const outlierCell = style({
   background: vars.color.warningBg,
   color: vars.color.warningText,
   borderRadius: vars.radii.sm,
-  padding: "0 4px",
+  padding: `0 ${vars.space[1]}`,
 });
 
 export const skillList = style({
