@@ -6,9 +6,12 @@ import { srOnly } from "./LiveRegion.css";
 interface LiveRegionProps {
   message: string;
   politeness?: "polite" | "assertive";
+  /** Task 4.2.2.1 — defaults to "status" (backward compatible: no existing
+   *  real consumer relied on a specific role before this option existed). */
+  role?: "status" | "alert";
 }
 
-export function LiveRegion({ message, politeness = "polite" }: LiveRegionProps) {
+export function LiveRegion({ message, politeness = "polite", role = "status" }: LiveRegionProps) {
   const [currentMessage, setCurrentMessage] = useState(message);
 
   useEffect(() => {
@@ -19,7 +22,7 @@ export function LiveRegion({ message, politeness = "polite" }: LiveRegionProps) 
 
   return (
     <div
-      role="status"
+      role={role}
       aria-live={politeness}
       aria-atomic="true"
       className={srOnly}

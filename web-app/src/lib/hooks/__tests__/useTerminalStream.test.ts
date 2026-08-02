@@ -82,16 +82,23 @@ jest.mock('@/lib/terminal/MessageQueue', () => {
   return { MessageQueue };
 });
 
-// Sub-hooks — minimal stubs so useTerminalStream can render
+// Sub-hooks — minimal stubs so useTerminalStream can render. The factory
+// captures the `onDrop` callback useTerminalStream passes in (Task 4.1.1.2)
+// so tests can invoke it directly to simulate useTerminalFlowControl's own
+// silent-drop call site without needing to exercise sendInput's real guard.
+let lastFlowControlOnDrop: (() => void) | undefined;
 jest.mock('../useTerminalFlowControl', () => ({
-  useTerminalFlowControl: () => ({
-    sendInput: jest.fn(),
-    resize: jest.fn(),
-    requestScrollback: jest.fn(),
-    sendFlowControl: jest.fn(),
-    requestFullResync: jest.fn(),
-    getIsResyncingRef: jest.fn().mockReturnValue({ current: false }),
-  }),
+  useTerminalFlowControl: (options: { onDrop?: () => void }) => {
+    lastFlowControlOnDrop = options.onDrop;
+    return {
+      sendInput: jest.fn(),
+      resize: jest.fn(),
+      requestScrollback: jest.fn(),
+      sendFlowControl: jest.fn(),
+      requestFullResync: jest.fn(),
+      getIsResyncingRef: jest.fn().mockReturnValue({ current: false }),
+    };
+  },
 }));
 
 jest.mock('../useTerminalMetrics', () => ({
@@ -1042,5 +1049,89 @@ describe('useTerminalStream — connection epoch guard', () => {
     // Attempt B's connected state must not have been clobbered back to
     // false by the stale disconnect() continuation.
     expect(result.current.isConnected).toBe(true);
+  });
+});
+
+// Task 4.1.1.3 (pre-mortem.md Failure #3, P2) — `reportDrop`'s same-React-
+// batch merge guard. `InputDropBadge`'s own coalescing (Epic 4.2) is tested
+// separately via sequential controlled re-renders and would not catch a
+// same-batch undercounting bug at this hook's layer.
+describe('useTerminalStream — drop reporting', () => {
+  const DROP_OPTIONS = {
+    ...BASE_OPTIONS,
+    autoConnect: false,
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+    resetMockQueueInstances();
+    lastFlowControlOnDrop = undefined;
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('reportDrop_should_mergeSameBatchOccurrences_When_flowControlDropAndReconnectCloseFireInOneBatch', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(DROP_OPTIONS));
+
+    await act(async () => { result.current.connect(); }); // attempt A
+
+    const instances = getMockQueueInstances();
+    expect(instances).toHaveLength(1);
+    const instanceA = instances[0];
+    // Simulate 2 buffered-but-unsent input messages sitting on instance A's
+    // queue at the moment it gets superseded.
+    instanceA.pushedCount = 2;
+
+    expect(lastFlowControlOnDrop).toBeInstanceOf(Function);
+
+    // Both drop call sites fire within the SAME synchronous batch: the
+    // captured onDrop (simulating useTerminalFlowControl's Task 4.1.1.2 call
+    // site, count=1) and immediately after, in the same callback, a
+    // reconnect that runs the close-before-install path against instance A
+    // (count=2) — before React flushes any intervening render.
+    await act(async () => {
+      streamA.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+      lastFlowControlOnDrop?.();
+      result.current.connect(); // attempt B — closes instance A synchronously
+      streamB.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+    });
+
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    expect(instanceA.close).toHaveBeenCalled();
+    expect(result.current.droppedInputEvent).not.toBeNull();
+    // Combined: 1 (flow-control drop) + 2 (reconnect-close drop) = 3, not
+    // just the last-called site's own count.
+    expect(result.current.droppedInputEvent?.count).toBe(3);
+
+    // Regression guard for the merge-reset half: a subsequent, separately-
+    // timed reportDrop call (in the next act() block, after the first
+    // batch's render has committed) produces a FRESH droppedInputEvent
+    // reflecting only its own count — proving dropBatchRef was reset after
+    // the first batch's commit rather than accumulating indefinitely.
+    await act(async () => {
+      lastFlowControlOnDrop?.();
+    });
+
+    expect(result.current.droppedInputEvent?.count).toBe(1);
+
+    streamB.end();
   });
 });

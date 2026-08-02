@@ -360,4 +360,28 @@ describe("TerminalOutput reconnect banner", () => {
 
     expect(handleManualReconnect).toHaveBeenCalledTimes(1);
   });
+
+  // AC-VIS-1 (design/ux.md) — InputDropBadge must render inside the
+  // terminal panel's own chrome (styles.terminal), never as a page-level
+  // toast/modal.
+  it("TerminalOutput_should_renderInputDropBadge_InsideTerminalChrome_When_droppedInputEventSet", () => {
+    const mockFn = useTerminalStream as jest.Mock;
+    mockFn.mockReturnValue(
+      makeStreamMock({
+        isConnected: true,
+        droppedInputEvent: { count: 1, at: Date.now() },
+      })
+    );
+
+    const { container } = renderTerminal();
+
+    const alertEl = container.querySelector('[role="alert"]');
+    expect(alertEl).not.toBeNull();
+    expect(alertEl).toHaveAttribute("aria-live", "assertive");
+
+    // Not portaled to document.body outside the rendered tree, and not
+    // nested inside any dialog.
+    expect(alertEl?.closest('[role="dialog"]')).toBeNull();
+    expect(container.contains(alertEl)).toBe(true);
+  });
 });

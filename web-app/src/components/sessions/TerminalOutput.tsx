@@ -43,6 +43,7 @@ const SHIFT_KEY_MAP: Record<string, string> = {
 };
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useVisibilityResync } from "./useVisibilityResync";
+import { InputDropBadge } from "./InputDropBadge";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useSplitContainerSize } from "@/lib/hooks/useSplitContainerSize";
@@ -453,7 +454,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, droppedInputEvent } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -1650,6 +1651,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         </div>
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
+        <InputDropBadge droppedInputEvent={droppedInputEvent} />
         {showReconnectBanner && !isHardFailed && (
           <div className={styles.reconnectingBanner}>
             Reconnecting terminal…

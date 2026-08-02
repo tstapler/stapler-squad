@@ -13,6 +13,17 @@ export interface UseTerminalFlowControlOptions {
   pushMessageRef: React.MutableRefObject<((msg: TerminalData) => void) | null>;
   isConnectedRef: React.MutableRefObject<boolean>;
   onError?: (error: Error) => void;
+  /**
+   * Called when `sendInput` silently discards a keystroke because the
+   * connection is already known-disconnected (Task 4.1.1.2) — the same
+   * class of input loss as a superseded MessageQueue's drop-on-close, just
+   * caught one layer earlier. Only `sendInput`'s guard is wired to this;
+   * the other five near-identical `!pushMessageRef.current ||
+   * !isConnectedRef.current` guards in this file (resize/scrollback/resync/
+   * flow-control) guard non-keystroke messages and are deliberately left
+   * unwired — out of scope for this "phantom keystroke" ticket.
+   */
+  onDrop?: () => void;
 }
 
 export interface UseTerminalFlowControlResult {
@@ -37,6 +48,7 @@ export function useTerminalFlowControl({
   pushMessageRef,
   isConnectedRef,
   onError,
+  onDrop,
 }: UseTerminalFlowControlOptions): UseTerminalFlowControlResult {
   // Resync state machine refs
   const isResyncingRef = useRef(false);
@@ -140,7 +152,10 @@ export function useTerminalFlowControl({
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
   const sendInput = useCallback((input: string) => {
-    if (!pushMessageRef.current || !isConnectedRef.current) return;
+    if (!pushMessageRef.current || !isConnectedRef.current) {
+      onDrop?.();
+      return;
+    }
 
     const encoder = new TextEncoder();
     const inputBytes = encoder.encode(input);
@@ -192,7 +207,7 @@ export function useTerminalFlowControl({
       }
     };
     sendChunk();
-  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError]);
+  }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, onDrop]);
 
   const resize = useCallback((cols: number, rows: number, force: boolean = false) => {
     if (!pushMessageRef.current || !isConnectedRef.current) {

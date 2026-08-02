@@ -100,6 +100,35 @@ describe('useTerminalFlowControl', () => {
 
       expect(pushMessageFn).not.toHaveBeenCalled();
     });
+
+    // Task 4.1.1.2 — sendInput's silent drop (keystroke rejected because the
+    // caller already knows it's disconnected) fires the same onDrop signal
+    // useTerminalStream wires into its reportDrop/droppedInputEvent state.
+    it('sendInput_should_callOnDrop_When_disconnected', () => {
+      const onDrop = jest.fn();
+      const { options, pushMessageFn, isConnectedRef } = createTestOptions({ onDrop });
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendInput('hello');
+      });
+
+      expect(onDrop).toHaveBeenCalledTimes(1);
+      expect(pushMessageFn).not.toHaveBeenCalled();
+    });
+
+    it('sendInput_should_notCallOnDrop_When_connected', () => {
+      const onDrop = jest.fn();
+      const { options } = createTestOptions({ onDrop });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+
+      act(() => {
+        result.current.sendInput('hello');
+      });
+
+      expect(onDrop).not.toHaveBeenCalled();
+    });
   });
 
   describe('resize', () => {

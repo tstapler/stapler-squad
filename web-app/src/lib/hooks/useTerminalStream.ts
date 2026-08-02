@@ -33,6 +33,22 @@ export type TerminalState =
   | 'RESIZING'
   | 'FETCHING_SCROLLBACK';
 
+/**
+ * A single reported occurrence of dropped-but-unsent terminal input (Task
+ * 4.1.1.1). This hook reports one occurrence per call site; it does not
+ * accumulate a running total across *distinct* occurrences — that
+ * cross-render coalescing is `InputDropBadge`'s job (Epic 4.2).
+ */
+export type DroppedInputEvent = { count: number; at: number };
+
+/**
+ * Smart constructor for a drop report. Returns null for count <= 0 so a
+ * domain-illegal "0 keystrokes not sent" event can never be constructed.
+ */
+function recordDrop(count: number): DroppedInputEvent | null {
+  return count > 0 ? { count, at: Date.now() } : null;
+}
+
 interface UseTerminalStreamOptions {
   baseUrl: string;
   sessionId: string;
@@ -71,6 +87,8 @@ interface TerminalStreamResult {
   requestFullResync: (urgent?: boolean) => void;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
+  /** Task 4.1.1.1 — most recent single drop occurrence, or null. */
+  droppedInputEvent: DroppedInputEvent | null;
 }
 
 export function useTerminalStream({
@@ -94,6 +112,9 @@ export function useTerminalStream({
   // Task 4.1.1 — Terminal state machine (R1.4)
   const [terminalState, setTerminalState] = useState<TerminalState>('DISCONNECTED');
   const [isHardFailed, setIsHardFailed] = useState(false);
+  // Task 4.1.1.1 — surfaces a single drop occurrence at a time; InputDropBadge
+  // (Epic 4.2) owns turning a sequence of these into a running total.
+  const [droppedInputEvent, setDroppedInputEvent] = useState<DroppedInputEvent | null>(null);
 
   const messageQueueRef = useRef<MessageQueue | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -135,6 +156,42 @@ export function useTerminalStream({
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
+  // ---- Drop reporting (Task 4.1.1.1/4.1.1.3) ----
+
+  // Same-React-batch merge guard (pre-mortem.md Failure #3, P2): the three
+  // drop call sites below (reconnect-close, disconnect()'s close, and
+  // useTerminalFlowControl's onDrop) can fire within the same synchronous
+  // React 18 batch (e.g. a reconnect's queue-close and a rejected keystroke
+  // landing in the same tick). Two setState calls to the same state in one
+  // batch mean only the *last* value survives to the next render — a naive
+  // `setDroppedInputEvent(dropEvent)` at each call site would silently drop
+  // the earlier occurrence's count. dropBatchRef accumulates same-batch
+  // occurrences; the effect below resets it once the batch's single
+  // resulting render has committed, so the *next* distinct occurrence starts
+  // its own count rather than accumulating onto a stale one.
+  const dropBatchRef = useRef<DroppedInputEvent | null>(null);
+
+  const reportDrop = useCallback((count: number) => {
+    const event = recordDrop(count);
+    if (!event) return;
+    const merged = dropBatchRef.current
+      ? { count: dropBatchRef.current.count + event.count, at: event.at }
+      : event;
+    dropBatchRef.current = merged;
+    setDroppedInputEvent(merged);
+  }, []);
+
+  useEffect(() => {
+    // Runs after the batch that produced this droppedInputEvent has
+    // committed — safe to reset here because any same-batch reportDrop()
+    // calls have already run and merged synchronously before this effect
+    // fires. Skips the `droppedInputEvent === null` mount case (nothing to
+    // reset).
+    if (droppedInputEvent !== null) {
+      dropBatchRef.current = null;
+    }
+  }, [droppedInputEvent]);
+
   // ---- Compose sub-hooks ----
 
   // pushMessageRef bridges the connection's messageQueue to flow control dispatch.
@@ -155,6 +212,11 @@ export function useTerminalStream({
     pushMessageRef,
     isConnectedRef,
     onError,
+    // Task 4.1.1.2 — sendInput's silent drop (keystroke rejected because the
+    // hook already knows it's disconnected) is the same class of input loss
+    // as a superseded queue's drop-on-close; funnel it through the same
+    // reportDrop signal, one reported occurrence per rejected sendInput call.
+    onDrop: () => reportDrop(1),
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -199,6 +261,7 @@ export function useTerminalStream({
       // forward into the new queue.
       const droppedCount = messageQueueRef.current?.close() ?? 0;
       if (droppedCount > 0) {
+        reportDrop(droppedCount);
         console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on reconnect`, { sessionId });
       }
       messageQueueRef.current = new MessageQueue();
@@ -383,7 +446,7 @@ export function useTerminalStream({
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows]);
+      flowControl, metrics, handleError, initialCols, initialRows, reportDrop]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -416,8 +479,14 @@ export function useTerminalStream({
     isDisconnectingRef.current = true;
 
     if (messageQueueRef.current) {
-      messageQueueRef.current.close();
+      // An explicit user-initiated disconnect with pending input must fire
+      // the same drop signal as a superseded reconnect's close (Task 4.1.1.1).
+      const droppedCount = messageQueueRef.current.close();
       messageQueueRef.current = null;
+      if (droppedCount > 0) {
+        reportDrop(droppedCount);
+        console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on disconnect`, { sessionId });
+      }
     }
 
     await new Promise<void>((resolve) => {
@@ -444,7 +513,7 @@ export function useTerminalStream({
       textDecoderRef.current = new TextDecoder();
       scrollbackDecoderRef.current = new TextDecoder();
     }
-  }, [getIsResyncingRef]);
+  }, [getIsResyncingRef, reportDrop, sessionId]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
@@ -519,5 +588,6 @@ export function useTerminalStream({
     requestFullResync: flowControl.requestFullResync,
     markResyncComplete: flowControl.markResyncComplete,
     markPaneResponseReceived: flowControl.markPaneResponseReceived,
+    droppedInputEvent,
   };
 }
