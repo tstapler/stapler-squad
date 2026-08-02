@@ -87,7 +87,11 @@ neither the `DIRTY`/`CONFLICTING` check nor `prReadyToMergeSolo`'s `MERGEABLE` c
 
 ## Concerns
 
-- [ ] **Story 3.2.2's narrative line still states the old, incorrect `(bool, error)`-shaped
+- [x] **RESOLVED, re-verified.** Story 3.2.2's narrative line (plan.md:311) now reads
+  "returns a single `error` whose classification is `errors.Is`-checkable (a different shape
+  than `verifyPR`'s `(bool, error)`...)" — consistent with the Domain Glossary and Task 3.2.2a.
+
+- ~~Story 3.2.2's narrative line still states the old, incorrect `(bool, error)`-shaped
   contract, contradicting the corrected Domain Glossary/Task text three lines away.** Checked
   for the "consistent single-`error`-return contract" claim across all four places the plan
   discusses `verifyGitHubRefExists`: the Domain Glossary (plan.md:52) and Task 3.2.2a's code

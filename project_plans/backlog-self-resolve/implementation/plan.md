@@ -11,7 +11,7 @@ discovers is a duplicate of an already-shipped PR/issue/commit.
 ADR-002 (GitHub ref verification: dispatcher + HTTP-only + status classification),
 ADR-003 (`TriggeredByAgent` applies to both `request_review` source-status paths),
 ADR-004 (`report_duplicate` idempotency: reject, don't merge, a differing second ref),
-ADR-002 (`report_duplicate` does not gain FR2's active-reviewer refusal)
+ADR-005 (`report_duplicate` does not gain FR2's active-reviewer refusal — **correction, consistency check**: this line previously mislabeled the ADR as ADR-002, duplicating the label already used two lines above; the Pattern Decisions table and Unresolved Questions section always had this correct as ADR-005)
 
 Source: `project_plans/backlog-self-resolve/requirements.md` (FR1–FR10) +
 `research/{stack,features,architecture,pitfalls,build-vs-buy,ux}.md`. Grounding facts below
@@ -362,8 +362,8 @@ Phase 4: Tests (needs everything above)
 - After the transition + notes persistence, call `itemSessions, lsErr := h.storage.ListItemSessions(ctx, itemID)`. **Correction (adversarial review)**: the original design discarded `lsErr` via `_`; on a storage error `itemSessions` would be `nil`, `services.HasActiveReviewSession(nil)` returns `false` (it just ranges over an empty slice), and the handler would emit the *optimistic* "Reviewer notified" text — precisely the claim FR5 says must never be made without evidence. Instead: `activeReview := lsErr != nil || services.HasActiveReviewSession(itemSessions)` — treat a `ListItemSessions` failure the same as "an active session might exist," defaulting to the conservative "next review pass" message (the transition itself already succeeded either way; only the wording is affected, so this fails safe without failing the call).
 - Files: `server/mcp/tools_backlog.go`
 
-##### Task 3.3.3b: Trigger the review gate unconditionally, log, return (~3 min)
-- `if h.reviewTrigger != nil { h.reviewTrigger.TriggerReviewForSession(callerUUID) }` — called unconditionally (matching `request_review`'s existing unconditional call; `TriggerReviewForSession`'s own internal idempotency, not this handler's concern, is what makes this safe when a review session is already active — consistent with how the generalized `request_review`'s own `pr_pending` path, once FR2's guard lets a call through in the normal no-active-reviewer case, also calls this unconditionally). Log via `log.InfoLog.Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s transitioned to review", callerUUID, itemID, duplicateRef)`. Return the branched success text from Task 3.3.3a.
+##### Task 3.3.3b: Trigger the review gate only when no reviewer is already active, log, return (~4 min)
+- **Corrected per pre-mortem P1**: the original design called `h.reviewTrigger.TriggerReviewForSession(callerUUID)` unconditionally, on the claim that `TriggerReviewForSession` is internally idempotent against an already-active reviewer. That claim is false — verified directly, not inferred: `TriggerReviewForSession` (`session/backlog_lifecycle.go:1114`) → `spawnReviewGate` (`:1208`) → `ReviewGateRunner.Run` (`session/review_gate.go:77-354`) contains no check anywhere for an existing active review-role `ItemSession` before calling `SpawnReviewSession`/`CreateItemSession` (confirmed by reading the full function body, including every `CreateItemSession`/`CreateItemSessionWithVerdict` call site in it). Calling it unconditionally while a reviewer is already active would spawn a genuine second, concurrent review session for the same item — exactly the failure FR2's refusal exists to prevent on the `request_review` side. **This is why `request_review`'s own unconditional call (Task 2.2's context) is safe and this one as originally written was not**: FR2's guard (Task 2.2.1b) already refuses `request_review` outright before reaching the trigger call whenever a reviewer is active on the `pr_pending` path, so `request_review`'s trigger call is only ever reached in the genuinely-no-active-reviewer case. `report_duplicate` has no equivalent refusal (ADR-005) — FR5's text requires it to still succeed in that state — so the trigger call itself must be the conditional part instead: reuse the same `activeReview` boolean Task 3.3.3a already computes for message branching — `if h.reviewTrigger != nil && !activeReview { h.reviewTrigger.TriggerReviewForSession(callerUUID) }`. FR5's premise (the transition succeeds, evidence is persisted, messaging says "next review pass") is fully preserved; only the redundant spawn is prevented. Log via `log.InfoLog.Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s transitioned to review activeReviewSkipped=%v", callerUUID, itemID, duplicateRef, activeReview)`. Return the branched success text from Task 3.3.3a.
 - Files: `server/mcp/tools_backlog.go`
 
 ---
@@ -378,7 +378,7 @@ Phase 4: Tests (needs everything above)
 **Files**: `server/mcp/tools_backlog.go`
 
 ##### Task 3.4.1a: Add the `s.AddTool(...)` block (~5 min)
-- In `registerBacklogTools`, immediately after the `report_pr_created` block (ends `tools_backlog.go:1037`), add a `report_duplicate` registration following `report_pr_created`'s exact shape (`mcpgo.NewTool("report_duplicate", mcpgo.WithDescription(...), mcpgo.WithString("item_id", ...), mcpgo.WithString("duplicate_ref", ...), mcpgo.WithString("reason", ...))`, `h.reportDuplicate`). Description content, house-style-ordered (ux.md §2): (1) one-line summary — "Report that this item's work is a duplicate of an already-existing PR/issue/commit, routing the item to review instead of continuing it."; (2) `"Role: work only."`; (3) preconditions — "Refuses if the item has SkipReviewGate enabled (use request_review instead), if the item isn't at in_progress or pr_pending, or if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change."; (4) consequence — "On success, transitions the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out."; (5) idempotency — "Calling this again with the same duplicate_ref after it already succeeded is safe (no-op)."; (6) FR10 retry guidance — the literal sentence from the acceptance criterion above; (7) **added per pre-mortem F1 (P1)** — an explicit non-retry escalation line distinct from (6)'s ordinary retry guidance: "If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session."
+- In `registerBacklogTools`, immediately after the `report_pr_created` block (ends `tools_backlog.go:1037`), add a `report_duplicate` registration following `report_pr_created`'s exact shape (`mcpgo.NewTool("report_duplicate", mcpgo.WithDescription(...), mcpgo.WithString("item_id", ...), mcpgo.WithString("duplicate_ref", ...), mcpgo.WithString("reason", ...))`, `h.reportDuplicate`). Description content, house-style-ordered (ux.md §2): (1) one-line summary — "Report that this item's work is a duplicate of an already-existing PR/issue/commit, routing the item to review instead of continuing it."; (2) `"Role: work only."`; (3) preconditions — "Refuses if the item has SkipReviewGate enabled (use request_review instead), if the item isn't at in_progress or pr_pending, or if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change."; (4) consequence — "On success, transitions the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out."; (5) idempotency — "Calling this again with the same duplicate_ref after it already succeeded is safe (no-op)."; (6) FR10 retry guidance — the literal sentence from the acceptance criterion above; (7) **added per prior pre-mortem pass's F1 (P1)** — an explicit non-retry escalation line distinct from (6)'s ordinary retry guidance: "If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session."; (8) **added per this pre-mortem pass's F5 (P3)** — an explicit existence-only trust-boundary disclosure: "This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."
 - Files: `server/mcp/tools_backlog.go`
 
 ---
@@ -397,12 +397,12 @@ Phase 4: Tests (needs everything above)
 - Files: none (verification task)
 
 #### Story 4.1.2: New test — `pr_pending`-sourced success (FR1/FR2's happy path)
-**Acceptance Criteria** (FR1):
-- *Given* an item created at `Status: string(session.BacklogStatusPRPending)` with a linked work-role `ItemSession`, *When* `requestReview` is called (no active review session present), *Then* the result text contains "review" and a follow-up `GetBacklogItem` shows `Status: "review"`.
+**Acceptance Criteria** (FR1, FR7):
+- *Given* an item created at `Status: string(session.BacklogStatusPRPending)` with a linked work-role `ItemSession`, *When* `requestReview` is called (no active review session present), *Then* the result text contains "review", a follow-up `GetBacklogItem` shows `Status: "review"`, and the resulting `BacklogStatusEvent` row has `TriggeredBy: "agent"` (not `"system"`).
 **Files**: `server/mcp/tools_backlog_test.go`
 
 ##### Task 4.1.2a: `TestRequestReview_TransitionsPRPendingItemToReview` (~5 min)
-- New test function, same helper pattern as existing tests (inline `storage.CreateBacklogItem`/`CreateItemSession`, `makeToolReq`, `WithSessionUUID`) but seed `Status: string(session.BacklogStatusPRPending)`. Assert success + `Status == "review"` afterward.
+- New test function, same helper pattern as existing tests (inline `storage.CreateBacklogItem`/`CreateItemSession`, `makeToolReq`, `WithSessionUUID`) but seed `Status: string(session.BacklogStatusPRPending)`. Assert success + `Status == "review"` afterward. **Extended per cross-artifact consistency check**: also assert `TriggeredBy == "agent"` on the resulting `BacklogStatusEvent` row — Task 2.1.1c's switch from `TriggeredBySystem` to `TriggeredByAgent` (ADR-003) had no test coverage for the `request_review` side; this is the first test to exercise it (list `BacklogStatusEvent`s for the item via the same storage method Task 4.2.1b already uses to assert this for `report_duplicate`, for consistency).
 - Files: `server/mcp/tools_backlog_test.go`
 
 #### Story 4.1.3: New test — whitelist rejection from a disallowed status
@@ -508,6 +508,7 @@ Phase 4: Tests (needs everything above)
 **Files**: `server/mcp/tools_backlog_test.go`
 
 ##### Task 4.2.5a: `TestReportDuplicate_MessageSaysNextReviewPass_WhenReviewSessionActive` (~5 min)
+- **Extended per pre-mortem P1**: in addition to asserting the message text, assert `h.reviewTrigger`'s `TriggerReviewForSession` (inject a fake `ReviewTrigger` recording calls, mirroring how `report_duplicate`'s other seams are overridden in tests) is **not called** in this scenario — this is the actual regression test for the fixed second-spawn bug (Task 3.3.3b), not just the message wording. Pair with a second assertion in the "no active session" branch (reuse or extend Task 4.2.1b–d's setup) confirming the trigger **is** called there — both branches need explicit coverage, not just the one that changed.
 - Files: `server/mcp/tools_backlog_test.go`
 
 ##### Task 4.2.5b: `TestReportDuplicate_MessageSaysNextReviewPass_WhenListItemSessionsErrors` (~4 min)
@@ -526,6 +527,20 @@ Phase 4: Tests (needs everything above)
 
 ### Epic 4.3: `github` package unit tests
 (Covered by Tasks 1.2.3b/1.2.3c above — listed here only for narrative completeness; no additional tasks.)
+
+---
+
+### Epic 4.3b: MCP tool description content (FR10)
+**Goal**: Verify FR10's literal requirement — `report_duplicate`'s registered tool description must contain retry guidance for `INTERNAL_ERROR` — has a test, not just an implementation (Task 3.4.1a) with no verifying assertion anywhere in Phase 4 (gap found by cross-artifact consistency check).
+
+#### Story 4.3b.1: Tool description asserts retry guidance
+**Acceptance Criteria** (FR10):
+- *Given* `registerBacklogTools` has run, *When* the registered `report_duplicate` tool's description is inspected, *Then* it contains the word "retry" in a sentence referencing `INTERNAL_ERROR`.
+**Files**: `server/mcp/tools_backlog_test.go`
+
+##### Task 4.3b.1a: `TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance` (~4 min)
+- Mirror the existing in-repo precedent `TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement` (`tools_backlog_test.go:1060`) exactly — that test reads the source file directly (`os.ReadFile("tools_backlog.go")`) and asserts substring presence, rather than instantiating the MCP server and introspecting a live tool registration. Assert the `report_duplicate` registration block contains both "retry" and "INTERNAL_ERROR".
+- Files: `server/mcp/tools_backlog_test.go`
 
 ---
 

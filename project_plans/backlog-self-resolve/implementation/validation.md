@@ -3,149 +3,186 @@
 **Date**: 2026-08-02
 **Scope**: `report_duplicate` MCP tool + `request_review` CAS generalization (FR1–FR10,
 `project_plans/backlog-self-resolve/requirements.md`). Backend/MCP-only — no `design/ux.md`
-exists (confirmed: no user-facing UI surface), so the UX Acceptance Tests section is skipped.
-No schema/migration changes (FR8, ADR-001), so the migration-test step is skipped — see
-Coverage Targets for how FR8 is actually verified instead.
+exists (`research/ux.md` confirmed this feature has no user-facing surface), so the UX
+Acceptance Tests step is skipped entirely, not just left blank.
 
-This document does not redesign the test suite from scratch — `implementation/plan.md`'s
-Phase 4 (Epics 4.1–4.3) already specifies ~20 named test functions with GWTs per AC. This
-document maps those planned tests to FR1–FR10, confirms every FR has coverage, and lists the
-genuine gaps found by cross-checking plan.md against `architecture-review.md` and
-`adversarial-review.md` (both dated 2026-08-02) that are **not yet** reflected as Phase 4 tasks.
+**Note on a prior draft of this file**: an earlier version of this document (same filename,
+same date) was written against an intermediate draft of `plan.md` and is superseded by this
+version. That draft's gap list (G1–G8) predates `adversarial-review.md`'s iteration-2
+re-verification; four of its gaps (length-cap test, `request_review` fail-closed test,
+`report_duplicate` conservative-message-on-error test, cross-repo test) are now already closed
+as tracked Phase 4 tasks (4.2.2e, 4.1.4c, 4.2.5b, 4.2.2f respectively) and are not repeated here.
+This version re-derives the gap list by cross-checking the **current** `plan.md` (post
+iteration-2 fixes) directly, task by task, against every FR's stated acceptance-criteria GWTs.
 
 ---
 
 ## Happy Path Scenario
 
-Given backlog item `da58b867-bf4e-4720-8fe4-9cfcfa5b6eed` at status `in_progress` with a linked
-work-role `ItemSession`, when that session calls `report_duplicate` with a GitHub-verified PR
-reference (`https://github.com/tstapler/stapler-squad/pull/272`) and a reason, then the
-reference is verified against GitHub *before* any mutation, the item transitions to `review`
-status with `TriggeredBy="agent"`, `duplicate_ref`/`reason` are persisted into the item
-session's verification notes, and the success message correctly states whether an active
-reviewer will see the evidence now or only on the next review pass.
+Given a backlog item at `in_progress` status whose linked work-role session discovers that its
+assigned work duplicates an already-shipped PR, when that session calls
+`report_duplicate(item_id, duplicate_ref, reason)` with a `duplicate_ref` that GitHub
+verification confirms exists, then the item transitions from `in_progress` to `review` (never
+directly to `done`/`archived`), a `BacklogStatusEvent` audit row is recorded with
+`TriggeredBy: "agent"` and a human-legible `Note`, the item session's `VerificationNotes` are
+updated with the `duplicate_ref`/`reason`, and the caller receives a success message that
+accurately states whether a live reviewer will see the evidence now or only on the next review
+pass.
 
 ---
 
 ## Requirement → Test Mapping
 
-| FR | Requirement (short) | Unit — happy | Unit — error | Integration | Notes / gaps |
-|----|---|---|---|---|---|
-| FR1 | Generalize `request_review` CAS to `{in_progress, pr_pending}` | `TestRequestReview_TransitionsItemToReview` (existing, in_progress) + **new** `TestRequestReview_TransitionsPRPendingItemToReview` (Task 4.1.2a) | **new** `TestRequestReview_RejectsWhenSourceStatusNotAllowed` (Task 4.1.3a, table over `done`/`idea`/`review`/`archived`) | Inherent — all `tools_backlog_test.go` tests run against a real ent-backed sqlite `session.Storage` (`newTestBacklogStorage`, not a mock), so the CAS precondition is exercised against the real repository layer, not stubbed | Regression floor: `TestRequestReview_*` (5 existing tests, Task 4.1.1a) must pass unmodified |
-| FR2 | Refuse `request_review` re-route when active review session + source=`pr_pending` | **new** `TestRequestReview_AllowsActiveReviewSession_WhenSourceIsInProgress` (Task 4.1.4b — confirms guard is scoped, not "always refuse") | **new** `TestRequestReview_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending` (Task 4.1.4a) | Same real-storage inherent coverage as FR1 | **GAP** — see G4 below: the `ListItemSessions`-errors-fails-open branch (adversarial-review.md concern) has no test and, per that review, arguably wrong behavior |
-| FR3 | New `report_duplicate` tool, GitHub-verify before mutation, routes to `review` only | **new** `TestReportDuplicate_TransitionsInProgressItemToReview_WithVerifiedPR` / `_WithVerifiedIssue` (4.2.1c) / `_WithVerifiedCommit` (4.2.1d) | **new** `TestReportDuplicate_RejectsWhenGitHubRefNotFound` (4.2.3a) | `github` package httptest.Server tests (Tasks 1.2.3b/1.2.3c) exercise the real HTTP round trip (status codes, JSON shape) that `GetPR`/`GetCommit`/`GetIssue` depend on — the closest thing this codebase has to an "external call" integration test (no live network call; the repo has no `-tags integration` GitHub-touching tests) | **GAP** — see G8 below: verification-failure tests (4.2.3a–d) assert the returned error but not that `GetBacklogItem` afterward shows the item unchanged, unlike the FR6 refusal tests which do assert this explicitly |
-| FR4 | Two-channel errors: `ErrInvalidArgument` (no retry) vs `ErrInternalError` ("retry" wording) | *(happy path is FR3's)* | **new** `TestReportDuplicate_RejectsWhenGitHubRefNotFound` (404→`ErrInvalidArgument`, 4.2.3a), `_RejectsWhenGitHubAccessDenied` (bare 403→`ErrInvalidArgument`, 4.2.3d), `_ReturnsRetryableError_WhenGitHubVerificationTimesOut` (4.2.3b), `_ReturnsRetryableError_WhenGitHubRateLimited` (4.2.3c) | Same `github` package httptest tests classify 401/403(no Retry-After)/403(w/ Retry-After)/404/429 via `errors.Is` against the new sentinels — this is where the classification logic itself is proven, not just the handler's re-labeling of it | None — well covered |
-| FR5 | Accurate "next review pass" vs "reviewer notified" messaging | **new** `TestReportDuplicate_MessageSaysNextReviewPass_WhenReviewSessionActive` (4.2.5a) covers the active-session branch | *(no dedicated "no active session ⇒ 'Reviewer notified'" assertion — folded implicitly into 4.2.1b's success check, but its GWT as written only asserts transition succeeded, not message text)* | Inherent (real storage) | **GAP** — see G5 below: `ListItemSessions`-errors branch defaults to the *optimistic* message per current plan code sketch (Task 3.3.3a), which is the literal thing FR5 forbids — no test, and adversarial-review.md flags this as a likely-wrong default |
-| FR6 | Refuse (zero mutation): `SkipReviewGate`, role≠work, session not linked [, disallowed source status] | *(happy path is FR3's — refusal absent)* | **new** `TestReportDuplicate_RejectsWhenSkipReviewGateEnabled` (4.2.2a), `_RejectsWhenSessionRoleNotWork` (4.2.2b), `_RejectsWhenSessionNotLinked` (4.2.2c), `_RejectsWhenSourceStatusNotAllowed` (4.2.2d, table over 4 statuses) — each asserts `GetBacklogItem` unchanged afterward | Same real-storage zero-mutation verification | **GAPs** — see G2 (length-cap test, adversarial-flagged, absent from Phase 4) and G3 (no test proves the GitHub call is never made on a refusal — adversarial-flagged) |
-| FR7 | Audit trail: `TriggeredBy="agent"`, `duplicate_ref`/`reason` in `VerificationNotes` | Folded into Task 4.2.1b's AC ("`VerificationNotes` contains the ref, `BacklogStatusEvent.Note` is populated, `TriggeredBy == "agent"`") — no separate test needed, same assertion block | *(N/A — audit trail has no distinct error path beyond FR6's zero-mutation guarantee, which already proves no event is written on refusal)* | Real `BacklogStatusEvent`/ent-backed read-back, not a mock | **GAP** — see G7 below: Task 3.3.2a's "append, don't overwrite prior `VerificationNotes`" behavior (added specifically to avoid discarding evidence from an earlier `request_review` call) has no test anywhere in Phase 4 |
-| FR8 | No schema changes; `go build ./...` succeeds without `ent generate` | N/A — not a unit test | N/A | N/A | Verified by **Task 5.0a** (Final Verification): `go build ./... && make test && make lint`, plus `git status session/ent/` showing zero diff. This is a build/CI gate, not a named test function — matches the instruction that FR8 is proven this way, not via a unit test |
-| FR9 | Existing `request_review` suite passes unmodified | N/A — regression check, not a new test | N/A | N/A | Verified by **Task 4.1.1a**: `go test ./server/mcp/... -run TestRequestReview -v` after Phase 2 lands, confirming the 5 pre-existing tests (`TestRequestReview_TransitionsItemToReview`, `_TransitionsDirectlyToDone_When_SkipReviewGateEnabled`, `_PersistsVerificationNotesOnWorkSession`, `_RejectsVerificationNotesOver4000Chars`, `_RejectsWhenSessionNotLinked`) pass with zero edits |
-| FR10 | (a) tool description has explicit "retry" guidance for `INTERNAL_ERROR`; (b) stuck `pr_pending` items eventually surface | *(a: no test)* *(b: N/A, existing code)* | *(a: no test)* | (b) `ReconcilePRPending` (`session/backlog_lifecycle.go:3850`) already has existing test coverage in `session/backlog_lifecycle_test.go` and `session/backlog_lifecycle_stuck_test.go` (confirmed via grep — independent of this feature's diff) — architecture-review.md verified this detector correctly covers FR10(b)'s scenario (a `pr_pending` item *with* a real PR reference), superseding adversarial-review.md's original BLOCKED verdict, which had cited the wrong detector (`pr_pending_no_pr`) | **GAP** — see G1 below: FR10(a) (the tool-description "retry" wording, Story 3.4.1's own AC) has **no corresponding Phase 4 test task at all** — contrast with the existing precedent `TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement` (`tools_backlog_test.go:1060`) for the sibling tool |
+| Requirement | Test File | Test Name | Type | Scenario |
+|---|---|---|---|---|
+| FR1: Generalize `request_review`'s CAS precondition to `in_progress`\|`pr_pending`, pinned to the validated observed status | `server/mcp/tools_backlog_test.go` | `TestRequestReview_TransitionsPRPendingItemToReview` (Task 4.1.2a) | Unit | `pr_pending`-sourced `request_review` succeeds; precondition built from `validStatus`, not a hardcoded constant |
+| FR1 (cont.) | `server/mcp/tools_backlog_test.go` | `TestRequestReview_RejectsWhenSourceStatusNotAllowed` (Task 4.1.3a) | Unit | Table-driven over `{done, idea, review, archived}` — refused before any mutation |
+| FR2: Refuse `request_review` on `pr_pending` source when an active review-role session exists; `in_progress` path unchanged | `server/mcp/tools_backlog_test.go` | `TestRequestReview_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending` (Task 4.1.4a) | Unit | `pr_pending` + active review session → refused, zero mutation |
+| FR2 (cont.) | `server/mcp/tools_backlog_test.go` | `TestRequestReview_AllowsActiveReviewSession_WhenSourceIsInProgress` (Task 4.1.4b) | Unit | Same active-session setup but `in_progress` source → succeeds (guard is `pr_pending`-scoped only) |
+| FR2 (cont., fail-closed on storage error) | `server/mcp/tools_backlog_test.go` | `TestRequestReview_FailsClosed_WhenListItemSessionsErrors` (Task 4.1.4c) | Unit | `ListItemSessions` error on the `pr_pending` path → `ErrInternalError`, not a silent pass-through |
+| FR3: New `report_duplicate` tool; GitHub verification before any mutation; routes to `review` only | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_TransitionsInProgressItemToReview_WithVerifiedPR` (Task 4.2.1b) | Unit | PR ref, `in_progress` source, verified success path |
+| FR3 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_TransitionsPRPendingItemToReview_WithVerifiedIssue` (Task 4.2.1c) | Unit | Issue ref, `pr_pending` source |
+| FR3 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_TransitionsInProgressItemToReview_WithVerifiedCommit` (Task 4.2.1d) | Unit | Commit-SHA ref |
+| FR3 (cont., pre-network parse/type validation — **gap: no Phase 4 task covers this**) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenDuplicateRefNotParseable` (**NEW**) | Unit | `duplicate_ref="not a url at all"` → `github.ParseGitHubRef` fails → `ErrInvalidArgument`, no network call (Story 3.2.1's first GWT / Task 3.2.1a — no corresponding test task exists anywhere in Epic 4.2) |
+| FR3 (cont., **gap**) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenDuplicateRefIsUnsupportedRefType` (**NEW**) | Unit | `duplicate_ref` parses successfully but as `RefTypeBranch` (not PR/issue/commit) → `ErrInvalidArgument`, no network call (Story 3.2.1's second GWT — same gap) |
+| FR4: Two-channel verification errors — definitive-invalid (`ErrInvalidArgument`, no retry) vs. transient (`ErrInternalError`, "retry" wording) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenGitHubRefNotFound` (Task 4.2.3a) | Unit | 404 → `ErrInvalidArgument` |
+| FR4 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_ReturnsRetryableError_WhenGitHubVerificationTimesOut` (Task 4.2.3b) | Unit | Network timeout → `ErrInternalError` with "retry" |
+| FR4 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_ReturnsRetryableError_WhenGitHubRateLimited` (Task 4.2.3c) | Unit | 429 → `ErrInternalError` with "retry" |
+| FR4 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenGitHubAccessDenied` (Task 4.2.3d) | Unit | Bare 403 (no rate-limit signal) → `ErrInvalidArgument` per ADR-002/UQ-2 |
+| FR4 (cont., no-credentials case — **gap: promised in Task 3.2.2a's own text ("Add `TestReportDuplicate_ReturnsNonRetryableError_WhenNotAuthenticated` to Story 4.2.3") but Story 4.2.3's actual task list (4.2.3a–d) never includes it**) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_ReturnsNonRetryableError_WhenNotAuthenticated` (**NEW**, formalizes the promised-but-untracked test) | Unit | `errors.Is(verifyErr, githubpkg.ErrNotAuthenticated)` → `ErrInternalError` with explicit non-retryable/escalate-to-operator wording (Task 3.2.2b) |
+| FR5: Accurate "when will this be seen" messaging | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_MessageSaysNextReviewPass_WhenReviewSessionActive` (Task 4.2.5a) | Unit | Active review session present → "next review pass" wording, never "Reviewer notified" |
+| FR5 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_MessageSaysNextReviewPass_WhenListItemSessionsErrors` (Task 4.2.5b) | Unit | `ListItemSessions` errors during message branching → conservative wording, transition still succeeds |
+| FR5 (cont., positive branch — **gap: no task explicitly asserts the affirmative "Reviewer notified" message text**) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_MessageSaysReviewerNotified_WhenNoActiveReviewSession` (**NEW**) | Unit | No active review session → success text says "Reviewer notified" (Story 3.3.3's first GWT; Tasks 4.2.1b–d assert transition/audit fields but not this message text) |
+| FR6: Refuse `SkipReviewGate`, non-`work` role, unlinked session, disallowed source status — zero mutation on every refusal path | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenSkipReviewGateEnabled` (Task 4.2.2a) | Unit | `SkipReviewGate: true` → refused before any GitHub call |
+| FR6 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenSessionRoleNotWork` (Task 4.2.2b) | Unit | Review-role caller → `ErrPermissionDenied` |
+| FR6 (cont.) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenSessionNotLinked` (Task 4.2.2c) | Unit | Unlinked session → `ErrPermissionDenied` |
+| FR6 (cont., 4th refusal condition layered on top per Pattern Decisions/ADR-005, not literally in FR6's 3-item list) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenSourceStatusNotAllowed` (Task 4.2.2d) | Unit | Table-driven over `{done, idea, review, archived}` |
+| FR6 (cont., length caps, adversarial-review-added) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_RejectsWhenDuplicateRefOrReasonTooLong` (Task 4.2.2e) | Unit | Table over 501-char `duplicate_ref` / 1001-char `reason` → `ErrInvalidArgument`, no GitHub call |
+| FR7: Every transition audited via `BacklogStatusEvent`/`recordStatusEvent` with `TriggeredBy="agent"`; `duplicate_ref`/`reason` persisted into `VerificationNotes` | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_TransitionsInProgressItemToReview_WithVerifiedPR` (Task 4.2.1b — assertions on `TriggeredBy=="agent"`, `BacklogStatusEvent.Note`, `VerificationNotes`) | Unit | Success test doubles as the audit-trail assertion per its own AC text |
+| FR7 (cont., append-not-overwrite behavior — **gap: Task 3.3.2a's "append rather than overwrite prior VerificationNotes" fix has no test anywhere in Phase 4**) | `server/mcp/tools_backlog_test.go` | `TestReportDuplicate_PreservesExistingVerificationNotes_WhenAppendingNewEntry` (**NEW**) | Unit | Seed a work-role `ItemSession` with non-empty `VerificationNotes` (e.g. left over from an earlier `request_review` call before a rework cycle), call `reportDuplicate`, assert the persisted notes contain both the prior content and the new `duplicate_ref=... reason=...` entry separated by the `\n\n---\n\n` delimiter (Task 3.3.2a) |
+| FR7 (cont., `TriggeredByAgent` constant) | `session/backlog.go` | n/a — compile-only (Task 1.1.1a), plain untyped string const, no exhaustiveness switch | Build check | `go build ./...` succeeds after adding `TriggeredByAgent = "agent"` |
+| FR7 (cont., `request_review`-side audit attribution — **gap: Task 2.1.1c's switch from `TriggeredBySystem` to `TriggeredByAgent` had zero test coverage**; closed by extending an existing task rather than adding a new one) | `server/mcp/tools_backlog_test.go` | `TestRequestReview_TransitionsPRPendingItemToReview` (Task 4.1.2a, extended) | Unit | Asserts the resulting `BacklogStatusEvent.TriggeredBy == "agent"`, not just `Status == "review"` |
+| FR8: No schema changes; `go build ./...` succeeds with zero `ent generate` runs | n/a (verification story, no production code) | Story 4.4.1 / Task 4.4.1a — `go build ./... && make test && make lint` | Build/CI gate | `git status session/ent/` shows zero diff — confirms no `BacklogStatus` enum value, ent schema field, or migration introduced |
+| FR9: Existing `request_review` suite passes unmodified for the `in_progress`-sourced path | `server/mcp/tools_backlog_test.go` | `TestRequestReview_TransitionsItemToReview`, `_TransitionsDirectlyToDone_When_SkipReviewGateEnabled`, `_PersistsVerificationNotesOnWorkSession`, `_RejectsVerificationNotesOver4000Chars`, `_RejectsWhenSessionNotLinked` (Story 4.1.1 / Task 4.1.1a) | Unit (regression) | `go test ./server/mcp/... -run TestRequestReview -v` — zero edits to these 5 functions |
+| FR10 (part 1): `report_duplicate`'s tool description gives explicit retry guidance for `INTERNAL_ERROR` — **gap: Story 3.4.1/Task 3.4.1a state this as an AC but no Phase 4 task verifies the registered description text**, despite an established in-repo precedent for exactly this kind of test | `server/mcp/tools_backlog_test.go` | `TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance` (**NEW**) | Unit (source-scan) | Mirrors `TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement` (`tools_backlog_test.go:1060` — `os.ReadFile("tools_backlog.go")` + `assert.Contains`); asserts the `report_duplicate` registration block contains "retry" in the `INTERNAL_ERROR` context plus the non-retryable no-credentials escalation line (Task 3.4.1a) |
+| FR10 (part 2): stuck `pr_pending` items eventually surface via the existing stuck-item notification path | `session/backlog_lifecycle_test.go` (pre-existing, not part of this feature's diff) | N/A — no new test needed | N/A | Per Observability Plan's corrected citation (adversarial-review.md iteration-2, item 1, verified directly against `session/backlog_lifecycle.go:3850`): `ReconcilePRPending` already covers any `pr_pending` item with a real PR reference regardless of *why* it's stuck, and is exercised by its own pre-existing test suite. This feature adds no new detector/`StuckReason` and needs no new test for this half of FR10. |
 
-**Coverage**: 10/10 FRs have at least one planned test or an explicit non-test verification
-mechanism (build gate for FR8, regression run for FR9, pre-existing detector test suite for
-FR10b). Every FR has a documented path to verification; the gaps below are refinements/additions
-to already-adequate coverage, not missing coverage entirely.
-
----
-
-## Gaps Found (not yet in plan.md's Phase 4 task list)
-
-These come from cross-referencing plan.md's Phase 4 against `architecture-review.md` (Concerns)
-and `adversarial-review.md` (Concerns — its one Blocker, FR10, was independently resolved by
-architecture-review.md and is not repeated here). None of these are structural blockers; all are
-addable as new test tasks within Epic 4.1/4.2's existing shape.
-
-| ID | Gap | FR | Proposed test | Source |
-|----|---|---|---|---|
-| G1 | FR10(a)'s tool-description "retry" wording has zero test coverage | FR10 | `TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance` — mirror the existing `TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement` pattern; assert the registered tool's description contains "retry" in the `INTERNAL_ERROR` context | Cross-check: Story 3.4.1 has an AC, Epic 4.1/4.2 has no matching task |
-| G2 | No test for `duplicate_ref`/`reason` exceeding their 500/1000-char caps | FR6 | `TestReportDuplicate_RejectsWhenDuplicateRefOrReasonTooLong` (table over both fields), mirroring the existing sibling `TestRequestReview_RejectsVerificationNotesOver4000Chars` | adversarial-review.md Concerns |
-| G3 | No test proves the refusal-check order (SkipReviewGate → role/link → whitelist → GitHub verify); the existing 4.2.2a–d tests only check the returned error, not that `h.verifyGitHubRef` was never invoked | FR6 | `TestReportDuplicate_NeverCallsGitHubVerification_WhenRefused` — set `h.verifyGitHubRef` to a stub that calls `t.Fatal` if invoked, run it against each of the 4 refusal fixtures | adversarial-review.md Concerns |
-| G4 | `TestRequestReview_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending` proves the guard fires when `ListItemSessions` succeeds; no test covers the `ListItemSessions`-errors path, which the current plan code (Task 2.2.1b) silently falls through to "no active reviewer" | FR2 | `TestRequestReview_FailsClosed_WhenListItemSessionsErrors_OnPRPendingPath` — requires a corresponding plan/code change (fail closed with `ErrInternalError`, not fall through) per adversarial-review.md's explicit recommendation; write the test alongside that fix, not as a test of current (silently-wrong) behavior |
-| G5 | Same swallowed-error shape on the messaging side: Task 3.3.3a's `itemSessions, _ := h.storage.ListItemSessions(...)` defaults to the optimistic "Reviewer notified" message on error, which is the literal thing FR5 forbids | FR5 | `TestReportDuplicate_MessageDefaultsToNextReviewPass_WhenListItemSessionsErrors` — again pairs with a plan/code fix (default to the conservative message on error), not a test of current behavior | adversarial-review.md Concerns |
-| G6 | Cross-repo `duplicate_ref` (pointing at a different `owner/repo` than the item's own) is implicitly allowed by the current design but never decided or tested | FR3 | Needs an explicit decision first (allow vs. same-repo-only); once decided, `TestReportDuplicate_AllowsCrossRepoDuplicateRef` or `_RejectsCrossRepoDuplicateRef` accordingly | adversarial-review.md Concerns |
-| G7 | Task 3.3.2a's "append, don't overwrite prior `VerificationNotes`" behavior (added to avoid discarding an earlier `request_review` call's notes) has no test | FR7 | `TestReportDuplicate_PreservesExistingVerificationNotes_WhenAppendingNewEntry` — seed a work-role `ItemSession` with non-empty `VerificationNotes` (e.g. from a prior `request_review`), call `reportDuplicate`, assert the persisted notes contain both the old content and the new `duplicate_ref=...` entry | Cross-check: Story 3.3.2 has an AC for the happy "notes contain the ref" case (folded into 4.2.1b) but not for the append-preserves-prior-content case |
-| G8 | Verification-failure tests (4.2.3a–d) assert the returned error only; none assert `GetBacklogItem` shows the item unchanged, unlike the FR6 refusal tests which do | FR3 | Extend Tasks 4.2.3a–d's existing assertions to add a `GetBacklogItem` unchanged-status check — not a new test function, a one-line addition to each of the 4 existing tasks | Cross-check against FR3's literal "verified... before any state mutation" text |
-
-**Not carried forward as a test gap** (process/design items only, no test implication):
-- ADR-003/ADR-004 still `Status: Proposed` rather than `Accepted` — a sign-off gap, not a test gap (adversarial-review.md Concerns).
-- The CAS-trap "3 independently-reviewed call sites" concern (adversarial-review.md) recommends a single `validateSelfResolveSource` helper to structurally close the risk — a refactor recommendation, not a missing test; the existing per-site tests (4.1.3a, 4.2.2d) already catch a regression at any one site today.
-- The read-then-append race on `VerificationNotes` under true concurrent callers (adversarial-review.md) is flagged as an accepted low-probability tradeoff given the single-threaded-per-session tool-call model — no test recommended by that review either.
-- Task 4.2.6a's rewritten construction (already corrected in the plan.md text read for this validation pass, per its own "Corrected per adversarial review" annotation) still carries a stale name, `TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated`, that contradicts its own now-corrected description. Rename to `TestReportDuplicate_RefusedAfterAlreadyTransitionedToReview` per architecture-review.md's nitpick — a rename, not a new test.
-- Task 4.1.5a's stated "fallback: unit-test the branch logic in isolation" is not buildable (nothing extracts `errors.Is(transErr, session.ErrPreconditionFailed)` into a separately-callable function per the current plan). Commit to the primary "seed at in_progress, force a stale precondition via a direct `TransitionBacklogItemStatus` call with a mismatched `ExpectedStatus`" construction; drop the fallback sentence from the task description.
+**Coverage**: 10/10 FRs have at least one test mapped (existing-planned or gap-fill) or an
+explicit non-test verification mechanism (build gate for FR8, regression run for FR9,
+pre-existing detector suite for FR10 part 2).
 
 ---
 
-## Test Naming Convention
+## Gaps Found and Closed
 
-`server/mcp/tools_backlog_test.go` actually has two coexisting conventions (checked directly,
-not assumed):
-1. **`TestX_VerbPhrase`** — the majority convention, e.g. `TestRequestReview_TransitionsItemToReview`,
-   `TestReportProgress_RejectsWhenNoSessionUUID`, `TestGetBacklogItem_ReturnsNotFoundError`.
-2. **`TestX_should_VerbPhrase_When_Condition`** (lowercase `should`/`When`) — used only by the
-   `report_pr_created` sibling tests, e.g. `TestReportPRCreated_should_TransitionToPRPending_When_ValidPR`.
+Cross-checking every Phase 4 task in the **current** `plan.md` (post iteration-2 fixes) against
+every FR's acceptance-criteria GWTs — not assuming the plan's own "Phase 4 is thorough" framing —
+surfaced five requirement-level GWTs with no corresponding tracked Phase 4 task:
 
-Every new test named in plan.md's Phase 4 (`TestRequestReview_*`, `TestReportDuplicate_*`) uses
-convention **#1** — correct, since it matches both the file's dominant style and the existing
-`request_review` tests these new ones sit alongside. This validation.md's proposed gap-filling
-tests (G1–G8) follow the same convention for consistency.
+1. **FR3** — Story 3.2.1's two pre-network parse/ref-type-validation refusal GWTs (malformed URL;
+   unsupported ref type, e.g. a branch URL) have no test anywhere in Epic 4.2. Added
+   `TestReportDuplicate_RejectsWhenDuplicateRefNotParseable` and
+   `TestReportDuplicate_RejectsWhenDuplicateRefIsUnsupportedRefType`.
+2. **FR4** — Task 3.2.2b's own text says "Add `TestReportDuplicate_ReturnsNonRetryableError_WhenNotAuthenticated`
+   to Story 4.2.3," but Story 4.2.3's actual task list (4.2.3a–d) never includes it. Added it as a
+   tracked test.
+3. **FR5** — the affirmative "Reviewer notified" (no active session) message text from Story
+   3.3.3's first GWT is never explicitly asserted; Tasks 4.2.1b–d check transition/audit-field
+   outcomes but not this message string. Added
+   `TestReportDuplicate_MessageSaysReviewerNotified_WhenNoActiveReviewSession`.
+4. **FR7** — Task 3.3.2a's "append, don't overwrite prior `VerificationNotes`" fix (added
+   specifically so a `report_duplicate` call doesn't discard notes left by an earlier
+   `request_review` call on the same session) has no test anywhere in Phase 4. Added
+   `TestReportDuplicate_PreservesExistingVerificationNotes_WhenAppendingNewEntry`.
+5. **FR10** (part 1) — Story 3.4.1's "description contains 'retry'" acceptance criterion has no
+   verifying test, despite an established in-repo precedent for exactly this pattern
+   (`TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement`).
+   Added `TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance`.
+
+**Superseded gaps** (present in an earlier draft of this document, now already closed as tracked
+Phase 4 tasks in the current plan.md — not repeated as open gaps here):
+- Length-cap test → now Task 4.2.2e.
+- `request_review` fail-closed-on-storage-error test → now Task 4.1.4c.
+- `report_duplicate` conservative-message-on-storage-error test → now Task 4.2.5b.
+- Cross-repo `duplicate_ref` test → now Task 4.2.2f, with an explicit "cross-repo is allowed"
+  decision recorded alongside it.
+- "Never calls GitHub verification on a refusal path" — no longer needs a separate new test
+  function; Epic 3.1's Goal text (added per adversarial review) now requires every one of Tasks
+  4.2.2a–e to construct `verifyGitHubRef` as a `t.Fatal`-on-call stub, folding the safeguard into
+  the existing refusal tests rather than adding a ninth one.
+
+**Minor, non-blocking recommendation** (not counted as a gap): Tasks 4.2.3a–d (FR4's GitHub-error
+tests) assert the returned error text/code but their task descriptions don't explicitly call out
+a `GetBacklogItem`-unchanged assertion, unlike Stories 3.1.1/3.1.2's refusal GWTs which do. This
+is structurally guaranteed regardless (the transition call is unreached when verification returns
+an error — the code never gets there), so it's a one-line assertion worth adding to those 4 tasks
+at implementation time for symmetry with the FR6 refusal tests, not a missing-coverage gap.
 
 ---
 
 ## Test Stack
 
-- **Framework**: Go stdlib `testing` + `testify` (`assert`/`require`) — no other test framework
-  is used in this codebase.
-- **Backend/MCP layer**: `go test ./server/mcp/...` — handler tests run against a real,
-  temp-file-backed ent/sqlite `session.Storage` (`newTestBacklogStorage`, `tools_backlog_test.go:21`),
-  not a mocked repository; the only mocked seam is the injectable `verifyGitHubRef`/
-  `verifyPRMatchesBranch` func-value fields on `backlogHandlers`, which stand in for the network
-  boundary specifically (the same seam `report_pr_created`'s existing tests already use).
-- **GitHub package layer**: `go test ./github/...` — new `github/commits_test.go` and
-  `github/repos_pr_test.go` (or `repos_test.go`) use `httptest.Server` + the `resetGhBaseURL`
-  helper pattern (borrowed from `server/services/backlog_github_rpc_test.go:19-22`, the first
-  precedent for this pattern to live inside the `github` package itself) to exercise the real
-  HTTP status-code → sentinel-error classification without a live network call.
-- **Full local run**: `make build && make test` (generates protos, then runs `go test -short ./...`);
-  `make quick-check` adds coverage + race + lint for a fast pre-push gate; `make ci` is the
-  definitive pre-push check (`build`, `test`, `test-race`, `vet`, `lint`, `lint-css-tokens`,
-  `test-integration`, `fmt-check`, `registry-generate`, `actor-field-guard`).
-- **This feature has no `-tags integration`-gated tests** — the repo's `test-integration` target
-  (`go test -race -tags integration ./...`) exists for real-tmux-dependent session tests
-  elsewhere in the codebase; nothing in this feature's diff needs that tag. The closest analog
-  to "integration with an external call" is the `httptest.Server`-backed `github` package tests
-  described above.
+- **Unit**: Go stdlib `testing` + `github.com/stretchr/testify` (`require`/`assert` — confirmed
+  in `server/mcp/tools_backlog_test.go`'s import block) + this repo's existing temp-dir,
+  ent/sqlite-backed `session.Storage` test double (`newTestBacklogStorage(t)`,
+  `tools_backlog_test.go:21`) for `server/mcp` handler tests — not a mocked repository. The only
+  mocked seam is the injectable `verifyGitHubRef`/`verifyPRMatchesBranch` func-value fields on
+  `backlogHandlers`, standing in for the GitHub network boundary specifically (the same seam
+  `report_pr_created`'s existing tests already use).
+- **Integration**: The `github` package tests (Tasks 1.2.3b/1.2.3c: `github/commits_test.go`,
+  `github/repos_pr_test.go`) are integration-shaped even though they run as plain `go test` — they
+  exercise the real HTTP request/status-code-classification path against an `httptest.Server`
+  (via the `resetGhBaseURL` helper pattern borrowed from
+  `server/services/backlog_github_rpc_test.go:19-22`), not a stubbed function value. This is the
+  layer that actually proves `GetPR`/`GetCommit`/the retrofitted `GetIssue` correctly classify
+  200/404/401/403(±Retry-After)/429 into the right sentinel or plain-transient error, rather than
+  the MCP handler's re-labeling of it.
+- **E2E / UX**: N/A — no user-facing surface. `research/ux.md` confirmed backend/MCP-tool scope
+  only; no `design/ux.md` was produced or needed.
 
-## Coverage Targets
+## Coverage Targets and How to Measure
 
-- `make test-coverage` (`TMUX_BIN=... go test -short -cover ./... -coverprofile=coverage.out`,
-  then `go tool cover -html=coverage.out -o coverage.html`) is this repo's standard coverage
-  command — no numeric threshold is enforced by the Makefile itself (no `go tool cover -func`
-  percentage gate found in `test-coverage`, `coverage-func`, or `coverage-gaps` targets); coverage
-  is reviewed via the generated HTML/func report, not a hard CI gate.
-- Practical target for this feature: every new exported function (`GetPR`, `GetCommit`,
-  `verifyGitHubRefExists`, `reportDuplicate`, the modified `requestReview`) should show 100% or
-  near-100% statement coverage in `coverage-func`'s output given the ~22 planned tests (Phase 4)
-  plus the 8 gap-fill tests (G1–G8) proposed above — every branch enumerated in plan.md's GWTs
-  (whitelist pass/reject, all 4 refusal reasons, 4-way GitHub error classification, idempotency
-  hit/miss, active-session message branch) has a corresponding test once the gaps are filled.
-- FR8's "no `ent generate` run" and FR9's "existing suite passes unmodified" are verified as
-  build/regression gates (Tasks 5.0a and 4.1.1a respectively), not coverage-percentage targets.
+| Stack | Coverage command | Target |
+|---|---|---|
+| Go | `go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out` | ≥80% line for `server/mcp/tools_backlog.go` and `github/{repos,commits}.go` — the files this feature touches. (Repo-standard `make test-coverage` runs the same underlying command as an HTML report; the Makefile enforces no hard numeric gate, so this is reviewed, not CI-blocking, per existing convention.) |
+
+- Every public/handler function this feature adds or modifies (`reportDuplicate`,
+  `requestReview`'s generalized path, `validateSelfResolveSource`, `verifyGitHubRefExists`,
+  `GetPR`, `GetCommit`, retrofitted `GetIssue`) has both a happy path and every documented error
+  path covered — see the mapping table above.
+- Every external integration (GitHub HTTP calls) is covered at two layers: unit-mocked at the
+  MCP-handler layer (func-value seam) **and** integration-shaped against a real `httptest.Server`
+  at the `github`-package layer for each new/changed function (`GetPR`, `GetCommit`; `GetIssue`'s
+  sentinel retrofit should get an equivalent table-case addition to its existing test at
+  implementation time if one doesn't already exist).
+
+## Migration Test
+
+**N/A.** This feature makes no schema or ent-migration changes (FR8, ADR-001 — duplicate outcomes
+are represented via the existing `review` `BacklogStatus` plus the free-text `VerificationNotes`/
+`BacklogStatusEvent.Note` fields, not a new enum value or column). Story 4.4.1/Task 4.4.1a is the
+explicit build-level check standing in for a migration test: `go build ./...` must succeed with
+zero `ent generate` invocations, and `git status session/ent/` must show zero diff.
 
 ---
 
 ## Summary
 
-- **Total planned test functions (plan.md Phase 4, as written)**: 22 — 5 in Epic 4.1
-  (`request_review`), 15 in Epic 4.2 (`report_duplicate`), 2 in Epic 4.3 (`github` package,
-  each table-driven over ~5–6 HTTP-status cases).
-- **Proposed additional tests to close gaps (G1–G8)**: 8 — see table above; 6 are net-new test
-  functions (G1, G2, G3, G4, G6, G7), 1 is a modification to an existing planned test (G8, extend
-  4.2.3a–d's assertions), 1 pairs a test with a required behavior fix rather than testing current
-  behavior as-is (G5).
-- **Requirements coverage**: 10/10 FRs have a mapped test or an explicit non-test verification
-  mechanism (build gate / regression run / pre-existing detector suite) — see the Requirement →
-  Test Mapping table. Two FRs (FR8, FR9) are intentionally verified via build/CI gates rather than
-  named unit tests, per the plan's own design.
-- **Migration test**: N/A — no schema/migration changes (FR8, ADR-001); verified via `go build ./...`
-  succeeding without `ent generate` (Task 5.0a), not a migration test.
+- **Total planned test functions in the current plan.md's Phase 4** (recounted directly from
+  task names, not estimated): **31** — Epic 4.1 (`request_review`): 11 total (5 pre-existing
+  regression tests reverified by Task 4.1.1a, plus 6 new: `TestRequestReview_TransitionsPRPendingItemToReview`,
+  `_RejectsWhenSourceStatusNotAllowed`, `_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending`,
+  `_AllowsActiveReviewSession_WhenSourceIsInProgress`, `_FailsClosed_WhenListItemSessionsErrors`,
+  `_ReportsDistinctMessage_WhenCASPreconditionFails`). Epic 4.2 (`report_duplicate`): 18 new named
+  test functions across Stories 4.2.1–4.2.6 (3 + 6 + 4 + 2 + 2 + 1). Epic 4.3: 2 `github`-package
+  table tests (Tasks 1.2.3b `GetCommit`, 1.2.3c `GetPR`), each covering ~5–6 HTTP-status cases.
+- **Gap-fill tests added by this validation pass**: 5 (`TestReportDuplicate_RejectsWhenDuplicateRefNotParseable`,
+  `_RejectsWhenDuplicateRefIsUnsupportedRefType`, `_ReturnsNonRetryableError_WhenNotAuthenticated`,
+  `_MessageSaysReviewerNotified_WhenNoActiveReviewSession`,
+  `_PreservesExistingVerificationNotes_WhenAppendingNewEntry`) plus 1 tool-registration test
+  (`TestRegisterBacklogTools_ReportDuplicate_DescribesRetryGuidance`) — 6 total.
+- **Requirements coverage**: 10/10 FRs mapped to a test (existing-planned or gap-fill) or an
+  explicit non-test verification mechanism (build gate for FR8, regression run for FR9,
+  pre-existing detector suite for FR10 part 2).
+- **Migration test**: N/A — no schema/migration changes (FR8, ADR-001); verified via
+  `go build ./...` succeeding without `ent generate` (Task 4.4.1a), not a migration test.
