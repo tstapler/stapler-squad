@@ -2321,7 +2321,8 @@ func TestReportDuplicate_PreservesExistingVerificationNotes_WhenAppendingNewEntr
 
 // TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated
 // verifies report_pr_created and report_duplicate compose correctly across a
-// real status change (in_progress -> pr_pending -> review), and that a
+// real status change (review -> pr_pending -> review, matching
+// SetBacklogItemPRAndTransition's actual precondition), and that a
 // third, now-disallowed call is cleanly refused rather than silently
 // misbehaving.
 func TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated(t *testing.T) {
@@ -2339,7 +2340,7 @@ func TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated(t *t
 	}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
-	// Step 1: report_pr_created succeeds, in_progress -> pr_pending.
+	// Step 1: report_pr_created succeeds, review -> pr_pending.
 	prReq := makeToolReq(map[string]interface{}{
 		"item_id":   item.ID,
 		"pr_url":    "https://github.com/tstapler/stapler-squad/pull/42",
