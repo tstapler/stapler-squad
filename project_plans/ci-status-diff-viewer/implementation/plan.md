@@ -30,8 +30,10 @@ services, pollers, background goroutines, or transport are introduced anywhere i
 |------|-----------|-------|
 | `GitHubCheckConclusion` | Existing `Instance` field holding the CI rollup conclusion: `success`/`failure`/`pending`/`neutral`/`""`. | `session/instance.go:206-207`. Do not rename. |
 | `LastPRStatusCheck` | Existing `Instance` timestamp of the last successful CI/PR status fetch, used to show badge staleness. | `session/instance.go:210-211`. |
-| `HasAssociatedPR()` | Existing `Instance` method; `true` when the session has a linked GitHub PR. Used to gate AC7's "no PR → no badge / unaffected by blocking rule." | `session/instance.go:740`. |
-| `FindInstanceDataByID` | Existing `Storage` lookup used by both new gates to resolve a session's CI status from a session ID. | `session/storage.go:407`. |
+| `HasGitHubPR()` | Existing `Instance` method; `true` when the session has a linked GitHub PR (`i.Snapshot().GitHub.GitHubPRNumber > 0`). Not called by this plan's new code. | `session/instance.go:739-741`. Operates on `*Instance` via `Snapshot()`, not `*InstanceData` — the two new gate call sites (Task 1.1.2a, Task 2.2.2a) work from `*InstanceData` (returned by `FindInstanceDataByID`), which has no equivalent method, so both intentionally use the inline literal `data.GitHubPRNumber > 0` instead. Two independent inline copies of a one-line comparison is judged not worth a shared helper for a plan this size — flag during implementation if a third call site appears. (Corrected from an earlier, incorrect `HasAssociatedPR()` citation.) |
+| `FindInstanceDataByID` | Existing `Storage` lookup used by both new gates to resolve a session's CI status from a session ID. Returns `(*InstanceData, error)`; errors/not-found and a nil `Storage` are both handled explicitly by each call site — see Task 1.1.2a and Task 2.2.2a. | `session/storage.go:407`. |
+| `ciConclusionSuccess`, `ciConclusionFailure` | New unexported string constants (`"success"`, `"failure"`) for the two conclusion values this feature compares against, colocated with `Rule` in `pkg/classifier/classifier.go` and with the guard in `server/services/approval_service.go`. Replaces literal-string comparisons in Task 1.1.1d and Task 2.2.2a. | New. Does not introduce a wire-format newtype — `GitHubCheckConclusion`/`ClassificationContext.CIStatus` remain plain `string`, matching the existing 3-fetcher convention (see Pattern Decisions table, "CI-status normalization" row). |
+| `overrideCiBlock` | New `bool` field on `ResolveApprovalRequest` (proto field 4); when `true`, a reviewer is explicitly re-submitting an already-blocked approval with acknowledgment that CI is red. Server skips the AC5 block check when set, and logs the resolution distinctly from a normal approval. | New — `proto/session/v1/session.proto:1244-1254`. See Story 2.2.4. |
 | `ClassificationContext.CIStatus` | New `string` field on the classifier's per-request context, mirroring `GitHubCheckConclusion`'s vocabulary; `""` means "no PR or unknown." | New — `pkg/classifier/classifier.go:61-72`. |
 | `Rule.RequireCIPassing` | New `bool` field on `pkg/classifier`'s `Rule`; when `true`, the rule only matches if `ClassificationContext.CIStatus == "success"`. ANDed with existing fields exactly like `FilePattern`. | New — `pkg/classifier/classifier.go:343-369`. |
 | `RuleSpec.RequireCIPassing` | New `bool` field mirroring `Rule.RequireCIPassing` in the persisted/proto rule shape. | New — `server/services/rules_store.go:22-48`. |
@@ -54,6 +56,7 @@ services, pollers, background goroutines, or transport are introduced anywhere i
 | AC6 `ci_passing` condition | (same as above) | | (b) Generic `ConditionEvaluator` plugin interface for future condition types | Unjustified generic for a single current need — YAGNI/interface-pollution violation; `matchesRule`'s existing flat-AND model already accommodates one more bool field with no abstraction needed. |
 | Diff-viewer CI badge | New sibling `CIStatusBadge.tsx`, importing `GitHubBadge.css.ts`'s existing variant classes (`prBadgeReady`/`prBadgeBlocking`/`prBadgePending`/`prBadgeUnknown`) | Synthesizes `research/ux.md` §3 option (b) + `research/build-vs-buy.md` §4 | (a) Extend `GitHubBadge.tsx`'s existing PR-badge render branch in place | `GitHubBadge` is used at 3 other call sites (`SessionCard`, `SessionRow`, `SessionDetailView`) rendering a *PR-number* badge; the diff viewer needs a CI-only badge (no duplicate PR-number chip, since one is already shown elsewhere in the same `SessionDetailView`). Editing the shared component's PR-badge branch to conditionally suppress the PR number risks regressing all 3 existing call sites for a need only the new 4th caller has. |
 | Diff-viewer CI badge | (same as above) | | (b) Net-new CSS/visual idiom for the badge | Explicitly rejected by both `research/ux.md` ("do not invent a third badge idiom") and `research/build-vs-buy.md` — the new component reuses 100% of `GitHubBadge.css.ts`'s existing tokens/variants, so it is *not* a third idiom, just a second render target for the same one. |
+| Diff-viewer CI badge | (same as above) | | (c) Render `VcsWidgetGithubRow.tsx` with `showPrLink={false}` instead of a new component | `VcsWidgetGithubRow.tsx:8-19` already has a `showPrLink?: boolean` prop built for exactly the "suppress duplicate PR chip, keep CI span" scenario this row cites, and `research/architecture.md`'s Gap Analysis names it as the preferred reuse target. Evaluated and rejected for this specific need: (1) it takes `VcsWidgetData` (`VcsWidgetGithubRow.tsx:8`), not the `Session` proto object `DiffViewer` already receives — reuse would require a new `fromSessionVcs()` adapter, itself new code; (2) its CI-conclusion rendering is plainer text (`CI: {conclusion}`, `VcsWidgetGithubRow.tsx:81-83`) with no icon and no staleness tooltip, while AC1's Given-When-Then (Story 3.1.2) requires specific text ("Failing"/"Passing"/"Pending"/"No checks"), an icon (❌/✅/⏳), and `GitHubBadge.css.ts`'s `prBadgeBlocking`/`prBadgeReady`/etc. variant classes plus a staleness-aware tooltip (Task 3.1.2a) — a real visual/behavioral difference, not a cosmetic one. Reusing `VcsWidgetGithubRow` would mean either changing its shared rendering (risking the 3 existing call sites: `VcsPanel.tsx`, `UnfinishedItemDetail.tsx`, `BacklogItemDetail`) or building the adapter anyway, for no less total new code than `CIStatusBadge.tsx`. Kept as a new sibling component; this row makes the comparison explicit and traceable per the architecture review, rather than a silently-dropped alternative. |
 | Global settings surface for AC5 | Reuse existing `Config.FeatureFlags` map + `knownFeatureFlags` registry (`server/services/feature_flag_service.go`) | Confirmed live, generic, zero-new-UI mechanism (verified by reading `web-app/src/app/settings/features/page.tsx`, which renders `knownFeatureFlags` generically) | New dedicated `Config.BlockApprovalOnCIFailure bool` field + bespoke settings UI | Duplicates a mechanism that already exists for exactly this shape of toggle (see `sddDefaultPipelineFlagName` precedent, `server/services/backlog_service_lifecycle.go:134,145`) — adds a new JSON key and new UI code for no behavioral gain. |
 | CI-status normalization | Reuse `GitHubCheckConclusion`'s existing vocabulary (`success`/`failure`/`pending`/`neutral`/`""`) as-is; no new normalizer | `research/build-vs-buy.md` §1/§3 (already canonical, already the one on the wire) | Retroactively consolidate all 3 existing fetchers (`getCheckConclusion`, `normalizeCheckState`, `fetchCILabel`) into one shared function now | Out of scope: none of this feature's new code paths call the two weaker fetchers (`normalizeCheckState`, `fetchCILabel`) — they're used by unrelated features (`UserPRCache`, backlog labeling). Touching them adds risk with no acceptance-criterion benefit; flagged as a separate future cleanup, not silently dropped. |
 | AC2 check-page link | Pragmatic `${prUrl}/checks` URL construction, no new stored field | `research/architecture.md` §2 gap analysis (explicit "likely minimal fix") | Capture a specific `details_url` per check run end-to-end (new `Instance` field, new poller plumbing, new proto field) | Disproportionate new work for AC2's literal text ("link out to the corresponding GitHub Actions run/check page" — GitHub's own Checks tab at `<prUrl>/checks` satisfies this for any conclusion state). |
@@ -77,6 +80,11 @@ No schema/data migration needed.
   entries and existing proto clients are unaffected — the field simply reads as `false`
   for every rule that predates this change. `make proto-gen` regenerates bindings; no
   data backfill required.
+- `overrideCiBlock` adds one new proto field (`ResolveApprovalRequest.override_ci_block =
+  4`, see Story 2.2.4). Proto3 default `false` means every existing/in-flight
+  `ResolveApprovalRequest` (from clients built before this change) is unaffected — it
+  behaves exactly as it does today, since the AC5 guard only skips when the field is
+  explicitly set `true`. No data migration; `make proto-gen` regenerates bindings.
 
 ## Observability Plan
 
@@ -109,16 +117,23 @@ No schema/data migration needed.
 
 ## Unresolved Questions
 
-None blocking. Two deliberate scope decisions are recorded in the Pattern Decisions table
-above rather than left open:
+None blocking. Three deliberate scope decisions are recorded rather than left open:
 1. Whether to add a 5th "CI status unavailable / fetch error" badge state — deferred; no
    backend signal exists to drive it yet (see table row "Badge state vocabulary").
-2. Whether `ci_passing` should force a synchronous CI re-fetch at rule-evaluation time
-   instead of trusting the ~60s-stale poller cache — `research/architecture.md` §3
-   explicitly frames this as optional and not required by any AC; this plan accepts the
-   existing staleness bound, consistent with every other consumer of
-   `GitHubCheckConclusion`. Revisit only if false-positive auto-approvals are observed in
-   practice.
+2. Whether `ci_passing` should force a **synchronous** CI re-fetch at rule-evaluation time
+   instead of trusting the poller cache — still deferred; `research/architecture.md` §3
+   frames this as optional and not required by any AC. This plan does, however, no longer
+   accept the cache *unbounded* — Task 1.1.2b adds a bounded-staleness guard (treat
+   `CIStatus` as unknown, not "success," once `LastPRStatusCheck` is older than
+   `2 * PollInterval`) specifically because `ci_passing` gates an irreversible auto-approve
+   action (see Story 1.1.2, AC6). A synchronous re-fetch remains a possible future
+   escalation if false-positive auto-approvals are still observed in practice with the
+   staleness guard in place.
+3. `research/pitfalls.md` §2's SHA-mismatch/force-push case — the diff viewer renders the
+   *local* worktree while the CI badge reflects the *remote* PR head, and these can
+   silently disagree (e.g. after a force-push the badge may show stale CI for a SHA no
+   longer checked out). Explicitly deferred, not implemented: no local-HEAD-vs-badge-SHA
+   comparison is added in this plan. Revisit if this proves confusing in practice.
 
 ## Dependency Visualization
 
@@ -132,7 +147,7 @@ Phase 1: ci_passing rule condition (AC6, AC8, AC9)       Phase 2: block manual A
         |                                                          |
   1.4 Rule-builder UI checkbox                               2.4 Unit test
         |                                                          |
-  1.5 Unit tests                                                   |
+  1.5 Unit tests                                              2.5 Override ("Approve anyway") — Story 2.2.4
         |___________________________________________________________|
                                     |
                     Phase 3: diff-viewer badge + freshness fix (AC1, AC2, AC3, AC4, AC7)
@@ -182,8 +197,19 @@ combine it with existing conditions (e.g. a command-pattern regex) per AC6's exa
 - Files: `pkg/classifier/classifier.go`
 
 ##### Task 1.1.1d: Implement the `RequireCIPassing` check in `matchesRule` (~3 min)
-- After the existing `FilePattern` check (`:718-723`), add: `if rule.RequireCIPassing && ctx.CIStatus != "success" { return false }`.
+- Add an unexported constant `ciConclusionSuccess = "success"` colocated with the `Rule`
+  struct (avoids a bare literal string at the one comparison site in this package; mirrors
+  `ciConclusionFailure` added alongside the guard in `approval_service.go`, Task 2.2.2a).
+- After the existing `FilePattern` check (`:718-723`), add: `if rule.RequireCIPassing && ctx.CIStatus != ciConclusionSuccess { return false }`.
 - Files: `pkg/classifier/classifier.go`
+
+##### Task 1.1.1e: Run the existing classifier test suite as a regression gate (~2 min)
+- After Tasks 1.1.1a–1.1.1d land, run `go test ./pkg/classifier/...` and confirm zero
+  regressions in pre-existing tests before considering Story 1.1.1 done. This is the
+  highest-blast-radius change in the plan — `matchesRule`/`classifySingle` are evaluated
+  for every tool-call classification in the app — so this is an explicit verification
+  gate, not an assumption.
+- Files: none (verification only)
 
 #### Story 1.1.2: Populate `ClassificationContext.CIStatus` from the requesting session
 **As a** reviewer, **I want** `ci_passing` to reflect the actual session's branch, **so
@@ -192,11 +218,52 @@ that** the condition means something (not a global/unscoped flag).
 - *Given* `ApprovalHandler` already resolves `sessionID` (`server/services/approval_handler.go:200`) and holds `storage *session.Storage` (`:70`).
 - *When* `HandlePermissionRequest` builds `classCtx := h.classifier.BuildContext(payload.Cwd)` (`:282`).
 - *Then* it additionally looks up `h.storage.FindInstanceDataByID(sessionID)` and sets `classCtx.CIStatus = data.GitHubCheckConclusion` only when `data.GitHubPRNumber > 0`; otherwise `CIStatus` stays `""`.
+- AC6 stale-CI mitigation (closes adversarial-review.md Blocker 3 — "AC6's stale-CI race
+  has no mitigation, despite gating an irreversible auto-approve action").
+  - *Given* `data.GitHubCheckConclusion == "success"` but `data.LastPRStatusCheck` is older
+    than `2 * pollInterval` (the poller's configured interval — see Task 1.1.2b).
+  - *When* `classCtx.CIStatus` is populated.
+  - *Then* it is set to `""` (unknown), not `"success"` — a rule with `RequireCIPassing:
+    true` falls through to Escalate rather than auto-allowing on a conclusion that may no
+    longer reflect the branch's real CI state.
 **Files**: `server/services/approval_handler.go`
 
 ##### Task 1.1.2a: Populate `CIStatus` before `Classify` is called (~5 min)
 - In `HandlePermissionRequest`, immediately after `classCtx := h.classifier.BuildContext(payload.Cwd)` (`server/services/approval_handler.go:282`), add the `FindInstanceDataByID` lookup and conditional assignment described above. Handle lookup error/nil gracefully (leave `CIStatus` as `""`, matching this handler's existing best-effort error style elsewhere in the function).
 - Files: `server/services/approval_handler.go`
+
+##### Task 1.1.2b: Add a bounded-staleness guard before trusting `CIStatus` (~4 min)
+- Immediately after Task 1.1.2a's assignment of `classCtx.CIStatus = data.GitHubCheckConclusion`,
+  add: if `time.Since(data.LastPRStatusCheck) > 2 * pollInterval`, reset `classCtx.CIStatus
+  = ""` (treat as unknown) regardless of what `GitHubCheckConclusion` says. `pollInterval`
+  is the poller's configured interval — `PollInterval time.Duration`,
+  `session/pr_status_poller.go:26`, defaulting to `60 * time.Second`
+  (`session/pr_status_poller.go:41`). **Implementer TODO**: `ApprovalHandler` does not
+  currently hold a reference to the live `PRStatusPollerConfig`; confirm at implementation
+  time whether to (a) thread the configured interval into `ApprovalHandler` at construction
+  (alongside `storage`), or (b) reference a package-level default constant, so this guard
+  doesn't silently drift from the poller's real interval if it's ever changed. Either is
+  acceptable; hardcoding a second, disconnected `60 * time.Second` literal here is not.
+- Rationale: unlike the classifier's other, synchronous/local conditions (regex, file
+  pattern), CI status is inherently async/network-sourced with no fresher local value to
+  fall back to (`research/pitfalls.md` §4) — and `ci_passing` gates an irreversible
+  auto-allow action (AC6's own worked example is `^npm publish`). Treating a
+  too-old-to-trust conclusion as unknown fails closed (falls through to Escalate) rather
+  than risking an auto-approve on data that may no longer reflect the branch's current
+  head.
+- Files: `server/services/approval_handler.go`
+
+##### Task 1.1.2c: Add a unit test for the staleness guard (~3 min)
+- The staleness guard lives in `approval_handler.go`, not in `pkg/classifier` —
+  `matchesRule` only ever sees whatever `ClassificationContext.CIStatus` it's handed; it has
+  no concept of "stale." Add `TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown` to
+  `server/services/approval_handler_test.go`: given `data.LastPRStatusCheck` older than
+  `2 * pollInterval` and `data.GitHubCheckConclusion == "success"`, assert the `classCtx`
+  passed to `Classify` has `CIStatus == ""`, not `"success"` — i.e. a stale-but-cached
+  "success" cannot silently satisfy a `RequireCIPassing` rule. (Story 1.1.5 cross-references
+  this test as the concrete coverage for the stale-CI mitigation named in its own AC list —
+  see Task 1.1.5c.)
+- Files: `server/services/approval_handler_test.go`
 
 #### Story 1.1.3: Persist `RequireCIPassing` through `RuleSpec` and the wire proto
 **As a** user, **I want** a `ci_passing`-requiring rule I create to survive a restart and round-trip through the RPC API, **so that** it behaves like every other rule field.
@@ -235,6 +302,9 @@ that** the condition means something (not a global/unscoped flag).
 #### Story 1.1.5: Unit test coverage for `ci_passing`
 **Acceptance Criteria**:
 - AC8 (partial — classifier half): unit tests exist for the new condition.
+- AC6 stale-CI mitigation coverage: the staleness guard added in Story 1.1.2/Task 1.1.2b has
+  a corresponding unit test (see Task 1.1.5c — the test itself lives outside
+  `pkg/classifier` since the guard does).
 **Files**: `pkg/classifier/classifier_test.go`
 
 ##### Task 1.1.5a: Add `TestClassify_RequireCIPassing_*` tests (~5 min)
@@ -247,6 +317,19 @@ that** the condition means something (not a global/unscoped flag).
 ##### Task 1.1.5b: Add an AND-composition test matching AC6's literal example (~4 min)
 - `TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch`: a rule with both `CommandPattern` and `RequireCIPassing: true`; assert it only matches when both conditions hold (regex matches AND CIStatus == "success"), and fails when either alone is true.
 - Files: `pkg/classifier/classifier_test.go`
+
+##### Task 1.1.5c: Stale-CI-status test coverage (cross-reference, ~0 min — no new work here)
+- `matchesRule`/`Classify` have no concept of staleness; they only ever see whatever
+  `ClassificationContext.CIStatus` they're handed (verified by Task 1.1.5a's tests, which
+  already cover "CIStatus == \"\" → falls through" via `..._NoPR_Escalate`). The actual
+  staleness computation — treating an old `LastPRStatusCheck` as reason to reset `CIStatus`
+  to `""` before it ever reaches the classifier — lives in `approval_handler.go` (Story
+  1.1.2/Task 1.1.2b), so its test, `TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown`,
+  is specified and added under Task 1.1.2c in `server/services/approval_handler_test.go`,
+  not here. This task exists only to make that cross-reference explicit, so Blocker 3's
+  test-coverage requirement isn't satisfied by a misleading duplicate test asserting the
+  same `CIStatus == ""` behavior `..._NoPR_Escalate` already covers.
+- Files: none (see `server/services/approval_handler_test.go`, Task 1.1.2c)
 
 ---
 
@@ -300,10 +383,15 @@ that** the condition means something (not a global/unscoped flag).
 
 ##### Task 2.2.2a: Add the CI-red guard clause in `ResolveApproval` (~5 min)
 - Before `as.approvalStore.Resolve(...)` (`server/services/approval_service.go:73`), when `req.Msg.Decision == "allow"` and `config.LoadConfig().GetFeatureFlag(blockApprovalOnCIFailureFlagName)`: look up `as.storage.FindInstanceDataByID(sessionID)` (using the `sessionID` already resolved at `:68-69`); if `data.GitHubPRNumber > 0 && data.GitHubCheckConclusion == "failure"`, return the `CodeFailedPrecondition` error described above and log the block (mirrors the existing `log.Info` at `:97`).
+- Add an unexported constant `ciConclusionFailure = "failure"` colocated with this guard (mirrors `ciConclusionSuccess` in `pkg/classifier/classifier.go`, Task 1.1.1d, per the Domain Glossary row); use it in place of the literal `"failure"` comparison above.
+- **Error path (explicit, closes adversarial-review.md Blocker 2):**
+  - **Nil `as.storage`**: guard it first — `if as.storage == nil { /* skip the block check entirely */ }` — and proceed to `approvalStore.Resolve` as if the flag were off. Fail open, not closed: this is a net-new, opt-in safety feature layered on top of the pre-existing approval flow, not a pre-existing invariant the flow already depended on, so a missing dependency should degrade to "feature quietly does nothing" rather than blocking (or panicking on) every approval in the workspace.
+  - **Lookup error or not-found from `FindInstanceDataByID`** (e.g. the session was deleted between escalation and the human clicking Approve — a race this feature is newly capable of hitting, since `ApprovalService` never touched storage before this change): treat CI status as unknown and fail open — skip the block, let `approvalStore.Resolve` proceed normally. Do not return an error and do not treat "lookup failed" as equivalent to "CI is failing." One-sentence rationale: an approval flow should never hard-fail a human's explicit "Approve" click because of an infrastructure lookup miss that has nothing to do with the actual CI state.
 - Files: `server/services/approval_service.go`
 
 ##### Task 2.2.2b: Surface the block reason inline in the Approve button UI (~5 min)
 - In `resolveApproval` (`web-app/src/components/ui/NotificationPanel.tsx:162-176`), on a caught error, inspect the ConnectRPC error code; if it is `FailedPrecondition`, store the error's message keyed by `approvalId` (new state, e.g. `blockedApprovals`) instead of falling into the generic `"expired"` branch, and render it as inline text near the Approve/Deny buttons (`:461-481`) rather than silently disabling them (per AC5, "visibly explained... not a silent no-op").
+- This inline text is not a dead end: Story 2.2.4/Task 2.2.4c adds an "Approve anyway" button next to it, so the block is always scoped-overridable rather than a pure stop sign.
 - Files: `web-app/src/components/ui/NotificationPanel.tsx`
 
 #### Story 2.2.3: Unit test coverage for the block
@@ -311,8 +399,91 @@ that** the condition means something (not a global/unscoped flag).
 - AC8 (partial — approval-block half): the block behavior has test coverage.
 **Files**: `server/services/approval_service_test.go`
 
-##### Task 2.2.3a: Add `ResolveApproval` block tests (~5 min)
-- `TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled`, `TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled`, `TestResolveApproval_UnaffectedWhenNoPR` — following the existing test setup pattern in `server/services/approval_service_test.go` (`NewApprovalService(store)` calls at lines 24/54/79/105/120/351).
+##### Task 2.2.3a: Add `ResolveApproval` block tests (~6 min)
+- `TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled`, `TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled`, `TestResolveApproval_UnaffectedWhenNoPR`, `TestResolveApproval_FailsOpen_WhenStorageLookupErrors` (asserts a `FindInstanceDataByID` error/not-found does not block, does not panic, and `approvalStore.Resolve` still proceeds — see Task 2.2.2a's error-path spec) — following the existing test setup pattern in `server/services/approval_service_test.go` (`NewApprovalService(store)` calls at lines 24/54/79/105/120/351).
+- Every new test above that exercises the CI-block path must explicitly call `SetStorage(...)` after `NewApprovalService(store)` (mirrors the existing `SetEventBus` call pattern) so it isn't silently exercising the nil-`storage` fail-open path by accident. `TestResolveApproval_FailsOpen_WhenStorageLookupErrors` is the one exception: it should call `SetStorage` with a storage double that deliberately returns an error/not-found from `FindInstanceDataByID`, not leave `storage` nil, so it tests the lookup-error branch specifically rather than the nil-storage branch. Confirm the 6 pre-existing `NewApprovalService(store)` call sites (lines 24/54/79/105/120/351) are unrelated to the CI-block feature and are therefore unaffected by Task 2.2.2a's nil-storage guard being fail-open — no changes needed to those sites.
+- Files: `server/services/approval_service_test.go`
+
+#### Story 2.2.4: Override the AC5 block with an audited "Approve anyway"
+**As a** reviewer, **I want** to override the CI-red block for one specific session while
+explicitly acknowledging red CI, **so that** I don't have to disable
+`review:block-approval-on-ci-failure` workspace-wide just to approve the one session I've
+reviewed and judged safe despite its failing CI (closes adversarial-review.md Blocker 1 —
+"a hard block with no override is a foot-gun... re-introduces exactly the kind of hard gate
+Goal 2 explicitly rejects").
+**Acceptance Criteria**:
+- *Given* the flag `review:block-approval-on-ci-failure` is `true`, and `ResolveApproval` has
+  just returned `CodeFailedPrecondition` for a session with `GitHubPRNumber > 0` and
+  `GitHubCheckConclusion == "failure"` (Story 2.2.2's block).
+- *When* the reviewer clicks "Approve anyway" and the client re-submits `ResolveApproval`
+  with `Decision: "allow"`, `OverrideCiBlock: true`.
+- *Then* `ResolveApproval` skips the AC5 guard clause entirely for this request (does not
+  re-evaluate `GitHubPRNumber > 0 && GitHubCheckConclusion == "failure"`), `approvalStore.Resolve`
+  proceeds normally, and the resolution is logged with a line distinct from the existing
+  `log.Info("[ApprovalService] resolved approval"...)` at `:97` — including
+  `override_ci_block=true` and the CI conclusion at the time of override — so overrides are
+  grep-able separately from ordinary approvals.
+- *Given* `OverrideCiBlock: true` is sent on a request where the block would not have fired
+  anyway (flag off, no PR, or CI passing).
+- *When* `ResolveApproval` is called.
+- *Then* behavior is unchanged from Story 2.2.2/2.2.3 (no distinct override log line is
+  emitted, since nothing was actually overridden) — `OverrideCiBlock` is a no-op flag in
+  this case, not a second code path with its own side effects.
+**Files**: `proto/session/v1/session.proto`, `server/services/approval_service.go`,
+`web-app/src/components/ui/NotificationPanel.tsx`
+
+##### Task 2.2.4a: Add `override_ci_block = 4` to `ResolveApprovalRequest` (~2 min)
+- Add `bool override_ci_block = 4;` to `ResolveApprovalRequest`
+  (`proto/session/v1/session.proto:1244-1254`), with a doc comment: "When true, the caller
+  explicitly acknowledges failing CI and re-submits an already-blocked approval; the server
+  skips the AC5 CI-red guard for this request only."
+- Run `make proto-gen` to regenerate `session/gen/session/v1/*.go` and
+  `web-app/src/gen/session/v1/*_pb.ts`.
+- Files: `proto/session/v1/session.proto`, generated files.
+
+##### Task 2.2.4b: Skip only the block *decision* (not the lookup) when `OverrideCiBlock` is set (~4 min)
+- Correction (adversarial review round 2): the lookup itself must always run — its result
+  is what the distinct log line reports — only the *early-return* decision built on top of
+  it is conditional on the override flag. Do not gate the whole guard clause (including the
+  nil-storage/lookup-error fail-open paths from Task 2.2.2a) behind
+  `if !req.Msg.OverrideCiBlock`; that would make the lookup itself conditional and leave
+  nothing to log.
+- In `ResolveApproval` (`server/services/approval_service.go`), keep Task 2.2.2a's lookup
+  and its nil-storage/lookup-error fail-open handling unconditional. Change only the final
+  decision: today it returns `CodeFailedPrecondition` when `data.GitHubPRNumber > 0 &&
+  data.GitHubCheckConclusion == ciConclusionFailure`; change that branch to
+  `if blocked := data.GitHubPRNumber > 0 && data.GitHubCheckConclusion ==
+  ciConclusionFailure; blocked && !req.Msg.OverrideCiBlock { return
+  connect.NewError(...) }` — i.e. `OverrideCiBlock` suppresses the *return*, not the lookup.
+- When `blocked && req.Msg.OverrideCiBlock` (the override actually mattered — not a no-op
+  flag sent on a passing/no-PR session), log a distinct line, e.g.
+  `log.Info("[ApprovalService] approved despite failing CI (override)", "approval_id",
+  req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", data.GitHubCheckConclusion)`,
+  separate from the existing `log.Info("[ApprovalService] resolved approval"...)` line at
+  `:97`. When the lookup itself failed/was skipped (nil storage, not-found — Task 2.2.2a's
+  fail-open paths), `blocked` is `false` by construction, so no override log line fires
+  either — consistent with Story 2.2.4's second Given/When/Then ("no-op flag" case).
+- Files: `server/services/approval_service.go`
+
+##### Task 2.2.4c: Add "Approve anyway" affordance in `NotificationPanel.tsx` (~5 min)
+- Extend `resolveApproval`'s signature (`:162`) with an optional 4th parameter,
+  `overrideCiBlock?: boolean`, threaded into the `create(ResolveApprovalRequestSchema, {
+  approvalId, decision, overrideCiBlock })` call at `:165` (existing callers omit it and get
+  proto3's default `false`, so Task 2.2.2b's Approve/Deny buttons are unaffected).
+- Next to the inline block-explanation text added in Task 2.2.2b, render a second button
+  "Approve anyway" when a stored block error exists for that `approvalId`. On click, call
+  `resolveApproval(approvalId, "allow", group.allIds, true)`, then clear the stored
+  block-error state for that `approvalId` on success (same success path Approve already
+  takes at `:166`).
+- Files: `web-app/src/components/ui/NotificationPanel.tsx`
+
+##### Task 2.2.4d: Unit test coverage for the override (~4 min)
+- Add `TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly` to
+  `server/services/approval_service_test.go`: given failing CI and the flag on, assert
+  `ResolveApproval` succeeds (no `CodeFailedPrecondition`) when `OverrideCiBlock: true`.
+  Add `TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired`: given the flag
+  off (or CI passing, or no PR), assert `OverrideCiBlock: true` has no observable behavioral
+  difference from the equivalent Story 2.2.3 test.
 - Files: `server/services/approval_service_test.go`
 
 ---
