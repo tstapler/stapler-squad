@@ -439,7 +439,7 @@ Phase 4: Tests (needs everything above)
 
 ---
 
-### Epic 4.2: `report_duplicate` tests (FR3–FR8, FR10)
+### Epic 4.2: `report_duplicate` tests (FR3–FR7, FR10)
 
 #### Story 4.2.1: Success paths (PR ref from `in_progress`, issue ref from `pr_pending`)
 **Acceptance Criteria** (FR3):
@@ -521,8 +521,25 @@ Phase 4: Tests (needs everything above)
 
 ---
 
-## Final Verification Task (all phases)
+### Epic 4.4: Build-level invariant (FR8)
+**Goal**: Give FR8 ("no new `BacklogStatus`, no ent schema/migration, `go build ./...` succeeds
+without `ent generate`") an explicit story with a concrete GWT, rather than leaving it verified
+only by an unlabeled task outside every Epic/Story (**added per cross-artifact consistency
+check**: Epic 4.2's header previously claimed FR8 coverage that none of its 6 stories actually
+exercised — this epic is the real, dedicated home for FR8).
 
-##### Task 5.0a: Full build/test/lint gate (~5 min)
+#### Story 4.4.1: Zero-schema-change verification
+**As** a reviewer of this PR, **I want** an explicit, automated check that the feature shipped
+with no ent schema drift, **so that** FR8/ADR-001's "no new terminal status, no migration" claim
+is verified mechanically, not just asserted in prose.
+**Acceptance Criteria** (FR8):
+- *Given* the full diff for this feature (Phases 1–4, all files listed in this plan), *When*
+  `go build ./...` is run, *Then* it succeeds with zero invocations of
+  `go run -mod=mod entgo.io/ent/cmd/ent generate` anywhere in the build/test/commit history for
+  this feature, and `git status session/ent/` shows zero diff — confirming no `BacklogStatus`
+  enum value, ent schema field, or migration was introduced.
+**Files**: none (verification story — no production code, confirms the absence of a category of change)
+
+##### Task 4.4.1a: Full build/test/lint gate (~5 min)
 - `go build ./... && make test && make lint` (or `make quick-check`) — confirms FR8 (`ent generate` never invoked, build succeeds), FR9 (existing suite green), and all new tests pass. `grep -rn "ent generate" .git/COMMIT_EDITMSG` is not a real check — the actual proof is `git status session/ent/` showing zero diff after the full build/test cycle.
 - Files: none (verification task)
