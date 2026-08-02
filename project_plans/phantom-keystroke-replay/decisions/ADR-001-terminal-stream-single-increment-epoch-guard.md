@@ -39,9 +39,9 @@ correct choice here, not an oversight.
 ## Decision
 
 **`useTerminalStream.connect()` increments `connectionEpochRef` exactly
-once, synchronously, at the very top of `connect()` — before the existing
-entry guard's early-return check.** No second increment inside the
-message-processing IIFE.
+once, synchronously, at the top of `connect()` — immediately *after* the
+existing entry guard's early-return check has passed, not before it.** No
+second increment inside the message-processing IIFE.
 
 ### Why `watchSessions()` needs two increments and `connect()` doesn't
 
@@ -84,11 +84,13 @@ so the entry guard no longer blocks it — this is exactly the reconnect case
 the epoch guard needs to protect against, and it is a single self-recursive
 surface, not two layered ones).
 
-A single increment, placed at the top of `connect()` itself (before the
-entry guard's check, so even an early-returning call still bumps the
-counter — matching `usePathCompletions.ts`'s placement discipline of
-incrementing before any `await`), is therefore sufficient: it gives every
-`connect()` invocation — whether from the initial `autoConnect` effect, the
+A single increment, placed at the top of `connect()` itself immediately
+after the entry guard's check has passed (so an early-returning,
+guard-blocked call never bumps the counter — see "Where the increment is
+placed relative to the entry guard" below — while still matching
+`usePathCompletions.ts`'s placement discipline of incrementing before any
+`await`), is therefore sufficient: it gives every `connect()` invocation
+that actually proceeds — whether from the initial `autoConnect` effect, the
 visibility/online listener, `handleManualReconnect`, or the internal
 `setTimeout`-scheduled retry — a distinct epoch, and every one of those
 call sites funnels through this single function. There is no second,
@@ -98,15 +100,35 @@ account for.
 
 ### Where the increment is placed relative to the entry guard
 
-Placed **before** `if (isConnectedRef.current || isConnectingRef.current ||
-!sessionId) return;`, not after. This means an early-returning call (e.g. a
-duplicate `connect()` fired while already connecting) still consumes an
-epoch value. This is intentional and harmless — epoch values are opaque
-monotonic identifiers, not a resource pool; skipping a value on an
-early-return has no observable effect, and placing the increment first
-avoids a subtle ordering bug where a *different* logic change to the entry
-guard's condition in the future could accidentally let two calls compute
-the same epoch value before either increments.
+Placed **after** `if (isConnectedRef.current || isConnectingRef.current ||
+!sessionId) return;`, not before. An early-returning (guard-blocked) call —
+e.g. a duplicate `connect()` fired while a prior attempt is still
+CONNECTING or already CONNECTED — must never reach the increment at all.
+
+This was corrected during plan repair (2026-08-02) after `pre-mortem.md`
+Failure #1 (P1) identified that incrementing *before* the guard lets a
+guard-blocked call still bump `connectionEpochRef.current`. Since the guard
+is exactly what currently prevents a second real `connect()` from running
+while one is already in flight, a guard-blocked call that still consumes an
+epoch would orphan the real in-flight attempt: that attempt's own captured
+`epoch` would permanently mismatch `connectionEpochRef.current` at every
+later checkpoint (`firstMessage`, `catch`, `finally`), even though no
+second real attempt ever started to complete the handoff — silently
+stranding the connection (e.g. stuck showing "CONNECTING", or silently
+reverting to disconnected) with no console error. This is exactly the
+rapid-reconnect flapping scenario (visibility + online listeners firing
+close together) this backlog item is about, so letting a guard-blocked
+call consume an epoch would reintroduce a version of the very bug this
+epoch guard exists to fix.
+
+Placing the increment after the guard means epoch values are still opaque
+monotonic identifiers, not a resource pool — the counter simply advances
+one *fewer* value than it would have — but now only for calls that
+actually proceed past the guard, which is what every checkpoint's
+`epoch === connectionEpochRef.current` comparison depends on staying
+meaningful. See `implementation/plan.md` Task 3.1.1.1 (implementation) and
+Task 3.2.1.0 (the Jest regression test proving a guard-blocked call does
+not orphan the real in-flight attempt).
 
 ### Addendum — `disconnect()` participates as a reader, not an incrementer
 

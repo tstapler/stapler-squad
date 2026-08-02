@@ -58,7 +58,7 @@ Decisions table below; summary:
 | Term | Definition | Realized as |
 |---|---|---|
 | Connection epoch | A monotonically increasing integer identifying one `connect()` attempt's lifetime, from entry to its `finally` block completing. `disconnect()` also reads (never increments) this same counter to detect that a newer `connect()` has superseded it mid-disconnect. | `connectionEpochRef: React.MutableRefObject<number>` in `useTerminalStream.ts` |
-| Current epoch / `epoch` | The epoch value captured locally by a specific `connect()` invocation at entry, before any `await`; `disconnect()` captures it at its own entry (without incrementing) for the same purpose. | `const epoch = ++connectionEpochRef.current` (connect); `const epochAtDisconnectStart = connectionEpochRef.current` (disconnect) |
+| Current epoch / `epoch` | The epoch value captured locally by a specific `connect()` invocation immediately after that invocation's entry guard (`isConnectedRef.current \|\| isConnectingRef.current \|\| !sessionId`) has passed, and before any `await` — a call that the guard blocks returns before ever reaching this increment, so a guard-blocked no-op never consumes an epoch or orphans the real in-flight attempt; `disconnect()` captures the counter at its own entry (without incrementing) for the same comparison purpose. | `const epoch = ++connectionEpochRef.current` (connect, placed after the entry guard); `const epochAtDisconnectStart = connectionEpochRef.current` (disconnect) |
 | Superseded attempt | A `connect()` invocation whose captured `epoch` no longer equals `connectionEpochRef.current` — a newer attempt has since started. The same comparison, applied to `disconnect()`'s captured value, detects a `connect()` that started and is now the current epoch while `disconnect()` was still awaiting. | Comparison `epoch !== connectionEpochRef.current` at each checkpoint |
 | Drop count | The number of `TerminalData` messages discarded from a `MessageQueue`'s internal buffer at the moment `close()` is called. | Return value of `MessageQueue.close(): number` |
 | `DroppedInputEvent` / `recordDrop` | A smart constructor making the domain-illegal `count <= 0` state unrepresentable at the point a drop is reported: `recordDrop(count: number): DroppedInputEvent \| null` returns `null` for `count <= 0`, otherwise `{ count, at: Date.now() }`. Used at all three drop-reporting call sites (`connect()`'s close-before-install, `disconnect()`'s close, `useTerminalFlowControl`'s `onDrop`) instead of each duplicating a `> 0` guard — a type-driven-design smart-constructor / parse-don't-validate pattern. | `function recordDrop(count: number): DroppedInputEvent \| null` in `useTerminalStream.ts`; `type DroppedInputEvent = { count: number; at: number }` |
@@ -118,12 +118,13 @@ Omitted — no schema, proto, or persisted-data changes in this plan.
 | Risk | Mitigation |
 |---|---|
 | Rewriting `MessageQueue.test.ts`'s `'should yield messages in order'` test (currently asserts the buggy behavior) could silently narrow coverage if not replaced with an equally strong assertion. | Task 2.1.1.2 explicitly rewrites it to assert the *opposite* (queued-but-unsent messages are dropped after `close()`), and Task 2.1.1.3 adds a same-tick-push-during-close race test per pitfalls.md §1's "resolve-callback races with close" warning. |
-| A generation-ref port that increments only once (either only in `connect()` or only inside the message-loop IIFE) silently under-protects, per pitfalls.md's explicit warning about `useSessionService.ts`'s *double*-increment shape. | Story 3.1.1's tasks explicitly mirror both increment points: once at the very top of `connect()` (invalidating any prior attempt still in its `finally`), and epoch comparisons at all three checkpoints named in architecture.md §1 (loop body, catch, finally) — not just one. |
+| A generation-ref port that increments only once (either only in `connect()` or only inside the message-loop IIFE) silently under-protects, per pitfalls.md's explicit warning about `useSessionService.ts`'s *double*-increment shape. | Story 3.1.1's tasks explicitly mirror both increment points: once in `connect()`, immediately after its entry guard passes (not before it — see Task 3.1.1.1 and pre-mortem.md Failure #1 — and not a second time inside the message-loop IIFE), and epoch comparisons at all three checkpoints named in architecture.md §1 (loop body, catch, finally) — not just one. |
 | Fixing `MessageQueue.close()` in isolation without exercising `useTerminalStream`'s actual usage of it reproduces the same "fixed the class, not the usage" gap that let AC3 get marked done incorrectly once already. | Story 3.2.1's "queued-message-drop-on-close interleaving" Jest test exercises `useTerminalStream` (via `renderHook`), not `MessageQueue` in isolation — per pitfalls.md §5. |
 | `aria-live="assertive"` is unproven in this codebase (no existing shipped consumer) — cross-browser/AT behavior risk. | Story 4.2.3 includes an explicit accessibility-focused Jest test asserting `role="alert"` + `aria-live="assertive"` + `aria-atomic="true"` are present; full manual AT verification is called out as a follow-up in Unresolved Questions (out of scope for automated CI). |
 | Rapid-repeat drops within `useLiveRegion`'s fixed 1000ms auto-clear window can silently swallow a second announcement (pitfalls.md §4, "clearImmediately" race). | Coalescing lives in `InputDropBadge`, not raw `announce()` calls — every drop within the debounce window updates a running count and re-triggers a single, content-changing (`"N keystrokes not sent"`) announcement, so identical-string suppression by AT is avoided by construction. |
 | Go: extracting `controlModeReadLoop` is a refactor of live production code (not just additive) — regression risk to the two other structurally similar handlers (`streamShellViaControlMode`, `streamViaTmuxCapturePane`) if touched by mistake. | Phase 5 scope is explicitly `streamViaControlMode` only, matching requirements.md's file listing; the other two duplicated handlers are named as a flagged follow-up in Unresolved Questions, not touched here (Non-Goals: "general reconnect/re-render stability work beyond what's needed... is out of scope"). |
 | AC5 manual repro requires actually inducing the "not started or paused" condition, not a generic network-offline toggle (per Constraints). | Story 6.1.1's task uses `pause_session`/`resume_session` MCP tools against a live tmux-backed session while its terminal WebSocket is open, which drives `session/instance_tmux.go:471-472`'s `!i.started.Load() \|\| i.Status == Paused` → `"session not started or paused"` path directly — the exact error string from the ticket's log excerpt. |
+| AC5's repro is run by a single sequential agent, which cannot literally type "during" a pause the way two independent actors could — a repro that doesn't pin the concrete injection mechanism risks the same "didn't actually exercise the fix" failure this ticket has already hit twice (pre-mortem.md Failure #2, P1). | Task 6.1.1.1 pins the mechanism concretely: a `write_to_session`/`send_control` call immediately followed, with no delay, by `pause_session` (back-to-back tool calls, repeated across all 5-10 cycles), explicitly framed as best-effort adversarial timing rather than guaranteed simultaneity; an observed `InputDropBadge`/drop-signal firing on at least one cycle is a required pass/fail assertion, and zero cycles showing the signal requires a tighter re-run or an explicit "inconclusive" outcome rather than a silent pass. |
 
 ---
 
@@ -342,35 +343,62 @@ Covers the `useTerminalStream` half of **AC3** and the epoch-guard portion of
 #### Story 3.1.1 — Add the epoch ref, gate the loop/catch/finally/`disconnect()` continuation, collapse the queue-close asymmetry
 
 **AC3 (epoch guard half) Given-When-Then:**
-- **Given** `connect()` is called for session `sess-flap-1` (attempt A,
-  captured `epoch = 1`), and before attempt A's `for await` loop receives
-  its first message, `connect()` is called again for the same session
-  (attempt B, captured `epoch = 2`, since `connectionEpochRef.current` was
-  incremented to `2` synchronously at B's entry),
-- **When** attempt A's stream later delivers a message or its `finally`
-  block runs,
-- **Then** attempt A's message-processing branch and `finally` block both
-  see `epoch (1) !== connectionEpochRef.current (2)` and skip all
+- **Given** `connect()` is called for session `sess-flap-1` (attempt A);
+  its entry guard (`isConnectedRef.current || isConnectingRef.current ||
+  !sessionId`) passes, so attempt A proceeds past the guard and *only then*
+  increments the epoch to `epoch = 1`,
+- **When** attempt A's `for await` loop receives its first message —
+  synchronously flipping `isConnectingRef.current` back to `false`
+  (line 222) — and, before React's `isConnectedRef` ref-sync `useEffect`
+  has had a chance to run off the queued `setIsConnected(true)`,
+  `connect()` is called again for the same session (attempt B): attempt
+  B's entry guard also passes in this window (`isConnectingRef.current`
+  is now `false` and the stale `isConnectedRef.current` is still `false`),
+  so attempt B proceeds past its own guard and increments the epoch to
+  `epoch = 2`,
+- **Then** attempt A's subsequent checkpoints (its `catch`/`finally`, and
+  any further messages delivered on its own stream) see `epoch (1) !==
+  connectionEpochRef.current (2)` and skip all
   `setIsConnected`/`setTerminalState`/reconnect-scheduling — only attempt
   B's outcome is ever reflected in `isConnected`/`terminalState`, and
   attempt B's `MessageQueue` (not attempt A's) is the one installed in
-  `messageQueueRef.current` for all subsequent `sendInput` calls.
+  `messageQueueRef.current` for all subsequent `sendInput` calls. A
+  **guard-blocked** call — one where `isConnectedRef.current ||
+  isConnectingRef.current` is still `true` at the moment it's attempted —
+  is a distinct case, covered by Task 3.2.1.0: it must return before ever
+  reaching the epoch increment, so it can never orphan the real in-flight
+  attempt (pre-mortem.md Failure #1).
 
-##### Task 3.1.1.1 — Declare `connectionEpochRef` and increment at `connect()` entry
+##### Task 3.1.1.1 — Declare `connectionEpochRef` and increment only after `connect()`'s entry guard passes
 
 - File: `web-app/src/lib/hooks/useTerminalStream.ts`.
 - Add `const connectionEpochRef = useRef(0);` near `isConnectingRef`
   (line 106), with a doc comment mirroring `useSessionService.ts:184`'s
   ("Monotonically-increasing... checked at every await checkpoint").
-- At the very top of `connect()` (line 162, before `if
-  (isConnectedRef.current...) return;`), add
-  `const epoch = ++connectionEpochRef.current;` — synchronous, before any
-  `await`, per pitfalls.md's "increment-point placement" warning. This is
-  the single increment (unlike `useSessionService.ts`'s double-increment
-  shape — see ADR-001 for why `useTerminalStream.ts` only needs one, given
-  its entry guard already fully prevents concurrent starts, unlike
-  `watchSessions()` which can be called by multiple independent external
-  callers).
+- At the top of `connect()` (line 162), leave the existing entry guard —
+  `if (isConnectedRef.current || isConnectingRef.current || !sessionId)
+  return;` — completely unchanged and untouched, and add
+  `const epoch = ++connectionEpochRef.current;` as the **first statement
+  after** that guard (i.e. only a call that the guard actually lets
+  through ever executes this line — place it alongside/immediately after
+  `isConnectingRef.current = true;`). This must **not** be placed before
+  the guard: pre-mortem.md Failure #1 (P1) identified that incrementing
+  before the guard means a guard-blocked call (one that hits the guard's
+  `return` because `isConnectedRef.current || isConnectingRef.current` is
+  already `true`) would still bump `connectionEpochRef.current` — orphaning
+  the real in-flight attempt, since that attempt's own captured `epoch`
+  would now permanently mismatch `connectionEpochRef.current` at every
+  later checkpoint (`firstMessage`, `catch`, `finally`), even though no
+  second real attempt ever started to complete the handoff. Placing the
+  increment after the guard means only a call that actually proceeds past
+  the guard ever consumes an epoch value. Still synchronous, still before
+  any `await` within `connect()`'s own body, per pitfalls.md's
+  "increment-point placement" warning — just after the guard rather than
+  before it. This is the single increment (unlike `useSessionService.ts`'s
+  double-increment shape — see ADR-001 for why `useTerminalStream.ts` only
+  needs one, given its entry guard already fully prevents concurrent
+  starts, unlike `watchSessions()` which can be called by multiple
+  independent external callers).
 
 ##### Task 3.1.1.2 — Unconditionally close the previous `messageQueueRef.current` before installing a new one
 
@@ -477,18 +505,53 @@ signal a code-level guard is needed, not just a documented justification):
 - **Given** `useTerminalStream({ sessionId: 'sess-race-1', autoConnect: false })`
   rendered via `renderHook`, with `mockStreamTerminal` configured to return a
   fresh `makePushStream()` on each call,
-- **When** the test calls `result.current.connect()` twice in immediate
-  succession (no `await` between calls) and then pushes a message onto the
-  *first* call's stream,
-- **Then** `result.current.isConnected` never reflects the first stream's
-  message (the hook's `isConnected` state only flips `true` in response to
-  the *second* call's stream delivering its first message), proving the
-  first (superseded) attempt's `firstMessage` branch was skipped.
+- **When** the test calls `result.current.connect()` (attempt A), pushes a
+  first message on attempt A's stream so its entry guard's
+  `isConnectingRef.current` flips back to `false` (production behavior,
+  line 222) without an intervening render flush of the `isConnectedRef`
+  ref-sync effect, then — while `isConnectedRef.current` is still
+  stale-`false` — calls `result.current.connect()` again (attempt B, whose
+  entry guard now also passes) and pushes a first message onto *attempt
+  B's* stream,
+- **Then** `result.current.isConnected` ends up reflecting only attempt
+  B's outcome — attempt A's `MessageQueue` instance was `.close()`-d
+  (Task 3.1.1.2) and its later checkpoints are no-ops — proving the first
+  (superseded) attempt's post-supersession state mutations were skipped. A
+  **separate** guard-blocked-call test (Task 3.2.1.0) proves the converse:
+  a `connect()` call that the entry guard actually blocks (called while
+  `isConnectingRef.current` is still `true` for a still-in-flight attempt)
+  must **not** consume an epoch or orphan that in-flight attempt — see
+  pre-mortem.md Failure #1 (P1).
 
-##### Task 3.2.1.1 — `connect_should_ignoreStaleGenerationMessages_When_secondConnectSupersedesFirstBeforeFirstMessage`
+##### Task 3.2.1.0 — `connect_should_notOrphanInFlightAttempt_When_secondCallIsBlockedByEntryGuard`
+
+*(Required by pre-mortem.md Failure #1 (P1): write and pass this test as
+direct proof that Task 3.1.1.1's increment-after-guard placement is
+correct, before relying on any other epoch-guard test in this story.)*
 
 - File: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`, new
   `describe('useTerminalStream — connection epoch guard', ...)` block.
+- Configure `mockStreamTerminal` so attempt A's returned stream never
+  yields a message during the test (i.e. attempt A is deliberately left
+  genuinely CONNECTING — `isConnectingRef.current === true` — for the
+  test's duration).
+- Call `connect()` once (attempt A, left in-flight). While attempt A is
+  still in-flight, call `connect()` a second time — this call must be
+  blocked by the existing entry guard.
+- Assert:
+  - (a) `mockStreamTerminal` was invoked **exactly once**, not twice — the
+    guard-blocked second call never reached the point that opens a stream
+    (and therefore never reached the epoch increment either).
+  - (b) After then pushing a message on attempt A's (only) stream, attempt
+    A's `firstMessage` branch still runs normally and `isConnected`
+    becomes `true` — proving the guard-blocked call did not bump
+    `connectionEpochRef.current` out from under attempt A. If it had,
+    attempt A's checkpoint would see `epoch !== connectionEpochRef.current`
+    and silently no-op forever, leaving `isConnected` stuck `false`.
+
+##### Task 3.2.1.1 — `connect_should_ignoreStaleGenerationMessages_When_secondConnectSupersedesFirstAfterFirstMessageRefSyncLag`
+
+- Same describe block as Task 3.2.1.0.
 - Enhance the module-level `MessageQueue` mock (lines 57-65) to track
   `close` calls with a per-instance id (e.g. `static instanceCount = 0`,
   each instance records its own id and whether `.close()` was invoked on
@@ -496,20 +559,27 @@ signal a code-level guard is needed, not just a documented justification):
   second instance is the one `sendInput` targets.
 - Configure `mockStreamTerminal` to return `pushStreamA.iterable` on call 1
   and `pushStreamB.iterable` on call 2.
-- Call `connect()` twice synchronously, then `pushStreamA.push(makeOutputMsg())`,
-  assert `isConnected` stays `false` (or whatever pre-first-message default
-  is) until `pushStreamB.push(...)` fires.
+- Call `connect()` (attempt A), push a message on `pushStreamA` so attempt
+  A's own entry-guard flags flip (`isConnectingRef.current` back to
+  `false`) without flushing the `isConnectedRef` ref-sync effect in
+  between, then call `connect()` again (attempt B — its entry guard passes
+  in this window) and push a message on `pushStreamB`. Assert `isConnected`
+  reflects only attempt B's message, and that `pushStreamA`'s
+  `MessageQueue` instance was `.close()`-d.
 
-##### Task 3.2.1.2 — `connect_should_notThrow_When_calledThreeTimesInRapidSuccession`
+##### Task 3.2.1.2 — `connect_should_notThrow_When_threeAttemptsSupersedeAcrossRepeatedRefSyncLagWindows`
 
-- Same describe block. Calls `connect()` three times synchronously with
+- Same describe block. Repeats Task 3.2.1.1's supersession mechanism twice
+  in a row — call `connect()` (A), push A's first message (opens the
+  guard), call `connect()` (B) in the lag window, push B's first message
+  (re-opens the guard), call `connect()` (C) in *that* lag window — with
   three distinct `mockStreamTerminal` return values (A, B, C). Asserts no
   exception is thrown/no unhandled promise rejection, and that only the
-  *third* (`C`) call's `firstMessage` results in `isConnected === true`
-  once `pushStreamC.push(...)` fires — covers pitfalls.md's explicit "must
-  decide whether triple-reconnect should also proactively close superseded
-  generations" question (answered: yes, via Task 3.1.1.2's unconditional
-  `close()`, verified here by asserting instances A and B were both closed).
+  *third* (`C`) call's `firstMessage` results in `isConnected === true` —
+  covers pitfalls.md's explicit "must decide whether triple-reconnect
+  should also proactively close superseded generations" question (answered:
+  yes, via Task 3.1.1.2's unconditional `close()`, verified here by
+  asserting instances A and B were both closed).
 
 ##### Task 3.2.1.3 — `useTerminalStream_should_dropQueuedInput_When_reconnectSupersedesQueueWithPendingMessages`
 
@@ -517,12 +587,15 @@ signal a code-level guard is needed, not just a documented justification):
   exercise the hook, not just the queue class" requirement — this
   complements, does not replace, Phase 2's queue-level tests).
 - Sequence: `connect()` (attempt A, gets `messageQueueRef` instance #1) →
-  simulate a queued-but-undelivered push on instance #1 (via the mock's
-  `push` spy recording a call) → call `connect()` again (attempt B) before
-  attempt A's stream delivers anything → assert instance #1's `.close` was
-  called (Task 3.1.1.2's unconditional close) and instance #2 is the one
-  installed — proving queued input from a superseded attempt is discarded,
-  not carried forward into the new queue.
+  push attempt A's first message so its own entry-guard flags open the
+  ref-sync lag window (per Task 3.2.1.1's mechanism) → simulate a
+  queued-but-undelivered push on instance #1 (via the mock's `push` spy
+  recording a call) → call `connect()` again (attempt B, whose entry guard
+  passes in that window) before attempt A's instance #1 queue has been
+  drained → assert instance #1's `.close` was called (Task 3.1.1.2's
+  unconditional close) and instance #2 is the one installed — proving
+  queued input from a superseded attempt is discarded, not carried forward
+  into the new queue.
 
 ##### Task 3.2.1.4 — `disconnect_should_notClobberNewerConnect_When_reconnectCompletesWhileDisconnectStillAwaiting`
 
@@ -938,26 +1011,35 @@ Covers the Go portion of **AC4**.
   `mcp__stapler-squad__create_session` (e.g. a throwaway directory session,
   not one-off, so it has a real tmux pane) with its terminal WebSocket open
   in a browser tab,
-- **When**, for each of 5-10 rapid `pause_session`/`resume_session` cycles
-  (no delay between calls) against that session's `id`, a distinguishable
-  counted string (e.g. `cycle-01-marker`, `cycle-02-marker`, ... — a
-  different, greppable token per cycle so a duplicate/replayed occurrence is
-  unambiguous) is **typed into the terminal immediately before or during**
-  each `pause_session` call — this is a required, scripted action for every
-  cycle, not a hypothetical aside — driving both
-  `session/instance_tmux.go:471-472`'s `!i.started.Load() || i.Status ==
-  Paused` branch (producing the exact `"session not started or paused"`
-  error string from the ticket's log excerpt) and the client-side
+- **When**, for each of 5-10 cycles against that session's `id`, a
+  distinguishable counted string (e.g. `cycle-01-marker`, `cycle-02-marker`,
+  ... — a different, greppable token per cycle so a duplicate/replayed
+  occurrence is unambiguous) is sent via a `write_to_session` or
+  `send_control` call **immediately followed, with no delay in between, by
+  a `pause_session` call** for the same session `id` — this specific
+  back-to-back tool-call ordering (input call, then pause call, zero
+  deliberate delay) is the realistic race window a single sequential agent
+  script can actually produce, since it cannot literally call both
+  simultaneously; it is a **best-effort adversarial** attempt to land the
+  input in-flight or just-queued at the moment the pause takes effect, not
+  guaranteed simultaneity — driving both `session/instance_tmux.go:471-472`'s
+  `!i.started.Load() || i.Status == Paused` branch (producing the exact
+  `"session not started or paused"` error string from the ticket's log
+  excerpt) and, on at least some of the 5-10 cycles, the client-side
   epoch-guard/`MessageQueue`-drop mechanism this session's Phase 2-4 work
   delivers,
 - **Then** `mcp__stapler-squad__read_session_output` confirms each cycle's
   marker string appears **at most once** in the pane content (never
   duplicated/replayed, and never appears as a phantom repeat of a prior
-  cycle's marker or a bare `"1"`), and for any cycle where a `pause_session`
-  call landed while a marker was still mid-flight (not yet fully
-  acknowledged), the browser shows the `InputDropBadge` + assertive
-  announcement for that cycle rather than silently losing or replaying the
-  keystrokes.
+  cycle's marker or a bare `"1"`), **and** the recorded outcome explicitly
+  states whether the browser's `InputDropBadge`/assertive announcement was
+  observed to fire for at least one cycle — this is a required, checked
+  pass/fail assertion, not an optional note: if zero cycles out of 5-10 show
+  any evidence of hitting the race window (no `InputDropBadge`/drop signal
+  ever fires across the whole run), the repro must be re-run with a tighter
+  write→pause loop or the AC5 outcome must be explicitly flagged
+  **inconclusive** rather than silently reported as a pass (pre-mortem.md
+  Failure #2, P1).
 
 ##### Task 6.1.1.1 — Run the repro against a manual test instance
 
@@ -971,19 +1053,44 @@ Covers the Go portion of **AC4**.
   default, use the browser directly against `:8999` and `read_session_output`/
   manual terminal typing to observe — confirm which is reachable before
   starting).
-- Execute the pause/resume alternation as an explicit script, one step per
-  cycle (repeat 5-10 times):
-  1. Type a distinguishable, cycle-numbered marker string into the terminal
-     (e.g. `echo cycle-0N-marker` or, if mid-command, just the raw token) —
-     immediately before or during the next step, not after.
-  2. Call `mcp__stapler-squad__pause_session` for the session `id`.
+- **Concrete typing mechanism (pre-mortem.md Failure #2, P1):** each cycle's
+  marker is injected via `mcp__stapler-squad__write_to_session` (or
+  `send_control`, whichever actually forwards to the tmux pane the way a
+  real keystroke would) targeting the session's `id`, immediately followed
+  — **no delay, no other tool call in between** — by
+  `mcp__stapler-squad__pause_session` for that same `id`. This is a
+  back-to-back pair of MCP tool calls, not a single combined action: since
+  the agent driving this repro is itself single-threaded/sequential, it
+  cannot make the write and the pause literally simultaneous. Placing them
+  back-to-back with zero deliberate delay is the realistic race window such
+  a script can produce — the marker may still be in-flight or just queued
+  when the pause takes effect on some cycles, not all of them. This is
+  explicitly a **best-effort adversarial timing**, not guaranteed
+  simultaneity, and the recorded outcome must say so rather than implying
+  the race was deterministically hit every cycle.
+- Execute the write→pause→resume→verify sequence as an explicit script, one
+  step per cycle (repeat 5-10 times):
+  1. Call `mcp__stapler-squad__write_to_session` (or `send_control`) with
+     that cycle's distinguishable marker string (e.g. `cycle-0N-marker`).
+  2. **Immediately**, with no other call in between, call
+     `mcp__stapler-squad__pause_session` for the same session `id`.
   3. Call `mcp__stapler-squad__resume_session` for the same `id`, no
      deliberate delay.
   4. Call `mcp__stapler-squad__read_session_output` and confirm this cycle's
-     marker string appears exactly once (not zero times if it was
-     successfully sent before the pause landed, not more than once), and
-     note whether `InputDropBadge`/the assertive announcement fired for
-     this cycle.
+     marker string appears **at most once** (not more than once — a
+     duplicate is the phantom-replay bug reopening), and record whether the
+     browser's `InputDropBadge`/assertive announcement fired for this cycle
+     (this is evidence the client-side drop path was actually exercised on
+     this cycle, not just tmux/`pause_session` behavior in isolation).
+- After all 5-10 cycles: if the `InputDropBadge`/drop signal fired for **at
+  least one** cycle, the race window was demonstrably exercised at least
+  once — record AC5 as a pass (assuming no duplicate markers were observed).
+  If the drop signal **never** fired across the full run, do not report a
+  silent pass: either re-run the script with a tighter write→pause loop (no
+  intervening logging/formatting calls that could widen the gap), or
+  explicitly record the AC5 outcome as **inconclusive** and say so in the
+  `report_progress` note — a clean transcript with no observed drop signal
+  is not, by itself, proof the fix works.
 - This scripted-typing repro is a deliberate improvement over the two prior
   (unmerged) branches' repro procedures — it uses
   `mcp__stapler-squad__create_session` (which attaches a real
@@ -991,12 +1098,15 @@ Covers the Go portion of **AC4**.
   `dca931a04` wrong-session-creation-path mistake) and does not depend on
   the trust dialog firing at all (sidestepping the prior branches'
   `~/.claude.json` global-trust-cache dead end).
-- Record the outcome (pass/fail, any anomalies observed, and per-cycle
-  marker/badge results) directly on the browser session and via
+- Record the outcome (pass/fail/inconclusive, any anomalies observed, and
+  per-cycle marker/badge results — including whether the drop signal fired
+  at least once across the run) directly on the browser session and via
   `mcp__stapler-squad__report_progress` with
   `item_id=04089969-0f19-499c-be34-2e8bcfc4f13e`, `criteria_index=4`
   (AC5 is the 5th criterion, 0-indexed), `status` reflecting the outcome —
-  per this repo's `backlog:done-4`/`backlog:fail-4` convention.
+  per this repo's `backlog:done-4`/`backlog:fail-4` convention. Do not report
+  `status=done` if the drop-signal evidence is inconclusive per the rule
+  above.
 
 ---
 
