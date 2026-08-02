@@ -124,7 +124,7 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
         if (byUpdated !== 0) return byUpdated;
         const byCreated = Number(b.createdAt?.seconds ?? 0) - Number(a.createdAt?.seconds ?? 0);
         if (byCreated !== 0) return byCreated;
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        return a.id.localeCompare(b.id);
       })
 );
 export const selectSessionIds = adapterSelectors.selectIds;

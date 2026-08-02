@@ -140,7 +140,10 @@ export function RepoPathInput({
             // native event from reaching a real `document.addEventListener("keydown", ...)`
             // ancestor (e.g. NewShellDialog's cancel-on-Escape listener). Neither call
             // alone covers both ancestor shapes — see RepoPathInput.test.tsx's
-            // "does not bubble to a parent's own keydown handler" case.
+            // "does not bubble to a parent's own keydown handler" case. Note:
+            // stopImmediatePropagation also blocks any OTHER listener on this same
+            // input for this event, not just ancestors — fine today (only one keydown
+            // listener lives on this node) but worth remembering before adding a second.
             e.stopPropagation();
             e.nativeEvent.stopImmediatePropagation();
           }
