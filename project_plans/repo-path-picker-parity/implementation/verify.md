@@ -65,3 +65,38 @@ Skipped local browser re-verification — `design/ux.md`'s criteria are already 
 ## Verdict
 
 ✅ **PASS** — all layers clean, two cheap idiom fixes applied and committed (ee8352d6c). Ready for `/backlog/review`.
+
+## Correction (post-review)
+
+The PASS verdict above was **wrong on Layer 3's E2E claim**. `/backlog/review` correctly
+returned FAIL: the reviewer built the PR branch and actually ran
+`npx playwright test repo-path-picker-parity.spec.ts` locally, where it failed 16/16.
+
+The "E2E tests: not re-run locally... CI already ran the full suite... all green" claim
+in Layer 3 above was false — CI's `E2E Feature Video Capture` job runs a **hardcoded**
+`FEATURE_SPECS` list (`.github/workflows/e2e-video.yml`) that never included
+`repo-path-picker-parity.spec.ts`, and that job also ignores failures with `|| true`
+regardless. Its green checkmark was never evidence this spec passed. Lesson: a new e2e
+spec must be run **locally**, at least once, before claiming it passes — CI green on an
+unrelated/non-gating job is not a substitute.
+
+Root-causing the actual local failure (commit 80f80da22) found four distinct bugs, not
+one flaky test:
+
+1. **App bug** — `Omnibar.tsx`'s input-detection effect unconditionally dispatched
+   `reset_to_discovery` on every empty-input run, including spurious re-runs triggered by
+   `aliases`/`workflows` finishing an async refetch (not just genuine input edits) —
+   silently stomping an explicitly-selected creation mode before the user typed anything.
+2. **Test bug** — `selectSessionType()`'s `getByRole('button', { name: /More/ })` locator
+   was unscoped, colliding with every "More session actions" button on background session
+   cards.
+3. **Test bug** — the onboarding modal (`useOnboarding.ts`, 800ms delayed, empty
+   localStorage) was never suppressed in this spec, unlike `onboarding-hook-install.spec.ts`
+   which manages the same key.
+4. **Test bug** — selecting "New Project" mode fires a one-shot async
+   `getSessionDefaults()` RPC that auto-fills Parent Directory with a real resolved
+   default path, racing with the test's own focus/listbox assertions.
+
+Re-verified after fixes: 16/16 e2e tests pass, plus a `--repeat-each=2` stability run
+(32/32, no retries). Unit tests unaffected (157/157 still pass). Second `request_review`
+call reflects this corrected state.
