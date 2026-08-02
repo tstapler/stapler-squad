@@ -62,7 +62,7 @@ Decisions table below; summary:
 | Superseded attempt | A `connect()` invocation whose captured `epoch` no longer equals `connectionEpochRef.current` — a newer attempt has since started. The same comparison, applied to `disconnect()`'s captured value, detects a `connect()` that started and is now the current epoch while `disconnect()` was still awaiting. | Comparison `epoch !== connectionEpochRef.current` at each checkpoint |
 | Drop count | The number of `TerminalData` messages discarded from a `MessageQueue`'s internal buffer at the moment `close()` is called. | Return value of `MessageQueue.close(): number` |
 | `DroppedInputEvent` / `recordDrop` | A smart constructor making the domain-illegal `count <= 0` state unrepresentable at the point a drop is reported: `recordDrop(count: number): DroppedInputEvent \| null` returns `null` for `count <= 0`, otherwise `{ count, at: Date.now() }`. Used at all three drop-reporting call sites (`connect()`'s close-before-install, `disconnect()`'s close, `useTerminalFlowControl`'s `onDrop`) instead of each duplicating a `> 0` guard — a type-driven-design smart-constructor / parse-don't-validate pattern. | `function recordDrop(count: number): DroppedInputEvent \| null` in `useTerminalStream.ts`; `type DroppedInputEvent = { count: number; at: number }` |
-| Dropped-input event | A single reported drop occurrence — one `recordDrop()` result — exposed by the hook as `droppedInputEvent` for the UI layer. This is **not** itself a coalesced/running total; `useTerminalStream` reports each occurrence as it happens and performs no accumulation of its own. | `droppedInputEvent: DroppedInputEvent \| null` returned from `useTerminalStream` |
+| Dropped-input event | A single reported drop occurrence — one `recordDrop()` result — exposed by the hook as `droppedInputEvent` for the UI layer. This is **not** itself a coalesced/running total across renders; `useTerminalStream` reports each occurrence as it happens and performs no accumulation of its own *across distinct batches*. The one exception is `reportDrop`'s same-React-batch merge guard (Task 4.1.1.3, added during plan repair per pre-mortem.md Failure #3, P2): if two of the hook's three drop call sites fire within the same synchronous React batch, their counts are merged into a single combined event so neither is silently lost to React's last-write-wins batching — this is a correctness fix for same-tick occurrences, not a substitute for `InputDropBadge`'s cross-render coalescing. | `droppedInputEvent: DroppedInputEvent \| null` returned from `useTerminalStream`; merge guard via `dropBatchRef` inside `reportDrop` |
 | Drop-and-signal badge | The visible + audible UI signal shown when input is dropped. Owns **all** coalescing across occurrences — both the visual running-total pill and triggering the assertive announcement — so `useTerminalStream`/`TerminalOutput.tsx` never coalesce or announce on their own. | `InputDropBadge` component (`web-app/src/components/sessions/InputDropBadge.tsx`) |
 | Assertive announcement | The `aria-live="assertive"` screen-reader announcement accompanying a drop, distinguishing it from routine `polite` connection-status chatter. Invoked by `InputDropBadge` itself (via its own `useLiveRegion()` call), not by a `TerminalOutput`-level effect keyed on the hook's raw event. | `useLiveRegion().announce(...)` with `politeness="assertive"`, `role="alert"`, called from inside `InputDropBadge` |
 | Coalescing window | The time window — "however long the badge is continuously visible" (its dwell timer, reset on each new occurrence) — during which multiple `droppedInputEvent` occurrences are batched into a single running-total badge update **and** a single re-triggered announcement per content change, rather than one announcement per occurrence. | Local timer/ref state inside `InputDropBadge`, which also owns invoking `announce()` for the window |
@@ -122,9 +122,11 @@ Omitted — no schema, proto, or persisted-data changes in this plan.
 | Fixing `MessageQueue.close()` in isolation without exercising `useTerminalStream`'s actual usage of it reproduces the same "fixed the class, not the usage" gap that let AC3 get marked done incorrectly once already. | Story 3.2.1's "queued-message-drop-on-close interleaving" Jest test exercises `useTerminalStream` (via `renderHook`), not `MessageQueue` in isolation — per pitfalls.md §5. |
 | `aria-live="assertive"` is unproven in this codebase (no existing shipped consumer) — cross-browser/AT behavior risk. | Story 4.2.3 includes an explicit accessibility-focused Jest test asserting `role="alert"` + `aria-live="assertive"` + `aria-atomic="true"` are present; full manual AT verification is called out as a follow-up in Unresolved Questions (out of scope for automated CI). |
 | Rapid-repeat drops within `useLiveRegion`'s fixed 1000ms auto-clear window can silently swallow a second announcement (pitfalls.md §4, "clearImmediately" race). | Coalescing lives in `InputDropBadge`, not raw `announce()` calls — every drop within the debounce window updates a running count and re-triggers a single, content-changing (`"N keystrokes not sent"`) announcement, so identical-string suppression by AT is avoided by construction. |
+| Three independent hook-level drop call sites (reconnect-close, `disconnect()`-close, flow-control `onDrop`) can each call `setDroppedInputEvent` within the same React 18 synchronous batch; React's last-write-wins batching means the earlier occurrence's count would be silently lost before it ever reaches `InputDropBadge`'s coalescing logic (pre-mortem.md Failure #3, P2). | Task 4.1.1.1's `reportDrop` helper merges same-batch occurrences via `dropBatchRef`, reset only after the batch's resulting render commits (Task 4.1.1.3's Jest test proves the merge, added during plan repair). |
 | Go: extracting `controlModeReadLoop` is a refactor of live production code (not just additive) — regression risk to the two other structurally similar handlers (`streamShellViaControlMode`, `streamViaTmuxCapturePane`) if touched by mistake. | Phase 5 scope is explicitly `streamViaControlMode` only, matching requirements.md's file listing; the other two duplicated handlers are named as a flagged follow-up in Unresolved Questions, not touched here (Non-Goals: "general reconnect/re-render stability work beyond what's needed... is out of scope"). |
-| AC5 manual repro requires actually inducing the "not started or paused" condition, not a generic network-offline toggle (per Constraints). | Story 6.1.1's task uses `pause_session`/`resume_session` MCP tools against a live tmux-backed session while its terminal WebSocket is open, which drives `session/instance_tmux.go:471-472`'s `!i.started.Load() \|\| i.Status == Paused` → `"session not started or paused"` path directly — the exact error string from the ticket's log excerpt. |
-| AC5's repro is run by a single sequential agent, which cannot literally type "during" a pause the way two independent actors could — a repro that doesn't pin the concrete injection mechanism risks the same "didn't actually exercise the fix" failure this ticket has already hit twice (pre-mortem.md Failure #2, P1). | Task 6.1.1.1 pins the mechanism concretely: a `write_to_session`/`send_control` call immediately followed, with no delay, by `pause_session` (back-to-back tool calls, repeated across all 5-10 cycles), explicitly framed as best-effort adversarial timing rather than guaranteed simultaneity; an observed `InputDropBadge`/drop-signal firing on at least one cycle is a required pass/fail assertion, and zero cycles showing the signal requires a tighter re-run or an explicit "inconclusive" outcome rather than a silent pass. |
+| Task 1.1.2.1's AC2 regression test could reimplement `session_driver.go`'s `approvalAwaitingClear` threading rule inline in the test instead of driving the real production method that does this threading — the same "tested the pattern, not production code" gap that already caused a documented FAIL on this ticket once (pre-mortem.md Failure #5, P2). | Task 1.1.2.1 (repair pass) first extracts `processApprovalTick` from `runSessionDriverWithPrompt`'s inline `NeedsApproval` block, mirroring Phase 5's `controlModeReadLoop` extraction precedent; Task 1.1.2.2's test then drives `processApprovalTick` directly across simulated ticks rather than re-implementing its rule. |
+| AC5 manual repro requires actually inducing the "not started or paused" condition, not a generic network-offline toggle (per Constraints). | Story 6.1.1's task uses `pause_session`/`resume_session` MCP tools against a live tmux-backed session while its terminal WebSocket is open in a real browser tab, which drives `session/instance_tmux.go:471-472`'s `!i.started.Load() \|\| i.Status == Paused` → `"session not started or paused"` path directly — the exact error string from the ticket's log excerpt. |
+| AC5's repro must exercise the actual client-side fix (Phases 2-4), not just server-side `pause_session` behavior — an MCP-level `write_to_session`/`send_control` call bypasses the browser's WebSocket/`MessageQueue`/epoch-guard path entirely and proves nothing about the shipped fix. This was also this plan's own first repair attempt's mistake, corrected in this pass (pre-mortem.md Failure #2, P1). | Task 6.1.1.1 pins the mechanism concretely: `claude-in-chrome` browser-automation tools type a distinguishable marker string via real keyboard events into the live xterm DOM element in a real browser tab, with `pause_session`/`resume_session` MCP calls alternated tightly around the typing across all 5-10 cycles — best-effort adversarial timing, not guaranteed simultaneity; an observed `InputDropBadge`/drop-signal firing on at least one cycle is a required pass/fail assertion, and zero cycles showing the signal requires a tighter re-run or an explicit "inconclusive" outcome rather than a silent pass. |
 
 ---
 
@@ -231,38 +233,125 @@ covering issue #165 at the pure-function level (3 isolated assertions on
 `shouldApprovePromptOnce(approvalVisible, awaitingClear)`). It is not tied to
 this backlog item and doesn't exercise the *stateful sequence* across many
 polling ticks the way `session_driver.go:428-451`'s actual loop does
-(`approvalAwaitingClear` threaded call-to-call). Add a new test that drives
-the same stateful sequence a real flapping episode would produce.
+(`approvalAwaitingClear` threaded call-to-call).
+
+**Corrected during plan repair (pre-mortem.md Failure #5, P2):** the original
+version of this story's task hand-reimplemented the loop's state-threading
+rule (`approvalAwaitingClear = approvalAwaitingClear && approvalVisible`)
+*inline in the test* instead of driving the real production method that does
+this threading — the same "tested the pattern, not the production code path"
+gap Phase 5's `controlModeReadLoop` extraction was explicitly designed to
+avoid, and the precise failure mode (AC3 marked done against code that didn't
+do what was claimed) that already happened once on this exact ticket. No
+directly-testable extraction point existed for this logic (it was inline in
+`runSessionDriverWithPrompt`'s `NeedsApproval` block, lines 428-451), so this
+story now adds one first, mirroring Phase 5's precedent exactly: pure
+decision/state-threading logic extracted into a new function; the single
+side-effecting `SendKeys` call stays a caller-supplied closure. The new test
+then drives that real extracted function directly, not a hand-copied rule.
 
 **AC2 Given-When-Then:**
 - **Given** a simulated driver poll sequence for backlog item
   `04089969-0f19-499c-be34-2e8bcfc4f13e`: tick 1 `NeedsApproval` visible,
-  `approvalAwaitingClear=false` → approve fires, `approvalAwaitingClear` set
-  `true`; ticks 2–5 `NeedsApproval` still visible (simulating the PTY redraw
-  lag the ticket's log lines show); tick 6 dialog no longer visible,
-- **When** `shouldApprovePromptOnce(approvalVisible, approvalAwaitingClear)`
-  is called once per tick with the loop's real state-threading rule
-  (`approvalAwaitingClear = approvalAwaitingClear && approvalVisible` on the
-  non-approve branch, mirroring `session_driver.go:447`),
-- **Then** exactly one of the 6 calls returns `true` (tick 1) — asserting the
-  same-dialog resend that produced the original ticket's repeated `"1"` does
-  not happen across the full 6-tick simulated flap.
+  `approvalAwaitingClear=false`; ticks 2–5 `NeedsApproval` still visible
+  (simulating the PTY redraw lag the ticket's log lines show); tick 6 dialog
+  no longer visible,
+- **When** `processApprovalTick(previewErr, output, allowedPath,
+  approvalAwaitingClear, sendKeys)` — Task 1.1.2.1's extracted production
+  function, not a re-implementation of its rule — is called once per tick,
+  threading each call's returned `awaitingClear` value into the next call's
+  input exactly as `runSessionDriverWithPrompt`'s real loop does,
+- **Then** the `sendKeys` closure passed to `processApprovalTick` is invoked
+  exactly once across the 6 calls (tick 1) — asserting, through the actual
+  production state-threading function, that the same-dialog resend which
+  produced the original ticket's repeated `"1"` does not happen across the
+  full 6-tick simulated flap.
 
-##### Task 1.1.2.1 — Add `TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn` to `session/session_driver_test.go`
+##### Task 1.1.2.1 — Extract `processApprovalTick` from `runSessionDriverWithPrompt`'s inline `NeedsApproval` handling
+
+*(Added during plan repair to close pre-mortem.md Failure #5, P2 — mirrors
+the Phase 5 `controlModeReadLoop` extraction precedent in this same plan:
+pure logic extracted into a directly-testable function; the side-effecting
+I/O call stays a caller-supplied closure.)*
+
+- File: `session/session_driver.go`.
+- Extract the inline `NeedsApproval` handling currently at lines 430-451
+  (inside `runSessionDriverWithPrompt`'s `if mgr := inst.GetStatusManager();
+  mgr != nil { if si := mgr.GetStatus(inst); si.ClaudeStatus ==
+  detection.StatusNeedsApproval { ... } }` block) into:
+  ```go
+  // processApprovalTick implements one poll tick's directory-access approval
+  // handling (see #165) — the state-threading rule that decides whether to
+  // approve a NeedsApproval prompt and how approvalAwaitingClear carries into
+  // the next tick. sendKeys performs the actual side-effecting SendKeys call
+  // and is caller-supplied so this function stays pure and directly testable
+  // against a simulated tick sequence with a fake Preview() output, with no
+  // live tmux session required — mirrors controlModeReadLoop's extraction in
+  // Phase 5 (pure logic extracted, I/O stays a closure at the call site).
+  func processApprovalTick(previewErr error, output string, allowedPath string, awaitingClear bool, sendKeys func() error) bool {
+      if previewErr != nil || output == "" {
+          return awaitingClear
+      }
+      approvalVisible := shouldApprovePrompt(output, allowedPath)
+      if shouldApprovePromptOnce(approvalVisible, awaitingClear) {
+          if err := sendKeys(); err != nil {
+              return awaitingClear // unchanged on a failed send — matches original inline semantics
+          }
+          return true
+      }
+      return awaitingClear && approvalVisible
+  }
+  ```
+- Update the call site to:
+  ```go
+  if mgr := inst.GetStatusManager(); mgr != nil {
+      if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
+          approvalAwaitingClear = processApprovalTick(previewErr, output, allowedPath, approvalAwaitingClear, func() error {
+              err := inst.SendKeys("1\r")
+              if err != nil {
+                  log.Warn("SessionDriver: failed to approve prompt", "session", inst.Title, "err", err)
+              } else {
+                  log.Info("SessionDriver: approved directory-access prompt", "session", inst.Title)
+              }
+              return err
+          })
+      }
+  }
+  ```
+- This is a pure logic move: the approve decision, the `"1\r"` `SendKeys`
+  call, both log lines, and the `awaitingClear` threading rule — including
+  the failed-send case leaving `awaitingClear` untouched — are all preserved
+  exactly; only the shape changes from inline to an extracted, directly-
+  callable function.
+- Run: `go build ./session/...` to confirm the extraction compiles cleanly.
+
+##### Task 1.1.2.2 — Add `TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn` to `session/session_driver_test.go`, driving `processApprovalTick` directly
 
 - File: `session/session_driver_test.go` (add after `TestShouldApprovePromptOnce`, ~line 184).
-- Doc comment references backlog item `04089969-0f19-499c-be34-2e8bcfc4f13e`
-  and quotes the ticket's log excerpt.
-- Implements the 6-tick simulation above using only `shouldApprovePromptOnce`
-  (already exported/package-visible in this test file) — no new production
-  code.
-- Naming note: the real production mechanism is `shouldSendOnce`, an
-  edge-triggered latch keyed on `awaitingClear` (`session_driver.go:661-673`)
-  — not a time-based cooldown. `session_driver.go`'s own doc comment
-  explicitly disclaims one: "A fixed time-based cooldown is deliberately not
-  used here." The test name and requirements.md's Root Cause section are
-  corrected to match (see requirements.md diff); this is a naming fix only —
-  the Given-When-Then/simulation logic above was already correct.
+- Doc comment references backlog item `04089969-0f19-499c-be34-2e8bcfc4f13e`,
+  quotes the ticket's log excerpt, and notes this test drives Task 1.1.2.1's
+  `processApprovalTick` directly rather than reimplementing its threading
+  rule (per pre-mortem.md Failure #5, P2).
+- Implements the 6-tick simulation above by calling `processApprovalTick`
+  once per tick (package-visible in this test file — no new exported API),
+  with a `sendKeys` stub that returns `nil` and records its invocation
+  count, and threads each call's returned `awaitingClear` into the next
+  call's `awaitingClear` argument.
+- Fake `Preview()` output: ticks 1-5 use output text containing the
+  NeedsApproval dialog (`approvalVisible == true` via `shouldApprovePrompt`);
+  tick 6 uses output with the dialog text removed (`approvalVisible ==
+  false`).
+- Assert the `sendKeys` stub was invoked **exactly once**, on tick 1 —
+  proving, through the real production state-threading function, that the
+  same-dialog resend which produced the original ticket's repeated `"1"`
+  does not happen across the full 6-tick simulated flap.
+- Naming note (unchanged from the prior version of this task): the real
+  production mechanism is `shouldSendOnce`, an edge-triggered latch keyed on
+  `awaitingClear` (`session_driver.go:661-673`) — not a time-based cooldown.
+  `session_driver.go`'s own doc comment explicitly disclaims one: "A fixed
+  time-based cooldown is deliberately not used here." The test name and
+  requirements.md's Root Cause section are corrected to match (see
+  requirements.md diff).
 - Run: `go test ./session/... -run TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn -v`
 
 ---
@@ -639,10 +728,14 @@ Covers the drop-and-signal portion of **AC3**.
   `{ count: 3, at: <timestamp> }` on the next render, distinct from `null`
   (its value on a clean disconnect with an empty queue — the "silent on the
   normal case" constraint). This is a **single reported occurrence** — the
-  hook performs no accumulation across occurrences; see Epic 4.2 for where
-  coalescing across occurrences (and the resulting announcement) lives.
+  hook performs no accumulation across *distinct* occurrences (that is
+  `InputDropBadge`'s job, Epic 4.2); the one exception is same-React-batch
+  merging (Task 4.1.1.3), which exists only to prevent two occurrences that
+  land in the same synchronous batch from silently overwriting each other —
+  see that task for why this is not the same thing as `InputDropBadge`'s
+  cross-render coalescing.
 
-##### Task 4.1.1.1 — Add `droppedInputEvent` state and wire it from Task 3.1.1.2's close call
+##### Task 4.1.1.1 — Add `droppedInputEvent` state and a `reportDrop` helper, wired from Task 3.1.1.2's close call
 
 - File: `web-app/src/lib/hooks/useTerminalStream.ts`.
 - Add a module-level type and smart constructor (per the Domain Glossary /
@@ -659,25 +752,65 @@ Covers the drop-and-signal portion of **AC3**.
   ```
 - Add `const [droppedInputEvent, setDroppedInputEvent] = useState<DroppedInputEvent | null>(null);`
   near the other state declarations (line ~96).
+- Add a `reportDrop` helper inside the hook (near `droppedInputEvent`'s state
+  declaration) — **all three** drop call sites (this task's reconnect-close,
+  `disconnect()`'s close, and Task 4.1.1.2's `onDrop`) call `reportDrop`
+  instead of calling `setDroppedInputEvent` directly:
+  ```ts
+  // Same-React-batch merge guard (Task 4.1.1.3 / pre-mortem.md Failure #3,
+  // P2): the three drop call sites below can fire within the same
+  // synchronous React 18 batch (e.g. a reconnect's queue-close and a
+  // rejected keystroke landing in the same tick). Two setState calls to the
+  // same state in one batch mean only the *last* value survives to the next
+  // render — a naive `setDroppedInputEvent(dropEvent)` at each call site
+  // would silently drop the earlier occurrence's count. dropBatchRef
+  // accumulates same-batch occurrences; the effect below resets it once the
+  // batch's single resulting render has committed, so the *next* distinct
+  // occurrence starts its own count rather than accumulating onto a stale one.
+  const dropBatchRef = useRef<DroppedInputEvent | null>(null);
+
+  function reportDrop(count: number) {
+    const event = recordDrop(count);
+    if (!event) return;
+    const merged = dropBatchRef.current
+      ? { count: dropBatchRef.current.count + event.count, at: event.at }
+      : event;
+    dropBatchRef.current = merged;
+    setDroppedInputEvent(merged);
+  }
+
+  useEffect(() => {
+    // Runs after the batch that produced this droppedInputEvent has
+    // committed — safe to reset here because any same-batch reportDrop()
+    // calls have already run and merged synchronously before this effect
+    // fires. Skips the `droppedInputEvent === null` mount case (nothing to
+    // reset).
+    if (droppedInputEvent !== null) {
+      dropBatchRef.current = null;
+    }
+  }, [droppedInputEvent]);
+  ```
 - In Task 3.1.1.2's block, replace the bare `console.warn` with:
   ```ts
-  const dropEvent = recordDrop(droppedCount);
-  if (dropEvent) {
-    setDroppedInputEvent(dropEvent);
-    console.warn(`[useTerminalStream] dropped ${dropEvent.count} buffered input message(s) on reconnect`, { sessionId });
+  if (droppedCount > 0) {
+    reportDrop(droppedCount);
+    console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on reconnect`, { sessionId });
   }
   ```
-- Also apply the identical `recordDrop(...)`-based pattern inside
+- Also apply the identical `reportDrop(...)`-based pattern inside
   `disconnect()` (`useTerminalStream.ts:387-390`) where
   `messageQueueRef.current.close()` is already called — an explicit
   user-initiated disconnect with pending input must fire the same signal.
 - Add `droppedInputEvent` to the returned `TerminalStreamResult` object
   (line ~469) and its interface (line ~54), typed as `DroppedInputEvent | null`.
-- Do **not** attempt to accumulate a running count at this layer (e.g. no
-  `setDroppedInputEvent((prev) => ...)` reducer-style update) — each call
-  site reports its own single occurrence via `recordDrop`; `InputDropBadge`
-  (Story 4.2.1) owns turning a sequence of occurrences into a running total
-  and a coalesced announcement.
+- Do **not** attempt to accumulate a running count across *distinct*
+  occurrences at this layer (e.g. no cross-render running-total logic) —
+  each call site reports its own single occurrence via `reportDrop`;
+  `InputDropBadge` (Story 4.2.1) still owns turning a *sequence of separate*
+  occurrences (across renders/batches) into a running total and a coalesced
+  announcement. `reportDrop`'s merge only fires within a single synchronous
+  batch, which is a correctness fix (preventing silent undercounting), not a
+  substitute for `InputDropBadge`'s cross-render coalescing.
 
 ##### Task 4.1.1.2 — Wire `useTerminalFlowControl.sendInput`'s pre-existing silent drop into the same signal
 
@@ -693,18 +826,17 @@ same class of loss.)*
   !isConnectedRef.current) { onDrop?.(); return; }`).
 - File: `web-app/src/lib/hooks/useTerminalStream.ts` — pass
   ```ts
-  onDrop: () => {
-    const dropEvent = recordDrop(1);
-    if (dropEvent) setDroppedInputEvent(dropEvent);
-  }
+  onDrop: () => reportDrop(1)
   ```
   into the `useTerminalFlowControl({...})` call (line 144) — a single
-  reported occurrence via the same `recordDrop` helper used by Task 4.1.1.1,
-  no inline accumulation logic (the previous inline
-  `prev?.at === Date.now() ? prev.count : 0` attempt compared two different
-  `Date.now()` calls and effectively never matched — deleted entirely per
-  architecture-review.md, not fixed in place, since coalescing belongs in
-  `InputDropBadge` regardless).
+  reported occurrence via the same `reportDrop` helper used by Task 4.1.1.1
+  (which also absorbs this call site into the same-batch merge guard — this
+  call site is one of the two most likely to race with the reconnect-close
+  call site in the same tick, e.g. a keystroke rejected at the exact moment
+  a reconnect supersedes the connection), no inline accumulation logic (the
+  previous inline `prev?.at === Date.now() ? prev.count : 0` attempt
+  compared two different `Date.now()` calls and effectively never matched —
+  deleted entirely per architecture-review.md, not fixed in place).
 - Note (per adversarial-review.md's nitpick): `useTerminalFlowControl.ts` has
   six near-identical `if (!pushMessageRef.current || !isConnectedRef.current)
   return;` guards (lines 143, 171, 198, 234, 252, 294, 319 per grep). Only
@@ -713,6 +845,42 @@ same class of loss.)*
   keystrokes, and are deliberately left unwired as out of scope for this
   "phantom keystroke" ticket. A future reader should not read this as an
   incomplete fix.
+
+##### Task 4.1.1.3 — Jest test: two same-batch `reportDrop` calls merge into one combined occurrence
+
+*(Added during plan repair — pre-mortem.md Failure #3, P2: `InputDropBadge`'s
+coalescing assumes one `setDroppedInputEvent` call per React render, but the
+three independent drop call sites can fire within the same React 18 batch;
+without Task 4.1.1.1's `reportDrop`/`dropBatchRef` merge guard, only the last
+value would survive to the next render, silently undercounting. This test
+proves the guard works at the hook level — `InputDropBadge`'s own coalescing
+tests, Task 4.2.3.2, only ever drive it via sequential controlled re-renders
+and would not have caught this.)*
+
+- File: `web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`, same
+  `describe('useTerminalStream — connection epoch guard', ...)` block is not
+  appropriate here (this isn't an epoch scenario) — add a new
+  `describe('useTerminalStream — drop reporting', ...)` block.
+- Test: render the hook (`autoConnect: false`), `connect()` and reach
+  `isConnected === true`. Inside a **single** `act(() => { ... })` block,
+  synchronously trigger two of the hook's drop call sites — e.g. call the
+  test's captured `onDrop` callback (simulating `useTerminalFlowControl`'s
+  Task 4.1.1.2 call site) and then, in the same synchronous callback,
+  directly invoke a reconnect that runs Task 3.1.1.2's close-before-install
+  path with a queue that has 2 buffered messages — so both `reportDrop` calls
+  execute before React flushes any render.
+- Assert: after the `act()` block, `result.current.droppedInputEvent`
+  reflects the **combined** count of both occurrences (`1` from the flow-
+  control drop + `2` from the reconnect-close drop = `3`), not just the
+  last-called site's own count.
+- Assert (regression guard for the merge-reset half): a **subsequent**,
+  separately-timed `reportDrop` call (outside any `act()` batch shared with
+  the first two, e.g. in the next `act()` block after a render has
+  committed) produces a **fresh** `droppedInputEvent` reflecting only its
+  own count — proving `dropBatchRef` was reset after the first batch's
+  commit and the merge guard does not accumulate indefinitely across
+  unrelated occurrences.
+- Run: `cd web-app && npx jest --no-coverage --testPathPatterns="useTerminalStream.test"`
 
 ---
 
@@ -1004,105 +1172,127 @@ Covers the Go portion of **AC4**.
 
 ### Epic 6.1 — Reproduce the ticket's exact flapping condition and confirm no phantom keystrokes
 
-#### Story 6.1.1 — Manual repro via `pause_session`/`resume_session` MCP tools
+#### Story 6.1.1 — Manual repro via browser-automation-driven real keystrokes alternated with `pause_session`/`resume_session`
+
+*(Corrected during this plan-repair pass — see pre-mortem.md Failure #2, P1.
+An earlier repair attempt on this task used MCP `write_to_session`/
+`send_control` calls timed tight against `pause_session` for the "typing"
+step. That was itself a mistake: an MCP-level pty write bypasses the
+browser's WebSocket/`MessageQueue`/epoch-guard path entirely and proves
+nothing about whether the actual client-side fix (Phases 2-4 of this plan)
+works — it only exercises tmux/`pause_session` server behavior. This story
+now requires real browser-automation-driven keystrokes into the live DOM
+terminal, per this repo's `CLAUDE.md` "Manual/interactive testing without
+touching the live deployed instance" pattern and the `claude-in-chrome` MCP
+tools.)*
 
 **AC5 Given-When-Then:**
 - **Given** a live tmux-backed session created via
-  `mcp__stapler-squad__create_session` (e.g. a throwaway directory session,
-  not one-off, so it has a real tmux pane) with its terminal WebSocket open
-  in a browser tab,
-- **When**, for each of 5-10 cycles against that session's `id`, a
-  distinguishable counted string (e.g. `cycle-01-marker`, `cycle-02-marker`,
-  ... — a different, greppable token per cycle so a duplicate/replayed
-  occurrence is unambiguous) is sent via a `write_to_session` or
-  `send_control` call **immediately followed, with no delay in between, by
-  a `pause_session` call** for the same session `id` — this specific
-  back-to-back tool-call ordering (input call, then pause call, zero
-  deliberate delay) is the realistic race window a single sequential agent
-  script can actually produce, since it cannot literally call both
-  simultaneously; it is a **best-effort adversarial** attempt to land the
-  input in-flight or just-queued at the moment the pause takes effect, not
-  guaranteed simultaneity — driving both `session/instance_tmux.go:471-472`'s
-  `!i.started.Load() || i.Status == Paused` branch (producing the exact
-  `"session not started or paused"` error string from the ticket's log
-  excerpt) and, on at least some of the 5-10 cycles, the client-side
-  epoch-guard/`MessageQueue`-drop mechanism this session's Phase 2-4 work
-  delivers,
+  `mcp__stapler-squad__create_session` (attaches a real `SessionDriver`,
+  unlike omnibar-created sessions — avoiding the `dca931a04`
+  wrong-session-creation-path mistake this ticket has hit before) on a
+  throwaway manual-test instance, with its terminal open in a real Chrome
+  tab navigated to and controlled via `claude-in-chrome` browser-automation
+  tools,
+- **When**, for each of 5-10 cycles, browser automation clicks into the live
+  xterm terminal DOM element and types a distinguishable counted marker
+  string (e.g. `cycle-01-marker`, `cycle-02-marker`, ... — a different,
+  greppable token per cycle so a duplicate/replayed occurrence is
+  unambiguous) via real keyboard events, with `mcp__stapler-squad__pause_session`
+  called as tightly as possible around/during that typing (immediately
+  followed by `mcp__stapler-squad__resume_session`) — this is a **best-
+  effort adversarial** attempt to land the browser-driven keystrokes
+  in-flight or just-queued at the moment the pause takes effect, not
+  guaranteed simultaneity, since a single sequential agent cannot make
+  typing and the MCP pause call literally simultaneous — driving both
+  `session/instance_tmux.go:471-472`'s `!i.started.Load() || i.Status ==
+  Paused` branch (producing the exact `"session not started or paused"`
+  error string from the ticket's log excerpt) and, on at least some of the
+  5-10 cycles, the client-side epoch-guard/`MessageQueue`-drop mechanism
+  this session's Phase 2-4 work delivers — exercised through the real
+  browser WebSocket path, not an MCP shortcut around it,
 - **Then** `mcp__stapler-squad__read_session_output` confirms each cycle's
   marker string appears **at most once** in the pane content (never
   duplicated/replayed, and never appears as a phantom repeat of a prior
-  cycle's marker or a bare `"1"`), **and** the recorded outcome explicitly
-  states whether the browser's `InputDropBadge`/assertive announcement was
-  observed to fire for at least one cycle — this is a required, checked
-  pass/fail assertion, not an optional note: if zero cycles out of 5-10 show
-  any evidence of hitting the race window (no `InputDropBadge`/drop signal
-  ever fires across the whole run), the repro must be re-run with a tighter
-  write→pause loop or the AC5 outcome must be explicitly flagged
-  **inconclusive** rather than silently reported as a pass (pre-mortem.md
-  Failure #2, P1).
+  cycle's marker or a bare `"1"`), **and**, after each cycle, the DOM is
+  checked (via `claude-in-chrome` `read_page`/`find`) for the
+  `InputDropBadge` element — the recorded outcome explicitly states whether
+  `InputDropBadge`/its assertive announcement was observed to fire for at
+  least one cycle — this is a required, checked pass/fail assertion, not an
+  optional note: if zero cycles out of 5-10 show any evidence of hitting the
+  race window (no `InputDropBadge`/drop signal ever fires across the whole
+  run), the repro must be re-run with tighter alternation between typing and
+  `pause_session`/`resume_session` calls, or the AC5 outcome must be
+  explicitly flagged **inconclusive** rather than silently reported as a
+  pass (pre-mortem.md Failure #2, P1).
 
-##### Task 6.1.1.1 — Run the repro against a manual test instance
+##### Task 6.1.1.1 — Run the repro against a manual test instance using real browser automation
 
-- Per this repo's `CLAUDE.md` "Manual/interactive testing" section: build to
-  `/tmp/ssq-manual-test`, run with `PORT=8999
-  STAPLER_SQUAD_INSTANCE=claude-manual-test`, `--tmux-keep-server` — **do
-  not** use `make install-service` (would kill the live deployed instance's
-  sessions).
-- Create a session via `mcp__stapler-squad__create_session` pointed at that
-  manual instance (or, if the MCP tools target the live `:8543` instance by
-  default, use the browser directly against `:8999` and `read_session_output`/
-  manual terminal typing to observe — confirm which is reachable before
-  starting).
-- **Concrete typing mechanism (pre-mortem.md Failure #2, P1):** each cycle's
-  marker is injected via `mcp__stapler-squad__write_to_session` (or
-  `send_control`, whichever actually forwards to the tmux pane the way a
-  real keystroke would) targeting the session's `id`, immediately followed
-  — **no delay, no other tool call in between** — by
-  `mcp__stapler-squad__pause_session` for that same `id`. This is a
-  back-to-back pair of MCP tool calls, not a single combined action: since
-  the agent driving this repro is itself single-threaded/sequential, it
-  cannot make the write and the pause literally simultaneous. Placing them
-  back-to-back with zero deliberate delay is the realistic race window such
-  a script can produce — the marker may still be in-flight or just queued
-  when the pause takes effect on some cycles, not all of them. This is
-  explicitly a **best-effort adversarial timing**, not guaranteed
-  simultaneity, and the recorded outcome must say so rather than implying
-  the race was deterministically hit every cycle.
-- Execute the write→pause→resume→verify sequence as an explicit script, one
-  step per cycle (repeat 5-10 times):
-  1. Call `mcp__stapler-squad__write_to_session` (or `send_control`) with
-     that cycle's distinguishable marker string (e.g. `cycle-0N-marker`).
-  2. **Immediately**, with no other call in between, call
-     `mcp__stapler-squad__pause_session` for the same session `id`.
-  3. Call `mcp__stapler-squad__resume_session` for the same `id`, no
+- Per this repo's `CLAUDE.md` "Manual/interactive testing without touching
+  the live deployed instance" section: build and run a throwaway instance —
+  `go build -o /tmp/ssq-manual-test . && PORT=8999
+  STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test
+  --tmux-keep-server &` — **do not** use `make install-service` (would kill
+  the live deployed instance's sessions and tmux server).
+- Create a session via `mcp__stapler-squad__create_session` targeting that
+  manual instance (a throwaway directory session, not one-off, so it has a
+  real tmux pane and a real `SessionDriver` attached).
+- Using `claude-in-chrome` MCP tools (`tabs_create_mcp`/`navigate` to open a
+  tab at `http://localhost:8999`, then `find`/`computer`/`read_page` to
+  locate and interact with the UI), navigate to that session's terminal view
+  and confirm the xterm terminal DOM element is visible with its WebSocket
+  connected before starting cycles.
+- **Concrete typing mechanism (pre-mortem.md Failure #2, P1 — and the fix to
+  this plan's own prior repair mistake):** each cycle's marker is typed via
+  `claude-in-chrome` browser automation issuing real keyboard events against
+  the live xterm DOM element in the actual browser tab — **not** any MCP
+  `write_to_session`/`send_control` pty-write shortcut. An MCP-level write
+  bypasses the browser's WebSocket/`MessageQueue`/epoch-guard path entirely
+  and would prove nothing about whether the shipped client-side fix (Phases
+  2-4) works, only about tmux/`pause_session` behavior in isolation.
+- Execute, one step per cycle (repeat 5-10 times):
+  1. Use `claude-in-chrome` (`computer`/`find`) to click into the xterm
+     terminal DOM element, ensuring it has keyboard focus.
+  2. Use `claude-in-chrome` browser automation to type that cycle's
+     distinguishable marker string (e.g. `cycle-0N-marker`) via real
+     keyboard events.
+  3. As tightly as possible around/during that typing — no deliberate
+     delay, no other tool call in between where avoidable — call
+     `mcp__stapler-squad__pause_session` for the session's `id`. This is a
+     best-effort adversarial pairing, not guaranteed simultaneity: browser
+     automation and the MCP call are issued by the same sequential agent
+     and cannot be made literally concurrent.
+  4. Call `mcp__stapler-squad__resume_session` for the same `id`, no
      deliberate delay.
-  4. Call `mcp__stapler-squad__read_session_output` and confirm this cycle's
+  5. Use `claude-in-chrome` `read_page`/`find` to check the DOM for the
+     `InputDropBadge` element and record whether it is present/visible for
+     this cycle (evidence the client-side drop path was actually exercised
+     through the real browser WebSocket path on this cycle, not just
+     tmux/`pause_session` behavior in isolation).
+  6. Call `mcp__stapler-squad__read_session_output` and confirm this cycle's
      marker string appears **at most once** (not more than once — a
-     duplicate is the phantom-replay bug reopening), and record whether the
-     browser's `InputDropBadge`/assertive announcement fired for this cycle
-     (this is evidence the client-side drop path was actually exercised on
-     this cycle, not just tmux/`pause_session` behavior in isolation).
-- After all 5-10 cycles: if the `InputDropBadge`/drop signal fired for **at
-  least one** cycle, the race window was demonstrably exercised at least
-  once — record AC5 as a pass (assuming no duplicate markers were observed).
-  If the drop signal **never** fired across the full run, do not report a
-  silent pass: either re-run the script with a tighter write→pause loop (no
-  intervening logging/formatting calls that could widen the gap), or
-  explicitly record the AC5 outcome as **inconclusive** and say so in the
+     duplicate is the phantom-replay bug reopening).
+- After all 5-10 cycles: if `InputDropBadge` (or its assertive announcement,
+  if independently observable) was observed for **at least one** cycle, the
+  race window was demonstrably exercised through the real client path at
+  least once — record AC5 as a pass (assuming no duplicate markers were
+  observed). If the drop signal **never** fired across the full run, do not
+  report a silent pass: either re-run with tighter alternation between
+  typing and the `pause_session`/`resume_session` calls, or explicitly
+  record the AC5 outcome as **inconclusive** and say so in the
   `report_progress` note — a clean transcript with no observed drop signal
   is not, by itself, proof the fix works.
-- This scripted-typing repro is a deliberate improvement over the two prior
-  (unmerged) branches' repro procedures — it uses
-  `mcp__stapler-squad__create_session` (which attaches a real
-  `SessionDriver`, unlike omnibar-created sessions, avoiding the
-  `dca931a04` wrong-session-creation-path mistake) and does not depend on
-  the trust dialog firing at all (sidestepping the prior branches'
-  `~/.claude.json` global-trust-cache dead end).
+- This browser-automation repro is a deliberate improvement over both the
+  two prior unmerged branches' repro procedures and this plan's own earlier
+  (mistaken) MCP-write-based repair attempt — it uses
+  `mcp__stapler-squad__create_session` (avoiding the `dca931a04`
+  wrong-session-creation-path mistake and its resulting missing
+  `SessionDriver`) and drives the fix through the actual browser client path
+  the shipped code runs in production, not a server-side shortcut around it.
 - Record the outcome (pass/fail/inconclusive, any anomalies observed, and
   per-cycle marker/badge results — including whether the drop signal fired
-  at least once across the run) directly on the browser session and via
-  `mcp__stapler-squad__report_progress` with
-  `item_id=04089969-0f19-499c-be34-2e8bcfc4f13e`, `criteria_index=4`
+  at least once across the run) via `mcp__stapler-squad__report_progress`
+  with `item_id=04089969-0f19-499c-be34-2e8bcfc4f13e`, `criteria_index=4`
   (AC5 is the 5th criterion, 0-indexed), `status` reflecting the outcome —
   per this repo's `backlog:done-4`/`backlog:fail-4` convention. Do not report
   `status=done` if the drop-signal evidence is inconclusive per the rule

@@ -12,5 +12,27 @@
 | 5 | Task 1.1.2.1's new AC2 regression test reimplements `session_driver.go:447`'s state-threading rule (`approvalAwaitingClear = approvalAwaitingClear && approvalVisible`) *inline in the test* rather than driving the real polling loop/method that does this threading in production. This is the same "tests the pattern, not the production code path" gap the plan's own Pattern Decisions table explicitly rejects for Phase 5's Go read-loop test (and the precise failure mode — AC3 marked done against code that didn't do what was claimed — that already happened once on this exact ticket) — but the same discipline wasn't applied when writing Task 1.1.2.1 itself. | The test keeps passing after a future refactor of `session_driver.go`'s actual polling-loop threading logic that introduces a real regression, because the test's hand-copied threading rule silently drifts out of sync with production and no longer reflects what the loop actually does. | Change Task 1.1.2.1 to drive the real driver-loop method that threads `approvalAwaitingClear` across ticks (not a hand-copied inline re-implementation of the threading rule), the same way Phase 5's extraction makes `controlModeReadLoop` directly callable — if no such directly-testable method exists yet, extract one first, mirroring the Phase 5 precedent already in this same plan. | P2 |
 
 ## P1 Items (address before implementation)
-- [ ] Failure #1 — Add a Jest test (Story 3.2.1) proving a guard-blocked `connect()` call does not orphan the real in-flight attempt before implementing Task 3.1.1.1; if it does, move the epoch increment to after the `isConnectedRef.current || isConnectingRef.current` entry guard rather than before it.
-- [ ] Failure #2 — Rewrite Task 6.1.1.1 to specify browser-automation-driven real keystrokes (not an MCP pty-write shortcut) for the "type during pause" step, and make an observed `InputDropBadge`/announcement firing a required pass/fail assertion in the recorded AC5 outcome, not an optional note.
+- [x] Failure #1 — Add a Jest test (Story 3.2.1) proving a guard-blocked `connect()` call does not orphan the real in-flight attempt before implementing Task 3.1.1.1; if it does, move the epoch increment to after the `isConnectedRef.current || isConnectingRef.current` entry guard rather than before it. **Resolved**: plan.md's Task 3.1.1.1 places `const epoch = ++connectionEpochRef.current;` as the first statement *after* the entry guard (not before it), and Task 3.2.1.0 (`connect_should_notOrphanInFlightAttempt_When_secondCallIsBlockedByEntryGuard`) is the required proof test — both already correct as of this plan-repair pass; reconfirmed and left unchanged.
+- [x] Failure #2 — Rewrite Task 6.1.1.1 to specify browser-automation-driven real keystrokes (not an MCP pty-write shortcut) for the "type during pause" step, and make an observed `InputDropBadge`/announcement firing a required pass/fail assertion in the recorded AC5 outcome, not an optional note. **Resolved in this pass**: an earlier repair attempt had instead wired Task 6.1.1.1 to MCP `write_to_session`/`send_control` calls timed tight against `pause_session` — itself a repeat of this same failure mode, since an MCP-level pty write bypasses the browser's WebSocket/`MessageQueue`/epoch-guard path entirely. Task 6.1.1.1 and Story 6.1.1's Given-When-Then are now rewritten to use `claude-in-chrome` browser automation typing real keyboard events into the live xterm DOM element (against a throwaway manual-test instance built per this repo's `CLAUDE.md`), with `pause_session`/`resume_session` alternated tightly around the typing; the DOM is checked for `InputDropBadge` after each cycle, and an observed firing on at least one cycle remains the required pass/fail assertion (unchanged from the prior fix's correct part).
+
+## P2 Items Also Addressed in This Pass (not required by the gate)
+
+Not blocking per the gate (P1 items only), but fixed in this same plan-repair
+pass since both were concrete, actionable findings:
+
+- **Failure #3** (coalescing undercounts same-batch drops) — plan.md's Phase 4
+  (`Task 4.1.1.1`) now adds a `reportDrop`/`dropBatchRef` same-React-batch
+  merge guard in `useTerminalStream.ts`, used by all three drop call sites
+  instead of each calling `setDroppedInputEvent` directly, plus a new
+  `Task 4.1.1.3` Jest test that fires two drop call sites inside a single
+  `act()` block and asserts the merged total. This *is* a real bug requiring
+  an implementation fix, not just a test — confirmed and specified as such
+  per the task's instructions.
+- **Failure #5** (AC2 regression test hand-reimplements the production
+  threading rule instead of driving it) — plan.md's `Story 1.1.2` now adds
+  `Task 1.1.2.1`, extracting a new `processApprovalTick` function from
+  `runSessionDriverWithPrompt`'s inline `NeedsApproval` handling in
+  `session/session_driver.go` (mirroring the `controlModeReadLoop` extraction
+  Phase 5 already does in this same plan), and `Task 1.1.2.2` rewrites the
+  regression test to drive `processApprovalTick` directly across simulated
+  ticks instead of reimplementing its `awaitingClear` threading rule inline.
