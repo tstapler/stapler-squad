@@ -16,7 +16,9 @@ jest.mock("@/lib/hooks/useInsightsService", () => ({
     mockUseSessionTurnTimeline(conversationId),
 }));
 
-function makeSession(overrides: Partial<SessionTokenSummary> = {}): SessionTokenSummary {
+function makeSession(
+  overrides: Partial<Omit<SessionTokenSummary, "$typeName" | "$unknown">> = {}
+): SessionTokenSummary {
   return create(SessionTokenSummarySchema, {
     sessionId: "session-1",
     conversationId: "conversation-1",
@@ -31,7 +33,9 @@ function makeSession(overrides: Partial<SessionTokenSummary> = {}): SessionToken
   });
 }
 
-function makeTurn(overrides: Partial<TurnTokenStat> = {}): TurnTokenStat {
+function makeTurn(
+  overrides: Partial<Omit<TurnTokenStat, "$typeName" | "$unknown">> = {}
+): TurnTokenStat {
   return create(TurnTokenStatSchema, {
     model: "claude-sonnet-4",
     inputTokens: 100n,
