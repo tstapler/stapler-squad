@@ -182,6 +182,89 @@ func TestShouldApprovePromptOnce(t *testing.T) {
 	})
 }
 
+// TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn
+// regression-tests backlog item 04089969-0f19-499c-be34-2e8bcfc4f13e (phantom
+// keystroke replay across reconnect churn). The ticket's log excerpt showed
+// `[streamViaControlMode] capture-pane failed, sending stopped notice
+// err="session not started or paused"` while the driver's NeedsApproval
+// polling loop kept resending "1\r" on every tick the stale preview buffer
+// still showed the dialog. This drives processApprovalTick (Task 1.1.2.1's
+// extraction from runSessionDriverWithPrompt's inline NeedsApproval block)
+// directly across a simulated 6-tick flap — not a reimplementation of its
+// awaitingClear threading rule — so the test exercises the real production
+// state machine, per pre-mortem.md Failure #5.
+func TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn(t *testing.T) {
+	const allowedPath = "/home/user/project"
+	dialogVisibleOutput := "Do you want to proceed? Allow reading /home/user/project"
+	dialogGoneOutput := "some other terminal output, no dialog here"
+
+	// tick 1: visible, unarmed; ticks 2-5: still visible, armed; tick 6: gone.
+	ticks := []string{
+		dialogVisibleOutput,
+		dialogVisibleOutput,
+		dialogVisibleOutput,
+		dialogVisibleOutput,
+		dialogVisibleOutput,
+		dialogGoneOutput,
+	}
+
+	var sendKeysCalls int
+	sendKeys := func() error {
+		sendKeysCalls++
+		return nil
+	}
+
+	var awaitingClear bool
+	for _, output := range ticks {
+		awaitingClear = processApprovalTick(nil, output, allowedPath, awaitingClear, sendKeys)
+	}
+
+	if sendKeysCalls != 1 {
+		t.Errorf("expected sendKeys to be invoked exactly once across the 6-tick flap, got %d", sendKeysCalls)
+	}
+}
+
+// TestApprovalAwaitingClearLatch_ReapprovesNewDialogAfterPriorOneFullyClears
+// proves the awaitingClear latch is a same-dialog-resend guard, not a
+// permanent "approve nothing after the first prompt ever" latch: once a
+// dialog fully clears (approvalVisible goes false, resetting
+// approvalAwaitingClear to false), a genuinely new dialog appearing
+// afterward must still be approved once.
+func TestApprovalAwaitingClearLatch_ReapprovesNewDialogAfterPriorOneFullyClears(t *testing.T) {
+	const allowedPath = "/home/user/project"
+	dialogVisibleOutput := "Do you want to proceed? Allow reading /home/user/project"
+	dialogGoneOutput := "some other terminal output, no dialog here"
+
+	var sendKeysCalls int
+	sendKeys := func() error {
+		sendKeysCalls++
+		return nil
+	}
+
+	var awaitingClear bool
+
+	// First dialog appears and is approved.
+	awaitingClear = processApprovalTick(nil, dialogVisibleOutput, allowedPath, awaitingClear, sendKeys)
+	if sendKeysCalls != 1 {
+		t.Fatalf("expected first dialog to be approved, sendKeys called %d times", sendKeysCalls)
+	}
+
+	// Dialog fully clears — latch resets.
+	awaitingClear = processApprovalTick(nil, dialogGoneOutput, allowedPath, awaitingClear, sendKeys)
+	if awaitingClear {
+		t.Fatalf("expected awaitingClear to reset to false once the dialog clears")
+	}
+
+	// A new dialog appears afterward — must be approved again.
+	awaitingClear = processApprovalTick(nil, dialogVisibleOutput, allowedPath, awaitingClear, sendKeys)
+	if sendKeysCalls != 2 {
+		t.Errorf("expected a genuinely new dialog to be approved once, sendKeys called %d times", sendKeysCalls)
+	}
+	if !awaitingClear {
+		t.Errorf("expected awaitingClear to be armed after approving the new dialog")
+	}
+}
+
 // UT-3: TestIsOneShot — verifies one-shot detection logic.
 func TestIsOneShot(t *testing.T) {
 	cases := []struct {

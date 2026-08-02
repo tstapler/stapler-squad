@@ -429,24 +429,15 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
-				if previewErr == nil && output != "" {
-					approvalVisible := shouldApprovePrompt(output, allowedPath)
-					if shouldApprovePromptOnce(approvalVisible, approvalAwaitingClear) {
-						if err := inst.SendKeys("1\r"); err != nil {
-							log.Warn("SessionDriver: failed to approve prompt",
-								"session", inst.Title,
-								"err", err,
-							)
-						} else {
-							approvalAwaitingClear = true
-							log.Info("SessionDriver: approved directory-access prompt",
-								"session", inst.Title,
-							)
-						}
+				approvalAwaitingClear = processApprovalTick(previewErr, output, allowedPath, approvalAwaitingClear, func() error {
+					err := inst.SendKeys("1\r")
+					if err != nil {
+						log.Warn("SessionDriver: failed to approve prompt", "session", inst.Title, "err", err)
 					} else {
-						approvalAwaitingClear = approvalAwaitingClear && approvalVisible
+						log.Info("SessionDriver: approved directory-access prompt", "session", inst.Title)
 					}
-				}
+					return err
+				})
 			}
 		}
 
@@ -839,4 +830,26 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 // dialog visibly clears — the repeated-"1" bug in #165.
 func shouldApprovePromptOnce(approvalVisible bool, awaitingClear bool) bool {
 	return shouldSendOnce(approvalVisible, awaitingClear)
+}
+
+// processApprovalTick implements one poll tick's directory-access approval
+// handling (see #165) — the state-threading rule that decides whether to
+// approve a NeedsApproval prompt and how approvalAwaitingClear carries into
+// the next tick. sendKeys performs the actual side-effecting SendKeys call
+// and is caller-supplied so this function stays pure and directly testable
+// against a simulated tick sequence with a fake Preview() output, with no
+// live tmux session required — mirrors controlModeReadLoop's extraction in
+// Phase 5 (pure logic extracted, I/O stays a closure at the call site).
+func processApprovalTick(previewErr error, output string, allowedPath string, awaitingClear bool, sendKeys func() error) bool {
+	if previewErr != nil || output == "" {
+		return awaitingClear
+	}
+	approvalVisible := shouldApprovePrompt(output, allowedPath)
+	if shouldApprovePromptOnce(approvalVisible, awaitingClear) {
+		if err := sendKeys(); err != nil {
+			return awaitingClear // unchanged on a failed send — matches original inline semantics
+		}
+		return true
+	}
+	return awaitingClear && approvalVisible
 }
