@@ -1,7 +1,16 @@
-# ADR-001: GitHub Ref Verification — Single Dispatcher, HTTP-Only Auth, Typed Status Sentinels
+# ADR-005: GitHub Ref Verification — Single Dispatcher, HTTP-Only Auth, Typed Status Sentinels
 
 ## Status
-Proposed
+Proposed — **CONFLICTS with a concurrently-written `ADR-002-gh-cli-pr-existence-classification.md`
+in this same directory.** A parallel planning session (this item is self-referential — see
+features.md §9.3 — and appears to have a second concurrent session also planning it) reached
+the opposite conclusion for the PR-verification sub-decision: that ADR keeps the existing
+`gh`-CLI-subshell `GetPRInfoCtx` + stderr-substring classification for the PR case, rejecting
+a new HTTP-based `GetPR` as unrequested scope growth. This ADR instead adds `GetPR` (HTTP-based)
+specifically to keep all three ref types on one consistent auth mechanism. **Both cannot be
+implemented as written — this must be reconciled by whoever picks up Phase 5 implementation,
+before Epic 1.2/3.2 of `implementation/plan.md` starts.** See the "Conflicting Decision" note
+at the bottom of this ADR.
 
 ## Context
 
@@ -116,3 +125,26 @@ rather than assume a typo.
   releases/tags), the switch in `verifyGitHubRefExists` gets a new case — no structural
   change needed, confirming the switch-over-interface choice scales fine for the actually-
   closed set of ref kinds GitHub URLs can express.
+
+## Conflicting Decision (found post-hoc, unresolved)
+
+`ADR-002-gh-cli-pr-existence-classification.md` (same directory, written by a concurrent
+planning pass on this same item) makes the opposite call for the PR sub-case: keep
+`GetPRInfoCtx` (the `gh`-CLI-subshell path) and classify "not found" via a stderr-substring
+match, explicitly rejecting a new HTTP `GetPR` function as scope growth beyond what any
+acceptance criterion requests. That ADR's own text flags its approach as "UNVERIFIED... as
+of this planning phase" and a known-fragile heuristic.
+
+This ADR's position (add `GetPR`, HTTP-only) is preferred here because: (a) it closes the
+auth-mechanism-inconsistency risk pitfalls.md §4 calls the single most likely copy-paste
+mistake, which the other ADR's approach leaves open (PR case still uses `gh auth`, issue/commit
+still use `GITHUB_TOKEN`/keychain); (b) stderr-substring matching against a third-party CLI's
+output is a fragile classification signal with no compiler/type backing, whereas an HTTP 404
+is a stable, versioned API contract. But the other ADR's argument — that `GetCommit` was the
+only new `github/`-package function any research pass unanimously called for, and a second
+new function is unrequested scope — is not unreasonable either.
+
+**This is a genuine, unresolved design disagreement between two independently-produced plans
+for the same item, not a case where one side is simply wrong. Whoever begins implementation
+(Phase 5) must pick one before Epic 1.2/3.2 (this plan) or the equivalent story in the other
+plan can start, and should delete or clearly supersede whichever ADR is not chosen.**

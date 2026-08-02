@@ -1,4 +1,4 @@
-# ADR-004: `report_duplicate` Does Not Gain FR2's Active-Reviewer Refusal
+# ADR-008: `report_duplicate` Does Not Gain FR2's Active-Reviewer Refusal
 
 ## Status
 Proposed — flagged for owner confirmation (see Consequences)

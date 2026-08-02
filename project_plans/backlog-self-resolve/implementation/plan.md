@@ -6,15 +6,33 @@ new `report_duplicate` MCP tool that lets a work session self-resolve a backlog 
 discovers is a duplicate of an already-shipped PR/issue/commit.
 
 **Date**: 2026-08-02
-**Status**: Ready for implementation
-**ADRs**: ADR-001 (GitHub ref verification: dispatcher + HTTP-only + status classification),
-ADR-002 (`TriggeredByAgent` applies to both `request_review` source-status paths),
-ADR-003 (`report_duplicate` idempotency: reject, don't merge, a differing second ref),
-ADR-004 (`report_duplicate` does not gain FR2's active-reviewer refusal)
+**Status**: Ready for implementation — **except see the concurrent-session conflict note below**
+**ADRs**: ADR-005 (GitHub ref verification: dispatcher + HTTP-only + status classification),
+ADR-006 (`TriggeredByAgent` applies to both `request_review` source-status paths),
+ADR-007 (`report_duplicate` idempotency: reject, don't merge, a differing second ref),
+ADR-008 (`report_duplicate` does not gain FR2's active-reviewer refusal)
 
 Source: `project_plans/backlog-self-resolve/requirements.md` (FR1–FR10) +
 `research/{stack,features,architecture,pitfalls,build-vs-buy,ux}.md`. Grounding facts below
 were verified directly against this worktree's source (not inferred from research prose).
+
+**Concurrent-session note (2026-08-02):** while writing this plan, two ADR files this plan
+did not author — `decisions/ADR-001-no-new-backlog-status-for-duplicates.md` and
+`decisions/ADR-002-gh-cli-pr-existence-classification.md` — appeared in this same project's
+`decisions/` directory between this plan's `mkdir` and its `git add`, indicating a second,
+independent SDD planning pass is running concurrently on this same backlog item (item
+`da58b867` is self-referential — see `research/features.md` §9.3). This plan's own ADRs were
+renumbered ADR-005–ADR-008 to avoid filename collision. The two plans agree on nearly
+everything checked (both land on `review` as the target status, both reuse
+`VerificationNotes`/`BacklogStatusEvent.Note`), but **disagree on one concrete design point**:
+this plan's `ADR-005` adds a new HTTP-based `github.GetPR` so all three ref-verification calls
+share one auth mechanism; the other session's `ADR-002` keeps the existing `gh`-CLI-subshell
+`GetPRInfoCtx` and classifies "not found" via stderr-substring matching, explicitly rejecting
+a new `GetPR` as unrequested scope. See the "Conflicting Decision" section at the bottom of
+`ADR-005-github-ref-verification-dispatcher.md` for the full reasoning on both sides. **This
+must be reconciled — by comparing both plan.md files and picking one epic/story for the
+`GetPR`-vs-`GetPRInfoCtx` decision — before Phase 5 implementation starts; do not implement
+both.**
 
 ---
 
@@ -36,10 +54,10 @@ Exact names here must be used consistently in code, tests, and comments.)*
 | `reason` | `report_duplicate`'s required string arg — free text explaining why `duplicate_ref` supersedes this item (max 500 chars) | New MCP tool param |
 | `ParsedGitHubRef` | `github.ParseGitHubRef(input) (*ParsedGitHubRef, error)` — generalized parser with `Type ∈ {RefTypePR, RefTypeIssue, RefTypeCommit, ...}` and typed `PRNumber`/`IssueNumber`/`CommitSHA` fields | `github/url_parser.go:13-64,281` — **use this, not `session.ParseGitHubURL`** |
 | `RefType` | `github` package enum (`RefTypePR`, `RefTypeBranch`, `RefTypeRepo`, `RefTypeFile`, `RefTypeCommit`, `RefTypeIssue`, `RefTypeCompare`, `RefTypeRelease`) | `github/url_parser.go:11-22` |
-| `ErrGitHubRefNotFound` | New exported sentinel in `github/` — a definitive 404 (ref doesn't exist, or exists but is invisible to the configured token) | New, ADR-001 |
-| `ErrGitHubAccessDenied` | New exported sentinel — 401, or 403 with no rate-limit signal (retrying with the same token will not change the outcome) | New, ADR-001 |
+| `ErrGitHubRefNotFound` | New exported sentinel in `github/` — a definitive 404 (ref doesn't exist, or exists but is invisible to the configured token) | New, ADR-005 |
+| `ErrGitHubAccessDenied` | New exported sentinel — 401, or 403 with no rate-limit signal (retrying with the same token will not change the outcome) | New, ADR-005 |
 | `GetCommit` | New `github.GetCommit(ctx, owner, repo, sha) (*CommitResult, error)` — HTTP existence check for a commit SHA, mirrors `GetIssue`'s shape | New, `github/commits.go` |
-| `GetPR` | New `github.GetPR(ctx, owner, repo, number) (*PRResult, error)` — HTTP (not `gh` CLI) existence check for a PR | New, `github/repos.go`, ADR-001 |
+| `GetPR` | New `github.GetPR(ctx, owner, repo, number) (*PRResult, error)` — HTTP (not `gh` CLI) existence check for a PR | New, `github/repos.go`, ADR-005 |
 | `verifyGitHubRefExists` | New `(h *backlogHandlers) verifyGitHubRefExists(ctx, ref *ParsedGitHubRef) (bool, error)` — single dispatcher over the 3 ref types, returning the same 3-way contract `verifyPR`/`VerifyPRMatchesBranch` already use | New, `server/mcp/tools_backlog.go`, Pattern Decision below |
 | `hasActiveReviewSession` | New unexported helper in `server/mcp` — local copy of the filter already duplicated in `server/services` and `session`, per architecture.md §3 | New, `server/mcp/tools_backlog.go` |
 | `errResult` / `ErrInvalidArgument` / `ErrInternalError` / `ErrPermissionDenied` / `ErrItemNotFound` | Existing MCP error-result vocabulary — reused as-is, no new codes | `server/mcp/tools_discovery.go:73`, `server/mcp/types.go:63-64`, `server/mcp/tools_backlog.go:57-58` |
@@ -55,17 +73,17 @@ Exact names here must be used consistently in code, tests, and comments.)*
 | GitHub ref verification dispatch (`report_duplicate`) | **Option A — single `verifyGitHubRefExists(ctx, ref) (bool, error)` dispatcher with an internal `switch ref.Type`**, mirroring `reportPRCreated`'s existing `h.verifyPR` seam (`tools_backlog.go:707`) | Step 0.5 creative pass, this doc | **Option C — `GitHubRefVerifier` interface, DI'd like `h.verifyPRMatchesBranch`**: one sentence strength — clean seam for a future second implementation (e.g. a mock in tests); one sentence weakness — a single-implementation interface for 3 fixed, closed ref kinds is speculative indirection (interface-pollution-checklist.md smell #1), and the switch is exhaustive/compile-checked either way, so DI buys nothing testability-wise that a plain function doesn't already give (tests can call the 3 `github.Get*` funcs directly or hit an `httptest.Server`). | Both alternatives considered and rejected below. |
 | (rejected alt. 2) | — | — | **Option B — three separate typed calls invoked directly from the handler with a switch inline in `reportDuplicate`** — strength: one fewer function/indirection; weakness: duplicates the switch's dispatch logic into the handler body, coupling arg-parsing/refusal-check code with verification-call code in one large function, harder to unit-test the dispatch decision in isolation from the full handler prologue. | — | — | — |
 | GitHub ref parsing | Reuse `github.ParseGitHubRef` as-is (no changes) | stack.md §5, architecture.md §5 | Extend `session.ParseGitHubURL` with new `GitHubRefType` cases (build-vs-buy.md's original Option A framing) | A more thorough read (architecture.md, features.md) found `github.ParseGitHubRef` already has `RefTypeIssue`/`RefTypeCommit` fully populated — extending the narrower, PR-only `session.ParseGitHubURL` would duplicate work a better parser already does. |
-| GitHub existence-check auth mechanism | **HTTP-only for all 3 ref types** — native `net/http` via `ghHTTPClient`/`getGHToken`, same as `GetIssue`; add HTTP-based `GetPR`, do **not** call `GetPRInfoCtx` (`gh` CLI subprocess) from `report_duplicate` | ADR-001 | Reuse `GetPRInfoCtx` for the PR case, `GetIssue`/`GetCommit` (HTTP) for the other two | pitfalls.md §4: `GetPRInfoCtx` resolves auth via `gh auth login`/`CheckGHAuth()`; `GetIssue` resolves auth via `GITHUB_TOKEN`/`GH_TOKEN` env or keychain (`getGHToken`, independent path). A host with one configured but not the other would pass verification for 2 of 3 ref types and fail the 3rd with a *different failure mode* — confusing and untestable as one coherent contract. One mechanism for all three closes this. |
-| GitHub error classification (404/401/403/429) | Typed sentinels `ErrGitHubRefNotFound` (404) / `ErrGitHubAccessDenied` (401, or 403 w/o rate-limit signal) shared across `GetIssue`(retrofit)/`GetPR`/`GetCommit`; `errors.Is` in the handler, not string/status matching | ADR-001 | Per-call `fmt.Errorf` text matched by the handler (as `GetIssue` does today) | `errors.Is` is robust to message-text changes; a shared sentinel means `verifyGitHubRefExists`'s classification logic is written once, not duplicated 3×. Small additive change to `GetIssue` (wrap its existing 404/401/403-no-Retry-After branches), no behavior change for existing callers of `GetIssue` since the returned error still satisfies `errors.Is` against nothing before *and* now additionally against the new sentinel — existing `err != nil` callers are unaffected. |
+| GitHub existence-check auth mechanism | **HTTP-only for all 3 ref types** — native `net/http` via `ghHTTPClient`/`getGHToken`, same as `GetIssue`; add HTTP-based `GetPR`, do **not** call `GetPRInfoCtx` (`gh` CLI subprocess) from `report_duplicate` | ADR-005 | Reuse `GetPRInfoCtx` for the PR case, `GetIssue`/`GetCommit` (HTTP) for the other two | pitfalls.md §4: `GetPRInfoCtx` resolves auth via `gh auth login`/`CheckGHAuth()`; `GetIssue` resolves auth via `GITHUB_TOKEN`/`GH_TOKEN` env or keychain (`getGHToken`, independent path). A host with one configured but not the other would pass verification for 2 of 3 ref types and fail the 3rd with a *different failure mode* — confusing and untestable as one coherent contract. One mechanism for all three closes this. |
+| GitHub error classification (404/401/403/429) | Typed sentinels `ErrGitHubRefNotFound` (404) / `ErrGitHubAccessDenied` (401, or 403 w/o rate-limit signal) shared across `GetIssue`(retrofit)/`GetPR`/`GetCommit`; `errors.Is` in the handler, not string/status matching | ADR-005 | Per-call `fmt.Errorf` text matched by the handler (as `GetIssue` does today) | `errors.Is` is robust to message-text changes; a shared sentinel means `verifyGitHubRefExists`'s classification logic is written once, not duplicated 3×. Small additive change to `GetIssue` (wrap its existing 404/401/403-no-Retry-After branches), no behavior change for existing callers of `GetIssue` since the returned error still satisfies `errors.Is` against nothing before *and* now additionally against the new sentinel — existing `err != nil` callers are unaffected. |
 | `report_duplicate`'s outcome data model | Pack `duplicate_ref` + `reason` into the existing free-text `VerificationNotes` field (ItemSession) and `BacklogStatusEvent.Note` (status-event row) | FR8, ux.md §4 | A `DuplicateReport` domain value object / new ent columns | FR8 explicitly forbids schema changes; two strings with no independent lifecycle or validation beyond length caps don't need a value-object wrapper — `fmt.Sprintf` into the two existing free-text fields is the entire "domain model" this needs (interface-pollution-checklist.md #6, don't wrap what doesn't add behavior). |
-| `TriggeredBy` scope for the generalized `request_review` | **Both** source-status paths (`in_progress→review` and `pr_pending→review`) switch from `TriggeredBySystem` to `TriggeredByAgent`, not just the new `report_duplicate` call | ADR-002 | Only `report_duplicate` gets the new constant; `request_review` keeps `TriggeredBySystem` | AC7 says "every transition made by this feature." FR1's generalization *is* part of this feature's diff — leaving `request_review`'s attribution as `"system"` while `report_duplicate`'s reads `"agent"` would make two functionally-identical agent-initiated actions audit-inconsistently. |
-| `report_duplicate` double-report handling | **Reject** a second call with a *different* `duplicate_ref` once the item has already left the whitelist (i.e. already `review`/`done`) — do not append/merge into `VerificationNotes` | ADR-003 | Merge/append the second ref into `VerificationNotes` | `UpdateItemSessionVerificationNotes` overwrites, not appends (confirmed, `session/storage_backlog.go:397`). Appending would require read-modify-write with its own race; rejecting keeps the "routes to review once, human/reviewer takes it from there" contract simple and matches `report_pr_created`'s own idempotency precedent (same-ref no-op, nothing more sophisticated). |
-| `report_duplicate` + active review session | **No FR2-style hard refusal** — `report_duplicate` may transition even if an active review-role session exists for the item; only the *success-message wording* changes (FR5) | ADR-004 | Extend FR2's refusal (as request_review has) to report_duplicate too | Requirements.md's FR6 enumerates exactly 3 refusal conditions, none mentioning active sessions; FR5 explicitly describes report_duplicate *succeeding* while a review session is active. A hard refusal here would make FR5 unreachable — see ADR-004 for full reasoning and the residual ambiguity flagged for owner sign-off. |
+| `TriggeredBy` scope for the generalized `request_review` | **Both** source-status paths (`in_progress→review` and `pr_pending→review`) switch from `TriggeredBySystem` to `TriggeredByAgent`, not just the new `report_duplicate` call | ADR-006 | Only `report_duplicate` gets the new constant; `request_review` keeps `TriggeredBySystem` | AC7 says "every transition made by this feature." FR1's generalization *is* part of this feature's diff — leaving `request_review`'s attribution as `"system"` while `report_duplicate`'s reads `"agent"` would make two functionally-identical agent-initiated actions audit-inconsistently. |
+| `report_duplicate` double-report handling | **Reject** a second call with a *different* `duplicate_ref` once the item has already left the whitelist (i.e. already `review`/`done`) — do not append/merge into `VerificationNotes` | ADR-007 | Merge/append the second ref into `VerificationNotes` | `UpdateItemSessionVerificationNotes` overwrites, not appends (confirmed, `session/storage_backlog.go:397`). Appending would require read-modify-write with its own race; rejecting keeps the "routes to review once, human/reviewer takes it from there" contract simple and matches `report_pr_created`'s own idempotency precedent (same-ref no-op, nothing more sophisticated). |
+| `report_duplicate` + active review session | **No FR2-style hard refusal** — `report_duplicate` may transition even if an active review-role session exists for the item; only the *success-message wording* changes (FR5) | ADR-008 | Extend FR2's refusal (as request_review has) to report_duplicate too | Requirements.md's FR6 enumerates exactly 3 refusal conditions, none mentioning active sessions; FR5 explicitly describes report_duplicate *succeeding* while a review session is active. A hard refusal here would make FR5 unreachable — see ADR-008 for full reasoning and the residual ambiguity flagged for owner sign-off. |
 
 ---
 
 ## Migration Plan
-N/A, no schema changes per FR8/ADR-001 (this project's own `ADR-001` referenced in requirements.md, not the ADR-001 authored by this plan below — see requirements.md's "Non-goals"). `go build ./...` must succeed with zero `ent generate` runs; verified as an explicit CI-equivalent task at the end of Phase 4.
+N/A, no schema changes per FR8 / `decisions/ADR-001-no-new-backlog-status-for-duplicates.md` (a separate ADR in this project's `decisions/` directory — filename genuinely starts with `ADR-001`, unrelated to this plan's own `ADR-005`..`ADR-008` numbering, which was renumbered to avoid colliding with it; it was written by a concurrent planning pass on this same item — see the conflict note atop `ADR-005-github-ref-verification-dispatcher.md`). `go build ./...` must succeed with zero `ent generate` runs; verified as an explicit CI-equivalent task at the end of Phase 4.
 
 ## Observability Plan
 - **Logs**: `report_duplicate` logs one `log.InfoLog` line on success (`session=%s item=%s duplicate_ref=%s transitioned to review`) mirroring `request_review`'s existing line (`tools_backlog.go:429`) and `report_pr_created`'s (`:721`); one `log.WarningLog` line if `UpdateItemSessionVerificationNotes` fails (best-effort, matches `request_review:425`); GitHub verification failures are logged at `log.InfoLog` with the ref and error before returning the `ErrInternalError`/`ErrInvalidArgument` result, so a human grepping logs can correlate a stuck `pr_pending` item with why `report_duplicate` never succeeded for it.
@@ -78,8 +96,8 @@ N/A, no schema changes per FR8/ADR-001 (this project's own `ADR-001` referenced 
 - **Staged rollout**: full rollout on merge — this is an internal agent-tooling change (MCP tool surface consumed only by this repo's own work sessions), not a user-facing product surface; no cohort/percentage rollout mechanism exists for MCP tools in this codebase.
 
 ## Unresolved Questions
-- [x] **UQ-1 (resolved, flagged for confirmation)**: Does `report_duplicate` refuse when an active review-role session exists (mirroring FR2), or only adjust its success message (FR5)? **Plan adopts: no additional refusal** (ADR-004) — because FR5 presupposes `report_duplicate` can succeed in that state. Confirm with the item owner before Phase 3 lands if this reading is wrong; if it is, Story 3.3.3 needs an added refusal branch and FR5's example (GWT for AC5 below) becomes unreachable and must be rewritten.
-- [x] **UQ-2 (resolved)**: 403-with-no-rate-limit-signal classification — resolved as `ErrGitHubAccessDenied` → `ErrInvalidArgument` (non-retryable) in ADR-001, not `ErrInternalError`. No further blocking action.
+- [x] **UQ-1 (resolved, flagged for confirmation)**: Does `report_duplicate` refuse when an active review-role session exists (mirroring FR2), or only adjust its success message (FR5)? **Plan adopts: no additional refusal** (ADR-008) — because FR5 presupposes `report_duplicate` can succeed in that state. Confirm with the item owner before Phase 3 lands if this reading is wrong; if it is, Story 3.3.3 needs an added refusal branch and FR5's example (GWT for AC5 below) becomes unreachable and must be rewritten.
+- [x] **UQ-2 (resolved)**: 403-with-no-rate-limit-signal classification — resolved as `ErrGitHubAccessDenied` → `ErrInvalidArgument` (non-retryable) in ADR-005, not `ErrInternalError`. No further blocking action.
 - [ ] **UQ-3**: Does `hasActiveReviewSession`'s pre-existing "zombie reviewer" false-positive (dead tmux session, `EndedAt` still nil) need a one-line hint in `request_review`'s FR2 refusal message ("if this persists after a few minutes, an operator can check with `get_backlog_item`")? Not blocking — pitfalls.md calls this an accepted pre-existing limitation — but Story 2.2.1 should include the hint text since it's a one-line addition once the guard exists. Not a design blocker, just confirm the exact wording lands in the task, not skipped.
 
 ## Dependency Visualization
@@ -129,7 +147,7 @@ Phase 4: Tests (needs everything above)
 ---
 
 ### Epic 1.2: GitHub verification primitives
-**Goal**: Add the HTTP-based, sentinel-error-returning verification calls `report_duplicate` needs for all three ref types, per ADR-001's HTTP-only decision.
+**Goal**: Add the HTTP-based, sentinel-error-returning verification calls `report_duplicate` needs for all three ref types, per ADR-005's HTTP-only decision.
 
 #### Story 1.2.1: Sentinel errors + `GetIssue` retrofit
 **As a** future caller of any GitHub existence-check function in this package, **I want** `errors.Is`-checkable sentinels for "not found" and "access denied", **so that** classification doesn't depend on parsing error text.
@@ -152,7 +170,7 @@ Phase 4: Tests (needs everything above)
 - Files: `github/repos.go`
 
 #### Story 1.2.2: `GetPR` — new HTTP-based PR existence check
-**As** `report_duplicate`'s verification dispatcher, **I want** a PR-existence check that uses the same HTTP/auth mechanism as `GetIssue`, **so that** all three ref types share one auth resolution path (ADR-001).
+**As** `report_duplicate`'s verification dispatcher, **I want** a PR-existence check that uses the same HTTP/auth mechanism as `GetIssue`, **so that** all three ref types share one auth resolution path (ADR-005).
 **Acceptance Criteria**:
 - `github.GetPR(ctx, owner, repo, number) (*PRResult, error)` exists, uses `newGHRequest`/`ghHTTPClient` (not `safeexec.CommandContext("gh", ...)`), and returns the same sentinel-wrapped errors as `GetIssue` for 404/401/403/429.
   - *Given* PR `#272` exists on `tstapler/stapler-squad`, *When* `GetPR(ctx, "tstapler", "stapler-squad", 272)` is called, *Then* it returns `(&PRResult{Number: 272, ...}, nil)` without invoking `gh` as a subprocess (verified by an `httptest.Server`-backed unit test, not by a live network call).
@@ -208,7 +226,7 @@ Phase 4: Tests (needs everything above)
 - Files: `server/mcp/tools_backlog.go`
 
 ##### Task 2.1.1c: Switch `TriggeredBy` to `TriggeredByAgent` on both paths (~2 min)
-- On line 415's `TransitionBacklogItemStatus` call, change `session.TriggeredBySystem` → `session.TriggeredByAgent` (ADR-002 — applies uniformly regardless of which validated source status was observed, no branching needed since it's the same call site either way).
+- On line 415's `TransitionBacklogItemStatus` call, change `session.TriggeredBySystem` → `session.TriggeredByAgent` (ADR-006 — applies uniformly regardless of which validated source status was observed, no branching needed since it's the same call site either way).
 - Files: `server/mcp/tools_backlog.go`
 
 #### Story 2.1.2: Distinguish `ErrPreconditionFailed` from generic transition errors
@@ -269,7 +287,7 @@ Phase 4: Tests (needs everything above)
 - *Given* item `da58b867-...` has `SkipReviewGate: true`, *When* a linked work session calls `report_duplicate`, *Then* it is refused with `ErrInvalidArgument` ("report_duplicate is unavailable for items with SkipReviewGate enabled — use request_review instead"), **no GitHub call is made** (this check runs before parsing/verifying `duplicate_ref`), and `GetBacklogItem` afterward shows the item's status/fields unchanged.
 - *Given* item `da58b867-...` at status `done` (already shipped through a different path), *When* `report_duplicate` is called, *Then* it is refused with `ErrInvalidArgument` ("item is at status \"done\" — report_duplicate only allowed from in_progress or pr_pending"), zero mutation, before any network call.
 - *Given* item `da58b867-...` already at `review` with `VerificationNotes` containing the exact string `"duplicate_ref=https://github.com/tstapler/stapler-squad/pull/272"` (i.e. this exact call already succeeded once), *When* `report_duplicate` is called again with the identical `duplicate_ref`, *Then* it returns a success no-op ("duplicate report for https://github.com/tstapler/stapler-squad/pull/272 already recorded for item da58b867-... (status already review) — no changes made"), no second `TransitionBacklogItemStatus` call is attempted.
-- *Given* the same already-`review` item, *When* `report_duplicate` is called with a **different** `duplicate_ref` (e.g. `.../pull/300`), *Then* it is refused with `ErrInvalidArgument` (falls into the same "disallowed source status" branch as the `done` case above — `review` is not in the whitelist and the ref doesn't match the idempotency string) — per ADR-003, the second ref is **not** merged into `VerificationNotes`.
+- *Given* the same already-`review` item, *When* `report_duplicate` is called with a **different** `duplicate_ref` (e.g. `.../pull/300`), *Then* it is refused with `ErrInvalidArgument` (falls into the same "disallowed source status" branch as the `done` case above — `review` is not in the whitelist and the ref doesn't match the idempotency string) — per ADR-007, the second ref is **not** merged into `VerificationNotes`.
 **Files**: `server/mcp/tools_backlog.go`
 
 ##### Task 3.1.2a: `GetBacklogItem` + `SkipReviewGate` refusal (~3 min)
@@ -344,7 +362,7 @@ Phase 4: Tests (needs everything above)
 **As** the calling work session, **I want** an accurate success message about *when* the duplicate evidence will be seen, **so that** I don't assume a live reviewer will act on it immediately if one isn't watching yet.
 **Acceptance Criteria** (FR5):
 - *Given* item `da58b867-...` at `in_progress` with **no** active review-role session, *When* `report_duplicate` succeeds, *Then* the success text reads like `"Item da58b867-... routed to review as a duplicate of https://github.com/tstapler/stapler-squad/pull/272. Reviewer notified."` and `h.reviewTrigger.TriggerReviewForSession(callerUUID)` is called (mirrors `request_review`'s unconditional trigger call, `tools_backlog.go:440-442`).
-- *Given* the same item but **with** an active review-role session already present (edge case per ADR-004/UQ-1 — e.g. a stale row from a prior rework cycle not yet cleaned up), *When* `report_duplicate` succeeds, *Then* the success text instead reads like `"Item da58b867-... routed to review as a duplicate of https://github.com/tstapler/stapler-squad/pull/272. This will be picked up on the next review pass (a review session is already running and won't see this update live)."` — never implying the *current* reviewer will see it, per `BuildReviewPrompt`'s once-at-spawn-time read confirmed in architecture.md §4.
+- *Given* the same item but **with** an active review-role session already present (edge case per ADR-008/UQ-1 — e.g. a stale row from a prior rework cycle not yet cleaned up), *When* `report_duplicate` succeeds, *Then* the success text instead reads like `"Item da58b867-... routed to review as a duplicate of https://github.com/tstapler/stapler-squad/pull/272. This will be picked up on the next review pass (a review session is already running and won't see this update live)."` — never implying the *current* reviewer will see it, per `BuildReviewPrompt`'s once-at-spawn-time read confirmed in architecture.md §4.
 **Files**: `server/mcp/tools_backlog.go`
 
 ##### Task 3.3.3a: Reuse `hasActiveReviewSession` for message branching (~4 min)
@@ -469,7 +487,7 @@ Phase 4: Tests (needs everything above)
 ##### Task 4.2.3b: `TestReportDuplicate_ReturnsRetryableError_WhenGitHubVerificationTimesOut` (~4 min)
 ##### Task 4.2.3c: `TestReportDuplicate_ReturnsRetryableError_WhenGitHubRateLimited` (~4 min)
 ##### Task 4.2.3d: `TestReportDuplicate_RejectsWhenGitHubAccessDenied` (~4 min)
-- Bare 403 (no `Retry-After`, no `X-RateLimit-Remaining: 0`) → `ErrInvalidArgument`, per ADR-001's UQ-2 resolution.
+- Bare 403 (no `Retry-After`, no `X-RateLimit-Remaining: 0`) → `ErrInvalidArgument`, per ADR-005's UQ-2 resolution.
 - Files (all 4 tasks): `server/mcp/tools_backlog_test.go`
 
 #### Story 4.2.4: Idempotency tests
