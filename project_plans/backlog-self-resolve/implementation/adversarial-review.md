@@ -181,3 +181,178 @@
 - Malformed/truncated JSON bodies and unrecognized GitHub status codes fall into the generic retryable
   `ErrInternalError` bucket for `GetIssue`/`GetPR`/`GetCommit` alike — reasonable default (matches
   `report_pr_created`'s template) but untested in Story 4.2.3's four tasks.
+
+---
+
+## Iteration 2 Re-Verification (appended)
+
+**Date**: 2026-08-02
+**Scope**: re-check of the 11 fixes iteration 1 required, against the current `plan.md`. Not a fresh
+full review — see the coordinator's brief for the exact 11-item checklist. Source claims were verified
+by reading `session/backlog_lifecycle.go` and the ADR files directly, not by trusting plan prose.
+
+### 1. FR10 Observability Plan citation — FIXED-CORRECTLY
+
+Plan's Observability Plan (lines 81-84) now cites `ReconcilePRPending` (`session/backlog_lifecycle.go:3850`)
+instead of `pr_pending_no_pr`. Verified directly against source:
+- `ReconcilePRPending` is gated `if item.PrNumber == 0 || item.PrURL == "" { continue }`
+  ([`session/backlog_lifecycle.go:3857`](session/backlog_lifecycle.go#L3857)) — the complementary
+  condition to `reconcilePRPendingWithoutPRItems`'s `if item.PrNumber != 0 { continue }`
+  ([`:2553`](session/backlog_lifecycle.go#L2553)), confirming it does cover items with a real PR
+  reference, which is FR10's actual scenario.
+- The healthy-but-stale-open-PR branch calls `l.markPRReadyUnmerged(...)`
+  ([`:4069`](session/backlog_lifecycle.go#L4069)), which itself calls `MarkStuck(..., StuckReasonPRReadyUnmerged, ...)`
+  ([`:4208`](session/backlog_lifecycle.go#L4208)) — confirmed.
+- The CI-failing/blocked/conflicting branch reaches `MarkStuck(..., StuckReasonPRNeedsFix, ...)`
+  ([`:3805`](session/backlog_lifecycle.go#L3805)) — confirmed.
+- Both `StuckReasonPRReadyUnmerged` and `StuckReasonPRNeedsFix` strings appear in
+  `web-app/src/components/backlog-stuck/StuckItemsSection.tsx` and `stuckReason.ts` — confirmed present
+  in the UI surface the plan cites.
+
+The blocker's root claim is now accurate. No further action needed on this item.
+
+### 2. Task 2.2.1b — fail closed on `ListItemSessions` error — PARTIALLY-FIXED
+
+The code fix is correct: the guard now returns `ErrInternalError` ("could not verify active-reviewer
+state for this item — retry: %v") on a storage error instead of falling through. Verified in plan.md
+line 252.
+
+New gap: the task prose says "Task 4.1.4a-equivalent test coverage: add
+`TestRequestReview_FailsClosed_WhenListItemSessionsErrors`" but no such task actually exists under
+Epic 4.1 (Stories 4.1.1–4.1.5, Tasks 4.1.1a–4.1.5a enumerated at lines 390-438) — the test name is
+mentioned only in a parenthetical inside Task 2.2.1b's own description, not tracked as a Phase 4
+deliverable the way every other new-behavior test is (contrast Task 4.1.4a/4.1.4b, which do exist for
+the sibling "active reviewer" guard behavior in the same story). Iteration 1's recommendation explicitly
+asked for "a test that injects a storage error and asserts refusal" as a checkable deliverable, not just
+a prose mention — a reviewer scanning Phase 4's task list for full FR2 coverage would miss this one.
+
+### 3. Task 3.3.3a — default to conservative message on error — PARTIALLY-FIXED
+
+The code fix is correct: `activeReview := lsErr != nil || services.HasActiveReviewSession(itemSessions)`
+(line 362) correctly treats a storage error as "might be active," defaulting to the conservative "next
+review pass" wording rather than the optimistic "Reviewer notified" text.
+
+New gap, worse than item 2's: Task 3.3.3a's prose doesn't even mention a test name for this branch, and
+Epic 4.2.5 has exactly one task (4.2.5a, `TestReportDuplicate_MessageSaysNextReviewPass_WhenReviewSessionActive`),
+which covers the "active session present" case, not the "`ListItemSessions` errored" case. Iteration 1
+explicitly asked for a test here too ("add a test"); it is missing entirely, not just untracked.
+
+### 4. Shared `validateSelfResolveSource` chokepoint + call-site/ordering check — FIXED-CORRECTLY
+
+`validateSelfResolveSource(item, toolName) (session.BacklogStatus, error)` is defined once (Task 2.1.1a,
+line 214) and all 3 downstream sites use its return value, not `item.Status`, verified by reading each:
+- Task 2.1.1b (line 218): `precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), ...}` — uses the chokepoint's return.
+- Task 3.1.2b (line 291): idempotency check runs first using **raw** `item.Status == string(session.BacklogStatusReview)` — this is intentional and correct, not a violation, because the idempotency no-op path is for an item that has *already left* the whitelist (status `review`), which the chokepoint would otherwise reject outright. Only in the "otherwise" branch (no exact-retry match) does it call `validateSelfResolveSource(item, "report_duplicate")` and carry `validStatus` forward.
+- Task 3.3.1a (line 337): `ExpectedStatus: string(validStatus)` — explicitly "the value Task 3.1.2b's `validateSelfResolveSource` call returned (never `item.Status` directly...)".
+
+Ordering is correct and does not contradict the chokepoint's existence — idempotency check (raw status)
+necessarily precedes the whitelist chokepoint call, exactly as iteration 1's checklist required.
+
+### 5. Epic 3.1 Goal — refusal tests must stub `verifyGitHubRef` to fail if called — FIXED-BUT-NEW-ISSUE
+
+The ordering-safeguard text was added (line 260) and does require Epic 4.2.2's refusal tests to set
+`verifyGitHubRef` to a `t.Fatal`-on-call stub. However, the range cited — **"every Epic 4.2.2 refusal
+test (Tasks 4.2.2a-f)"** — is now wrong. Task 4.2.2f (`TestReportDuplicate_AllowsCrossRepoDuplicateRef`,
+added per fix #8, line 479) is explicitly **not** a refusal test — its own acceptance text requires
+`verifyGitHubRefExists`/`verifyGitHubRef` to **be called** (asserting it's invoked with the cross-repo
+`owner`/`repo`) and to return success, with the item transitioning to `review`. Constructing 4.2.2f per
+Epic 3.1's Goal text (`verifyGitHubRef` that calls `t.Fatal` if invoked) would make 4.2.2f fail by
+construction — a direct contradiction between two sections both fixed in this iteration. The range
+should read "Tasks 4.2.2a-e" (4.2.2e, the length-cap refusal test, correctly belongs in the "no GitHub
+call" set; 4.2.2f does not). This is a new internal contradiction introduced by combining fix #5 and
+fix #8 without reconciling the cross-reference.
+
+### 6. Task 3.3.2a — accepted-tradeoff note on the `VerificationNotes` race — FIXED-CORRECTLY
+
+Line 351 now ends with an explicit "**Accepted tradeoff (adversarial review)**" paragraph stating the
+read-early/write-late race exists, is not CAS-protected, is judged low-probability given the
+single-work-session-per-item-at-a-time model, and is deliberately not mitigated further (no re-read
+immediately before final write) for v1. This directly satisfies iteration 1's recommendation ("state
+explicitly... that this is an accepted low-probability tradeoff").
+
+### 7. Task 4.2.2e — length-cap rejection test — FIXED-CORRECTLY
+
+Exists at line 475-477 (`TestReportDuplicate_RejectsWhenDuplicateRefOrReasonTooLong`), table-driven over
+both the 500-char `duplicate_ref` cap and 1000-char `reason` cap, explicitly asserts zero mutation and no
+GitHub call.
+
+### 8. Task 4.2.2f — cross-repo `duplicate_ref` allowed, explicit decision — FIXED-CORRECTLY
+
+Exists at line 479-481 (`TestReportDuplicate_AllowsCrossRepoDuplicateRef`), with an explicit "Explicit
+decision" paragraph reasoning that FR3's text does not restrict `duplicate_ref` to the item's own repo
+and that cross-repo duplicates are a legitimate real-world case (cites this very repo's `origin`/
+`personal` fork pair). This resolves iteration 1's concern about an undecided, untested behavior — see
+item 5 above, however, for the new contradiction this addition created elsewhere in the plan.
+
+### 9. ADR-003 / ADR-004 status — FIXED-CORRECTLY
+
+Read directly:
+- `decisions/ADR-003-triggeredby-agent-scope.md:4`: "Accepted (2026-08-02, ratified by item owner). Per
+  the review-flagged 'grep check before merging'... the check was run during architecture review and
+  confirmed low-risk... Phase 5's implementer should still re-run it..." — Accepted, with the residual
+  action item iteration 1 asked about explicitly carried forward as a Phase 5 note rather than dropped.
+- `decisions/ADR-004-report-duplicate-idempotency.md:4`: "Accepted (2026-08-02, ratified by item owner)".
+
+Both now match ADR-001/002/005's "Accepted" status.
+
+### 10. Task 4.2.6a — real two-tool-call test — FIXED-CORRECTLY
+
+Task 4.2.6a (line 513-515) and Story 4.2.6's acceptance text (line 510) were both rewritten together.
+The test now calls `reportPRCreated` (real handler call, `in_progress → pr_pending`, one status-event
+row), then `reportDuplicate` on the same now-`pr_pending` item (real handler call, succeeds per the
+whitelist, `pr_pending → review`, second status-event row) — a genuine two-handler-call sequence, not a
+direct repository-layer CAS probe. The "loser" scenario is now a **third** `reportDuplicate` call on the
+now-`review` item, asserted to hit the whitelist-rejection branch with no third status-event row. The
+story's acceptance criteria text was also corrected to stop claiming "exactly one status-event row,"
+which the original (pre-fix) framing had gotten wrong given the two calls target different, sequentially
+legitimate transitions.
+
+### 11. Task 4.1.5a — commit to one buildable construction — FIXED-CORRECTLY (writing quality note)
+
+Task 4.1.5a (line 437) removed the unbuildable "unit-test in isolation" fallback (correctly noted as
+impossible since Task 2.1.2a inlines the `errors.Is` branch with no extracted helper). It now commits to
+a single buildable construction: two goroutines calling `requestReview` concurrently via
+`sync.WaitGroup` against an item seeded at `in_progress`, relying on the DB-level atomic
+`UPDATE...WHERE` (pitfalls.md §1) to guarantee exactly one winner/one loser, asserting the loser's error
+text contains "state changed." This is genuinely buildable and matches the CAS-race scenario Story 4.1.5
+describes.
+
+Minor writing-quality note (not a correctness issue): the task's prose still walks through a rejected
+"out-of-band transition" construction first (explaining why it only exercises the whitelist path, not
+the CAS-race path) before landing on the real goroutine-race construction. This reads as leftover
+reasoning-trace rather than a clean task description — worth tightening before Phase 5, but it does not
+leave two competing buildable options the way the original "unit-test in isolation" fallback did, so it
+does not reopen iteration 1's finding.
+
+### Other newly-noticed issues
+
+- **Epic 3.1 Goal's "Tasks 4.2.2a-f" range contradicts Task 4.2.2f's own success-path semantics** — see
+  item 5 above. This is the one new problem introduced by iteration 2's edits considered independently
+  of the 11 checklist items; it is a same-file internal contradiction, not a blocker (Phase 5's
+  implementer would almost certainly notice 4.2.2f can't compile/pass with a `t.Fatal`-on-call stub and
+  correct it in the moment), but it should be fixed before `sdd:4-validate` rather than left for
+  implementation-time discovery.
+- No other stale cross-references or renamed/removed symbols were found in a scan of the sections
+  touched by these 11 fixes (Domain Glossary, Pattern Decisions, Epics 1.1–4.3, Observability Plan, ADR
+  files) — the `validateSelfResolveSource` name is used consistently everywhere it's referenced (Domain
+  Glossary line 40, Pattern Decisions line 65, Tasks 2.1.1a/2.1.1b/3.1.2b/3.3.1a), and `ReconcilePRPending`/
+  `StuckReasonPRReadyUnmerged`/`StuckReasonPRNeedsFix` are used consistently between the Observability
+  Plan and the underlying source.
+
+### Overall Verdict: CONCERNS
+
+No blocker-severity issue remains — the FR10 blocker (item 1) is genuinely fixed and verified against
+source. 8 of 11 fixes are fully correct (items 1, 4, 6, 7, 8, 9, 10, 11); 2 are code-correct but missing
+their promised test coverage as a trackable Phase 4 deliverable (items 2, 3); 1 fix introduced a new,
+non-blocking internal contradiction (item 5's task range vs. item 8's new test). None of these three
+gaps rises to blocker severity — the underlying code behavior for items 2/3 is correct, and item 5's
+contradiction is a one-line range fix, not a design problem — but none should be waved through to
+`sdd:4-validate` silently either.
+
+**Recommended before `sdd:4-validate`**:
+1. Fix Epic 3.1's Goal text: "Tasks 4.2.2a-e" (not "a-f") — 4.2.2f is a success-path test.
+2. Add `TestRequestReview_FailsClosed_WhenListItemSessionsErrors` as an actual numbered task in Epic 4.1 (e.g. Task 4.1.4c), not just prose inside Task 2.2.1b.
+3. Add a task for the FR5 `ListItemSessions`-error message-fallback path (e.g. Task 4.2.5b,
+   `TestReportDuplicate_MessageSaysNextReviewPass_WhenListItemSessionsErrors`) under Story 4.2.5.
+
+**Count: 8/11 fixed correctly, 2 partially fixed (code correct, test task untracked/missing), 1 fixed-but-introduced-a-new-contradiction.**

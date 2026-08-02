@@ -110,6 +110,18 @@ rather than assume a typo.
   for different purposes. Acceptable: they serve different callers with different needs
   (existence-only vs. full mergeability/diff-stat detail), and consolidating them is out of
   scope for this feature (would require auditing/migrating `report_pr_created` too).
+- **This ADR's own HTTP-only choice creates a second, deliberate auth-mechanism split
+  elsewhere in the feature** (flagged as pre-mortem F1, P1, addressed in plan.md Task 3.2.2b):
+  `report_duplicate`'s verification path resolves auth via `getGHToken()`
+  (`GITHUB_TOKEN`/`GH_TOKEN` env or keychain), while FR10's designated stuck-item safety net
+  `ReconcilePRPending` resolves auth via the `gh` CLI (`checkGHCLI()`) — a completely separate
+  credential store. A session configured only via `gh auth login` has `report_duplicate` fail
+  every call while its own safety net keeps functioning, oblivious to why. This is not
+  reversed by this ADR (doing so would reopen the very auth-mechanism inconsistency this ADR
+  exists to close *within* the three ref-verification calls) — instead, Task 3.2.2b classifies
+  a missing-token failure with a distinct, non-retry error message rather than folding it into
+  the generic transient-retry bucket, so the failure is at least legible to the calling agent
+  and an operator, even though it isn't eliminated.
 
 ### Neutral
 - If a future feature needs the same existence-check pattern for a 4th ref kind (e.g.
