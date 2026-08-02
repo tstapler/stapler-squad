@@ -516,7 +516,9 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if inst == nil {
 		return nil // already gone / never tracked
 	}
-	if !inst.SetArchivedAtIfNil(time.Now()) {
+	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
+	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
+	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
@@ -4222,7 +4224,12 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.SetArchivedAt(&now)
+	// ArchiveWithStop also transitions Status to Stopped (best-effort — archiving
+	// previously left ArchivedAt set while Status stayed Active/Paused/Hibernated,
+	// which the retention sweep and other Stopped-gated logic depend on being in sync).
+	if err := inst.ArchiveWithStop(now); err != nil {
+		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
+	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
