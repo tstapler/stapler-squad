@@ -87,10 +87,12 @@ const (
 // into "Uncategorized".
 const CategoryBacklog = "Backlog"
 
-// TriggeredBy values for BacklogStatusEvent records.
+// TriggeredBy values for BacklogStatusEvent records. Agent-initiated
+// transitions (e.g. request_review, report_duplicate) use TriggeredByAgent.
 const (
 	TriggeredByUser   = "user"
 	TriggeredBySystem = "system"
+	TriggeredByAgent  = "agent"
 )
 
 // DefaultBacklogPriority is the default priority assigned to new backlog items
