@@ -79,9 +79,16 @@ must.
 2. `droppedInputEvent` updates in the hook; `TerminalOutput` re-renders.
 3. `InputDropBadge` mounts (was `null`), renders the pill inside
    `styles.terminal`, `aria-hidden` icon + visible text, no color-only cue.
-4. A `useEffect` keyed on `droppedInputEvent.at` calls
-   `announce(...)` on the `LiveRegion` (`politeness="assertive"`,
-   `role="alert"`) — fires once per distinct `at`.
+4. `InputDropBadge` itself — not `TerminalOutput` and not a hook-level
+   effect — owns the call to `announce(...)` on the `LiveRegion`
+   (`politeness="assertive"`, `role="alert"`) as part of its own coalescing
+   logic (Task 4.2.1.1/4.2.3.2): the component's internal effect keyed on
+   `droppedInputEvent.at` fires the announcement once per distinct `at`
+   while it's also updating the running-count ref and (re)starting the
+   dwell timer. `TerminalOutput.tsx` carries no `useLiveRegion()`/`announce()`
+   responsibility of its own — that was deliberately removed from it during
+   plan repair to eliminate a per-event announcement-spam bug; see the
+   Cross-reference table below.
 5. Focus remains wherever it was (the terminal); badge has no `autoFocus`,
    no `tabIndex`.
 6. Badge starts its 4000ms dwell timer (Surface B).
@@ -357,8 +364,8 @@ familiarity required beyond what's written here.
 |---|---|
 | A — Badge appears | 4.1.1.1, 4.1.1.2, 4.2.1.1, 4.2.2.2 |
 | B — Auto-dismiss | 4.2.1.1 (dwell timer, 4000ms per Unresolved Question 4) |
-| C — Coalesced announcement | 4.2.1.1 (running-total ref), 4.2.2.2 (`prevStateRef`-style gated effect), 4.2.3.2 |
+| C — Coalesced announcement | 4.2.1.1 (running-total ref, dwell-timer reset, and the `announce()` call — all owned by `InputDropBadge` itself), 4.2.3.2 (tests) — **not** 4.2.2.2: that task's post-repair scope removed all `useLiveRegion()`/`announce()` responsibility from `TerminalOutput.tsx`; `InputDropBadge` owns 100% of coalescing and announcement |
 | D — Silent default | 4.2.1.1 (`return null` idiom), Pattern Decisions (`ConnectionIndicator` left untouched) |
 | AC-SR-1/AC-SR-2 | 4.2.2.1 (`LiveRegion` `role` prop), 4.2.3.2 |
 | AC-KBD-1..3 | 4.2.1.1 ("No focus-stealing" bullet), 4.2.3.1 (`does not set focus/tabIndex on mount` test) |
-| AC-RESOLVE-2 | Not explicitly named as a task in plan.md — flag for the implementer to add timer cleanup in `InputDropBadge`'s `useEffect` return function; call out in code review if missing. |
+| AC-RESOLVE-2 | 4.2.1.1 (`InputDropBadge` implements timer cleanup in its `useEffect` return function), 4.2.3.1 (test) — both tasks explicitly cite "ux.md AC-RESOLVE-2" |

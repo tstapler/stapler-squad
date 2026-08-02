@@ -98,7 +98,12 @@ boundary.
    - input still queued when the connection is superseded/closed is dropped,
      not held for later delivery,
    - the user is visibly (badge) and audibly (assertive announcement)
-     signaled when this drop happens.
+     signaled when this drop happens,
+   - connection-state/decoder corruption caused by a `disconnect()`-vs-
+     `connect()` interleaving race is prevented — a stale `disconnect()`
+     continuation that resolves after a newer `connect()` has already
+     established a connection must not reset or corrupt that newer
+     connection's state or decoder.
 3. Add regression coverage (Go + Jest) simulating a reconnect during/around
    an input send, asserting input reaches tmux at most once and that
    drop-on-close / overlapping-reconnect behavior is deterministic.
@@ -137,7 +142,11 @@ per stored backlog state.)
    input typed while disconnected is dropped, not queued/flushed —
    **not actually true on `main` today** (see Remaining confirmed gap above)
    despite being marked done; this session must make it true in the diff
-   that ships, including the drop-and-signal badge + assertive announcement.
+   that ships, including the drop-and-signal badge + assertive announcement,
+   and including an epoch guard preventing connection-state/decoder
+   corruption from a `disconnect()`-vs-`connect()` interleaving race (a
+   stale `disconnect()` continuation must not clobber a newer `connect()`'s
+   established state).
 4. [ ] Regression coverage: Go bounded read-goroutine exit test; Jest
    overlapping-connect epoch guard, queued-message-drop-on-close
    interleaving, and triple-rapid-connect no-throw tests.
