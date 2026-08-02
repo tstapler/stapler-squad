@@ -104,6 +104,14 @@ export function useTerminalStream({
   // together in TerminalOutput.tsx) both calling connect() for the same
   // disconnected session before either handshake completes.
   const isConnectingRef = useRef(false);
+  // Monotonically-increasing connection epoch; incremented exactly once per
+  // connect() call that actually proceeds past the entry guard (never before
+  // it — see ADR-001), and checked at every await checkpoint (firstMessage,
+  // catch, finally) so a superseded attempt's late-arriving continuation
+  // cannot mutate state out from under a newer attempt. disconnect() reads
+  // this counter too (never increments it) to detect whether a newer
+  // connect() has completed while it was awaiting.
+  const connectionEpochRef = useRef(0);
   const shouldReconnectRef = useRef(false);
   const terminalBackoffRef = useRef(new BackoffState(1000, 30_000));
   const isHardFailedRef = useRef(false);
@@ -161,6 +169,7 @@ export function useTerminalStream({
   // ---- Connect ----
   const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
     if (isConnectedRef.current || isConnectingRef.current || !sessionId) return;
+    const epoch = ++connectionEpochRef.current;
     isConnectingRef.current = true;
     shouldReconnectRef.current = true;
     terminalBackoffRef.current.reset();
@@ -182,6 +191,16 @@ export function useTerminalStream({
 
     try {
       abortControllerRef.current = new AbortController();
+
+      // Unconditionally close any previous queue before installing a new one —
+      // collapses the disconnect-path (which already called close()) vs.
+      // implicit-reconnect-path (previously did not) asymmetry. A superseded
+      // attempt's buffered-but-unsent input must be dropped, not carried
+      // forward into the new queue.
+      const droppedCount = messageQueueRef.current?.close() ?? 0;
+      if (droppedCount > 0) {
+        console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on reconnect`, { sessionId });
+      }
       messageQueueRef.current = new MessageQueue();
 
       // Send initial handshake with dimensions
@@ -218,6 +237,7 @@ export function useTerminalStream({
         try {
           let firstMessage = true;
           for await (const msg of stream) {
+            if (epoch !== connectionEpochRef.current) return;
             if (firstMessage) {
               isConnectingRef.current = false;
               setIsConnected(true);
@@ -311,6 +331,7 @@ export function useTerminalStream({
             }
           }
         } catch (err) {
+          if (epoch !== connectionEpochRef.current) return;
           const wsCode = getWsCloseCode(err);
           if (wsCode !== null && !isRetriableCloseCode(wsCode)) {
             shouldReconnectRef.current = false;
@@ -320,34 +341,38 @@ export function useTerminalStream({
           }
           handleError(err);
         } finally {
-          isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
-          isConnectingRef.current = false;
-          setIsConnected(false);
-          setTerminalState('DISCONNECTED');
-          // Reset decoders so stale {stream:true} buffered state from a server-closed
-          // connection does not corrupt the next connect() call.
+          // Resource cleanup always runs regardless of epoch — decoder resets
+          // must happen even for a superseded generation so its stale buffered
+          // decode state can never bleed into whichever generation is current.
           textDecoderRef.current = new TextDecoder();
           scrollbackDecoderRef.current = new TextDecoder();
-          if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
-              && shouldReconnectRef.current
-              && !isDisconnectingRef.current) {
-            if (terminalBackoffRef.current.attempt >= 5) {
-              shouldReconnectRef.current = false;
-              isHardFailedRef.current = true;
-              setIsHardFailed(true);
-            } else {
-              const delay = terminalBackoffRef.current.next();
-              console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
-              if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-                reconnectTimerRef.current = null;
-              }
-              reconnectTimerRef.current = setTimeout(() => {
-                reconnectTimerRef.current = null;
-                if (shouldReconnectRef.current && !isDisconnectingRef.current) {
-                  connectRef.current?.();
+
+          if (epoch === connectionEpochRef.current) {
+            isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
+            isConnectingRef.current = false;
+            setIsConnected(false);
+            setTerminalState('DISCONNECTED');
+            if (process.env.NEXT_PUBLIC_RECONNECT_V2 === "true"
+                && shouldReconnectRef.current
+                && !isDisconnectingRef.current) {
+              if (terminalBackoffRef.current.attempt >= 5) {
+                shouldReconnectRef.current = false;
+                isHardFailedRef.current = true;
+                setIsHardFailed(true);
+              } else {
+                const delay = terminalBackoffRef.current.next();
+                console.info(`[reconnect] stream=terminal trigger=close attempt=${terminalBackoffRef.current.attempt} delay=${delay}ms`);
+                if (reconnectTimerRef.current) {
+                  clearTimeout(reconnectTimerRef.current);
+                  reconnectTimerRef.current = null;
                 }
-              }, delay);
+                reconnectTimerRef.current = setTimeout(() => {
+                  reconnectTimerRef.current = null;
+                  if (shouldReconnectRef.current && !isDisconnectingRef.current) {
+                    connectRef.current?.();
+                  }
+                }, delay);
+              }
             }
           }
         }
@@ -369,6 +394,12 @@ export function useTerminalStream({
   // stable useCallback(() => isResyncingRef, []) so depending on it keeps disconnect stable.
   const getIsResyncingRef = flowControl.getIsResyncingRef;
   const disconnect = useCallback(async () => {
+    // Read-only capture — disconnect() isn't starting a new attempt, it's
+    // checking whether one has started since. Captured before the
+    // isResyncingRef/isDisconnectingRef early-return so an early-returning
+    // call still captures a value (mirrors connect()'s increment-before-guard
+    // placement discipline). See ADR-001 addendum.
+    const epochAtDisconnectStart = connectionEpochRef.current;
     shouldReconnectRef.current = false;
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
@@ -406,10 +437,13 @@ export function useTerminalStream({
       }
     });
 
-    setIsConnected(false);
-    isDisconnectingRef.current = false;
-    textDecoderRef.current = new TextDecoder();
-    scrollbackDecoderRef.current = new TextDecoder();
+    isDisconnectingRef.current = false; // bookkeeping — always reset regardless of epoch
+
+    if (epochAtDisconnectStart === connectionEpochRef.current) {
+      setIsConnected(false);
+      textDecoderRef.current = new TextDecoder();
+      scrollbackDecoderRef.current = new TextDecoder();
+    }
   }, [getIsResyncingRef]);
 
   // ---- Auto-connect / cleanup ----

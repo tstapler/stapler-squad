@@ -53,16 +53,34 @@ jest.mock('@/gen/session/v1/events_pb', () => ({
   CurrentPaneRequest: class {},
 }));
 
-// MessageQueue — minimal stub; the push side is not exercised in these tests
-jest.mock('@/lib/terminal/MessageQueue', () => ({
-  MessageQueue: class {
-    push = jest.fn();
-    close = jest.fn();
+// MessageQueue — mock with per-instance id + push/close tracking, so tests
+// can assert which MessageQueue instance backs a given connect() attempt and
+// verify it was (or wasn't) closed (Tasks 3.2.1.1/3.2.1.2/3.2.1.3). close()
+// returns the count of buffered-but-undelivered pushes, mirroring the real
+// MessageQueue.close()'s dropped-count return value from Phase 2.
+jest.mock('@/lib/terminal/MessageQueue', () => {
+  class MessageQueue {
+    static instances: InstanceType<typeof MessageQueue>[] = [];
+    id: number;
+    closed = false;
+    pushedCount = 0;
+    push = jest.fn(() => { this.pushedCount += 1; });
+    close = jest.fn((): number => {
+      this.closed = true;
+      const dropped = this.pushedCount;
+      this.pushedCount = 0;
+      return dropped;
+    });
+    constructor() {
+      this.id = MessageQueue.instances.length;
+      MessageQueue.instances.push(this);
+    }
     [Symbol.asyncIterator]() {
       return { next: async () => ({ value: undefined, done: true }) };
     }
-  },
-}));
+  }
+  return { MessageQueue };
+});
 
 // Sub-hooks — minimal stubs so useTerminalStream can render
 jest.mock('../useTerminalFlowControl', () => ({
@@ -92,6 +110,27 @@ jest.mock('../useTerminalMetrics', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { useTerminalStream } from '../useTerminalStream';
+import { MessageQueue as MockMessageQueueCtor } from '@/lib/terminal/MessageQueue';
+
+// ---------------------------------------------------------------------------
+// MessageQueue mock instance helpers (Story 3.2.1)
+// ---------------------------------------------------------------------------
+
+interface MockQueueInstance {
+  id: number;
+  closed: boolean;
+  pushedCount: number;
+  push: jest.Mock;
+  close: jest.Mock;
+}
+
+function getMockQueueInstances(): MockQueueInstance[] {
+  return (MockMessageQueueCtor as unknown as { instances: MockQueueInstance[] }).instances;
+}
+
+function resetMockQueueInstances(): void {
+  (MockMessageQueueCtor as unknown as { instances: MockQueueInstance[] }).instances = [];
+}
 
 // ---------------------------------------------------------------------------
 // Controllable stream factory
@@ -751,5 +790,257 @@ describe('useTerminalStream — auto-reconnect (NEXT_PUBLIC_RECONNECT_V2)', () =
 
     const visibilityRemoves = removeEventSpy.mock.calls.filter(c => c[0] === 'visibilitychange').length;
     expect(visibilityRemoves).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 — connection-epoch guard (Epic 3.1 / Story 3.2.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Drains only the microtask queue (repeated `await Promise.resolve()`), never
+ * a macrotask. This lets a pushed stream message's `for await` processing run
+ * to completion (all microtask-chained: the mock iterator's internal await,
+ * plus the engine's async-iterator-protocol await) WITHOUT giving React's
+ * passive-effect scheduler (which runs on a macrotask, e.g. MessageChannel/
+ * setTimeout) a chance to run — reproducing production's real "ref-sync lag
+ * window" (Task 3.1.1's Given-When-Then) where `isConnectingRef.current` has
+ * already flipped `false` but the `isConnectedRef` ref-sync `useEffect` off
+ * `setIsConnected(true)` has not yet fired. Must be called from inside an
+ * `act(async () => { ... })` callback so React still attributes the resulting
+ * state updates to that act() call instead of warning.
+ */
+async function flushMicrotasksOnly(ticks = 20): Promise<void> {
+  for (let i = 0; i < ticks; i++) {
+    await Promise.resolve();
+  }
+}
+
+describe('useTerminalStream — connection epoch guard', () => {
+  const EPOCH_OPTIONS = {
+    ...BASE_OPTIONS,
+    autoConnect: false,
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+    resetMockQueueInstances();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  // Task 3.2.1.0 (pre-mortem.md Failure #1, P1) — direct proof that the epoch
+  // increment (Task 3.1.1.1) is placed AFTER connect()'s entry guard, not
+  // before it. A guard-blocked second call must never consume an epoch, or it
+  // would orphan the real in-flight attempt.
+  it('connect_should_notOrphanInFlightAttempt_When_secondCallIsBlockedByEntryGuard', async () => {
+    const streamA = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(streamA.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    // Attempt A — deliberately left in-flight (no message pushed yet), so
+    // isConnectingRef.current stays true for the duration of this test.
+    await act(async () => { result.current.connect(); });
+
+    // Second call while A is still CONNECTING — must be blocked by the
+    // existing entry guard before it ever opens a stream.
+    await act(async () => { result.current.connect(); });
+
+    expect(mockStreamTerminal).toHaveBeenCalledTimes(1);
+
+    // Pushing a message on A's (only) stream must still complete the
+    // handshake normally — proving the guard-blocked call did not bump
+    // connectionEpochRef.current out from under attempt A.
+    await act(async () => { streamA.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    streamA.end();
+  });
+
+  // Task 3.2.1.1 — overlapping-connect epoch guard: attempt B supersedes
+  // attempt A in the ref-sync lag window before A's first message flips
+  // isConnectingRef.current back to false and React has re-rendered.
+  it('connect_should_ignoreStaleGenerationMessages_When_secondConnectSupersedesFirstBeforeFirstMessage', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+
+    // Push A's first message and immediately call connect() again for B
+    // inside the SAME act() callback — draining only microtasks (not the
+    // macrotask-scheduled isConnectedRef ref-sync effect) in between, so B's
+    // entry guard sees isConnectingRef.current already false (A's own
+    // firstMessage handling flipped it) but isConnectedRef.current still
+    // stale-false (the effect off setIsConnected(true) hasn't run yet).
+    await act(async () => {
+      streamA.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+      result.current.connect(); // attempt B
+      streamB.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+    });
+
+    // Only attempt B's outcome is ever reflected in isConnected.
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    const instances = getMockQueueInstances();
+    expect(instances).toHaveLength(2);
+    // Attempt A's MessageQueue instance was closed (Task 3.1.1.2's
+    // unconditional close), attempt B's is the one left open.
+    expect(instances[0].close).toHaveBeenCalled();
+    expect(instances[1].close).not.toHaveBeenCalled();
+
+    streamB.end();
+  });
+
+  // Task 3.2.1.2 — triple-rapid-connect must not throw; only the third
+  // (current-epoch) attempt's firstMessage flips isConnected, and both
+  // superseded generations (A and B) were closed.
+  it('connect_should_notThrow_When_calledThreeTimesInRapidSuccession', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    const streamC = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable)
+      .mockReturnValueOnce(streamC.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    await act(async () => { result.current.connect(); });
+
+    // Repeat the ref-sync-lag supersession mechanism (Task 3.2.1.1) twice in
+    // a row, all within one act() callback so no intervening effect flush
+    // lets any of the three attempts' entry guard block the next.
+    await act(async () => {
+      streamA.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+      result.current.connect(); // attempt B, in A's lag window
+      streamB.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+      result.current.connect(); // attempt C, in B's lag window
+      streamC.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+    });
+
+    // No exception/unhandled rejection — reaching this point without the
+    // act() calls above throwing is itself part of the assertion.
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    const instances = getMockQueueInstances();
+    expect(instances).toHaveLength(3);
+    expect(instances[0].close).toHaveBeenCalled();
+    expect(instances[1].close).toHaveBeenCalled();
+    expect(instances[2].close).not.toHaveBeenCalled();
+
+    streamC.end();
+  });
+
+  // Task 3.2.1.3 (AC3 MessageQueue-half, hook-level per pitfalls.md §5) —
+  // queued-but-undelivered input on a superseded generation's queue is
+  // dropped, not carried forward into the new queue.
+  it('useTerminalStream_should_dropQueuedInput_When_reconnectSupersedesQueueWithPendingMessages', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    // Attempt A — connect() itself pushes a handshake message onto instance
+    // #1's queue synchronously.
+    await act(async () => { result.current.connect(); });
+
+    const instances = getMockQueueInstances();
+    expect(instances).toHaveLength(1);
+    const instanceA = instances[0];
+    expect(instanceA.pushedCount).toBeGreaterThan(0);
+
+    // Attempt A's own first server message opens the ref-sync lag window
+    // (Task 3.2.1.1's mechanism); attempt B supersedes A within that same
+    // window, before instance A's queue has been drained.
+    await act(async () => {
+      streamA.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+      result.current.connect(); // attempt B
+      streamB.push(makeOutputMsg());
+      await flushMicrotasksOnly();
+    });
+
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    expect(instances).toHaveLength(2);
+    // Instance A's unconditional close() (Task 3.1.1.2) is what discards its
+    // queued-but-undelivered input; instance B is the one installed.
+    expect(instanceA.close).toHaveBeenCalled();
+    expect(instances[1]).not.toBe(instanceA);
+    expect(instances[1].close).not.toHaveBeenCalled();
+
+    streamB.end();
+  });
+
+  // Task 3.2.1.4 (ADR-001 addendum) — disconnect()'s post-await continuation
+  // must not clobber a newer connect() that completed while it was awaiting.
+  it('disconnect_should_notClobberNewerConnect_When_reconnectCompletesWhileDisconnectStillAwaiting', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    // Attempt A connects.
+    await act(async () => { result.current.connect(); });
+    await act(async () => { streamA.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // Start disconnect() while still connected — isConnectedRef.current is
+    // true at the moment its internal Promise is constructed, so it takes
+    // the setTimeout(1000ms) branch rather than resolving immediately.
+    let disconnectPromise!: Promise<void>;
+    act(() => {
+      disconnectPromise = result.current.disconnect();
+    });
+
+    // Simulate the underlying connection actually tearing down (e.g. the
+    // server observing disconnect()'s now-closed outgoing queue) before
+    // disconnect()'s own forced-abort timeout fires. This is what flips
+    // isConnectedRef/isConnectingRef back to false and lets an independent
+    // connect() (e.g. the visibility/online listener) proceed past the entry
+    // guard while disconnect()'s promise is still pending.
+    await act(async () => { streamA.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    // Attempt B — an independent connect() call that starts and completes
+    // while disconnect()'s own timer is still pending.
+    await act(async () => { result.current.connect(); });
+    await act(async () => { streamB.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+
+    // Now let disconnect()'s pending forced-abort timeout fire and its
+    // post-await continuation run.
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await act(async () => { await disconnectPromise; });
+
+    // Attempt B's connected state must not have been clobbered back to
+    // false by the stale disconnect() continuation.
+    expect(result.current.isConnected).toBe(true);
   });
 });
