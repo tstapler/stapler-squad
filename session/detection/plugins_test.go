@@ -740,6 +740,53 @@ func Test_EnsurePluginDir(t *testing.T) {
 			t.Errorf("example.toml.sample content = %q, want %q (must not be clobbered by a second EnsurePluginDir() call)", string(data), "# edited")
 		}
 	})
+
+	t.Run("EnsurePluginDir_should_stillReturnDirectory_When_seedFileWriteFails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: directory permission bits do not restrict writes, so this failure cannot be simulated")
+		}
+		testDir := t.TempDir()
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+
+		dir := filepath.Join(testDir, "detectors")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("test setup: failed to pre-create detectors dir: %v", err)
+		}
+		// Drop a real, valid plugin file *before* locking the directory down,
+		// so we can prove afterward that the directory is still genuinely
+		// scannable, not just that EnsurePluginDir returns without error.
+		writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
+
+		// example.toml.sample does not exist yet, so EnsurePluginDir's os.Stat
+		// check takes the os.IsNotExist branch and attempts os.WriteFile — make
+		// that write fail by stripping the directory's write bit (read+execute
+		// only). Restore it in Cleanup so t.TempDir()'s own removal succeeds.
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatalf("test setup: failed to chmod detectors dir read-only: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chmod(dir, 0o755)
+		})
+
+		gotDir, err := EnsurePluginDir()
+		if err != nil {
+			t.Fatalf("EnsurePluginDir() unexpected error = %v, want nil (a seed-file write failure must be swallowed, not returned)", err)
+		}
+		if gotDir != dir {
+			t.Fatalf("EnsurePluginDir() = %q, want %q", gotDir, dir)
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, "example.toml.sample")); !os.IsNotExist(statErr) {
+			t.Fatalf("example.toml.sample stat err = %v, want IsNotExist (the write should have failed, not silently succeeded)", statErr)
+		}
+
+		detectors, errs := LoadPluginDir(gotDir)
+		if len(errs) != 0 {
+			t.Errorf("LoadPluginDir(%q) errs = %+v, want none", gotDir, errs)
+		}
+		if len(detectors) != 1 || detectors[0].Name() != "my-agent" {
+			t.Errorf("LoadPluginDir(%q) detectors = %+v, want exactly one PluginDetector named my-agent", gotDir, detectors)
+		}
+	})
 }
 
 // resetInitPluginsForTest swaps in a fresh *sync.Once for the duration of
@@ -847,5 +894,53 @@ func Test_InitPlugins(t *testing.T) {
 		if len(prov) != len(builtinNames) {
 			t.Fatalf("DetectorProvenance() = %+v, want exactly the %d built-ins (plugin dir failure must not affect the active snapshot)", prov, len(builtinNames))
 		}
+	})
+
+	t.Run("InitPlugins_should_beNoOp_When_calledTwice", func(t *testing.T) {
+		resetInitPluginsForTest(t)
+		resetSnapshotAfterTest(t)
+
+		firstDir := t.TempDir()
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", firstDir)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		if err := InitPlugins(ctx); err != nil {
+			t.Fatalf("first InitPlugins() unexpected error = %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(firstDir, "detectors")); statErr != nil {
+			t.Fatalf("detectors dir missing after first InitPlugins(): %v", statErr)
+		}
+
+		// Point STAPLER_SQUAD_TEST_DIR at a brand-new, never-touched directory
+		// and call InitPlugins again with the same ctx. If the sync.Once guard
+		// works, the second call's body never runs at all -- so PluginDir()
+		// re-resolving to this new directory is irrelevant, and critically
+		// EnsurePluginDir() is never invoked against it. If the guard were
+		// broken (e.g. accidentally reset, or InitPlugins didn't actually gate
+		// on it), the second call would bootstrap a *second* detectors/ dir and
+		// a *second* watcher goroutine here -- a duplicate this test would
+		// observe directly, rather than just trusting the doc comment.
+		secondDir := t.TempDir()
+		t.Setenv("STAPLER_SQUAD_TEST_DIR", secondDir)
+
+		if err := InitPlugins(ctx); err != nil {
+			t.Fatalf("second InitPlugins() unexpected error = %v", err)
+		}
+
+		if _, statErr := os.Stat(filepath.Join(secondDir, "detectors")); !os.IsNotExist(statErr) {
+			t.Fatalf("detectors dir under the second STAPLER_SQUAD_TEST_DIR stat err = %v, want IsNotExist -- the second InitPlugins() call must be a true no-op (no duplicate bootstrap/watcher), not just return nil", statErr)
+		}
+
+		// The original watcher (from the first call) must still be the only
+		// one running, and must still be watching firstDir: a plugin file
+		// dropped there is still picked up live.
+		firstDetectorsDir := filepath.Join(firstDir, "detectors")
+		writePluginFile(t, firstDetectorsDir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
+		require.Eventually(t, func() bool {
+			_, ok := DetectorProvenance()["my-agent"]
+			return ok
+		}, eventuallyTimeout, eventuallyPoll, "the original watcher from the first InitPlugins() call is no longer running after a second InitPlugins() call")
 	})
 }
