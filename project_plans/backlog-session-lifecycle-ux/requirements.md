@@ -50,9 +50,9 @@ Medium (1–3 weeks) — this is UI wiring of already-modeled fields (majority o
 ## Scope
 
 ### In Scope
-- Surface `ItemSession.end_reason` in `SessionsSection.tsx` (item detail) and, where sessions are listed, `SessionList.tsx`/`SessionCard.tsx`.
+- Surface `ItemSession.end_reason` in `SessionsSection.tsx` (item detail). *Scope note: an earlier draft of this bullet also named `SessionList.tsx`/`SessionCard.tsx` for `end_reason`; that was a deliberate narrowing made during planning, not an oversight — see plan.md's Pattern Decisions table, "`end_reason` surfacing scope" row. `end_reason` is structurally an `ItemSession`-only concept, and the generic `Session` proto rendered by `SessionCard.tsx`/`SessionList.tsx` carries no backlog/`ItemSession` linkage, so forcing it through would require an out-of-scope cross-entity join.*
 - Promote `Session.pause_reason` from tooltip-only to an always-visible badge on `SessionCard.tsx`; consider a filter/grouping affordance on `SessionList.tsx`.
-- Surface `BacklogStuckState.remediation_attempts`, `next_remediation_at`, and `context` on `BacklogItemCard.tsx` (board) and `SessionsSection.tsx` (detail), not just `/unfinished`.
+- Surface `BacklogStuckState.remediation_attempts`, `next_remediation_at`, and `context` on `BacklogItemCard.tsx` (board) and `LifecycleSummary.tsx` (detail), not just `/unfinished`.
 - New durable respawn-event record: one row per respawn triggered by any of the four respawn/remediation call sites in `backlog_service_triage.go`, capturing reason, timestamp, triggering session ID, resulting session ID. New RPC(s) to read this per item; UI surface (likely a collapsed-by-default timeline in the item detail, consistent with the progressive-disclosure pattern `backlog-item-detail-ux` already established).
 - Progressive-disclosure pass across the touched widgets: default view shows a compact status/reason summary; full history/detail expands on demand (reusing the `Collapsible`/`CollapsibleGroup` primitives already shipped by `backlog-item-detail-ux`).
 - Feature registry entries for new/changed surfaces.
