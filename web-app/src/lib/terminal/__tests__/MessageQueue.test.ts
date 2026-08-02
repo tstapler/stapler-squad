@@ -31,23 +31,22 @@ function createTestMessage(sessionId: string, input?: string): any {
 
 describe('MessageQueue', () => {
   describe('push and iterate', () => {
-    it('should yield messages in order', async () => {
+    it('should drop buffered messages when close() is called before they are drained', async () => {
       const queue = new MessageQueue();
       const msg1 = createTestMessage('s1', 'hello');
       const msg2 = createTestMessage('s1', 'world');
 
       queue.push(msg1);
       queue.push(msg2);
-      queue.close();
+      const dropped = queue.close();
 
       const received: any[] = [];
       for await (const msg of queue) {
         received.push(msg);
       }
 
-      expect(received).toHaveLength(2);
-      expect(received[0].sessionId).toBe('s1');
-      expect(received[1].sessionId).toBe('s1');
+      expect(dropped).toBe(2);
+      expect(received).toHaveLength(0);
     });
 
     it('should yield messages pushed while iterating', async () => {
@@ -90,18 +89,46 @@ describe('MessageQueue', () => {
     });
 
     it('should filter out sentinel messages', async () => {
+      // The message must be pushed *after* the iterator is already awaiting
+      // (delivered via the direct resolve() path, not buffered in the
+      // queue) so that it is drained before close() runs — a message
+      // sitting in the queue when close() is called is now dropped by
+      // design (see 'should drop buffered messages...' above).
       const queue = new MessageQueue();
 
+      const received: any[] = [];
+      const iterPromise = (async () => {
+        for await (const msg of queue) {
+          received.push(msg);
+        }
+      })();
+
       queue.push(createTestMessage('s1', 'real'));
+      await new Promise((r) => setTimeout(r, 0));
       queue.close();
 
-      const received: any[] = [];
-      for await (const msg of queue) {
-        received.push(msg);
-      }
+      await iterPromise;
 
       expect(received).toHaveLength(1);
       expect(received[0].sessionId).toBe('s1');
+    });
+
+    it('should not deliver a message pushed in the same synchronous tick close() runs', async () => {
+      const queue = new MessageQueue();
+
+      const received: any[] = [];
+      const iterPromise = (async () => {
+        for await (const msg of queue) {
+          received.push(msg);
+        }
+      })();
+
+      queue.close();
+      queue.push(createTestMessage('s1', 'late'));
+
+      await iterPromise;
+
+      expect(received).toHaveLength(0);
     });
   });
 

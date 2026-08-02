@@ -5,6 +5,11 @@
  * The queue implements the async iterator protocol so it can be
  * directly passed to `client.streamTerminal(queue)`.
  *
+ * `close()` discards any buffered-but-unsent messages rather than
+ * flushing them — a closed queue is always empty, so nothing queued
+ * before shutdown is replayed to a later consumer. It returns the
+ * count of messages dropped so callers can surface the drop.
+ *
  * Usage:
  * ```typescript
  * const queue = new MessageQueue();
@@ -13,7 +18,7 @@
  * // Consumer side (ConnectRPC stream)
  * const stream = client.streamTerminal(queue);
  * // Shutdown
- * queue.close();
+ * const dropped = queue.close();
  * ```
  */
 
@@ -52,14 +57,17 @@ export class MessageQueue {
     }
   }
 
-  close() {
+  close(): number {
     this.closed = true;
+    const dropped = this.queue.length;
+    this.queue = [];
     if (this.resolve) {
       // Force unblock the iterator with a sentinel message
       // This message will be filtered out by the iterator and not sent to the server
       this.resolve(create(TerminalDataSchema, { sessionId: "", data: { case: undefined } }));
       this.resolve = null;
     }
+    return dropped;
   }
 
   isClosed(): boolean {
