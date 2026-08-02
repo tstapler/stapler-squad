@@ -5,18 +5,31 @@ import * as os from 'os';
 import * as path from 'path';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+const ONBOARDED_KEY = 'stapler-squad:onboarded';
+
+// Every test here starts from a fresh browser context (Playwright's default),
+// so localStorage is empty and useOnboarding.ts's 800ms timer would otherwise
+// pop a full-viewport onboarding modal mid-test, intercepting clicks on
+// whatever it happens to render over (see onboarding-hook-install.spec.ts,
+// which manages the same key to force the modal to show instead of suppress it).
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((key) => {
+    try {
+      window.localStorage.setItem(key, 'true');
+    } catch {
+      /* ignore */
+    }
+  }, ONBOARDED_KEY);
+});
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });
   const radiogroup = page.getByRole('radiogroup', { name: 'Session type' });
-  // Ctrl+Shift+K opens directly in creation mode (OmnibarContext.tsx), but the
-  // panel briefly resets to discovery mode shortly after opening on this test
-  // server (an unrelated, pre-existing race — Omnibar.tsx re-runs its
-  // input-detection effect once aliases/workflows finish their per-open
-  // refetch, and since the search input is untouched/empty, that effect's
-  // `else` branch unconditionally dispatches reset_to_discovery). Retrying the
-  // shortcut re-enters creation mode; this loop is a test-side workaround, not
-  // a claim that the underlying race is fixed.
+  // Ctrl+Shift+K opens directly in creation mode (OmnibarContext.tsx). Retried
+  // defensively in case the omnibar's own open-animation/focus effects haven't
+  // settled on the first keypress (rare) — the underlying reset_to_discovery
+  // race that used to make this reliably flaky is now fixed at the source in
+  // Omnibar.tsx's input-detection effect.
   for (let attempt = 0; attempt < 8; attempt++) {
     await page.keyboard.press('Control+Shift+K');
     try {
@@ -33,10 +46,35 @@ async function openInCreationMode(page: import('@playwright/test').Page) {
 // OmnibarCreationPanel.tsx (SessionTypeRadioGroup), collapsed behind a
 // "▾ More" toggle by default since the panel's default sessionType
 // ("new_worktree") is a primary type. Expand it before selecting either mode.
+// Selecting "New Project" mode triggers a one-shot async getSessionDefaults()
+// RPC (OmnibarCreationPanel.tsx) that auto-fills Parent Directory with the
+// server's configured default (resolved to a real path, e.g. ~/Projects) the
+// moment it resolves — racing with whatever the test does next. Once that
+// value lands, RepoPathInput's own history filter (`value === "" || path
+// includes value`) excludes our unrelated seeded /tmp path, so the target
+// suggestion silently disappears depending on exactly when the RPC settles.
+// Wait for the one-shot fill to land (or time out if it errored/resolved
+// empty — the field is then already empty, nothing to clear), then reset to
+// empty so every test starts from the same race-free state.
+async function settleNewProjectDefault(page: import('@playwright/test').Page) {
+  const parentDir = page.getByLabel('Parent Directory *');
+  try {
+    await expect(parentDir).not.toHaveValue('', { timeout: 3000 });
+    await parentDir.fill('');
+  } catch {
+    // Defaults RPC didn't resolve non-empty in time — field is already empty.
+  }
+}
+
 async function selectSessionType(page: import('@playwright/test').Page, label: string) {
-  const radio = page.getByRole('radio', { name: label, exact: true });
+  // Scope to the "Session type" radiogroup — an unscoped page-wide `/More/`
+  // button locator also matches every session card's "More session actions"
+  // overflow button in the background session list, which makes the locator
+  // ambiguous (or flaky-unstable) once any real sessions exist on the page.
+  const radiogroup = page.getByRole('radiogroup', { name: 'Session type' });
+  const radio = radiogroup.getByRole('radio', { name: label, exact: true });
   if (!(await radio.isVisible().catch(() => false))) {
-    await page.getByRole('button', { name: /More/ }).click();
+    await radiogroup.getByRole('button', { name: /More/ }).click();
   }
   await expect(radio).toBeVisible({ timeout: 3000 });
   await radio.click();
@@ -125,6 +163,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
   test('T-E2E-RPP-001: history suggestion appears and selecting it fills the field in 2 actions', async ({ page }) => {
     await openInCreationMode(page);
     await selectSessionType(page, 'New Project');
+    await settleNewProjectDefault(page);
 
     const parentDir = page.getByLabel('Parent Directory *');
     await parentDir.focus(); // action 1
@@ -143,6 +182,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
   test('T-E2E-RPP-003: typing a brand-new path is preserved verbatim, no dropdown override', async ({ page }) => {
     await openInCreationMode(page);
     await selectSessionType(page, 'New Project');
+    await settleNewProjectDefault(page);
 
     const parentDir = page.getByLabel('Parent Directory *');
     const typed = `/tmp/brand-new-e2e-parent-${Date.now()}`;
@@ -155,6 +195,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
   test('T-E2E-RPP-005: Escape with dropdown open closes only the dropdown', async ({ page }) => {
     await openInCreationMode(page);
     await selectSessionType(page, 'New Project');
+    await settleNewProjectDefault(page);
 
     const parentDir = page.getByLabel('Parent Directory *');
     await parentDir.focus();
@@ -171,6 +212,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
   test('T-E2E-RPP-006: second Escape (dropdown already closed) falls through to the pre-existing reset-to-discovery behavior', async ({ page }) => {
     await openInCreationMode(page);
     await selectSessionType(page, 'New Project');
+    await settleNewProjectDefault(page);
 
     const parentDir = page.getByLabel('Parent Directory *');
     await parentDir.focus();
@@ -188,6 +230,7 @@ test.describe('repo path picker parity — Parent Directory field', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openInCreationMode(page);
     await selectSessionType(page, 'New Project');
+    await settleNewProjectDefault(page);
 
     await page.getByLabel('Parent Directory *').focus();
     await expect(page.getByRole('listbox')).toBeVisible();
