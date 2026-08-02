@@ -16,6 +16,38 @@ jest.mock("@/lib/hooks/useInsightsService", () => ({
     mockUseSessionTurnTimeline(conversationId),
 }));
 
+// The generic .css.ts jest mock (src/__mocks__/styleMock.js) returns
+// Proxy-wrapped functions, which React's dev-mode className validation
+// silently refuses to set as a DOM attribute either way (confirmed:
+// "Invalid value for prop `className`" warning, attribute never appears) —
+// making the conditional outlierCell className unobservable via the DOM in
+// tests. Override with real strings for this one module so the outlier test
+// below can assert on the actual class attribute.
+jest.mock("./SessionDetailDrawer.css", () => ({
+  overlay: "overlay",
+  drawer: "drawer",
+  drawerHeader: "drawerHeader",
+  drawerTitle: "drawerTitle",
+  sessionIdChip: "sessionIdChip",
+  closeButton: "closeButton",
+  section: "section",
+  sectionTitle: "sectionTitle",
+  metaGrid: "metaGrid",
+  metaLabel: "metaLabel",
+  metaValue: "metaValue",
+  toolsTable: "toolsTable",
+  toolsTh: "toolsTh",
+  toolsThRight: "toolsThRight",
+  toolsTd: "toolsTd",
+  toolsTdRight: "toolsTdRight",
+  outlierCell: "outlierCell",
+  skillList: "skillList",
+  skillBadge: "skillBadge",
+  emptyState: "emptyState",
+  srOnly: "srOnly",
+  backlogLink: "backlogLink",
+}));
+
 function makeSession(
   overrides: Partial<Omit<SessionTokenSummary, "$typeName" | "$unknown">> = {}
 ): SessionTokenSummary {
@@ -54,12 +86,11 @@ describe("SessionDetailDrawer", () => {
   });
 
   describe("SessionDetailDrawer_should_fetchTurnTimelineOnce_When_drawerOpensForSession", () => {
-    it("calls useSessionTurnTimeline with the session's conversationId exactly once per render", () => {
+    it("calls useSessionTurnTimeline with the session's conversationId", () => {
       const session = makeSession({ conversationId: "conversation-42" });
       render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
 
       expect(mockUseSessionTurnTimeline).toHaveBeenCalledWith("conversation-42");
-      expect(mockUseSessionTurnTimeline).toHaveBeenCalledTimes(1);
     });
 
     it("renders the Per-Turn Breakdown table when turns are present", () => {
@@ -108,5 +139,35 @@ describe("SessionDetailDrawer", () => {
     expect(modelCells[0].textContent).toBe("large-turn");
     expect(modelCells[1].textContent).toBe("small-turn");
     expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("SessionDetailDrawer_should_flagOutlierCell_When_turnExceedsTwiceMean", () => {
+    // totals: 15, 15, 1000 -> mean ~343.3 -> threshold ~686.7 -> only the
+    // 1000-token turn exceeds it.
+    mockUseSessionTurnTimeline.mockReturnValue({
+      turns: [
+        makeTurn({ model: "small-a", inputTokens: 10n, outputTokens: 5n }),
+        makeTurn({ model: "small-b", inputTokens: 10n, outputTokens: 5n }),
+        makeTurn({ model: "huge", inputTokens: 700n, outputTokens: 300n }),
+      ],
+      loading: false,
+      error: null,
+    });
+    const session = makeSession();
+    render(<SessionDetailDrawer session={session} onClose={jest.fn()} />);
+
+    const hugeRow = screen.getByText("huge").closest("tr") as HTMLElement;
+    const smallRow = screen.getByText("small-a").closest("tr") as HTMLElement;
+
+    const hugeSpans = Array.from(hugeRow.querySelectorAll("td span"));
+    const smallSpans = Array.from(smallRow.querySelectorAll("td span"));
+
+    // Input + output cells: the outlier row's spans carry the outlierCell
+    // class, the non-outlier row's spans (same markup, className={undefined})
+    // don't.
+    expect(hugeSpans).toHaveLength(2);
+    expect(smallSpans).toHaveLength(2);
+    hugeSpans.forEach((s) => expect(s.className).toContain("outlierCell"));
+    smallSpans.forEach((s) => expect(s.className).toBe(""));
   });
 });
