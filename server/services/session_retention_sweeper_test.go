@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,37 @@ func hasStoredTitle(t *testing.T, fix *forkTestFixture, title string) bool {
 		}
 	}
 	return false
+}
+
+// addArchivedInstanceLive persists a session directly into fixture storage AND registers
+// it with the live review-queue poller (reloading first, mirroring addPausedSession in
+// session_service_test.go), so DeleteSession's live-instance branch runs and actually
+// calls Destroy() -> CleanupWorktree() instead of just killing tmux by name.
+func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*session.Instance)) {
+	t.Helper()
+	inst := &session.Instance{
+		Title:     title,
+		Path:      "/tmp/test",
+		Status:    session.Stopped,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.ArchivedAt = &archivedAt
+	for _, opt := range opts {
+		opt(inst)
+	}
+	require.NoError(t, fix.storage.AddInstance(inst))
+
+	loaded, err := fix.storage.LoadInstances()
+	require.NoError(t, err, "addArchivedInstanceLive: failed to reload after persist")
+	for _, li := range loaded {
+		if li.Title == title {
+			addInstanceToPoller(fix.poller, li)
+			return
+		}
+	}
+	t.Fatalf("addArchivedInstanceLive: could not find %q after reload", title)
 }
 
 func TestSessionRetentionSweeper_DeletesArchivedSessionPastRetention(t *testing.T) {
@@ -200,4 +232,87 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 
 	assert.True(t, hasStoredTitle(t, fix, "old-round"),
 		"expected old archived round to be retained because its worktree is shared with an active sibling round")
+}
+
+// TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible is a regression test
+// for the group-convergence fix (PR #303 review): a naive "skip if ANY sibling still
+// references this worktree path" check never converges for an item reopened 2+ times,
+// because every round shares the identical path (see findExistingWorktreeForBranch) --
+// each round would always find some OTHER round still referencing it and block forever,
+// even once the whole group is independently archived, past retention, clean, and
+// PR-terminal. This test builds exactly that group (3 sibling rounds sharing one real
+// git worktree, all independently eligible) and asserts the sweep eventually reclaims all
+// of them -- both the DB rows and the physical worktree directory -- across however many
+// sweep cycles it actually takes (see the comment on the assert.Eventually call below for
+// why a stronger single-pass guarantee isn't the right thing to assert here).
+func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	defer fix.cleanup()
+
+	mainRepoDir := t.TempDir()
+	runGit(t, mainRepoDir, "init", "-q")
+	require.NoError(t, os.WriteFile(filepath.Join(mainRepoDir, "committed.txt"), []byte("a"), 0o644))
+	runGit(t, mainRepoDir, "add", ".")
+	runGit(t, mainRepoDir, "commit", "-q", "-m", "initial")
+	headSHA := strings.TrimSpace(runGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
+
+	// A single real linked worktree, shared by every round below -- mirroring
+	// findExistingWorktreeForBranch's reuse-by-branch-name behavior: reopen/rework
+	// never creates a second worktree, it reuses this exact directory.
+	worktreeDir := filepath.Join(t.TempDir(), "shared-worktree")
+	runGit(t, mainRepoDir, "worktree", "add", "-q", "-b", "shared-branch", worktreeDir, "HEAD")
+
+	ctx := context.Background()
+	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "converged item",
+		RepoPath: mainRepoDir,
+		// The backlog item itself has also reached a terminal state -- consistent
+		// with every round being done, though the sweep does not read item status
+		// directly (it derives group eligibility purely from sibling session data).
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	roundTitles := []string{"round-1", "round-2", "round-3"}
+	roundUUIDs := []string{"round-1-uuid", "round-2-uuid", "round-3-uuid"}
+	for i, title := range roundTitles {
+		_, err := fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: roundUUIDs[i],
+			SessionRole: session.SessionRoleWork,
+		})
+		require.NoError(t, err)
+
+		// Stagger ArchivedAt so they're independently, not just coincidentally, past
+		// retention -- all well past the 14-day default.
+		archivedAt := time.Now().AddDate(0, 0, -(20 + i))
+		addArchivedInstanceLive(t, fix, title, archivedAt, func(inst *session.Instance) {
+			inst.UUID = roundUUIDs[i]
+			wt := git.NewGitWorktreeFromStorage(mainRepoDir, worktreeDir, title, "shared-branch", headSHA)
+			inst.SetGitWorktree(wt)
+		})
+	}
+
+	sweeper := NewSessionRetentionSweeper(fix.storage, config.DefaultConfig(), fix.svc)
+
+	// DeleteSession's own worktree cleanup (Destroy()) runs in a fire-and-forget
+	// goroutine, so once the whole group becomes eligible, more than one sibling can be
+	// dispatched for deletion within the same sweep() call while they all point at the
+	// identical physical directory -- one sibling's in-flight `git worktree remove` can
+	// transiently make another sibling's own dirty-check error out and get skipped for
+	// that cycle (a safe, conservative outcome, not a bug: the worktree it was guarding
+	// is gone moments later, so it converges on the very next tick). Re-invoking sweep()
+	// here models exactly that next tick, rather than asserting a stronger "always
+	// single-pass" guarantee this fix doesn't need to make.
+	assert.Eventually(t, func() bool {
+		sweeper.sweep(ctx)
+		for _, title := range roundTitles {
+			if hasStoredTitle(t, fix, title) {
+				return false
+			}
+		}
+		_, statErr := os.Stat(worktreeDir)
+		return os.IsNotExist(statErr)
+	}, 5*time.Second, 100*time.Millisecond,
+		"expected every sibling round's DB row and the shared worktree directory to eventually be reclaimed once the whole group became independently eligible")
 }

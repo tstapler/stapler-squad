@@ -1988,6 +1988,16 @@ func (s *SessionService) DeleteSession(
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
 	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
+	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
+	// (below) evicts this session from the ReviewQueuePoller's instance list — the
+	// exact list FindLiveInstance searches — so calling FindLiveInstance after
+	// removeFromAllPollers always returned nil here, silently skipping Destroy()'s
+	// git worktree cleanup for every delete (live or not) in favor of the
+	// tmux-only KillTmuxSessionByTitle fallback. Capturing the pointer first fixes
+	// that without reopening the race the ordering comment below is about (that
+	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
+	liveInst := s.FindLiveInstance(sessionTitle)
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -1997,9 +2007,9 @@ func (s *SessionService) DeleteSession(
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
 	// do not affect the success response the caller receives.
-	if inst := s.FindLiveInstance(sessionTitle); inst != nil {
+	if liveInst != nil {
 		go func() {
-			if err := inst.Destroy(); err != nil {
+			if err := liveInst.Destroy(); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
