@@ -280,6 +280,30 @@ is fine but nobody's retried the duplicate report" from "PR itself needs attenti
 would be a genuinely new `StuckReason` — flag as an explicit scope decision for planning, not
 assume it's required.
 
+## 9. WorkflowEngine / ADR-013 — confirmed landed, but a facade, not the fix point
+
+`docs/adr/013-workflow-engine-replaces-valid-transitions.md` documents the decision and it
+has shipped: `session/workflow_engine.go` defines a `WorkflowEngine` interface
+(`CanTransition(from, to) bool`, `ValidateGates(item, to) error`,
+`AllowedTransitions(from) []BacklogStatus`) with `DefaultWorkflowEngine` as the
+implementation. But `DefaultWorkflowEngine` is a thin wrapper — `NewDefaultWorkflowEngine`
+(`workflow_engine.go:24-34`) just deep-copies the same package-level `validTransitions` map
+from `session/domain/backlog.go`, and `ValidateGates` (`workflow_engine.go:46-48`) delegates
+straight to the same `TransitionGuard` function that predates ADR-013. `session/backlog.go:191-192`
+still exposes `CanTransitionBacklog = domain.CanTransitionBacklog` as a direct passthrough —
+neither wrapping changed behavior nor is `WorkflowEngine` even in the call path for
+`request_review`/`report_duplicate`: `requestReview`'s handler calls
+`h.storage.TransitionBacklogItemStatus` directly (§1), which enforces the CAS precondition at
+the ent-repository layer, several steps removed from `WorkflowEngine`'s structural
+from→to legality check. **Net effect: ADR-013 landing is irrelevant to where FR1's fix
+goes** — confirmed directly in `session/domain/backlog.go:331-388`'s `validTransitions` map:
+both `BacklogStatusInProgress: {BacklogStatusReview: true, ...}` (line 356) and
+`BacklogStatusPRPending: {..., BacklogStatusReview: true, ...}` (line 372) already permit a
+transition to `review` today — no map entry needs to change. The bug FR1 fixes is entirely in
+the *caller-supplied CAS precondition value* passed to `TransitionBacklogItemStatus` (§1), not
+in structural transition legality — confirms §1's diagnosis is complete and no
+`WorkflowEngine`/`validTransitions` edit is needed.
+
 ## Recommendations: files to touch vs. net-new
 
 **Touch (existing files, generalize/extend):**

@@ -1,4 +1,4 @@
-# ADR-006: `TriggeredByAgent` Applies to Both `request_review` Source-Status Paths
+# ADR-003: `TriggeredByAgent` Applies to Both `request_review` Source-Status Paths
 
 ## Status
 Proposed

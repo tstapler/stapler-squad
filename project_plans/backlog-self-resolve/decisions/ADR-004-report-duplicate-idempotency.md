@@ -1,4 +1,4 @@
-# ADR-007: `report_duplicate` Idempotency — Reject, Don't Merge, a Differing Second Ref
+# ADR-004: `report_duplicate` Idempotency — Reject, Don't Merge, a Differing Second Ref
 
 ## Status
 Proposed

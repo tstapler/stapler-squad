@@ -1,7 +1,7 @@
-# ADR-008: `report_duplicate` Does Not Gain FR2's Active-Reviewer Refusal
+# ADR-005: `report_duplicate` Does Not Gain FR2's Active-Reviewer Refusal
 
 ## Status
-Proposed — flagged for owner confirmation (see Consequences)
+Accepted (2026-08-02, ratified by item owner — UQ-1 resolved in favor of this ADR's reading)
 
 ## Context
 
@@ -54,12 +54,12 @@ would itself be a plan defect, not a faithful implementation of "every FR."
   fourth condition to justify or maintain.
 
 ### Negative / Risk
-- **This is a judgment call under genuine ambiguity, not a fact derived from unambiguous
-  requirements text — flagged in Unresolved Questions (UQ-1) for the item owner to confirm
-  before or during Phase 3.** If the owner's actual intent was closer to the synthesized
-  finding (extend FR2's refusal to `report_duplicate` too), the fix is small and isolated:
-  add a refusal branch to Story 3.1.2/Task 3.1.2b mirroring Task 2.2.1b's guard, and FR5's
-  acceptance criterion (and Task 4.2.5a) would need to be rewritten or dropped as
+- This was a judgment call under genuine ambiguity, not a fact derived from unambiguous
+  requirements text — **resolved by the item owner (UQ-1, confirmed during Phase 3)** in favor
+  of the reading above. If a future revision determines the original intent was closer to the
+  synthesized finding (extend FR2's refusal to `report_duplicate` too), the fix is small and
+  isolated: add a refusal branch to Story 3.1.2/Task 3.1.2b mirroring Task 2.2.1b's guard, and
+  FR5's acceptance criterion (and Task 4.2.5a) would need to be rewritten or dropped as
   unreachable — a contained, single-story change, not a plan-wide rework.
 
 ### Neutral
