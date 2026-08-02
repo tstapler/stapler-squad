@@ -5,7 +5,7 @@ import { vars, zIndex } from "@/styles/theme-contract.css";
 // this reuses the warning token trio rather than a bespoke color.
 export const badge = style({
   position: "absolute",
-  top: 8,
+  top: vars.space[2],
   left: "50%",
   transform: "translateX(-50%)",
   zIndex: zIndex.floatingTerminalUI,
@@ -13,13 +13,13 @@ export const badge = style({
   alignItems: "center",
   gap: 6,
   padding: "4px 10px",
-  borderRadius: 12,
-  fontSize: 12,
-  fontWeight: 600,
+  borderRadius: vars.radii.lg,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
   background: vars.color.warningBg,
   color: vars.color.warningText,
   border: `1px solid ${vars.color.warning}`,
-  boxShadow: "0 2px 6px rgba(0, 0, 0, 0.15)",
+  boxShadow: vars.shadow.md,
   pointerEvents: "none",
   whiteSpace: "nowrap",
 });

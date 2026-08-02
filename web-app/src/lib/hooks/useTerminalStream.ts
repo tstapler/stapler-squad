@@ -181,6 +181,18 @@ export function useTerminalStream({
     setDroppedInputEvent(merged);
   }, []);
 
+  // Shared by connect()'s reconnect path and disconnect(): both close the
+  // current message queue and report any buffered-but-unsent input as a
+  // drop, differing only in the log line's reason label.
+  const closeQueueAndReportDrop = useCallback((reason: "reconnect" | "disconnect") => {
+    const droppedCount = messageQueueRef.current?.close() ?? 0;
+    if (droppedCount > 0) {
+      reportDrop(droppedCount);
+      console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on ${reason}`, { sessionId });
+    }
+    return droppedCount;
+  }, [reportDrop, sessionId]);
+
   useEffect(() => {
     // Runs after the batch that produced this droppedInputEvent has
     // committed — safe to reset here because any same-batch reportDrop()
@@ -206,17 +218,25 @@ export function useTerminalStream({
     return () => { pushMessageRef.current = null; };
   }, []);
 
+  // Task 4.1.1.2 — sendInput's silent drop (keystroke rejected because the
+  // hook already knows it's disconnected) is the same class of input loss
+  // as a superseded queue's drop-on-close; funnel it through the same
+  // reportDrop signal, one reported occurrence per rejected sendInput call.
+  // Memoized once (reportDrop is a stable [] useCallback) so this handler's
+  // identity never changes across renders — useTerminalFlowControl's
+  // sendInput includes `onDrop` in its dependency array, so an unstable
+  // inline arrow here would cascade a new sendInput identity through
+  // TerminalOutput.tsx's handleTerminalData and the xterm onData wiring on
+  // every render.
+  const handleFlowControlDrop = useCallback(() => reportDrop(1), [reportDrop]);
+
   const flowControl = useTerminalFlowControl({
     sessionId,
     getTerminal: getTerminal ?? (() => null),
     pushMessageRef,
     isConnectedRef,
     onError,
-    // Task 4.1.1.2 — sendInput's silent drop (keystroke rejected because the
-    // hook already knows it's disconnected) is the same class of input loss
-    // as a superseded queue's drop-on-close; funnel it through the same
-    // reportDrop signal, one reported occurrence per rejected sendInput call.
-    onDrop: () => reportDrop(1),
+    onDrop: handleFlowControlDrop,
   });
 
   const metrics = useTerminalMetrics({ onOutput });
@@ -259,11 +279,7 @@ export function useTerminalStream({
       // implicit-reconnect-path (previously did not) asymmetry. A superseded
       // attempt's buffered-but-unsent input must be dropped, not carried
       // forward into the new queue.
-      const droppedCount = messageQueueRef.current?.close() ?? 0;
-      if (droppedCount > 0) {
-        reportDrop(droppedCount);
-        console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on reconnect`, { sessionId });
-      }
+      closeQueueAndReportDrop("reconnect");
       messageQueueRef.current = new MessageQueue();
 
       // Send initial handshake with dimensions
@@ -446,7 +462,7 @@ export function useTerminalStream({
       setIsConnected(false);
     }
   }, [sessionId, shellId, onShellStatusChange, getTerminal, onError, onScrollbackReceived, onOutput,
-      flowControl, metrics, handleError, initialCols, initialRows, reportDrop]);
+      flowControl, metrics, handleError, initialCols, initialRows, closeQueueAndReportDrop]);
 
   // Keep connectRef in sync so visibility/online listeners always call the current closure
   connectRef.current = connect;
@@ -481,12 +497,8 @@ export function useTerminalStream({
     if (messageQueueRef.current) {
       // An explicit user-initiated disconnect with pending input must fire
       // the same drop signal as a superseded reconnect's close (Task 4.1.1.1).
-      const droppedCount = messageQueueRef.current.close();
+      closeQueueAndReportDrop("disconnect");
       messageQueueRef.current = null;
-      if (droppedCount > 0) {
-        reportDrop(droppedCount);
-        console.warn(`[useTerminalStream] dropped ${droppedCount} buffered input message(s) on disconnect`, { sessionId });
-      }
     }
 
     await new Promise<void>((resolve) => {
@@ -513,7 +525,7 @@ export function useTerminalStream({
       textDecoderRef.current = new TextDecoder();
       scrollbackDecoderRef.current = new TextDecoder();
     }
-  }, [getIsResyncingRef, reportDrop, sessionId]);
+  }, [getIsResyncingRef, closeQueueAndReportDrop]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {

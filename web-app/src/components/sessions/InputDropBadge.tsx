@@ -14,7 +14,7 @@ interface InputDropBadgeProps {
 }
 
 function formatMessage(count: number): string {
-  const noun = count === 1 ? "keystroke" : "keystrokes";
+  const noun = count === 1 ? "input event" : "input events";
   return `${count} ${noun} not sent — connection interrupted`;
 }
 
@@ -34,6 +34,10 @@ function formatMessage(count: number): string {
 export function InputDropBadge({ droppedInputEvent }: InputDropBadgeProps) {
   const { message, announce } = useLiveRegion();
   const [runningTotal, setRunningTotal] = useState(0);
+  // Mirrors `runningTotal` outside React state so the coalescing math can be
+  // read/written as a plain statement rather than inside a setState updater
+  // (see the `announce` call below for why).
+  const runningTotalRef = useRef(0);
   const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Guards against re-running the coalescing/announce logic for a render
   // that didn't actually introduce a new occurrence (e.g. an unrelated
@@ -57,15 +61,21 @@ export function InputDropBadge({ droppedInputEvent }: InputDropBadgeProps) {
     if (droppedInputEvent.at === lastHandledAtRef.current) return;
     lastHandledAtRef.current = droppedInputEvent.at;
 
-    setRunningTotal((prev) => {
-      const next = prev > 0 ? prev + droppedInputEvent.count : droppedInputEvent.count;
-      announce(formatMessage(next));
-      return next;
-    });
+    // Side effect (announce) lives outside the setState updater — React may
+    // invoke updater functions more than once (Strict Mode / concurrent
+    // features) to check purity, which would double-fire announce() and
+    // violate AC-SR-3 ("exactly one announcement per occurrence").
+    const next = runningTotalRef.current > 0
+      ? runningTotalRef.current + droppedInputEvent.count
+      : droppedInputEvent.count;
+    runningTotalRef.current = next;
+    setRunningTotal(next);
+    announce(formatMessage(next));
 
     clearDwellTimer();
     dwellTimerRef.current = setTimeout(() => {
       dwellTimerRef.current = null;
+      runningTotalRef.current = 0;
       setRunningTotal(0); // Surface B — auto-dismiss, no announcement.
     }, DWELL_MS);
     // `announce` is intentionally omitted: useLiveRegion() returns a new

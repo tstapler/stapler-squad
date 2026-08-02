@@ -46,7 +46,7 @@ describe("InputDropBadge", () => {
 
   it("InputDropBadge_should_renderPillWithDropCount_When_droppedInputEventIsSet", () => {
     const { container } = render(<InputDropBadge droppedInputEvent={makeEvent(1, 1000)} />);
-    expect(pillEl(container)?.textContent).toMatch(/1 keystroke not sent/i);
+    expect(pillEl(container)?.textContent).toMatch(/1 input event not sent/i);
   });
 
   // AC-VIS-2 — no color-only signal: an aria-hidden icon AND visible text
@@ -57,7 +57,7 @@ describe("InputDropBadge", () => {
     expect(icon).not.toBeNull();
     const pill = pillEl(container);
     expect(pill).not.toBeNull();
-    expect(pill?.textContent).toMatch(/1 keystroke not sent/i);
+    expect(pill?.textContent).toMatch(/1 input event not sent/i);
     expect(pill).toBeVisible();
   });
 
@@ -138,26 +138,26 @@ describe("InputDropBadge", () => {
   it("InputDropBadge_should_announceRunningTotal_When_MultipleDropsCoalesceInSameEpisode", () => {
     const t0 = 2000;
     const { container, rerender } = render(<InputDropBadge droppedInputEvent={makeEvent(1, t0)} />);
-    expect(pillEl(container)?.textContent).toMatch(/1 keystroke not sent/i);
+    expect(pillEl(container)?.textContent).toMatch(/1 input event not sent/i);
 
     rerender(<InputDropBadge droppedInputEvent={makeEvent(2, t0 + 800)} />);
-    expect(pillEl(container)?.textContent).toMatch(/3 keystrokes not sent/i);
+    expect(pillEl(container)?.textContent).toMatch(/3 input events not sent/i);
 
     rerender(<InputDropBadge droppedInputEvent={makeEvent(1, t0 + 1600)} />);
-    expect(pillEl(container)?.textContent).toMatch(/4 keystrokes not sent/i);
+    expect(pillEl(container)?.textContent).toMatch(/4 input events not sent/i);
   });
 
   it("InputDropBadge_should_announceAccumulatedRunningTotal_When_DropsCoalesceInSameEpisode", () => {
     const t0 = 3000;
     const { container, rerender } = render(<InputDropBadge droppedInputEvent={makeEvent(1, t0)} />);
-    expect(alertEl(container)?.textContent).toMatch(/1 keystroke not sent/i);
+    expect(alertEl(container)?.textContent).toMatch(/1 input event not sent/i);
 
     rerender(<InputDropBadge droppedInputEvent={makeEvent(2, t0 + 800)} />);
-    expect(alertEl(container)?.textContent).toMatch(/3 keystrokes not sent/i);
-    expect(alertEl(container)?.textContent).not.toMatch(/^2 keystrokes/i);
+    expect(alertEl(container)?.textContent).toMatch(/3 input events not sent/i);
+    expect(alertEl(container)?.textContent).not.toMatch(/^2 input events/i);
 
     rerender(<InputDropBadge droppedInputEvent={makeEvent(1, t0 + 1600)} />);
-    expect(alertEl(container)?.textContent).toMatch(/4 keystrokes not sent/i);
+    expect(alertEl(container)?.textContent).toMatch(/4 input events not sent/i);
   });
 
   // AC-SR-3 — announcement count bounded exactly by content changes: N rapid
@@ -230,8 +230,8 @@ describe("InputDropBadge", () => {
     unmount();
 
     const { container } = render(<InputDropBadge droppedInputEvent={makeEvent(1, t0 + 5000)} />);
-    expect(pillEl(container)?.textContent).toMatch(/1 keystroke not sent/i);
-    expect(pillEl(container)?.textContent).not.toMatch(/4 keystrokes/i);
+    expect(pillEl(container)?.textContent).toMatch(/1 input event not sent/i);
+    expect(pillEl(container)?.textContent).not.toMatch(/4 input events/i);
   });
 
   // AC-KBD-3 — no focus theft or scroll on update/auto-dismiss.

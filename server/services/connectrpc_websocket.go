@@ -806,12 +806,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
 
-	// readWG tracks the read-goroutine below so tests can assert it exits
-	// within a bound after the underlying connection closes (AC4). Not
-	// waited on here — waiting would deadlock against the caller's later
-	// conn.Close() in HandleWebSocket.
-	var readWG sync.WaitGroup
-
 	// Goroutine 1: Forward control mode updates to WebSocket.
 	// Coalesces back-to-back frames so rapid terminal bursts are batched into a
 	// single proto message per write, reducing syscall count and allocations.
@@ -1014,9 +1008,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// controlModeReadLoop owns the blocking read + exit classification;
 	// handleEnvelope carries the input/resize/scrollback business logic as a
 	// closure so it can still close over instance/snap/tmuxSessionName/resizeCh.
-	readWG.Add(1)
 	go func() {
-		defer readWG.Done()
 		controlModeReadLoop(stream.conn, sessionID, doneChan, errChan, func(envelope *protocol.Envelope) {
 			// Parse TerminalData
 			var incomingData sessionv1.TerminalData
