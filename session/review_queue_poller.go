@@ -627,12 +627,18 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 // shouldSkipSession returns true for sessions the poller should not evaluate.
 // Don't check sessions that are not running or are explicitly paused.
 // Hidden (system/background) sessions are never shown in the review queue.
+// Archived sessions (ArchivedAt set) are deliberately superseded/retired — e.g. by
+// archiveItemWorkSessions during a backlog item reopen, which sets ArchivedAt and kills
+// the tmux pane but does not change Hidden or Status — so they must be excluded here too,
+// or a dead pane never produces new activity and the session sits in the queue as a
+// permanent false ATTENTION_REASON_STALE entry (see docs/tasks/backlog-feature-improvement.md,
+// 2026-08-02 entry).
 // All other states proceed to status detection regardless of controller state.
 func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
-	// Lock-free snapshot read for Hidden and Status; Started() reads inst.started
-	// (set once during construction, not in the snapshot).
+	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
+	// inst.started (set once during construction, not in the snapshot).
 	snap := inst.Snapshot()
-	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || !inst.Started()
+	return snap.Hidden || snap.Status == Stopped || snap.Status == Paused || snap.ArchivedAt != nil || !inst.Started()
 }
 
 // checkSession checks a single session and adds/removes from queue as needed.
