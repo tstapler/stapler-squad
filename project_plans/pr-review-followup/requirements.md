@@ -153,6 +153,11 @@ polling/spawn mechanism, not new infrastructure.
   the Copilot-specific mechanism) if not already reliably triggered.
 - Regression tests for the new signal, plus confirmation existing
   `CHANGES_REQUESTED`/CI/conflict tests still pass unchanged.
+- Fix the pre-existing `STUCK_REASON_PR_NEEDS_FIX` proto-enum gap (`toProtoStuckReason`/
+  `fromProtoStuckReason` currently fall through to `STUCK_REASON_UNSPECIFIED`) — added
+  during Phase 2 research (see Open Questions): this project's entire reuse-first
+  premise depends on `/unfinished` correctly surfacing `pr_needs_fix` items, which is
+  broken today for all four triggers sharing that reason, not just the new one.
 
 ### Out of Scope
 - Any change to `PRStatusPoller`/`WorktreePRPoller`'s UI-facing badge computation
@@ -215,17 +220,28 @@ with the new trigger type.
 - No feature flag — extension of an already-live, unconditional reconciliation loop,
   consistent with how CI/review/conflict triggers already ship.
 - Rollback: revert the `PRStatus`/`parsePRStatusPayload`/`ReconcilePRPending`/ship-flow
-  changes; no schema/data migration involved.
+  changes. **Correction (found during Phase 3 planning, plan.md's Migration Plan
+  section)**: this line originally said "no schema/data migration involved" — that
+  was stale. An additive nullable ent column (`pr_feedback_addressed_at` on
+  `BacklogItem`) is required for the dedup watermark. It is low-risk (no backfill,
+  no index, auto-migrated at startup per this repo's existing ent pattern) but it is
+  a real schema migration.
 
 ## Open Questions
 
-- ~~Dedup mechanism for comment feedback~~ — **resolved by Phase 2 research**: dedup on
-  GitHub review/comment **IDs** (not timestamps, to avoid clock skew and correctly
-  re-trigger on a genuinely new `COMMENTED` review), recording the marker atomically
-  with the `remediatePRFixWithBackoffGate` spawn decision (`build-vs-buy.md`,
-  `architecture.md`, `pitfalls.md` all converge here). `parsePRStatusPayload`
-  currently discards `id`/timestamp fields entirely (`pitfalls.md`) — decoding them is
-  a prerequisite, not optional.
+- ~~Dedup mechanism for comment feedback~~ — **corrected during Phase 4 validation**:
+  this entry previously claimed Phase 2 research resolved dedup toward GitHub
+  review/comment **IDs**, and that `build-vs-buy.md`/`architecture.md`/`pitfalls.md`
+  "all converge here." That was wrong — the sdd:4-validate cross-artifact consistency
+  check (2026-08-02) found architecture.md actually argued for a **timestamp
+  watermark**, only build-vs-buy.md/pitfalls.md argued for IDs, and Phase 3 planning
+  (ADR-001) resolved this in favor of the timestamp watermark: a single nullable
+  `PrFeedbackAddressedAt time.Time` column per item, compared via `.After()` against
+  the newest GitHub-issued `submittedAt`/`createdAt` each tick. `parsePRStatusPayload`
+  decodes `submittedAt`/`createdAt` (not `id`) as the prerequisite field. See
+  `implementation/decisions/ADR-001-timestamp-watermark-dedup.md` for the full
+  reasoning, including why ID-based dedup was rejected (solves a multi-item-per-tick
+  collision problem this single-PR-per-item domain doesn't have).
 - ~~Exact `gh` invocation for Copilot's inline review-thread comments~~ — **resolved**:
   the existing `gh pr view --json reviews,comments` call already returns per-item
   `id`/`createdAt`/`submittedAt` with no `--json` flag change (`architecture.md`,
@@ -234,12 +250,19 @@ with the new trigger type.
   live but empty on sampled PRs) — needed only if Phase 3 decides to honor manual
   "resolve conversation" as addressing feedback; the base comment/review-ID dedup
   above does not require it.
-- Definition of "substantive" comment/review worth acting on vs. noise to ignore
-  (e.g. bare "LGTM", empty body) — **unresolved after Phase 2 research**; carry into
-  Phase 3 planning.
-- Whether Copilot review requests should be gated behind a repo-level Settings toggle
-  or always attempted — **unresolved after Phase 2 research**; carry into Phase 3
-  planning.
+- ~~Definition of "substantive" comment/review worth acting on vs. noise to ignore
+  (e.g. bare "LGTM", empty body)~~ — **resolved by Phase 3 planning**: a plain length
+  threshold, `len(strings.TrimSpace(body)) >= 10` runes (`isSubstantiveFeedback`,
+  plan.md Pattern Decisions table) — chosen over a keyword/NLP denylist as
+  deterministic, unit-testable, and proportionate to this project's Small appetite.
+  Pre-mortem.md (Phase 4) flags a residual gap this threshold does not cover: a
+  sufficiently long recurring bot comment (coverage/CI-report bots) still counts as
+  "substantive" by length alone — noted as a P2/P3 risk, not blocking.
+- ~~Whether Copilot review requests should be gated behind a repo-level Settings toggle
+  or always attempted~~ — **resolved by Phase 3 planning**: always attempted,
+  best-effort, one-shot at PR-creation time inside `pushAndCreatePR` (plan.md Pattern
+  Decisions table) — a toggle was rejected as speculative config for a call that
+  structurally cannot runaway-retrigger (fires once per PR, not on a recurring tick).
 - **New, found during Phase 2 research** (`ux.md`): `domain.StuckReasonPRNeedsFix` has
   no corresponding proto `StuckReason` enum value — `toProtoStuckReason`
   (`server/services/backlog_service_stuck.go:28-57`) silently falls through to
@@ -253,11 +276,14 @@ with the new trigger type.
   document's original Problem Statement) already provides a time-based backoff gate
   (`Storage.RemediationDue`, 5 attempts) shared by all triggers — this reduces but
   does not eliminate the dedup risk (time-based backoff still eventually re-fires on
-  content that never self-clears), so the content-based ID dedup above remains
-  required, layered on top of, not instead of, the existing gate.
-- **New, found during Phase 2 research** (`architecture.md`, `pitfalls.md`,
+  content that never self-clears), so the content-based timestamp-watermark dedup
+  above remains required, layered on top of, not instead of, the existing gate.
+- ~~**New, found during Phase 2 research** (`architecture.md`, `pitfalls.md`,
   `build-vs-buy.md`): the installed `gh` CLI in this environment is v2.86; `gh pr edit
-  --add-reviewer @copilot` requires v2.88+ (shipped 2026-03-11). Phase 3 planning must
-  pick between upgrading `gh` in the deployment environment or falling back to the
-  legacy `copilot-pull-request-reviewer[bot]` login / raw `gh api` reviewer-request
-  endpoint.
+  --add-reviewer @copilot` requires v2.88+~~ — **resolved by Phase 3 planning**:
+  unconditional use of the legacy literal login `copilot-pull-request-reviewer[bot]`
+  (accepted by `--add-reviewer` on every tested `gh` version, 2.86+) rather than the
+  version-gated `@copilot` alias — avoids a runtime `gh --version` detection branch
+  entirely (plan.md Pattern Decisions table). Pre-mortem.md flags this login string
+  as still end-to-end UNVERIFIED against a real PR as of plan-writing time; plan.md
+  Story 5.1.2 adds a real (non-sandboxed) dry-run verification task before shipping.

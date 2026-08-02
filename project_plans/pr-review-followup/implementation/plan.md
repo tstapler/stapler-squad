@@ -155,6 +155,16 @@ persisted timestamp, and one new `&&` term to an existing `if`.
     `"[BacklogLifecycle] ReconcilePRPending item=%s PrFeedbackAddressedAt advanced to %s (PR #%d)"`.
   - New `log.WarningLog` line (mirrors `EnablePRAutoMerge`'s existing pattern,
     `backlog_lifecycle.go:3304-3311`) when `RequestCopilotReview` fails.
+  - **New (pre-mortem.md P1 — required, not optional)**: when a `hasNewFeedback`
+    dispatch covers more than one substantive item (`len(commentReviews) +
+    len(substantive generalComments) > 1`), log the count and authors of every item
+    included in that dispatch's context:
+    `"[BacklogLifecycle] ReconcilePRPending item=%s dispatching PR-fix session covering %d feedback item(s) from [%s] — watermark advances to %s regardless of which items the session actually addresses"`.
+    Rationale: the timestamp watermark (ADR-001, adversarial-review.md Concern-1)
+    advances past the whole batch on dispatch, not per-item, so a partially-addressed
+    multi-item batch is otherwise silently unrecoverable — this log line is the one
+    place an operator can discover it happened. This does not fix the coarse-grain
+    dedup gap (out of appetite per ADR-001); it makes the gap discoverable.
 - **Metrics**: none added — this repo has no existing metrics pipeline for
   `ReconcilePRPending`'s other three triggers either (log-line-only observability is
   the established convention here).
@@ -306,7 +316,7 @@ compute from.
 - Files: `session/git/worktree_git.go`
 
 ##### Task 1.1.2d: Add the `COMMENTED` case to the review switch, parse `submittedAt` (~4 min)
-- In the review loop (`worktree_git.go:627-636`), add `case "COMMENTED":` after `case "CHANGES_REQUESTED":` — parse `r.SubmittedAt` with `time.Parse(time.RFC3339, r.SubmittedAt)` (log+skip the timestamp on parse error, matching the "fail loudly, don't silently zero-value" concern from stack.md/pitfalls.md §4 — but still append with a zero `at` rather than dropping the review entirely, so at minimum `HasReviewFeedback` still detects the feedback), and append to `status.commentReviews` only `if isSubstantiveFeedback(r.Body)`.
+- In the review loop (`worktree_git.go:627-636`), add `case "COMMENTED":` after `case "CHANGES_REQUESTED":` — parse `r.SubmittedAt` with `time.Parse(time.RFC3339, r.SubmittedAt)`. **On parse error, do NOT zero-value `at`** (adversarial-review.md BLOCKER: a zero-value `at` can lose to an already-persisted, later `PrFeedbackAddressedAt` watermark, silently suppressing detection of genuinely new feedback — the inverse, silent-miss version of the exact risk ADR-001 reasoned about). Instead: log the parse failure at warn level (still following stack.md/pitfalls.md §4's "fail loudly" spirit — the log line makes it visible, not silent) and fall back to `at: time.Now()`. `time.Now()` is safe specifically because it is guaranteed to be no earlier than any prior GitHub-issued watermark this process could have already persisted, so it can only ever push `LatestFeedbackAt` later, never mask a real later item under an earlier one. Still append to `status.commentReviews` only `if isSubstantiveFeedback(r.Body)`.
 - Files: `session/git/worktree_git.go`
 
 ##### Task 1.1.2e: Parse `createdAt` and populate retyped `generalComments` (~3 min)
@@ -359,7 +369,9 @@ test rigor as `HasBlockingReviews`/`CIFailing`/`HasConflicts`.
   `_ConflictSectionOrderedFirst` — `worktree_git_test.go:146,229,271,312,353`) pass
   unchanged.
   - *Given* the existing `TestParsePRStatusPayload_HasBlockingReviews` fixture (a `CHANGES_REQUESTED` review), *When* run against the modified `parsePRStatusPayload`, *Then* `status.HasBlockingReviews == true` and `status.HasReviewFeedback == false` (a `CHANGES_REQUESTED` review is never counted toward the new signal — only `COMMENTED`).
-**Files**: `session/git/worktree_git_test.go`
+- **New (adversarial-review.md BLOCKER fix)**: `TestReconcilePRPending_HasNewFeedback_UnparseableTimestampStillAdvancesWatermark` proves the `time.Now()` fallback in Task 1.1.2d cannot be masked by an existing watermark.
+  - *Given* an item with `PrFeedbackAddressedAt` already set to an earlier real timestamp (e.g. `2026-08-01T10:00:00Z`, from a prior addressed-feedback cycle), and this tick's `commentReviews` contains one new substantive `COMMENTED` review whose `submittedAt` fails `time.Parse` (e.g. malformed string), *When* `parsePRStatusPayload` then `ReconcilePRPending`'s `hasNewFeedback` computation run, *Then* the fallback `at: time.Now()` is strictly after the stored watermark, so `LatestFeedbackAt.After(*item.PrFeedbackAddressedAt) == true` and `hasNewFeedback == true` — the item takes the spawn branch, not the healthy branch.
+**Files**: `session/git/worktree_git_test.go`, `session/backlog_lifecycle_test.go`
 
 ##### Task 1.1.4a: Add `TestParsePRStatusPayload_HasReviewFeedback_CommentedReview` (~4 min)
 - Files: `session/git/worktree_git_test.go`
@@ -493,6 +505,10 @@ distinguishable from a CI-triggered one in the log stream.
   `hasNewFeedback` was true for this tick.
   - *Given* `remediatePRFixWithBackoffGate` returns `(false, nil)` (backoff not yet due), *When* the dispatch block runs, *Then* `UpdateBacklogItem` is NOT called for `PrFeedbackAddressedAt` — the watermark stays at its prior value so this feedback is retried once the backoff opens.
   - *Given* `remediatePRFixWithBackoffGate` returns `(true, nil)` for item `f47ac10b-58cc-4372-a567-0e02b2c3d479` with `prStatus.LatestFeedbackAt = 2026-08-02T14:32:07Z`, *When* the dispatch block runs, *Then* `UpdateBacklogItem` is called with `PrFeedbackAddressedAt: &(2026-08-02T14:32:07Z)`.
+- **New (pre-mortem.md P1)**: when a dispatch covers >1 substantive feedback item, the
+  batch-coverage log line (Observability Plan) fires with the correct count and
+  author list.
+  - *Given* `commentReviews = [{author:"copilot-pull-request-reviewer[bot]"}]` and `generalComments` containing one substantive entry `{author:"tstapler"}` in the same tick, *When* the dispatch block runs, *Then* the log line reports `covering 2 feedback item(s) from [copilot-pull-request-reviewer[bot], tstapler]`.
 **Files**: `session/backlog_lifecycle.go`
 
 ##### Task 3.1.2a: Update the log line (~2 min)
@@ -510,6 +526,14 @@ distinguishable from a CI-triggered one in the log stream.
 ##### Task 3.1.2d: Add the new info-log line for a successful watermark persist (~2 min)
 - Inside the success path of Task 3.1.2c, add the `log.InfoLog` line specified in the Observability Plan.
 - Files: `session/backlog_lifecycle.go`
+
+##### Task 3.1.2e: Add the multi-item batch-coverage log line (~3 min) — pre-mortem.md P1
+- Immediately before the dispatch call, when `hasNewFeedback` is true, count substantive items (`len(commentReviews) + len(substantive generalComments)`) and, if `> 1`, log the batch-coverage line from the Observability Plan with authors joined by `", "`.
+- Files: `session/backlog_lifecycle.go`
+
+##### Task 3.1.2f: Add the batch-coverage log regression test (~4 min)
+- New test asserting the log line fires with the correct count/author list for a 2-item batch, and does NOT fire for a single-item dispatch.
+- Files: `session/backlog_lifecycle_test.go`
 
 #### Story 3.1.3: Clear the watermark when a closed-without-merging PR's fields are cleared
 **As a** the reconciler, **I want** a fresh PR (after a closed-without-merging cycle)
