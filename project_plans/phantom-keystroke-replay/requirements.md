@@ -63,6 +63,21 @@ misdescribed the mechanism using those names; corrected here.
 effort's job is to verify that with a regression test tied to this backlog
 item (not just re-derive the fix) and close the remaining gap below.
 
+## Why finish this
+
+This backlog item's AC3/AC4/AC5/AC6 are explicitly still open and tracked in
+the company's backlog system regardless of the upstream symptom fix landing
+via #146/`c0e6c4ce6` — closing the ticket's original symptom did not close
+the ticket. The remaining scope is now small and well-bounded (client-side
+reconnect hardening in `MessageQueue`/`useTerminalStream` plus regression
+tests, not a re-fix of the original bug) specifically *because* that upstream
+discovery narrowed it — two prior SDD attempts failed to ship at a broader
+scope, before this narrowing existed. Completing it closes a real, if
+lower-severity, latent gap: input loss/duplication during reconnect churn is
+still possible today via the `MessageQueue`/epoch bugs this plan fixes,
+independent of whether it manifests as the original ticket's exact "phantom
+`1` keystroke" symptom.
+
 ## Remaining confirmed gap — client-side reconnect hardening
 
 Independently real, not the cause of the original ticket's symptom, but

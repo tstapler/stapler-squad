@@ -209,6 +209,28 @@ ongoing; a screen reader hears a handful of updated interruptions (one per
 drop event, not one per dropped character/chunk), each with the current
 total, never a wall of identical repeated announcements.
 
+**Residual risk — noisy badge under frequent benign reconnect blips:** a
+session experiencing frequent short, benign reconnects (e.g. flaky wifi that
+auto-recovers in well under a second) could show `InputDropBadge` repeatedly.
+Each firing is a real (true-positive) drop — `count` is legitimately small,
+often `1`, because only a single in-flight keystroke happened to be buffered
+at the exact instant the connection was superseded — but a user seeing the
+badge fire on every one of many quick, self-healing blips may experience it
+as noisy or alarmist relative to how inconsequential each individual drop
+felt (a single character, instantly retypeable). This is an **accepted
+tradeoff**, not a defect: correctness over silence — a false-negative silent
+loss (the pre-fix behavior) is worse than an occasional true-positive badge,
+and Surface D's "silent by default" guarantee only holds when nothing was
+actually dropped, so the badge cannot be suppressed here without
+reintroducing silent loss. This is flagged as something to watch in real
+production usage, not something this plan needs to solve now — e.g. a "don't
+show for N seconds after the last dismiss" suppression window would trade
+correctness for quiet and would be scope creep beyond this ticket's bug-fix
+mandate (`requirements.md`'s Non-Goals already excludes general
+reconnect/re-render stability work beyond stopping input replay/loss). If
+this turns out to be a real annoyance in practice, it's a follow-up UX
+ticket, not a blocker for shipping this one.
+
 ---
 
 ### Surface D — Connection restored, nothing lost (default / no-badge state)

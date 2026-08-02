@@ -126,6 +126,7 @@ Omitted — no schema, proto, or persisted-data changes in this plan.
 | Go: extracting `controlModeReadLoop` is a refactor of live production code (not just additive) — regression risk to the two other structurally similar handlers (`streamShellViaControlMode`, `streamViaTmuxCapturePane`) if touched by mistake. | Phase 5 scope is explicitly `streamViaControlMode` only, matching requirements.md's file listing; the other two duplicated handlers are named as a flagged follow-up in Unresolved Questions, not touched here (Non-Goals: "general reconnect/re-render stability work beyond what's needed... is out of scope"). |
 | Task 1.1.2.1's AC2 regression test could reimplement `session_driver.go`'s `approvalAwaitingClear` threading rule inline in the test instead of driving the real production method that does this threading — the same "tested the pattern, not production code" gap that already caused a documented FAIL on this ticket once (pre-mortem.md Failure #5, P2). | Task 1.1.2.1 (repair pass) first extracts `processApprovalTick` from `runSessionDriverWithPrompt`'s inline `NeedsApproval` block, mirroring Phase 5's `controlModeReadLoop` extraction precedent; Task 1.1.2.2's test then drives `processApprovalTick` directly across simulated ticks rather than re-implementing its rule. |
 | AC5 manual repro requires actually inducing the "not started or paused" condition, not a generic network-offline toggle (per Constraints). | Story 6.1.1's task uses `pause_session`/`resume_session` MCP tools against a live tmux-backed session while its terminal WebSocket is open in a real browser tab, which drives `session/instance_tmux.go:471-472`'s `!i.started.Load() \|\| i.Status == Paused` → `"session not started or paused"` path directly — the exact error string from the ticket's log excerpt. |
+| A session with frequent short, benign reconnects (e.g. flaky wifi with quick auto-recovery) could show `InputDropBadge` repeatedly — each firing is a real (true-positive) drop, but `count` is legitimately small (often `1`) per blip, so the cumulative effect across many quick, self-healing blips can feel noisy/alarmist relative to how inconsequential each individual drop is — a UX risk under real-world network conditions this plan's automated tests can't reproduce. | Accepted tradeoff, not fixed here: correctness over silence — a false-negative silent loss is worse than an occasional true-positive badge (see `design/ux.md`'s Surface C residual-risk note). Flagged as something to watch in production usage; a dismiss-suppression window (e.g. "don't show for N seconds after the last dismiss") would trade correctness for quiet and is scope creep beyond this ticket's bug-fix mandate — left as a potential follow-up UX ticket if it proves annoying in practice. |
 | AC5's repro must exercise the actual client-side fix (Phases 2-4), not just server-side `pause_session` behavior — an MCP-level `write_to_session`/`send_control` call bypasses the browser's WebSocket/`MessageQueue`/epoch-guard path entirely and proves nothing about the shipped fix. This was also this plan's own first repair attempt's mistake, corrected in this pass (pre-mortem.md Failure #2, P1). | Task 6.1.1.1 pins the mechanism concretely: `claude-in-chrome` browser-automation tools type a distinguishable marker string via real keyboard events into the live xterm DOM element in a real browser tab, with `pause_session`/`resume_session` MCP calls alternated tightly around the typing across all 5-10 cycles — best-effort adversarial timing, not guaranteed simultaneity; an observed `InputDropBadge`/drop-signal firing on at least one cycle is a required pass/fail assertion, and zero cycles showing the signal requires a tighter re-run or an explicit "inconclusive" outcome rather than a silent pass. |
 
 ---
@@ -1297,6 +1298,29 @@ tools.)*
   per this repo's `backlog:done-4`/`backlog:fail-4` convention. Do not report
   `status=done` if the drop-signal evidence is inconclusive per the rule
   above.
+
+**Resolution path if inconclusive after the re-run/tighter-loop attempt**
+(added per triad readiness review — Product gap 1): if, after re-running with
+tighter alternation, the drop signal still never fires across the full run,
+record the finding via `report_progress` with `status=fail` (the tool's
+`status` enum is `pass`/`fail`/`in_progress` only — there is no
+`inconclusive` value, so this is the closest honest status; it must **not**
+be reported as `pass`) and an honest one-line `note` explicitly saying the
+outcome is inconclusive, plus what was tried (e.g. "INCONCLUSIVE: 5 cycles +
+5 tighter-loop re-run cycles, zero InputDropBadge observations;
+browser-automation timing likely too coarse to land inside the race window").
+An inconclusive AC5 outcome does **not**
+block shipping this PR: AC1/AC2 (the ticket's actual user-facing symptom) are
+independently already fixed on `main` and verified by Phase 1's isolated
+regression test (`TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn`),
+and AC3/AC4 (the client-side hardening this plan adds) are independently
+verified by the Jest (`useTerminalStream.test.ts`, `InputDropBadge.test.tsx`,
+`MessageQueue.test.ts`) and Go (`TestControlModeReadLoop_BoundedExitOnConnClose`)
+regression suites — neither depends on AC5's live-browser timing race
+succeeding. An inconclusive AC5 only means the live evidence for that one
+specific criterion is weaker than desired, not that the shipped fix is
+unverified. If this happens, flag it explicitly in the PR description for
+human awareness — do not let it pass unmentioned.
 
 ---
 
