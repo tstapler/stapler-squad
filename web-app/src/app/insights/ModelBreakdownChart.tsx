@@ -22,7 +22,9 @@ import {
   legendItem,
   legendDot,
   unpricedLabel,
+  cacheHitLabel,
 } from "./ModelBreakdownChart.css";
+import { fmtPct } from "./insightsFormatters";
 
 interface Props {
   models: ModelBreakdown[];
@@ -45,17 +47,24 @@ interface DataPoint {
   cost: number;
   color: string;
   pricingUnavailable: boolean;
+  cacheHitRate: number;
 }
 
 function toDataPoints(models: ModelBreakdown[]): DataPoint[] {
   return [...models]
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
-    .map((m, i) => ({
-      family: m.modelFamily || "unknown",
-      cost: m.estimatedCostUsd,
-      color: PALETTE[i % PALETTE.length],
-      pricingUnavailable: m.pricingUnavailable,
-    }));
+    .map((m, i) => {
+      const input = Number(m.totalInputTokens);
+      const cacheRead = Number(m.cacheReadTokens);
+      const denom = input + cacheRead;
+      return {
+        family: m.modelFamily || "unknown",
+        cost: m.estimatedCostUsd,
+        color: PALETTE[i % PALETTE.length],
+        pricingUnavailable: m.pricingUnavailable,
+        cacheHitRate: denom === 0 ? 0 : cacheRead / denom,
+      };
+    });
 }
 
 function fmtDollar(v: number): string {
@@ -112,6 +121,7 @@ export function ModelBreakdownChart({ models }: Props) {
           <div key={d.family} className={legendItem}>
             <div className={legendDot} style={{ background: d.color }} />
             {d.family}
+            <span className={cacheHitLabel}> {fmtPct(d.cacheHitRate)} cache hit</span>
             {d.pricingUnavailable && (
               <span className={unpricedLabel}> (pricing unavailable)</span>
             )}

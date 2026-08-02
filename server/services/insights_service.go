@@ -485,14 +485,33 @@ func (s *InsightsService) ListSessionTokens(
 	}), nil
 }
 
+// insightsEventSender is the narrow interface watchInsights sends through.
+// Satisfied structurally (no explicit "implements") by
+// *connect.ServerStream[sessionv1.InsightsEvent] in production, and by a
+// mutex-guarded fake in tests (server/services/insights_service_test.go).
+// Mirrors backlogItemEventSender (backlog_service_events.go) — same problem
+// (*connect.ServerStream[T] has no exported constructor, so no real fake can
+// be built outside the connect package), same fix.
+type insightsEventSender interface {
+	Send(*sessionv1.InsightsEvent) error
+}
+
 // WatchInsights streams summary updates when new JSONL data is parsed.
 // Sends an initial "parse_complete" event (or "loading" if still parsing),
 // then pushes an "update" event each time the TokenStore processes a new file.
+// +api: WatchInsights
 func (s *InsightsService) WatchInsights(
 	ctx context.Context,
 	_ *connect.Request[sessionv1.WatchInsightsRequest],
 	stream *connect.ServerStream[sessionv1.InsightsEvent],
 ) error {
+	return s.watchInsights(ctx, stream)
+}
+
+// watchInsights is WatchInsights's core logic, extracted behind the
+// insightsEventSender interface (see its doc comment) so it is directly
+// unit-testable without a real RPC round-trip.
+func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEventSender) error {
 	// 1. Send initial state.
 	allParsed := !s.store.IsLoading()
 	initialEvent := &sessionv1.InsightsEvent{
@@ -502,7 +521,7 @@ func (s *InsightsService) WatchInsights(
 	if !allParsed {
 		initialEvent.EventType = "loading"
 	}
-	if err := stream.Send(initialEvent); err != nil {
+	if err := sender.Send(initialEvent); err != nil {
 		return fmt.Errorf("send initial event: %w", err)
 	}
 
@@ -523,7 +542,7 @@ func (s *InsightsService) WatchInsights(
 				EventType: "update",
 				AllParsed: !s.store.IsLoading(),
 			}
-			if err := stream.Send(evt); err != nil {
+			if err := sender.Send(evt); err != nil {
 				return fmt.Errorf("send update event: %w", err)
 			}
 		}

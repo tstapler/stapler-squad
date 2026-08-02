@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -546,4 +547,88 @@ func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOn
 
 	assert.Len(t, svc.loggedUnpricedFamilies, 1)
 	assert.True(t, svc.loggedUnpricedFamilies["gpt-99-turbo"])
+}
+
+// --------------------------------------------------------------------------
+// AC-4: WatchInsights streaming test coverage, via the insightsEventSender
+// seam (mirrors backlogItemEventSender/watchBacklogItems).
+// --------------------------------------------------------------------------
+
+// fakeInsightsEventSender is a hand-rolled fake implementing
+// insightsEventSender, capturing every sent message in a mutex-guarded slice
+// — watchInsights runs in a goroutine below while the test triggers a file
+// change concurrently, so Send is called concurrently with Sent().
+type fakeInsightsEventSender struct {
+	mu   sync.Mutex
+	sent []*sessionv1.InsightsEvent
+}
+
+func (f *fakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, e)
+	return nil
+}
+
+// Sent returns a snapshot copy of the messages sent so far, safe to read
+// concurrently with in-flight Send calls.
+func (f *fakeInsightsEventSender) Sent() []*sessionv1.InsightsEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*sessionv1.InsightsEvent, len(f.sent))
+	copy(out, f.sent)
+	return out
+}
+
+var _ insightsEventSender = (*fakeInsightsEventSender)(nil)
+
+func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	sender := &fakeInsightsEventSender{}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.watchInsights(runCtx, sender) }()
+
+	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+
+	require.Eventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "update", sender.Sent()[1].EventType)
+
+	runCancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchInsights did not return after context cancellation")
+	}
+}
+
+func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	sender := &fakeInsightsEventSender{}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.watchInsights(runCtx, sender) }()
+
+	require.Eventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+	runCancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchInsights did not return after context cancellation")
+	}
 }
