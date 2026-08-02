@@ -32,6 +32,19 @@ func (i *Instance) GetStableID() string {
 	return i.Title
 }
 
+// GetProgram returns the program this instance runs (e.g. "claude", "aider").
+//
+// Reads via Snapshot(), not a direct i.Program field access: actor commands
+// (SetProgram/SwitchProgram and friends) write i.Program directly outside
+// i.mu, publishing the change only by atomically storing a fresh snapshot at
+// the end of the mutation — the same reasoning as GetStatus's doc comment.
+// ClaudeController.Start reads this from a different goroutine than whatever
+// last set it, so only the atomic snapshot read is synchronized with that
+// write; a direct field read or an i.mu-guarded read would not be.
+func (i *Instance) GetProgram() string {
+	return i.Snapshot().Program
+}
+
 // MatchesID reports whether id refers to this instance.
 // Accepts the stable UUID, the legacy Title, or the full tmux session name
 // (e.g. "staplersquad_my-session") so that hook notifications sent from inside

@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -172,6 +173,12 @@ var (
 					defer cancel()
 					go profiling.MonitorGoroutines(ctx, 10*time.Second)
 				}
+			}
+
+			// Load user-defined detector plugins from the config dir's detectors/
+			// subfolder and start watching it for changes. Never fatal.
+			if err := detection.InitPlugins(ctx); err != nil {
+				log.Warn("failed to initialize detector plugins", "err", err)
 			}
 
 			if daemonFlag {

@@ -730,28 +730,13 @@ func (sd *StatusDetector) DetectFromString(output string) DetectedStatus {
 	return sd.Detect([]byte(output))
 }
 
-// builtBinaryDetectors is a package-level cache of per-binary StatusDetectors,
-// keyed by binary name. Initialized once at startup from DefaultRegistry().
-var builtBinaryDetectors = func() map[string]*StatusDetector {
-	m := make(map[string]*StatusDetector)
-	reg := DefaultRegistry()
-	for _, name := range reg.Names() {
-		bd, _ := reg.Lookup(name)
-		ps, _ := NewPatternSet(bd.Patterns()) // patterns are from code, always valid
-		bsd := &StatusDetector{}
-		bsd.patternSet.Store(ps)
-		m[name] = bsd
-	}
-	return m
-}()
-
 // DetectForProgram detects the status for output from a named program.
 // When the program has a registered BinaryDetector, its per-binary pattern set
 // is consulted first. If the per-binary detector returns StatusUnknown (no match),
 // the generic Detect() is called as a fallback. For unregistered programs, only
 // the generic Detect() is used.
 func (sd *StatusDetector) DetectForProgram(output []byte, program string) DetectedStatus {
-	if bsd, ok := builtBinaryDetectors[program]; ok {
+	if bsd, ok := lookupBinaryDetector(program); ok {
 		text := stripANSI(collapseCarriageReturns(string(output)))
 		status, patternName, _ := bsd.detectFromText(text, output)
 		if status != StatusUnknown {
