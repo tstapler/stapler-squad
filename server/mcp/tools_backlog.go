@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -69,6 +70,29 @@ func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
 	return nil
 }
 
+// --- Self-resolve source-status validation ---
+//
+// allowedSelfResolveSourceStatuses is the whitelist of source statuses a
+// self-resolve tool (request_review, report_duplicate) may transition an
+// item out of. Consulted only from inside validateSelfResolveSource.
+var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
+	session.BacklogStatusInProgress: true,
+	session.BacklogStatusPRPending:  true,
+}
+
+// validateSelfResolveSource is the single chokepoint both request_review and
+// report_duplicate call to obtain a validated source status. Downstream code
+// must use only its returned session.BacklogStatus for a transition's
+// ExpectedStatus — never item.Status directly — so that the CAS precondition
+// is never trivially self-satisfying for a disallowed status.
+func validateSelfResolveSource(item *session.BacklogItemData, toolName string) (session.BacklogStatus, error) {
+	s := session.BacklogStatus(item.Status)
+	if !allowedSelfResolveSourceStatuses[s] {
+		return "", fmt.Errorf("item is at status %q — %s only allowed from in_progress or pr_pending", item.Status, toolName)
+	}
+	return s, nil
+}
+
 // ReviewCompletionSignaler allows the MCP handler to stop an AutonomousDriver
 // after submit_review_verdict completes. The stop call is belt-and-suspenders;
 // the LLM orchestrator will also detect completion from the terminal tail.
@@ -107,6 +131,13 @@ type backlogHandlers struct {
 	// session.Storage has no public seam for constructing worktree data
 	// without spawning and starting a real Instance (real git/tmux calls).
 	resolveSessionBranch func(ctx context.Context, sessionUUID string) (string, error)
+	// listItemSessionsFn backs request_review's FR2 active-reviewer guard.
+	// Defaults to h.storage.ListItemSessions when nil; overridable in tests to
+	// force a storage error — session.Storage.ListItemSessions type-asserts
+	// its repository to the concrete *EntRepository (session/storage.go),
+	// so it has no swappable-Repository test seam of its own. This field
+	// mirrors verifyPRMatchesBranch/resolveSessionBranch's existing shape.
+	listItemSessionsFn func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
 }
 
 // --- get_backlog_item ---
@@ -405,15 +436,42 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if itemErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
 	}
+
+	// Reject calls from a disallowed source status before constructing any
+	// precondition, so the CAS check is never trivially self-satisfying (FR1,
+	// FR9 — see validateSelfResolveSource).
+	validStatus, valErr := validateSelfResolveSource(item, "request_review")
+	if valErr != nil {
+		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
+	}
+
+	// FR2: refuse re-routing a pr_pending item out from under a running
+	// reviewer. Scoped to the pr_pending source path only — the in_progress
+	// path's existing behavior (including the pre-existing "zombie reviewer"
+	// edge case) is unchanged. Fail closed on a ListItemSessions error: never
+	// silently fall through as if no reviewer were active.
+	if validStatus == session.BacklogStatusPRPending {
+		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+		if lsErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+		}
+		if services.HasActiveReviewSession(itemSessions) {
+			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
+		}
+	}
+
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
 	}
 
-	// Transition item from in_progress to the target status.
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredBySystem); transErr != nil {
+	// Transition item from its validated source status to the target status.
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
 		log.InfoLog.Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
 	}
 
@@ -444,6 +502,17 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
+}
+
+// itemSessionsFor lists ItemSessions for itemID via the overridable
+// listItemSessionsFn seam when set, otherwise the real
+// h.storage.ListItemSessions. Used by request_review's FR2 active-reviewer
+// guard.
+func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error) {
+	if h.listItemSessionsFn != nil {
+		return h.listItemSessionsFn(ctx, itemID)
+	}
+	return h.storage.ListItemSessions(ctx, itemID)
 }
 
 // --- submit_review_verdict ---

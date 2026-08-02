@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -745,6 +748,348 @@ func TestRequestReview_RejectsWhenSessionNotLinked(t *testing.T) {
 	require.False(t, m["success"].(bool))
 	errObj := m["error"].(map[string]interface{})
 	require.Equal(t, ErrPermissionDenied, errObj["code"])
+}
+
+// --- request_review: Phase 2 CAS generalization (Epic 4.1) ---
+
+// TestRequestReview_TransitionsPRPendingItemToReview verifies FR1's happy
+// path: a request_review call sourced from pr_pending (not just the
+// pre-existing in_progress path) succeeds, and the resulting
+// BacklogStatusEvent is attributed TriggeredBy "agent" (ADR-003), not
+// "system".
+func TestRequestReview_TransitionsPRPendingItemToReview(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Re-request after PR feedback",
+		Status: string(session.BacklogStatusPRPending),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Re-requesting review after addressing PR feedback",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+
+	require.NotEmpty(t, fetched.StatusEvents)
+	last := fetched.StatusEvents[len(fetched.StatusEvents)-1]
+	require.Equal(t, session.TriggeredByAgent, last.TriggeredBy)
+}
+
+// TestRequestReview_RejectsWhenSourceStatusNotAllowed verifies the
+// validateSelfResolveSource whitelist (pitfalls.md §0): request_review must
+// refuse any source status outside {in_progress, pr_pending}, before any
+// mutation.
+func TestRequestReview_RejectsWhenSourceStatusNotAllowed(t *testing.T) {
+	statuses := []string{
+		string(session.BacklogStatusDone),
+		string(session.BacklogStatusIdea),
+		string(session.BacklogStatusReview),
+		string(session.BacklogStatusArchived),
+	}
+
+	for _, status := range statuses {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+
+			itemData := session.BacklogItemData{
+				Title:  "Disallowed source status",
+				Status: status,
+			}
+			item, err := storage.CreateBacklogItem(ctx, itemData)
+			require.NoError(t, err)
+
+			sessionUUID := uuid.New().String()
+			_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+				ItemID:      item.ID,
+				SessionUUID: sessionUUID,
+				SessionRole: session.SessionRoleWork,
+			})
+			require.NoError(t, err)
+
+			handler := &backlogHandlers{storage: storage}
+			ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+			req := makeToolReq(map[string]interface{}{
+				"item_id": item.ID,
+				"message": "Attempting review from a disallowed status.",
+			})
+
+			result, err := handler.requestReview(ctxWithUUID, req)
+			require.NoError(t, err)
+
+			m := parseResult(t, result)
+			require.False(t, m["success"].(bool))
+			errObj := m["error"].(map[string]interface{})
+			require.Equal(t, ErrInvalidArgument, errObj["code"])
+			require.Contains(t, errObj["message"], status)
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			require.Equal(t, status, fetched.Status)
+		})
+	}
+}
+
+// TestRequestReview_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending
+// verifies FR2: a pr_pending-sourced request_review call is refused while an
+// active (unended) review-role session already exists for the item, with
+// zero mutation.
+func TestRequestReview_RejectsWhenActiveReviewSessionExists_AndSourceIsPRPending(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Zombie reviewer, pr_pending",
+		Status: string(session.BacklogStatusPRPending),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reviewUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: reviewUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, workUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Re-requesting review while one is already active.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInvalidArgument, errObj["code"])
+	require.Contains(t, errObj["message"], "active review session")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestRequestReview_AllowsActiveReviewSession_WhenSourceIsInProgress verifies
+// FR2's guard is scoped to the pr_pending source path only: the same
+// active-review-session setup must not affect the pre-existing in_progress
+// path's behavior.
+func TestRequestReview_AllowsActiveReviewSession_WhenSourceIsInProgress(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Zombie reviewer, in_progress",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	workUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reviewUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: reviewUUID,
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, workUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Requesting review; guard must not apply here.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_FailsClosed_WhenListItemSessionsErrors verifies Task
+// 2.2.1b's fail-closed correction: a ListItemSessions storage error on the
+// pr_pending path must refuse the call (INTERNAL_ERROR), never silently fall
+// through as though no reviewer were active.
+func TestRequestReview_FailsClosed_WhenListItemSessionsErrors(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Storage flaky on active-reviewer check",
+		Status: string(session.BacklogStatusPRPending),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	injectedErr := errors.New("boom: storage unavailable")
+	handler := &backlogHandlers{
+		storage: storage,
+		listItemSessionsFn: func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error) {
+			return nil, injectedErr
+		},
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Re-requesting review during a storage blip.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	require.False(t, m["success"].(bool))
+	errObj := m["error"].(map[string]interface{})
+	require.Equal(t, ErrInternalError, errObj["code"])
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+}
+
+// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails verifies
+// pitfalls.md §1/§5c: when two request_review calls genuinely race on the
+// same in_progress item, the DB-level atomic UPDATE...WHERE guarantees
+// exactly one winner; the loser must see a distinct, non-retry message (not
+// the generic "transition to %s failed" text), still under ErrInternalError.
+func TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Racing review requests",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	var wg sync.WaitGroup
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+	results := make(chan *mcpgo.CallToolResult, 2)
+
+	race := func() {
+		defer wg.Done()
+		startBarrier.Wait()
+		req := makeToolReq(map[string]interface{}{
+			"item_id": item.ID,
+			"message": "Racing request_review call.",
+		})
+		result, callErr := handler.requestReview(ctxWithUUID, req)
+		require.NoError(t, callErr)
+		results <- result
+	}
+
+	wg.Add(2)
+	go race()
+	go race()
+	startBarrier.Done()
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	var failureMsg string
+	for result := range results {
+		require.Len(t, result.Content, 1)
+		tc, ok := result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+
+		// The success path returns plain (non-JSON) text; errResult always
+		// emits a JSON-encoded MCPResult. Distinguish on that, since both
+		// possible outcomes here arrive as mcpgo.TextContent.
+		var parsed map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &parsed); jsonErr != nil {
+			successes++
+			continue
+		}
+		failures++
+		errObj := parsed["error"].(map[string]interface{})
+		require.Equal(t, ErrInternalError, errObj["code"])
+		failureMsg, _ = errObj["message"].(string)
+	}
+
+	require.Equal(t, 1, successes, "exactly one racer should win")
+	require.Equal(t, 1, failures, "the loser must get a distinct message, not silently succeed")
+	require.Contains(t, failureMsg, "state changed")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }
 
 // TestSubmitTriageResult_NoNotificationWhenEventBusNil verifies that submitTriageResult
