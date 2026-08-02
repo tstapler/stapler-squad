@@ -42,7 +42,17 @@ export function InputDropBadge({ droppedInputEvent }: InputDropBadgeProps) {
   // Guards against re-running the coalescing/announce logic for a render
   // that didn't actually introduce a new occurrence (e.g. an unrelated
   // parent re-render with the same droppedInputEvent reference/value).
-  const lastHandledAtRef = useRef<number | null>(null);
+  //
+  // Keyed on `seq`, not `at` (MAJOR 3 fix): `at` is Date.now() millisecond
+  // resolution, and two genuinely distinct drop occurrences landing in the
+  // same millisecond (plausible on a fast machine or under CI timing —
+  // exactly during the rapid-reconnect-churn scenario this whole feature is
+  // about) would collide on `at` and be silently treated as "already
+  // handled," producing zero announcements for a real occurrence and
+  // violating AC-SR-3 ("exactly one announcement per occurrence"). `seq` is
+  // a monotonically-increasing counter with no collision risk; `at` remains
+  // purely for display/dwell-timer purposes.
+  const lastHandledSeqRef = useRef<number | null>(null);
 
   const clearDwellTimer = () => {
     if (dwellTimerRef.current !== null) {
@@ -51,15 +61,15 @@ export function InputDropBadge({ droppedInputEvent }: InputDropBadgeProps) {
     }
   };
 
-  // Surfaces A and C — a new distinct droppedInputEvent (by `at`) updates the
-  // running total, fires one announcement, and (re)starts the dwell timer.
+  // Surfaces A and C — a new distinct droppedInputEvent (by `seq`) updates
+  // the running total, fires one announcement, and (re)starts the dwell timer.
   useEffect(() => {
     // Loose null check: tolerates callers/mocks that pass `undefined` as
     // well as the documented `null` — this prop should never be strictly
     // required to be exactly `null` when absent.
     if (droppedInputEvent == null) return;
-    if (droppedInputEvent.at === lastHandledAtRef.current) return;
-    lastHandledAtRef.current = droppedInputEvent.at;
+    if (droppedInputEvent.seq === lastHandledSeqRef.current) return;
+    lastHandledSeqRef.current = droppedInputEvent.seq;
 
     // Side effect (announce) lives outside the setState updater — React may
     // invoke updater functions more than once (Strict Mode / concurrent
@@ -82,9 +92,9 @@ export function InputDropBadge({ droppedInputEvent }: InputDropBadgeProps) {
     // function identity every render, but its behavior only depends on the
     // stable setState dispatcher it closes over, so including it would
     // re-run this effect (and re-announce) on unrelated re-renders while
-    // `at` is unchanged — the exact per-render spam AC-SR-3 forbids.
+    // `seq` is unchanged — the exact per-render spam AC-SR-3 forbids.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [droppedInputEvent?.at, droppedInputEvent?.count]);
+  }, [droppedInputEvent?.seq, droppedInputEvent?.count]);
 
   // Unmount safety (ux.md AC-RESOLVE-2) — clear any pending dwell timer so it
   // never fires a state update against an unmounted component, and no

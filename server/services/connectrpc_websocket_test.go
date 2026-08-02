@@ -200,6 +200,62 @@ func TestControlModeReadLoop_BoundedExitOnConnClose(t *testing.T) {
 			t.Error("expected a value on errChan after EndStream exit, got none")
 		}
 	})
+
+	// MAJOR 2 — the loop's doc comment lists doneChan closing as a third,
+	// unconditional exit trigger (the exact "bounded exit" mechanism AC4 is
+	// about), but neither subtest above ever exercises it: the first covers
+	// conn-close, the second covers an EndStream envelope. This subtest
+	// proves the `case <-doneChan: return` branch is live and reachable
+	// between reads — i.e. once the loop is back at the top of its `for`
+	// after processing an envelope, not just before the very first read.
+	t.Run("exits via doneChan closing between reads, after processing one envelope", func(t *testing.T) {
+		serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+		defer cleanup()
+
+		doneChan := make(chan struct{})
+		errChan := make(chan error, 1)
+
+		var handledCount int
+		var readWG sync.WaitGroup
+		readWG.Add(1)
+		go func() {
+			defer readWG.Done()
+			controlModeReadLoop(serverStream.conn, "test-session", doneChan, errChan, func(*protocol.Envelope) {
+				handledCount++
+				// Close doneChan synchronously from inside handleEnvelope,
+				// which runs and returns strictly before the loop's `for`
+				// re-enters its `select` (see controlModeReadLoop's body:
+				// handleEnvelope is the last statement before looping back
+				// to `for`). This guarantees doneChan is already closed by
+				// the time that next select runs, so `case <-doneChan:
+				// return` is deterministically the branch taken — not
+				// racing against a second blocking ReadMessage() call that
+				// closing doneChan alone would never interrupt.
+				close(doneChan)
+			})
+		}()
+
+		// One ordinary (non-EndStream, non-empty) envelope: enough to drive
+		// the loop through exactly one full ReadMessage -> handleEnvelope
+		// cycle and back to the top of the `for`.
+		if err := clientConn.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, []byte("hello"))); err != nil {
+			t.Fatalf("failed to write envelope: %v", err)
+		}
+
+		if !waitWithTimeout(&readWG, 2*time.Second) {
+			t.Fatal("controlModeReadLoop did not exit within 2s of doneChan closing between reads")
+		}
+
+		if handledCount != 1 {
+			t.Errorf("expected handleEnvelope to be invoked exactly once before the doneChan exit, got %d", handledCount)
+		}
+
+		select {
+		case err := <-errChan:
+			t.Errorf("expected no value on errChan for a doneChan-triggered exit, got %v", err)
+		default:
+		}
+	})
 }
 
 // --- sanitizeInitialContent ---

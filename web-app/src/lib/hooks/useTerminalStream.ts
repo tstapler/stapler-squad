@@ -39,14 +39,27 @@ export type TerminalState =
  * accumulate a running total across *distinct* occurrences — that
  * cross-render coalescing is `InputDropBadge`'s job (Epic 4.2).
  */
-export type DroppedInputEvent = { count: number; at: number };
+export type DroppedInputEvent = { count: number; at: number; seq: number };
+
+/**
+ * Monotonically-increasing occurrence identity for DroppedInputEvent (MAJOR
+ * 3 fix). `at` (Date.now()) is display/dwell-timer data only — two genuinely
+ * distinct drop batches can land in the same millisecond (plausible on a
+ * fast machine or under CI timing, exactly during the rapid-reconnect-churn
+ * scenario this hook exists for), and InputDropBadge's dedup previously
+ * keyed on `at`, silently treating the second as "already handled" and
+ * producing zero announcements for a real occurrence (violates AC-SR-3).
+ * `seq` is the real identity key; module-scoped so it stays unique across
+ * concurrent hook instances, not just within one.
+ */
+let dropSeqCounter = 0;
 
 /**
  * Smart constructor for a drop report. Returns null for count <= 0 so a
  * domain-illegal "0 keystrokes not sent" event can never be constructed.
  */
 function recordDrop(count: number): DroppedInputEvent | null {
-  return count > 0 ? { count, at: Date.now() } : null;
+  return count > 0 ? { count, at: Date.now(), seq: ++dropSeqCounter } : null;
 }
 
 interface UseTerminalStreamOptions {
@@ -174,8 +187,11 @@ export function useTerminalStream({
   const reportDrop = useCallback((count: number) => {
     const event = recordDrop(count);
     if (!event) return;
+    // seq: event.seq — same-batch merges still collapse to a single
+    // occurrence/render, so the latest call's freshly-minted seq identifies
+    // it; count is the only field that accumulates across the batch.
     const merged = dropBatchRef.current
-      ? { count: dropBatchRef.current.count + event.count, at: event.at }
+      ? { count: dropBatchRef.current.count + event.count, at: event.at, seq: event.seq }
       : event;
     dropBatchRef.current = merged;
     setDroppedInputEvent(merged);
@@ -420,13 +436,21 @@ export function useTerminalStream({
           }
           handleError(err);
         } finally {
-          // Resource cleanup always runs regardless of epoch — decoder resets
-          // must happen even for a superseded generation so its stale buffered
-          // decode state can never bleed into whichever generation is current.
-          textDecoderRef.current = new TextDecoder();
-          scrollbackDecoderRef.current = new TextDecoder();
-
           if (epoch === connectionEpochRef.current) {
+            // textDecoderRef/scrollbackDecoderRef are single shared refs, not
+            // per-generation state. Resetting them here unconditionally (i.e.
+            // outside this epoch check) would let a superseded generation's
+            // own finally — which can fire *after* a newer generation has
+            // already taken over and started decoding real output through
+            // the same decoder instance, since a stale generation's network
+            // stream can complete asynchronously well after the newer one
+            // begins — silently replace the current generation's decoder,
+            // discarding its in-flight multi-byte UTF-8 decode state and
+            // corrupting output with no visible error. Only reset them when
+            // this generation is still the current one.
+            textDecoderRef.current = new TextDecoder();
+            scrollbackDecoderRef.current = new TextDecoder();
+
             isConnectedRef.current = false; // sync ref before state setter to prevent reconnect guard race
             isConnectingRef.current = false;
             setIsConnected(false);
@@ -501,9 +525,18 @@ export function useTerminalStream({
       messageQueueRef.current = null;
     }
 
+    // Captured by reference, not re-read from the ref when the timeout fires:
+    // if the connection this disconnect() is closing ends naturally before
+    // the 1000ms elapses, and a completely independent, newer connect() call
+    // installs a *new* AbortController at abortControllerRef.current in the
+    // meantime, a stale re-read at fire time would abort that newer
+    // generation's live controller — killing a freshly-established
+    // connection for no visible reason. Only abort/null the ref if it still
+    // holds the exact controller captured here.
+    const controllerAtDisconnectStart = abortControllerRef.current;
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (abortControllerRef.current) {
+        if (controllerAtDisconnectStart && abortControllerRef.current === controllerAtDisconnectStart) {
           console.debug("[useTerminalStream] Timeout waiting for graceful close, forcing abort");
           abortControllerRef.current.abort();
           abortControllerRef.current = null;

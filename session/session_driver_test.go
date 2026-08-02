@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,6 +263,54 @@ func TestApprovalAwaitingClearLatch_ReapprovesNewDialogAfterPriorOneFullyClears(
 	}
 	if !awaitingClear {
 		t.Errorf("expected awaitingClear to be armed after approving the new dialog")
+	}
+}
+
+// TestProcessApprovalTick_SendKeysError_LeavesAwaitingClearUnchanged verifies
+// the untested error branch in processApprovalTick: when sendKeys() fails,
+// awaitingClear must be returned unchanged (matching the original inline
+// semantics this extraction preserves — a failed send must not falsely arm
+// the double-fire guard, since the dialog was never actually answered).
+// Verified by mutation: changing `if err != nil { return awaitingClear }` to
+// `return true` left the pre-existing test suite green, so this test exists
+// to catch exactly that regression.
+//
+// awaitingClear must start false here: shouldApprovePromptOnce only calls
+// sendKeys when approvalVisible && !awaitingClear, so an awaitingClear=true
+// starting point never reaches the branch under test at all.
+func TestProcessApprovalTick_SendKeysError_LeavesAwaitingClearUnchanged(t *testing.T) {
+	const allowedPath = "/home/user/project"
+	dialogVisibleOutput := "Do you want to proceed? Allow reading /home/user/project"
+
+	var sendKeysCalls int
+	sendKeysErr := func() error {
+		sendKeysCalls++
+		return errors.New("tmux: invalid argument")
+	}
+
+	got := processApprovalTick(nil, dialogVisibleOutput, allowedPath, false, sendKeysErr)
+
+	if sendKeysCalls != 1 {
+		t.Fatalf("expected sendKeys to be attempted exactly once, got %d", sendKeysCalls)
+	}
+	if got {
+		t.Errorf("expected awaitingClear to remain false after a failed sendKeys, got true — "+
+			"a mutant returning true here would falsely arm the double-fire guard for a dialog "+
+			"that was never actually answered, got awaitingClear=%v", got)
+	}
+
+	// Regression guard for the consequence of the mutation: because
+	// awaitingClear correctly stayed false, the driver retries the send on
+	// the very next tick while the dialog is still visible (the desired
+	// "keep trying on transient send failure" behavior) rather than being
+	// permanently latched as if the dialog had already been answered.
+	got2 := processApprovalTick(nil, dialogVisibleOutput, allowedPath, got, sendKeysErr)
+	if sendKeysCalls != 2 {
+		t.Errorf("expected a retried send on the next tick since awaitingClear stayed false, "+
+			"sendKeys called %d times", sendKeysCalls)
+	}
+	if got2 {
+		t.Errorf("expected awaitingClear to still be false after a second failed sendKeys, got true")
 	}
 }
 

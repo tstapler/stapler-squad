@@ -3,8 +3,13 @@ import { render, act } from "@testing-library/react";
 import { InputDropBadge } from "./InputDropBadge";
 import type { DroppedInputEvent } from "@/lib/hooks/useTerminalStream";
 
-function makeEvent(count: number, at: number): DroppedInputEvent {
-  return { count, at };
+// seq defaults to `at` when not explicitly provided — sufficient for tests
+// that only construct one event per `at` value (the overwhelming majority
+// here), while tests that need to prove seq-based (not at-based) dedup pass
+// seq explicitly.
+let nextTestSeq = 1;
+function makeEvent(count: number, at: number, seq?: number): DroppedInputEvent {
+  return { count, at, seq: seq ?? nextTestSeq++ };
 }
 
 // The pill's visible text and the srOnly LiveRegion's text are identical
@@ -183,6 +188,28 @@ describe("InputDropBadge", () => {
     expect(seenMessages.size).toBe(N);
   });
 
+  // MAJOR 3 — occurrence identity must key on `seq`, not `at`. `at` is
+  // Date.now() millisecond resolution; two genuinely distinct drop batches
+  // can land in the same millisecond (plausible on a fast machine or under
+  // CI timing, exactly during the rapid-reconnect-churn scenario this whole
+  // PR is about). Before the fix, InputDropBadge deduped on `at` and would
+  // silently skip the second same-millisecond occurrence — zero
+  // announcement, zero count increment — violating AC-SR-3 ("exactly one
+  // announcement per occurrence").
+  it("InputDropBadge_should_handleBothOccurrences_When_TwoDistinctDropsShareTheSameAtMillisecond", () => {
+    const sameMs = 9000;
+    const { container, rerender } = render(
+      <InputDropBadge droppedInputEvent={makeEvent(1, sameMs, /* seq */ 101)} />
+    );
+    expect(pillEl(container)?.textContent).toMatch(/1 input event not sent/i);
+
+    // Same `at`, but a distinct `seq` — a real second occurrence, not a
+    // duplicate re-render of the first.
+    rerender(<InputDropBadge droppedInputEvent={makeEvent(1, sameMs, /* seq */ 102)} />);
+
+    expect(pillEl(container)?.textContent).toMatch(/2 input events not sent/i);
+  });
+
   // AC-SR-4 — no duplicate "all clear": droppedInputEvent -> null must not
   // change the pill/announcement (InputDropBadge never announces reconnect
   // success itself; that's ConnectionIndicator's job, out of scope here).
@@ -200,26 +227,39 @@ describe("InputDropBadge", () => {
   });
 
   // AC-RESOLVE-2 — unmount safety: pending dwell timer cleared in cleanup.
+  //
+  // Asserting only "no unmounted-component console.error" is vacuous on
+  // React 19, which no longer emits that warning for this case at all —
+  // verified by mutation: deleting the component's
+  // `useEffect(() => () => clearDwellTimer(), [])` cleanup left the old
+  // version of this test passing unchanged. Instead, spy on `setTimeout` to
+  // capture the exact timer id the dwell-timer effect schedules, and assert
+  // `clearTimeout` is called with that same id once unmounted — proving the
+  // cleanup effect actually ran and cleared *this* timer, not just that no
+  // warning happened to fire.
   it("InputDropBadge_should_clearPendingTimer_When_UnmountedBeforeDwellTimerFires", () => {
-    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const setTimeoutSpy = jest.spyOn(global, "setTimeout");
     const clearSpy = jest.spyOn(global, "clearTimeout");
 
     const { unmount } = render(<InputDropBadge droppedInputEvent={makeEvent(1, 6000)} />);
 
-    unmount();
+    // Mount schedules two timers: useLiveRegion's own 1000ms "clear the
+    // announced message" timeout (fired from inside `announce()`, called
+    // before the dwell timer below) and InputDropBadge's own DWELL_MS
+    // (4000ms) dwell timer — the one AC-RESOLVE-2 is actually about. Find it
+    // by its distinctive delay rather than assuming call order/count, so
+    // this test doesn't become coupled to LiveRegion's internal timer usage.
+    const dwellTimerCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 4000);
+    expect(dwellTimerCallIndex).toBeGreaterThanOrEqual(0);
+    const dwellTimerId = setTimeoutSpy.mock.results[dwellTimerCallIndex]?.value;
+    expect(dwellTimerId).toBeDefined();
+
     clearSpy.mockClear();
+    unmount();
 
-    act(() => {
-      jest.advanceTimersByTime(5000);
-    });
+    expect(clearSpy).toHaveBeenCalledWith(dwellTimerId);
 
-    // No React "state update on an unmounted component" warning fired.
-    const stateUpdateWarnings = errorSpy.mock.calls.filter((args) =>
-      String(args[0]).includes("unmounted component")
-    );
-    expect(stateUpdateWarnings).toHaveLength(0);
-
-    errorSpy.mockRestore();
+    setTimeoutSpy.mockRestore();
     clearSpy.mockRestore();
   });
 

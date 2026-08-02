@@ -823,6 +823,26 @@ async function flushMicrotasksOnly(ticks = 20): Promise<void> {
   }
 }
 
+// Task 3.2.1.4 regression coverage (MAJOR 2b fix) — tracks every
+// AbortController the hook constructs and how many times each instance's
+// `abort()` was actually invoked, so tests can assert a *specific*
+// generation's controller was never aborted rather than only inferring it
+// indirectly through `isConnected`. Installed as `global.AbortController`
+// for the duration of the "connection epoch guard" describe block below.
+const RealAbortController = global.AbortController;
+class TrackedAbortController extends RealAbortController {
+  static instances: TrackedAbortController[] = [];
+  abortCallCount = 0;
+  constructor() {
+    super();
+    TrackedAbortController.instances.push(this);
+  }
+  abort(reason?: unknown): void {
+    this.abortCallCount++;
+    super.abort(reason);
+  }
+}
+
 describe('useTerminalStream — connection epoch guard', () => {
   const EPOCH_OPTIONS = {
     ...BASE_OPTIONS,
@@ -838,11 +858,14 @@ describe('useTerminalStream — connection epoch guard', () => {
     jest.spyOn(console, 'info').mockImplementation(() => {});
     mockStreamTerminal.mockReset();
     resetMockQueueInstances();
+    TrackedAbortController.instances = [];
+    (global as unknown as { AbortController: typeof AbortController }).AbortController = TrackedAbortController;
   });
 
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+    (global as unknown as { AbortController: typeof AbortController }).AbortController = RealAbortController;
   });
 
   // Task 3.2.1.0 (pre-mortem.md Failure #1, P1) — direct proof that the epoch
@@ -1048,6 +1071,70 @@ describe('useTerminalStream — connection epoch guard', () => {
 
     // Attempt B's connected state must not have been clobbered back to
     // false by the stale disconnect() continuation.
+    expect(result.current.isConnected).toBe(true);
+  });
+
+  // MAJOR 2b regression coverage — the disconnect_should_notClobberNewerConnect
+  // test above only proves the *symptom* (isConnected stays true) doesn't
+  // regress, which the mock stream can't actually falsify: aborting a mocked
+  // AsyncIterable's AbortSignal is a no-op as far as the mock is concerned,
+  // so a stale disconnect() timeout wrongly calling
+  // `abortControllerRef.current.abort()` on attempt B's controller wouldn't
+  // have flipped isConnected back to false in that test even before the fix.
+  // This test asserts directly on the AbortController instance itself: B's
+  // controller must never have had .abort() invoked on it by A's stale
+  // forced-abort timeout.
+  it('disconnect_should_notAbortNewerConnectsController_When_forcedAbortTimeoutFiresAfterNewerConnectInstalledItsOwnController', async () => {
+    const streamA = makePushStream<object>();
+    const streamB = makePushStream<object>();
+    mockStreamTerminal
+      .mockReturnValueOnce(streamA.iterable)
+      .mockReturnValueOnce(streamB.iterable);
+
+    const { result } = renderHook(() => useTerminalStream(EPOCH_OPTIONS));
+
+    // Attempt A connects.
+    await act(async () => { result.current.connect(); });
+    await act(async () => { streamA.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    expect(TrackedAbortController.instances).toHaveLength(1);
+    const controllerA = TrackedAbortController.instances[0];
+
+    // Start disconnect() while still connected — takes the setTimeout(1000ms)
+    // forced-abort branch rather than resolving immediately.
+    let disconnectPromise!: Promise<void>;
+    act(() => {
+      disconnectPromise = result.current.disconnect();
+    });
+
+    // The underlying connection tears down naturally before disconnect()'s
+    // own forced-abort timeout fires, letting an independent newer connect()
+    // proceed past the entry guard while disconnect()'s promise is still
+    // pending.
+    await act(async () => { streamA.end(); });
+    await waitFor(() => expect(result.current.isConnected).toBe(false));
+
+    // Attempt B — installs its own new AbortController at
+    // abortControllerRef.current, replacing A's (already-unaborted) one.
+    await act(async () => { result.current.connect(); });
+    await act(async () => { streamB.push(makeOutputMsg()); });
+    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    expect(TrackedAbortController.instances).toHaveLength(2);
+    const controllerB = TrackedAbortController.instances[1];
+    expect(controllerB).not.toBe(controllerA);
+    expect(controllerB.abortCallCount).toBe(0);
+
+    // Let disconnect()'s stale forced-abort timeout fire and its post-await
+    // continuation run.
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    await act(async () => { await disconnectPromise; });
+
+    // The fix: disconnect() captured controllerA by reference at its own
+    // start and only aborts/nulls the ref if it still holds that exact
+    // instance. Since B replaced the ref, neither controller should have
+    // been aborted by this stale timeout.
+    expect(controllerB.abortCallCount).toBe(0);
+    expect(controllerA.abortCallCount).toBe(0);
     expect(result.current.isConnected).toBe(true);
   });
 });

@@ -486,6 +486,9 @@ export const mobileKeyCtrlC = style({
 });
 
 // Story 3.2.1 — reconnecting banner overlay
+// See InputDropBadge.css.ts's `badge` comment (MAJOR 4 fix): that badge's
+// `top` is deliberately offset below this banner's `top` so the two never
+// overlap when both are visible at once.
 export const reconnectingBanner = style({
   position: "absolute",
   top: vars.space["2"],

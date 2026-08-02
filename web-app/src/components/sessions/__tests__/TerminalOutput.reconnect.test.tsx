@@ -369,7 +369,7 @@ describe("TerminalOutput reconnect banner", () => {
     mockFn.mockReturnValue(
       makeStreamMock({
         isConnected: true,
-        droppedInputEvent: { count: 1, at: Date.now() },
+        droppedInputEvent: { count: 1, at: Date.now(), seq: 1 },
       })
     );
 
