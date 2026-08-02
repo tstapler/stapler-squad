@@ -239,6 +239,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const lastSuggestedNameRef = useRef<string>("");
   const prevDetectionTypeRef = useRef<string | null>(null);
+  // Tracks the input value as of the last time the detection effect actually
+  // ran its body, so a reset_to_discovery dispatch only fires when input truly
+  // transitioned away from empty — not merely because aliases/workflows finished
+  // an async refetch while input was already empty (see reset_to_discovery guard below).
+  const prevDetectionInputRef = useRef<string>("");
   // Stable ref so handleKeyDown can always call the latest handleSubmit without
   // a circular declaration-order dependency (handleKeyDown is declared before handleSubmit).
   const handleSubmitRef = useRef<() => void>(() => {});
@@ -540,10 +545,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }
           }
         } else {
-          setDetection(null);
-          dispatchMode({ kind: "reset_to_discovery" });
-          setResultHighlightIndex(-1);
+          // This branch also runs when aliases/workflows finish an async refetch
+          // while input is (and already was) empty — that's an identity change in
+          // this effect's dep array, not a real input edit. Only reset to discovery
+          // when input actually transitioned from non-empty to empty, so it doesn't
+          // stomp a mode the user reached another way (e.g. Ctrl+Shift+K creation
+          // mode) before they've typed anything.
+          if (prevDetectionInputRef.current.trim()) {
+            setDetection(null);
+            dispatchMode({ kind: "reset_to_discovery" });
+            setResultHighlightIndex(-1);
+          }
         }
+        prevDetectionInputRef.current = input;
       } catch (err) {
         // Never let a thrown exception mid-update abandon UI state — leave the
         // last valid detection/canSubmit state in place and surface the failure.

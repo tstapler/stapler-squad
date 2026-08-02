@@ -1,12 +1,10 @@
 # Architecture Review: backlog-description-prominence
-**Date**: 2026-08-01
-**Verdict**: CONCERNS
+**Date**: 2026-08-02
+**Verdict**: CLEAN
 
-## Constitution Check
+## Constitution Violations
 
-`docs/adr/ADR-000-architecture-constitution.md` does not exist in this repository (checked
-`docs/adr/` — ADRs present start at 003, no ADR-000). No constitution to check against; no
-constitution violations possible.
+`docs/adr/ADR-000-architecture-constitution.md` does not exist in this repository (checked `docs/adr/`). No constitution to check against — section skipped per instructions.
 
 ## Blockers
 
@@ -14,72 +12,24 @@ None.
 
 ## Concerns
 
-None that rise to the level of a real risk given the scope. The plan is factually grounded
-against the actual source (`Collapsible.tsx`, `BacklogItemDetail.tsx:314-323,1215`,
-`useSectionExpandState.ts`, all eight sibling `detail/*Section.tsx` files, and the sole
-production call site) and every claim checked out, with one factual overstatement noted
-below as a nitpick rather than a concern — it doesn't change what code gets written, only a
-sentence of justification.
+None.
 
 ## Nitpicks
 
-- **Epic 1.2 / Pattern Decisions table / build-vs-buy.md "Fork or adapt" section** — the
-  plan repeatedly frames `DescriptionSection` as "the one call site in the whole `detail/`
-  family that doesn't thread `defaultExpanded` as a prop" / "the sole outlier among ~8
-  sibling sections." This is not quite accurate: `PullRequestSection.tsx:31` also hardcodes
-  `defaultExpanded={true}` directly on its `CollapsibleSection` rather than accepting it as
-  a prop (verified — `PullRequestSectionProps` has no `defaultExpanded` field, unlike
-  `NotesSection`, `PlanArtifactsSection`, `ProgressHistorySection`, `VersionControlSection`,
-  `WorkflowHistorySection`, `LastReviewResultSection`, and `SessionsSection`, which all do).
-  So there are two hardcoded outliers today, not one, and after this plan ships
-  `PullRequestSection` becomes the sole remaining one. This doesn't affect any task's
-  correctness — Approach B is still the right call, and the new `DescriptionSection` prop
-  API is still consistent with 7 of 8 siblings — but the "sole outlier" / "~8 siblings"
-  phrasing in the plan and in `research/build-vs-buy.md`'s "Fork or adapt" section overstates
-  uniqueness slightly. Cosmetic only: worth a one-line correction if the plan doc is revised
-  for other reasons, not worth blocking or re-planning for.
-- **`DescriptionSectionProps.defaultExpanded` required, not optional** — Task 1.2.1a makes
-  it a required `boolean` (no `?`), matching the convention in all 7 prop-threading siblings
-  (`NotesSection`, `PlanArtifactsSection`, etc., all declare it as required). This is
-  correct and intentional per the plan; noting it only to confirm it was checked, not to
-  flag a problem — a required prop here is the right choice since the single production
-  call site (`BacklogItemDetail.tsx:1215`) will always pass it, and making it optional would
-  reintroduce the exact "silently disagrees with reality" hazard Epic 1.2 exists to remove.
+- **Story 1.1.1 / Task 1.1.1b — `defaultExpanded: boolean` required prop is dead weight outside the group, but that's inherent to the existing convention, not new debt.** `DescriptionSection` is always rendered inside `BacklogItemDetail`'s page-level `CollapsibleGroup` in production (verified: `Collapsible.tsx:137-163`, the `insideGroup` branch ignores `defaultExpanded` except for a dev-mode divergence warning). The plan correctly identifies this in its own Domain Glossary and chooses to match the 8-sibling convention rather than invent a special case for `DescriptionSection` — the right call, since a bespoke exception here would itself be a SOLID/consistency violation (Liskov-ish surprise: one section behaving differently from its siblings for no domain reason). No action needed; flagging only so the "why does this required prop do nothing at the real call site" question doesn't resurface as a false positive in a future review.
 
-## Verification Performed
+- **Requirements.md / plan.md — "type-driven design" lens has effectively nothing to grip here, correctly.** `defaultExpanded: boolean` is a plain boolean, not a primitive standing in for a richer domain concept (unlike, say, a raw `string` doing duty as an `Email`). A boolean toggle for "is this UI section open" is the correct type — introducing an enum/sum type (`Expanded | Collapsed`) here would be over-engineering for a value that has no other legal states, no domain invariant beyond "true or false," and no risk of illegal-state combination. Confirmed no primitive-obsession smell.
 
-Cross-checked every load-bearing factual claim in the plan against the actual repository
-state (not just the plan's own prose):
-- `Collapsible.tsx:127-177` — confirmed grouped-mode `defaultExpanded` is architecturally
-  inert (drives nothing when `insideGroup`) and the dev-only divergence warning only fires
-  when `defaultExpanded === true && !groupSaysOpen`; since the current unthreaded call site
-  never passes `defaultExpanded` (defaults to `false`), the warning cannot currently fire
-  either way — the plan's own framing of this as "purely internal-consistency, not
-  user-visible" is accurate, not a functional necessity being mis-sold as one.
-- `BacklogItemDetail.tsx:314-323` — `useSectionExpandState` call sites for all 9 sections,
-  confirming the plan's line numbers and confirming `pull-request`/`sessions` are indeed the
-  two existing `true`-default precedents cited.
-- `BacklogItemDetail.tsx:1215` — sole call site of `<DescriptionSection item={item} />`;
-  grepped the whole `web-app/src` tree and found no other production or storybook usage, so
-  making `defaultExpanded` a required prop is safe.
-- `useSectionExpandState.ts:8-13` — confirmed the localStorage-key/try-catch-fallback
-  contract cited in requirements.md and the Pattern Decisions table.
-- `DescriptionSection.test.tsx` (current) and `BacklogItemDetail.markdown.test.tsx`
-  (current, including its `beforeEach`/`localStorage.clear()`/`getBacklogItem`/`baseItem`
-  harness) — confirmed both match what the plan describes as their "before" state, so the
-  diffs described in Tasks 1.3.1a/1.3.2a/1.4.1a/1.4.2a are accurate deltas.
-- All 8 sibling `detail/*Section.tsx` files — confirmed which do/don't thread
-  `defaultExpanded` as a prop (see Nitpicks above for the one correction).
+- **Task 1.1.2c — the plan's decision not to add a `collapseSection()` helper to `BacklogItemDetailPage.ts` is correct and matches the Page Object pattern's actual purpose.** A raw `.click()` on an existing public locator (`detailPage.sectionHeader("description")`) is the appropriate weight for a one-off test action; wrapping it in a page-object method would be premature abstraction (the "unjustified generic"/speculative-interface smell generalized to test helpers) since no second call site exists yet. If a second spec later needs to force-collapse a section, promote it to a helper then — not preemptively.
 
-## Scope Assessment
+## Lens-by-Lens Notes (no findings beyond the above)
 
-Confirmed this is exactly the XS scope claimed: two boolean-literal flips plus one prop
-addition across two files, no new types, no new abstractions, no persistence/service-layer
-work, no illegal-state surface added. Applied the three lenses and found nothing
-disproportionate to invent here — Approach B (chosen) is the correctly-sized solution:
-smaller than a redesign, and only marginally larger than the minimal Approach A in exchange
-for removing genuinely stale/misleading code (the hardcoded `false` + stale docstring).
-Approach C (content-conditional default) was correctly rejected as unnecessary complexity
-for a requirement that explicitly forbids it. No PoEAA or GoF pattern is warranted or
-proposed; none should be. Build-vs-buy verdict ("boolean-literal flip, no library/service
-change") matches the plan's actual task list line for line.
+- **SOLID**: `DescriptionSection` goes from an unconfigurable component (hardcoded `defaultExpanded={false}`, violating Open/Closed — the only way to change its behavior was editing its source) to one that receives its initial-open state as a prop, exactly mirroring 8 existing siblings. This closes an existing SOLID gap rather than opening one.
+- **Layer coupling**: Pure presentational-component prop threading, one level deep (`BacklogItemDetail` → `DescriptionSection`). No new layer, no new boundary crossed.
+- **DDD aggregate boundaries**: N/A, confirmed — no persisted domain aggregate is touched; `localStorage` key semantics are unchanged (only the seed default passed into `useSectionExpandState` changes, verified at `BacklogItemDetail.tsx:323`).
+- **Testability**: Verified via `Collapsible.tsx` that `CollapsibleSection` rendered standalone (no wrapping group, as in `DescriptionSection.test.tsx`) genuinely honors `defaultExpanded` through its own implicit `Accordion.Root` (`Collapsible.tsx:165-176`) — so Story 1.1.2's unit tests are testing real, live behavior, not a value that's dead in the harness the way it is in production. Each proposed change is testable in isolation as designed.
+- **Illegal states**: `DescriptionSectionProps` going from `{ item }` to `{ item, defaultExpanded: boolean }` (required, no `?`) cannot represent an invalid combination — matches `NotesSectionProps`'s shape exactly (verified: `NotesSection.tsx:8-13`, `defaultExpanded: boolean` required, no default).
+- **Parse-at-boundary**: N/A — no raw external input is being parsed here; the boolean already originates as a proven `boolean` from `useState`/`useSectionExpandState`.
+- **GoF/PoEAA pattern fit**: Correctly flagged N/A in the plan. This is "follow the existing convention," not a new pattern application. No missing pattern, no unneeded pattern introduced.
+- **Build-vs-buy consistency**: Verified `research/build-vs-buy.md` recommends Build with the same reasoning the plan restates (one-line default flip + existing prop-threading convention, no new dependency — `@radix-ui/react-accordion` already in `web-app/package.json`). Plan is consistent with this.
+- **API contract stability**: `DescriptionSectionProps` gains one required field. This is a breaking change to the component's prop contract, but its only consumer is the single call site in `BacklogItemDetail.tsx:1215`, which the plan updates in the same atomic unit (Task 1.1.1c). No other call site exists (verified via grep — `DescriptionSection` is imported and used exactly once). Stable and correctly scoped.

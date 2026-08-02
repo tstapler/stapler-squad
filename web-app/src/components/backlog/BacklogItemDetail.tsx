@@ -320,7 +320,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
-  const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", false);
+  const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
 
   // Story 3.1.5: applies each status-dependent section's real default
   // exactly once, the first time `item` becomes available after this
@@ -1212,7 +1212,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             />
           )}
 
-          <DescriptionSection item={item} />
+          <DescriptionSection item={item} defaultExpanded={descriptionExpanded} />
 
           {item.planArtifactsPath && (
             <PlanArtifactsSection item={item} defaultExpanded={planArtifactsExpanded} />
