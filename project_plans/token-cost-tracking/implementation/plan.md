@@ -88,7 +88,7 @@ dashboards are warranted. What matters is *not regressing* existing signal:
 | "Jumping list" — `SessionList.tsx` re-sorts visibly as cost data streams in after initial paint, because `Session[]` (fast) and `SessionTokenSummary[]` (slower, separate RPC) resolve at different times. | `research/pitfalls.md` §3, `research/ux.md` §4 | `compareSessionsByCost`'s early-return-before-direction-flip design (Epic 4.2) resolves "not yet loaded" to the same "always last" bucket as "genuinely unpriced" — a row's *relative* position among the loaded set never changes as more costs stream in; only newly-loaded rows move out of the trailing "unloaded" bucket into their earned position, once, not repeatedly. |
 | Silent-wrong-data class (PR #280's root-cause pattern: new data hits an aggregation lookup with no entry, renders a plausible-looking `$0.00`). | `research/pitfalls.md` §1 | Confirmed not applicable to any of AC-1/2/3/6: none introduce a new lookup table or aggregation path. AC-1 reads `TurnTimeline`, which the parser already filters (`<synthetic>` turns excluded at `session/tokens/parser.go:183,188`, confirmed by `parser_test.go:153-155`) — no new filtering needed in the RPC handler or UI. AC-6 reuses the *exact* existing `computeCacheHitRate` formula, ported to TS, against fields already correctly populated server-side. |
 | `TokenStore.notify()`'s non-blocking, best-effort fan-out (`subChanSize = 64`) can drop notifications under rapid-fire triggers. | `research/pitfalls.md` §2 | AC-4's test (Task 1.1.2b) triggers exactly one `OnHistoryFileChanged` call per assertion window and drains (`require.Eventually`) before triggering again — never asserts an exact notification count beyond "at least N," per the pitfalls doc's explicit guidance. |
-| `make registry-generate`'s internal ordering: `registry-generate-frontend` (which computes `coverage-gaps.json`) runs *before* `registry-aggregate` (which regenerates the monolithic `backend-features.json` from the per-feature files) — so a single `make registry-generate` run computes `coverage-gaps.json` against the **previous** commit's aggregate, not the one just edited. Verified directly against `Makefile:77-108`, not documented in prior research. | New finding, this planning pass | Task 1.2.1d and the final Phase 5 task both run `make registry-generate` **twice** — the second pass's `coverage-gaps.json` reflects the first pass's aggregated output. `make registry-diff` (`validate-registry.sh`) is run after the second pass, not the first. |
+| **Superseded finding, corrected during `/sdd:4-validate`'s pre-mortem pass**: `coverage-gaps.json` is not just ordering-sensitive, it never reads `docs/registry/features/frontend/` at all — it's computed purely from live `// +feature:` marker scans of `.tsx` source (`tools/scanner/frontend/src/{component-scanner,gap-reporter}.ts`). All 5 AC-5 target files already carry `// +feature: insights-dashboard`, and `insights` is already a matched backend domain, so `unmatchedFrontend` is 0 both before and after this project's per-feature JSON files are added, regardless of their correctness. A before/after diff of this file is not a valid completion proof for AC-5 (pre-mortem.md finding #3, P1). | Corrected this pass, superseding an earlier (still-true but insufficient) ordering-only finding | Tasks 1.2.1d and 5.1.1c now verify AC-5 by grepping the new ids directly out of `docs/registry/frontend-features.json` (the `registry-aggregate` output, which *does* read the per-feature directory) instead of diffing `coverage-gaps.json`. |
 | Adding a second `useInsightsSummary()` call site (`SessionList.tsx`, alongside the existing `/insights` dashboard) means a second concurrent `GetInsightsSummary` fetch + `WatchInsights` stream subscription per browser tab that has the session list open — which may be the default/most-frequently-open view. | This planning pass, extending `research/pitfalls.md` §2's reasoning | Accepted as in-scope for AC-2's literal wording ("fetches per-session cost data"); `GetInsightsSummary` is an in-memory `TokenStore.GetAll()` iteration (not disk/DB), so the marginal cost per extra caller is small. Flagged in Unresolved Questions as a candidate for a future lazy-fetch-on-first-cost-sort optimization if it proves to matter in practice — not implemented here since it's not requirement-driven. |
 | Backend registry scanner (`tools/scanner/backend/cmd/main.go`) could silently overwrite hand-edited `tested`/`testIds` on `WatchInsights.json` when `make registry-generate` re-runs. | Verified directly against scanner source this pass | Confirmed **not** a risk: the scanner only overwrites `testIds`/`tested` when the existing committed file's `testIds` array is *empty* (`main.go:114-118`, `len(existingIDs) > 0` guard) — Task 1.1.3a's hand-edit (non-empty `testIds`) survives every subsequent `registry-generate-backend` run. |
 
@@ -255,8 +255,18 @@ surface changes in Phase 2/3.
 `insights-dashboard` marker with no dedicated registry entry,
 **when** a per-feature JSON file is hand-authored for each using the real (not
 `schema.json`/rule-doc) field shape,
-**then** `make registry-generate` + `make registry-diff` show no unexplained growth in
-`coverage-gaps.json`.
+**then** `make registry-generate`'s `registry-aggregate` step folds all 3 new entries
+into `docs/registry/frontend-features.json`, verified by grepping that file directly —
+**not** by diffing `coverage-gaps.json`, which (per pre-mortem.md finding #3, P1) is
+computed purely from live `// +feature:` marker scans of `.tsx` source
+(`tools/scanner/frontend/src/{component-scanner,gap-reporter}.ts`) and never reads
+`docs/registry/features/frontend/`. Confirmed empirically (2026-08-02): all 3 target
+files already carry `// +feature: insights-dashboard` on line 1, and `insights` is
+already a matched backend domain (from `GetInsightsSummary`/`ListSessionTokens`/
+`WatchInsights`), so `coverage-gaps.json`'s `unmatchedFrontend` count is 0 both before
+and after this epic regardless of what the per-feature JSON files contain — a diff
+against it would pass identically whether these 3 files were correct, malformed, or
+never created. It is not a meaningful proof for this task and is dropped as one.
 
 - **Task 1.2.1a**: Create `docs/registry/features/frontend/insights-projected-cost-card.json`:
   ```json
@@ -289,11 +299,16 @@ surface changes in Phase 2/3.
   — `component: "ModelOverTimeChart"`, `path`/`filePath`:
   `web-app/src/app/insights/ModelOverTimeChart.tsx`, `testIds` from
   `ModelOverTimeChart.test.tsx` (2 tests, prefixed `"ModelOverTimeChart > "`). 1 file.
-- **Task 1.2.1d** (verification, no source files): Run `make registry-generate` **twice**
-  (per the ordering finding in Risk Control — the first pass's `registry-aggregate` output
-  isn't reflected in `coverage-gaps.json` until a second pass), then `make registry-diff`.
-  Record the before/after `unmatchedFrontend`/`unmatchedBackend` counts from
-  `docs/registry/coverage-gaps.json` in the task's completion note.
+- **Task 1.2.1d** (verification, no source files): Run `make registry-generate` once, then
+  `grep -c '"id": "insights-projected-cost-card"\|"id": "insights-daily-spend-chart"\|"id":
+  "insights-model-over-time-chart"' docs/registry/frontend-features.json` and confirm all 3
+  ids are present (proves `registry-aggregate` actually folded the 3 new per-feature files
+  into the monolithic output — the real signal for this task, per the corrected Given/when/
+  then above). Also run `make registry-diff` (backend-only; `validate-registry.sh` has no
+  frontend comparison logic, confirmed by inspection — record this as informational, not as
+  proof of the frontend work). Record the `coverage-gaps.json` `unmatchedFrontend`/
+  `unmatchedBackend` counts in the completion note for continuity with Task 5.1.1c's later
+  comparison, but do not treat a lack of change in that file as a pass/fail signal.
 
 ---
 
@@ -331,22 +346,33 @@ sessions always sort last for the Cost column regardless of direction, and the d
 #### Story 2.1.2 — Wire clickable, keyboard-accessible headers
 
 - **Task 2.1.2a** (same file): Update `headerContent()` (current lines 118-128): for the
-  `Input`/`Output`/`Cache`/`Cost` `<th>` cells only (not `Session`/`Model`/`Path`), add
-  `onClick={() => handleSortClick("input")}`, `aria-sort={sortCol === "input" ? (sortAsc ?
-  "ascending" : "descending") : "none"}`, `tabIndex={0}`, `role="button"`, and
-  `onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault();
-  handleSortClick("input"); } }}` (repeated per column) — reusing the exact Enter/Space
-  pattern already proven at `handleRowKeyDown` (lines 111-116), closing the keyboard-access
-  gap both existing reference implementations (`backlog/page.tsx`, `ApprovalRulesPanel.tsx`)
-  have, per `research/ux.md` §3. 1 file.
+  `Input`/`Output`/`Cache`/`Cost` `<th>` cells only (not `Session`/`Model`/`Path`), keep
+  `<th aria-sort={sortCol === "input" ? (sortAsc ? "ascending" : "descending") : "none"}>`
+  with its native `columnheader` role intact (**no `role` override on the `<th>` itself** —
+  **corrected during triad review's UX pass**: putting `role="button"` directly on a `<th>`
+  overrides its native columnheader semantics for screen readers, an axe-core-invisible
+  regression). Instead nest the click/keyboard affordance on an inner element:
+  `<th aria-sort={...}><span role="button" tabIndex={0} onClick={() =>
+  handleSortClick("input")} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") {
+  e.preventDefault(); handleSortClick("input"); } }}>{label}{sortIndicator("input")}</span>
+  </th>` (repeated per column) — reusing the exact Enter/Space pattern already proven at
+  `handleRowKeyDown` (lines 111-116), closing the keyboard-access gap both existing reference
+  implementations (`backlog/page.tsx`, `ApprovalRulesPanel.tsx`) have, per `research/ux.md`
+  §3, while preserving native table semantics per the WAI-ARIA APG sortable-table pattern
+  (interactive control nested inside `<th>`, not replacing its role). 1 file.
 - **Task 2.1.2b** (`web-app/src/app/insights/SessionsTable.css.ts`): Add
   `sortableTh = style([th, { cursor: "pointer" }])` and
   `sortableThRight = style([thRight, { cursor: "pointer" }])`, composed from the existing
   `th`/`thRight` per vanilla-extract's array-composition form — **not** an inline
   `style={{cursor: "pointer"}}`, per `.claude/rules/css-architecture.md`'s ban on inline
   layout styles (the exact anti-pattern `backlog/page.tsx:743` uses, called out as a flaw
-  not to copy forward in `research/ux.md` §3). Swap `th`/`thRight` for `sortableTh`/
-  `sortableThRight` on the 4 sortable header cells in Task 2.1.2a. 1 file.
+  not to copy forward in `research/ux.md` §3). Apply `sortableTh`/`sortableThRight` to the
+  inner `<span role="button">` from Task 2.1.2a (not the `<th>` itself, which keeps its
+  plain `th`/`thRight` class). Also add `sortableThFocus = style({ selectors: { "&:focus-
+  visible": { outline: \`2px solid ${vars.color.actionPrimary}\`, outlineOffset: "2px" } }
+  })` on the same inner span — **corrected during triad review's UX pass** (WCAG 2.4.7 gap:
+  the original plan gave the new `tabIndex={0}` element a pointer cursor but no visible
+  focus indicator). 1 file.
 
 #### Story 2.1.3 — Tests
 
@@ -536,10 +562,15 @@ flagged table,
 - **Task 3.2.3b** (same file): Compute
   `const threshold = computeOutlierThreshold(turns);` once per render; for each row where
   `isOutlierTurn(turn, threshold)`, wrap the Input/Output cell values in `<span
-  className={badgeVariant.warning}>...</span>`, importing `badgeVariant` from
-  `@/components/shared/TokenBadge.css` (existing warning/alert palette, per
-  `research/ux.md` §5's explicit "reuse `TokenBadge.css.ts`'s variant colors" guidance — no
-  new colors invented). Follow-on edit, same file/task group.
+  className={[badge, badgeVariant.warning].join(" ")}>...</span>`, importing **both**
+  `badge` and `badgeVariant` from `@/components/shared/TokenBadge.css` (existing
+  warning/alert palette, per `research/ux.md` §5's explicit "reuse `TokenBadge.css.ts`'s
+  variant colors" guidance — no new colors invented). **Corrected during `/sdd:4-validate`**
+  (pre-mortem.md finding #2, P2): `badgeVariant.warning` alone omits the shared `badge` base
+  class that supplies padding/pill-shape/inline-flex/border-radius — confirmed against
+  `TokenBadge.tsx:47`'s own composition, `[badge, badgeVariant[variant], className].filter(
+  Boolean).join(" ")`. Applying `badgeVariant.warning` alone would render unstyled colored
+  text with no padding, not a pill. Follow-on edit, same file/task group.
 
 No new registry file for `SessionDetailDrawer` yet — deferred to Phase 5 (Epic 5.1), once
 this story's test surface (turnTimelineUtils.test.ts) exists to cite.
@@ -656,12 +687,17 @@ per-turn feature) and Phase 2 added click-to-sort tests to `SessionsTable.test.t
   `web-app/src/app/insights/SessionsTable.tsx`, `tested: true`, `testIds` combining the
   pre-existing 3 unpriced-badge tests (`research` findings) **plus** the 3 new sort tests
   from Task 2.1.3a). 1 file.
-- **Task 5.1.1c** (verification, no source files): Run `make registry-generate` twice (same
-  ordering reasoning as Task 1.2.1d), then `make registry-diff`. Compare final
-  `coverage-gaps.json` `unmatchedFrontend`/`unmatchedBackend` counts against the Task 1.2.1d
-  baseline — confirm no unexplained growth (the only expected changes: the new
-  `insights-*` ids appearing as matched-or-not per the domain-prefix algorithm, not new
-  unmatched entries from unrelated features).
+- **Task 5.1.1c** (verification, no source files): Run `make registry-generate` once, then
+  `grep -c '"id": "insights-session-detail-drawer"\|"id": "insights-sessions-table"'
+  docs/registry/frontend-features.json` and confirm both new ids are present, alongside the
+  3 from Task 1.2.1d (5/5 total) — this, not a `coverage-gaps.json` diff, is AC-5's actual
+  completion proof (see the corrected Epic 1.2 Given/when/then and pre-mortem.md finding #3:
+  `coverage-gaps.json` is marker-scan-derived and provably insensitive to this directory's
+  contents — all 5 target files already carry `// +feature: insights-dashboard`, domain
+  `insights` already matches on the backend side, so its `unmatchedFrontend` count is 0
+  before and after this entire epic regardless of these files' correctness). Also run `make
+  registry-diff` and confirm it still passes (backend-only signal, unrelated to this task but
+  cheap to check for regressions).
 
 ### Epic 5.2 — AC-7: final quality gate
 
