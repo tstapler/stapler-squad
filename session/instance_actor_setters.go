@@ -14,7 +14,10 @@ package session
 // target `make actor-field-guard` enforces this invariant until Epic 7 makes
 // it a go-build failure via field unexport.
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // ---- MCPServerURL ----------------------------------------------------------------
 //
@@ -229,6 +232,51 @@ func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
 		s.inst.snapshot.Store(snap)
 		set = true
 		return nil
+	})
+	return set
+}
+
+// stopIfNotStoppedLocked transitions the instance to Stopped from within an
+// actor command, unless it is already Stopped (Stopped→Stopped is not a
+// defined transition edge, so calling transitionToLocked unconditionally
+// would return ErrInvalidTransition for an already-archived-and-stopped
+// session on a repeat sweep).
+func stopIfNotStoppedLocked(s *instanceState, ctx context.Context) error {
+	if s.inst.Status == Stopped {
+		return nil
+	}
+	return transitionToLocked(s, ctx, Stopped)
+}
+
+// ArchiveWithStop sets ArchivedAt and transitions the instance to Stopped, in a
+// single actor command. ArchiveSession previously only set ArchivedAt, which let
+// a session sit with ArchivedAt set but Status still Active/Paused/Hibernated —
+// archiving is meant to mean "this session is done," so the two must move together.
+func (i *Instance) ArchiveWithStop(t time.Time) error {
+	return i.sendSyncErr(func(s *instanceState) error {
+		setArchivedAtLocked(s, &t)
+		return stopIfNotStoppedLocked(s, context.Background())
+	})
+}
+
+// SetArchivedAtIfNilAndStop is the CAS counterpart of ArchiveWithStop, used by
+// ArchiveSessionByUUID (which must be safe to call unconditionally from a sweep).
+// Returns true if ArchivedAt was set by this call (i.e. it was previously nil).
+// No-ops the status transition if already Stopped.
+func (i *Instance) SetArchivedAtIfNilAndStop(t time.Time) bool {
+	var set bool
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		s.inst.mu.Lock()
+		if s.inst.ArchivedAt != nil {
+			s.inst.mu.Unlock()
+			return nil
+		}
+		s.inst.ArchivedAt = &t
+		snap := buildSnapshot(s.inst)
+		s.inst.mu.Unlock()
+		s.inst.snapshot.Store(snap)
+		set = true
+		return stopIfNotStoppedLocked(s, context.Background())
 	})
 	return set
 }

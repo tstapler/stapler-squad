@@ -339,6 +339,8 @@ type Config struct {
 	Capacity CapacityConfig `json:"capacity,omitempty"`
 	// TmuxExecGate bounds concurrent tmux subprocess execution across all processes.
 	TmuxExecGate TmuxExecGateConfig `json:"tmux_exec_gate,omitempty"`
+	// SessionRetention holds configuration for the automatic session-retention cleanup sweep.
+	SessionRetention SessionRetentionConfig `json:"session_retention,omitempty"`
 
 	// Escape analytics configuration
 
