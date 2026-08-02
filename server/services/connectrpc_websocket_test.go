@@ -133,6 +133,75 @@ func TestSendEndStreamSuccessEnvelopeFormat(t *testing.T) {
 	}
 }
 
+// --- controlModeReadLoop ---
+
+// TestControlModeReadLoop_BoundedExitOnConnClose covers AC4 (Go bounded-exit)
+// for backlog item 04089969-0f19-499c-be34-2e8bcfc4f13e: the read goroutine
+// extracted from streamViaControlMode (controlModeReadLoop) must observably
+// exit within a bound once its connection is torn down or an EndStream
+// envelope arrives, rather than blocking indefinitely in ReadMessage() and
+// replaying phantom input against a stale/superseded stream.
+func TestControlModeReadLoop_BoundedExitOnConnClose(t *testing.T) {
+	t.Run("exits within bound when underlying connection closes", func(t *testing.T) {
+		serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+		defer cleanup()
+
+		doneChan := make(chan struct{})
+		errChan := make(chan error, 1)
+
+		var readWG sync.WaitGroup
+		readWG.Add(1)
+		go func() {
+			defer readWG.Done()
+			controlModeReadLoop(serverStream.conn, "test-session", doneChan, errChan, func(*protocol.Envelope) {})
+		}()
+
+		// Simulate HandleWebSocket's defer conn.Close() (connectrpc_websocket.go:348) —
+		// the event that actually unblocks a live deployment's read goroutine.
+		if err := clientConn.Close(); err != nil {
+			t.Fatalf("failed to close client connection: %v", err)
+		}
+
+		if !waitWithTimeout(&readWG, 2*time.Second) {
+			t.Fatal("controlModeReadLoop did not exit within 2s of the underlying connection closing")
+		}
+	})
+
+	t.Run("exits immediately on EndStream envelope without closing the connection", func(t *testing.T) {
+		serverStream, clientConn, cleanup := createTestWebSocketPair(t)
+		defer cleanup()
+
+		doneChan := make(chan struct{})
+		errChan := make(chan error, 1)
+
+		var readWG sync.WaitGroup
+		readWG.Add(1)
+		go func() {
+			defer readWG.Done()
+			controlModeReadLoop(serverStream.conn, "test-session", doneChan, errChan, func(*protocol.Envelope) {
+				t.Error("handleEnvelope should not be invoked for an EndStream envelope")
+			})
+		}()
+
+		if err := clientConn.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(protocol.EndStreamFlag, nil)); err != nil {
+			t.Fatalf("failed to write EndStream envelope: %v", err)
+		}
+
+		if !waitWithTimeout(&readWG, 2*time.Second) {
+			t.Fatal("controlModeReadLoop did not exit within 2s of receiving an EndStream envelope")
+		}
+
+		select {
+		case err := <-errChan:
+			if err != nil {
+				t.Errorf("expected nil error on errChan for EndStream exit, got %v", err)
+			}
+		default:
+			t.Error("expected a value on errChan after EndStream exit, got none")
+		}
+	})
+}
+
 // --- sanitizeInitialContent ---
 
 // TestSanitizeInitialContentStripsPositioningCodes verifies that the ANSI sequences
