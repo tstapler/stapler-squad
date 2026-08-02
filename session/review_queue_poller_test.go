@@ -639,6 +639,48 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	}
 }
 
+// TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue verifies that a session with
+// ArchivedAt set is skipped by shouldSkipSession and never added to the review queue —
+// even when its cached terminal content would otherwise trigger an approval-pending
+// detection. This is the regression test for the bug where archiveItemWorkSessions
+// (server/services/backlog_service.go) sets Instance.ArchivedAt and kills the tmux pane
+// during a backlog item reopen, but never sets Hidden or transitions Status to Stopped —
+// so shouldSkipSession (which checked only Hidden/Status/Started) never excluded it, and
+// the dead-paned session sat in the queue forever as a false ATTENTION_REASON_STALE entry.
+// See docs/tasks/backlog-feature-improvement.md, 2026-08-02 entry.
+func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "archived-session",
+		UUID:   "uuid-archived",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	archivedAt := time.Now().Add(-1 * time.Hour)
+	inst.ArchivedAt = &archivedAt
+
+	// Sanity check the fix directly: shouldSkipSession must report true for an
+	// archived instance regardless of any other state.
+	if !poller.shouldSkipSession(inst) {
+		t.Fatal("shouldSkipSession must return true for an instance with ArchivedAt set")
+	}
+
+	// Pre-populate the content cache with an approval prompt — if the poller did NOT
+	// skip archived sessions, this content would cause it to be added to the queue via
+	// the same no-controller detection path exercised in
+	// TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue.
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	poller.injectCachedContent(inst.Title, approvalContent)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("archived session must never be added to the review queue")
+	}
+}
+
 // TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
 // sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).

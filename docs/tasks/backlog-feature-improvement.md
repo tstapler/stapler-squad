@@ -1649,7 +1649,11 @@ Confirmed PR #292 (07-31's blocked-spawn staleness signal) merged and live
   `endedAt`) has been legitimately running 14+ hours — the stuck row is just a stale label sitting
   on top of an item that's actually fine. Unchanged low-priority assessment from 07-19/07-30.
 
-### [1, NEW, root-caused] Archived/superseded backlog work sessions never leave the Review Queue — the tmux-pane-kill cleanup that fixed the *resource* leak left a *signal* leak behind
+### [1, FIXED] Archived/superseded backlog work sessions never leave the Review Queue — the tmux-pane-kill cleanup that fixed the *resource* leak left a *signal* leak behind
+
+**Status: FIXED.** `shouldSkipSession` (`session/review_queue_poller.go`) now also excludes
+instances with `ArchivedAt != nil`, closing the gap described below. Regression test:
+`TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue` (`session/review_queue_poller_test.go`).
 
 Triggered by cross-checking the Review Queue's overall size against 07-18's numbers out of habit —
 found 73 total items (up from 18-20), 28 tagged `backlog:work`, **26 of them `ATTENTION_REASON_STALE`,
