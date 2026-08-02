@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -134,29 +134,8 @@ func SearchUserRepos(ctx context.Context, query string, limit int) ([]RepoResult
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -224,29 +203,8 @@ func ListRepoIssues(ctx context.Context, owner, repo, state, search string, limi
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: forbidden (403): %s", strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "", false)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -312,32 +270,8 @@ func GetIssue(ctx context.Context, owner, repo string, number int) (*IssueResult
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: unauthorized (401): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("%w: issue not found (404)", ErrGitHubRefNotFound)
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: forbidden (403): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "issue not found (404)", true)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -394,32 +328,8 @@ func GetPR(ctx context.Context, owner, repo string, number int) (*PRResult, erro
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: unauthorized (401): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("%w: PR not found (404)", ErrGitHubRefNotFound)
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: forbidden (403): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "PR not found (404)", true)
 	}
 
 	body, err := io.ReadAll(resp.Body)

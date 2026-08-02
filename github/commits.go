@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
-	"strings"
 )
 
 // CommitResult is the domain return type for GetCommit.
@@ -51,32 +51,8 @@ func GetCommit(ctx context.Context, owner, repo, sha string) (*CommitResult, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: unauthorized (401): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("%w: commit not found (404)", ErrGitHubRefNotFound)
-	}
-	if resp.StatusCode == 403 {
-		if resp.Header.Get("Retry-After") != "" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: secondary rate limit (403)")
-		}
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			return nil, fmt.Errorf("GitHub API: primary rate limit exhausted (403)")
-		}
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: forbidden (403): %s", ErrGitHubAccessDenied, strings.TrimSpace(string(body)))
-	}
-	if resp.StatusCode == 429 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("GitHub API: rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API: unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK {
+		return nil, classifyGHResponse(resp, "commit not found (404)", true)
 	}
 
 	body, err := io.ReadAll(resp.Body)

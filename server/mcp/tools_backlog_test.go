@@ -2319,13 +2319,16 @@ func TestReportDuplicate_PreservesExistingVerificationNotes_WhenAppendingNewEntr
 
 // --- Story 4.2.6: sequential interaction with report_pr_created ---
 
-// TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated
+// TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenReportDuplicate
 // verifies report_pr_created and report_duplicate compose correctly across a
 // real status change (review -> pr_pending -> review, matching
 // SetBacklogItemPRAndTransition's actual precondition), and that a
 // third, now-disallowed call is cleanly refused rather than silently
-// misbehaving.
-func TestReportDuplicate_LoserGetsDistinctMessage_WhenRacingReportPRCreated(t *testing.T) {
+// misbehaving. This is sequential state-machine composition on a single
+// goroutine, not a concurrency test — see
+// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails for the
+// genuinely-concurrent counterpart in this file.
+func TestReportDuplicate_RejectsThirdCall_AfterSequentialReportPRCreatedThenReportDuplicate(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	// report_pr_created's precondition (SetBacklogItemPRAndTransition)
 	// requires the source status to be "review" — seed there, matching

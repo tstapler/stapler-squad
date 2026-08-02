@@ -804,10 +804,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 
 // --- report_duplicate ---
 
-// checkGitHubRef runs the GitHub existence check via the overridable
+// verifyRef runs the GitHub existence check via the overridable
 // verifyGitHubRef seam when set, otherwise the real verifyGitHubRefExists.
 // Mirrors verifyPR/sessionBranch's nil-check-then-fallback shape.
-func (h *backlogHandlers) checkGitHubRef(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
+func (h *backlogHandlers) verifyRef(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
 	if h.verifyGitHubRef != nil {
 		return h.verifyGitHubRef(ctx, ref)
 	}
@@ -949,7 +949,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	// distinct from a generic transient failure — see ADR-002's Negative
 	// consequences and pre-mortem F1), definitively-not-found/access-denied
 	// (non-retryable), or a plain transient error (retryable).
-	if verifyErr := h.checkGitHubRef(ctx, ref); verifyErr != nil {
+	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
 		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
 			return errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), ""), nil
 		}
