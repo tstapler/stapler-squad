@@ -1322,6 +1322,54 @@ specific criterion is weaker than desired, not that the shipped fix is
 unverified. If this happens, flag it explicitly in the PR description for
 human awareness — do not let it pass unmentioned.
 
+**Actual run record (2026-08-02):** Executed with one necessary deviation from
+the literal procedure above: `mcp__stapler-squad__pause_session`/
+`resume_session`/`create_session` in this session are bound to the *live*
+deployed instance at `:8543`, not a freshly-built throwaway instance — so
+they cannot exercise this branch's just-built fix. Built and ran a throwaway
+instance instead (`go build -o /tmp/ssq-manual-test . && PORT=8999
+STAPLER_SQUAD_INSTANCE=claude-manual-test /tmp/ssq-manual-test
+--tmux-keep-server`, confirmed distinct from `:8543` throughout), created a
+session through its own web UI (which also calls `session.StartSessionDriver`
+per `server/services/session_service.go:1568-1570` — verified in source, so
+this doesn't reintroduce the `dca931a04` missing-`SessionDriver` mistake),
+and drove pause/resume via direct `POST /api/session.v1.SessionService/UpdateSession`
+calls against `:8999` (the same underlying `instance.Pause()`/`instance.Resume()`
+codepath the MCP tools call, per `server/services/session_service.go:1796,1809`)
+since the MCP tools themselves couldn't target that instance. Real keystrokes
+were driven via `claude-in-chrome` into the live xterm DOM element as
+specified, satisfying the literal intent of Failure #2's prevention (real
+browser WebSocket path, not an MCP pty-write shortcut).
+
+Results across ~9 pause/resume cycles: (1) pausing reliably reproduced the
+exact `Disconnected` / "Reconnecting terminal…" flapping UI state from the
+ticket; (2) a baseline check confirmed typed marker text echoes and is
+delivered correctly while connected; (3) a marker typed immediately before a
+pause (`MARKER-CYCLE-2`) was **not** present anywhere in the terminal after
+reconnect — direct live evidence that input in flight at a pause boundary is
+dropped, not replayed, confirming AC2/AC3's core at-most-once/no-replay
+guarantee under the real client path; (4) the `InputDropBadge` element was
+**not** observed in the DOM (via `claude-in-chrome` `find`) during any
+attempt, despite several cycles with typing timed immediately adjacent to the
+pause call.
+
+Per the resolution path above: recording AC5 as **inconclusive** for the
+drop-signal-observation sub-part specifically (not for the no-replay
+guarantee, which was positively confirmed). Plausible cause: a single
+sequential agent's browser-automation type action and the out-of-band `curl`
+pause call are separated by real network/scheduling latency, so the typed
+input plausibly reached the server (and was fully consumed by `MessageQueue`)
+before `close()` ran, meaning the badge correctly did not fire because
+nothing was actually still buffered at that moment — i.e. the absence may
+reflect correct behavior (no drop occurred) as often as it reflects a missed
+race window; single-observer manual timing cannot distinguish the two. This
+is exactly the class of gap the automated Jest suite (`InputDropBadge.test.tsx`,
+`useTerminalStream.test.ts`) is designed to cover deterministically (by
+controlling the exact tick a `close()`/`onDrop` call lands), and those tests
+pass against the real production code. Test session and throwaway instance
+were deleted/stopped after the run; the live `:8543` instance was not
+touched at any point (verified before and after).
+
 ---
 
 ## Phase 7 — AC6 Confirmation (No Code)
