@@ -183,6 +183,61 @@ mechanical generalization of an already-correct pattern: (a) pin
 (b) add one `ListItemSessions`-backed guard clause before the transition
 call. Nothing here justifies a different CAS/locking mechanism.
 
+## 4. Audit trail — `BacklogStatusEvent`/`recordStatusEvent`
+
+Confirmed in-house, no external audit-log library involved, reused as-is:
+
+- `recordStatusEvent` (`session/ent_repository_backlog.go:39-56`) appends an
+  immutable `BacklogStatusEvent` row (`FromStatus`, `ToStatus`, `TriggeredBy`,
+  optional `Note`) via the ent client, called from inside
+  `TransitionBacklogItemStatus`. The doc comment is explicit about the
+  contract: "A write failure is logged, not returned: an audit-log gap must
+  never block the status transition itself" — i.e. audit recording is
+  intentionally best-effort/in-process, not a durable external event bus.
+- `BacklogStatusEventData` (`session/repository.go:311`) is the DTO surfaced
+  back out through the repository layer for reading event history — again a
+  plain in-house struct, no wrapped third-party audit/event-sourcing library.
+- `report_duplicate` recording its verification evidence (the ref, its
+  verified existence) is additive data passed into this same
+  `recordStatusEvent`/`Note` path (or an equivalent existing field on the
+  transition call) — not a new logging mechanism.
+
+**Verdict: reuse `BacklogStatusEvent`/`recordStatusEvent` unchanged.** No
+library need — this is a single ent-backed table write already wired into
+every `TransitionBacklogItemStatus` call.
+
+## 5. Workflow-engine library (ADR-013) — ruled out for this feature
+
+`docs/adr/013-workflow-engine-replaces-valid-transitions.md` header still
+reads `Status: Proposed`, but the code shows the described `WorkflowEngine`
+interface has *already been implemented*: `session/workflow_engine.go`
+defines `WorkflowEngine` (`CanTransition`, `ValidateGates`,
+`AllowedTransitions`) and `DefaultWorkflowEngine`, and `session/backlog.go`'s
+`validTransitions` var is now sourced from `domain.ValidTransitions()`
+specifically "kept for use by WorkflowEngine (which deep-copies it at
+construction time)" (`session/backlog.go:194-196`). The ADR's status header
+appears stale relative to the code — a doc-hygiene note, not something this
+feature needs to fix.
+
+That implementation is orthogonal to this feature regardless of its status:
+
+- ADR-013 exists to make *transition topology itself* (which states can reach
+  which, what gates apply) runtime-configurable for custom/DB-persisted
+  workflows. This feature adds no new state and no new transition edge — it
+  only changes which already-valid `ExpectedStatus` value is asserted before
+  an already-existing transition (§3), and appends evidence to an
+  already-existing audit row (§4).
+- `report_duplicate` does not need to call `WorkflowEngine.CanTransition`/
+  `ValidateGates` with new semantics — whatever transition/precondition call
+  it makes goes through the same `BacklogItemPrecondition`/
+  `TransitionBacklogItemStatus` path every other tool in `tools_backlog.go`
+  already uses, unmodified.
+
+**Verdict: not applicable — reaching for or extending `WorkflowEngine` here
+would be solving a problem (configurable transition topology) this feature
+doesn't have.** Use the existing CAS/workflow primitives exactly as every
+other transition call site does.
+
 ## Summary
 
 | Area | Verdict |
@@ -191,3 +246,12 @@ call. Nothing here justifies a different CAS/locking mechanism.
 | GitHub existence verification | Extend `github/` package (native `net/http`, `GetIssue`-style) — add `GetCommit`, reuse `GetPRInfoCtx`/`GetIssue`; do **not** adopt `google/go-github` |
 | Internal duplicate/supersede helper | None exists — build `report_duplicate` as new code, following `report_pr_created`'s two-channel-error shape |
 | CAS precondition mechanism | Reuse `TransitionBacklogItemStatus`'s existing `BacklogItemPrecondition` as-is — no new primitive |
+| Audit trail | Reuse `BacklogStatusEvent`/`recordStatusEvent` as-is — no external audit-log library |
+| Workflow-engine (ADR-013) | Already implemented in-repo (`session/workflow_engine.go`), but out of scope for this feature — no new transition topology introduced |
+
+**Bottom line, confirmed against `go.mod`:** no GitHub SDK, no workflow-engine
+library, no new audit/event-sourcing dependency anywhere in the dependency
+list, and none is warranted. Every piece of new logic in this feature is a
+small, mechanical extension of a pattern that already exists in the same file
+it would be added to. Build using 100% existing in-repo primitives, zero new
+dependencies.
