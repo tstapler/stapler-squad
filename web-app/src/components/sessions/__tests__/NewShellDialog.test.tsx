@@ -8,41 +8,34 @@
  *  - onCancel called when Escape key is pressed
  *  - onCancel called when backdrop (overlay) is clicked
  *  - Error message shown when onSubmit rejects
+ *  - Escape key scoping: an Escape that only dismisses the workingDir field's
+ *    RepoPathInput dropdown must not also close the whole dialog (Task 1.1.1d)
  */
 
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { NewShellDialog } from "../NewShellDialog";
 import { addRecentShellCommand } from "@/lib/omnibar/recentShellCommands";
+import { useSessionRepoPaths } from "@/lib/hooks/useSessionRepoPaths";
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-// RepoPathInput uses useSessionRepoPaths (Redux) and usePathCompletions (RPC).
-// Stub it as a plain controlled input so the dialog tests don't need a Redux
-// store or ConnectRPC transport.
-jest.mock("@/components/ui/RepoPathInput", () => ({
-  RepoPathInput: ({
-    id,
-    value,
-    onChange,
-    placeholder,
-  }: {
-    id?: string;
-    value: string;
-    onChange: (v: string) => void;
-    placeholder?: string;
-  }) => (
-    <input
-      id={id}
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-    />
-  ),
+// RepoPathInput (used for the workingDir field) uses useSessionRepoPaths (Redux)
+// and usePathCompletions (RPC) internally. Stub both hooks — rather than mocking
+// RepoPathInput itself — so the dialog tests don't need a Redux store or
+// ConnectRPC transport, while still exercising the real component's Escape/dropdown
+// behavior for Task 1.1.1d's tests below.
+jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
+  useSessionRepoPaths: jest.fn(() => []),
 }));
+
+jest.mock("@/lib/hooks/usePathCompletions", () => ({
+  usePathCompletions: () => ({ entries: [], isLoading: false }),
+}));
+
+const mockUseSessionRepoPaths = useSessionRepoPaths as jest.Mock;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -51,6 +44,7 @@ jest.mock("@/components/ui/RepoPathInput", () => ({
 describe("NewShellDialog", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    mockUseSessionRepoPaths.mockReturnValue([]);
   });
 
   describe("renders_all_form_fields", () => {
@@ -252,6 +246,46 @@ describe("NewShellDialog", () => {
       await waitFor(() => {
         expect(screen.getByText(/port already in use/i)).toBeInTheDocument();
       });
+    });
+  });
+
+  describe("NewShellDialog — Escape key scoping", () => {
+    it("NewShellDialog_should_closeOnlyTheWorkingDirDropdown_When_escapePressedWhileDropdownOpen", () => {
+      mockUseSessionRepoPaths.mockReturnValue(["/home/user/project-a"]);
+      const onCancel = jest.fn();
+
+      render(
+        <NewShellDialog
+          onSubmit={jest.fn().mockResolvedValue(undefined)}
+          onCancel={onCancel}
+        />
+      );
+
+      const workingDirInput = screen.getByLabelText(/working directory/i);
+      fireEvent.focus(workingDirInput);
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+      fireEvent.keyDown(workingDirInput, { key: "Escape", code: "Escape" });
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it("NewShellDialog_should_callOnCancel_When_escapePressedWithNoDropdownOpen", () => {
+      mockUseSessionRepoPaths.mockReturnValue(["/home/user/project-a"]);
+      const onCancel = jest.fn();
+
+      render(
+        <NewShellDialog
+          onSubmit={jest.fn().mockResolvedValue(undefined)}
+          onCancel={onCancel}
+        />
+      );
+
+      // The workingDir field's dropdown was never opened (never focused).
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+      expect(onCancel).toHaveBeenCalledTimes(1);
     });
   });
 });

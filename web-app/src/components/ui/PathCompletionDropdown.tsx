@@ -89,6 +89,7 @@ export function PathCompletionDropdown({
       className={dropdown}
       role="listbox"
       aria-label="Path completions"
+      data-testid="path-completion-dropdown"
     >
       {entries.slice(0, historyCount).map((entry, i) => (
         <EntryItem
