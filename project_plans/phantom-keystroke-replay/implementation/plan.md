@@ -639,7 +639,7 @@ correct, before relying on any other epoch-guard test in this story.)*
     attempt A's checkpoint would see `epoch !== connectionEpochRef.current`
     and silently no-op forever, leaving `isConnected` stuck `false`.
 
-##### Task 3.2.1.1 — `connect_should_ignoreStaleGenerationMessages_When_secondConnectSupersedesFirstAfterFirstMessageRefSyncLag`
+##### Task 3.2.1.1 — `connect_should_ignoreStaleGenerationMessages_When_secondConnectSupersedesFirstBeforeFirstMessage` *(implemented name — matches validation.md; shortened from an earlier draft name during implementation)*
 
 - Same describe block as Task 3.2.1.0.
 - Enhance the module-level `MessageQueue` mock (lines 57-65) to track
@@ -657,7 +657,7 @@ correct, before relying on any other epoch-guard test in this story.)*
   reflects only attempt B's message, and that `pushStreamA`'s
   `MessageQueue` instance was `.close()`-d.
 
-##### Task 3.2.1.2 — `connect_should_notThrow_When_threeAttemptsSupersedeAcrossRepeatedRefSyncLagWindows`
+##### Task 3.2.1.2 — `connect_should_notThrow_When_calledThreeTimesInRapidSuccession` *(implemented name — matches validation.md; shortened from an earlier draft name during implementation)*
 
 - Same describe block. Repeats Task 3.2.1.1's supersession mechanism twice
   in a row — call `connect()` (A), push A's first message (opens the
@@ -1394,10 +1394,14 @@ Make the "verified, no task" claim an actual, repeatable check rather than
 an assumption (per adversarial-review.md):
 
 - Run `grep -rn "BroadcastChannel\|localStorage" web-app/src/lib/hooks/useTerminalStream.ts web-app/src/lib/terminal/MessageQueue.ts`
-  and confirm no matches — this diff's actual scope (single-hook,
-  single-queue, single-Go-handler) never introduces cross-tab shared state
-  (a `BroadcastChannel`, a shared `localStorage` key, or similar) that would
-  make multi-tab behavior implicitly in-scope.
+  and confirm any matches are pre-existing and unrelated to cross-tab shared
+  state — running this check found one hit, a pre-existing
+  `localStorage.getItem("debug-terminal")` per-tab debug-logging read at
+  `useTerminalStream.ts:350` that predates this branch (confirmed via
+  `git show main:...`), not a cross-tab state mechanism. This diff's actual
+  scope (single-hook, single-queue, single-Go-handler) never introduces
+  cross-tab shared state (a `BroadcastChannel`, a shared `localStorage` key,
+  or similar) that would make multi-tab behavior implicitly in-scope.
 - Confirm `requirements.md`'s Non-Goals section wording is unchanged by this
   session's diff (still explicitly names concurrent multi-tab/multi-window
   input as out of scope).
