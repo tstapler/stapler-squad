@@ -27,13 +27,27 @@ import {
   emptyState,
   srOnly,
   backlogLink,
+  outlierCell,
 } from "./SessionDetailDrawer.css";
 import { fmtCost, fmtPct, fmtDate, shortId } from "./insightsFormatters";
+import { useSessionTurnTimeline } from "@/lib/hooks/useInsightsService";
+import {
+  sortTurnsByTokensDesc,
+  computeOutlierThreshold,
+  isOutlierTurn,
+} from "./turnTimelineUtils";
 
 interface Props {
   session: SessionTokenSummary | null;
   onClose: () => void;
   backlogEntry?: BacklogIndexEntry;
+}
+
+function turnCacheHitRate(t: { inputTokens: bigint; cacheReadTokens: bigint }): number {
+  const input = Number(t.inputTokens);
+  const cacheRead = Number(t.cacheReadTokens);
+  const denom = input + cacheRead;
+  return denom === 0 ? 0 : cacheRead / denom;
 }
 
 export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
@@ -46,7 +60,12 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
     return () => document.removeEventListener("keydown", handleKey);
   }, [session, onClose]);
 
+  const { turns } = useSessionTurnTimeline(session?.conversationId);
+
   if (!session || typeof document === "undefined") return null;
+
+  const sortedTurns = sortTurnsByTokensDesc(turns);
+  const outlierThreshold = computeOutlierThreshold(turns);
 
   const displayId = session.sessionId || session.conversationId;
 
@@ -132,6 +151,49 @@ export function SessionDetailDrawer({ session, onClose, backlogEntry }: Props) {
             </dl>
           </div>
         )}
+
+        <div className={section}>
+          <h3 className={sectionTitle}>Per-Turn Breakdown</h3>
+          {sortedTurns.length === 0 ? (
+            <p className={emptyState}>No per-turn data available for this session.</p>
+          ) : (
+            <table className={toolsTable}>
+              <thead>
+                <tr>
+                  <th className={toolsTh}>Timestamp</th>
+                  <th className={toolsTh}>Model</th>
+                  <th className={toolsThRight}>Input</th>
+                  <th className={toolsThRight}>Output</th>
+                  <th className={toolsThRight}>Cache</th>
+                  <th className={toolsTh}>Tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTurns.map((t, i) => {
+                  const outlier = isOutlierTurn(t, outlierThreshold);
+                  return (
+                    <tr key={i}>
+                      <td className={toolsTd}>{fmtDate(t.timestamp)}</td>
+                      <td className={toolsTd}>{t.model || "—"}</td>
+                      <td className={toolsTdRight}>
+                        <span className={outlier ? outlierCell : undefined}>
+                          {t.inputTokens.toString()}
+                        </span>
+                      </td>
+                      <td className={toolsTdRight}>
+                        <span className={outlier ? outlierCell : undefined}>
+                          {t.outputTokens.toString()}
+                        </span>
+                      </td>
+                      <td className={toolsTdRight}>{fmtPct(turnCacheHitRate(t))}</td>
+                      <td className={toolsTd}>{t.toolNames.join(", ") || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
 
         <div className={section}>
           <h3 className={sectionTitle}>Tools Breakdown</h3>

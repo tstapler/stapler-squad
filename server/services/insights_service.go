@@ -549,6 +549,35 @@ func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEven
 	}
 }
 
+// GetSessionTurnTimeline returns per-turn token stats for one session, fetched
+// on-demand when the session detail drawer opens.
+// +api: GetSessionTurnTimeline
+func (s *InsightsService) GetSessionTurnTimeline(
+	_ context.Context,
+	req *connect.Request[sessionv1.GetSessionTurnTimelineRequest],
+) (*connect.Response[sessionv1.GetSessionTurnTimelineResponse], error) {
+	r := s.store.GetByUUID(req.Msg.ConversationId)
+	if r == nil {
+		return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{}), nil
+	}
+	turns := make([]*sessionv1.TurnTokenStat, 0, len(r.TurnTimeline))
+	for _, t := range r.TurnTimeline {
+		stat := &sessionv1.TurnTokenStat{
+			Model:               t.Model,
+			InputTokens:         t.Input,
+			OutputTokens:        t.Output,
+			CacheCreationTokens: t.CacheCreation,
+			CacheReadTokens:     t.CacheRead,
+			ToolNames:           t.ToolNames,
+		}
+		if !t.Timestamp.IsZero() {
+			stat.Timestamp = timestamppb.New(t.Timestamp)
+		}
+		turns = append(turns, stat)
+	}
+	return connect.NewResponse(&sessionv1.GetSessionTurnTimelineResponse{Turns: turns}), nil
+}
+
 // ---------- helpers ----------
 
 // sessionTimestamps returns the first and last message timestamps from a ParseResult.

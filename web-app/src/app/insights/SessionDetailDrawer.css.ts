@@ -144,6 +144,18 @@ export const toolsTd = style({
 
 export const toolsTdRight = style([toolsTd, { textAlign: "right" }]);
 
+// Flags an outlier turn's Input/Output cell value in the per-turn breakdown
+// table. Deliberately not TokenBadge's pill-shaped `badge`+`badgeVariant` —
+// a full pill per flagged value in a dense table degrades to "pill soup" for
+// sessions with several outliers; this is a narrower background+text-color
+// highlight scoped to the table-cell context instead.
+export const outlierCell = style({
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  borderRadius: vars.radii.sm,
+  padding: "0 4px",
+});
+
 export const skillList = style({
   display: "flex",
   flexWrap: "wrap",

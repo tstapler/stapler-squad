@@ -610,6 +610,60 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	}
 }
 
+// --------------------------------------------------------------------------
+// AC-1: GetSessionTurnTimeline
+// --------------------------------------------------------------------------
+
+func TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches(t *testing.T) {
+	now := time.Now().UTC()
+	results := []*tokens.ParseResult{
+		newResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 200, now),
+	}
+	svc := newInsightsFixture(results, nil)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "uuid-1"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Turns, 1)
+	assert.Equal(t, "claude-sonnet-4", resp.Msg.Turns[0].Model)
+	assert.Equal(t, int64(1000), resp.Msg.Turns[0].InputTokens)
+	assert.Equal(t, int64(500), resp.Msg.Turns[0].OutputTokens)
+	assert.Equal(t, int64(200), resp.Msg.Turns[0].CacheReadTokens)
+}
+
+func TestGetSessionTurnTimeline_should_returnEmptyTurns_When_ConversationIdUnknown(t *testing.T) {
+	svc := newInsightsFixture(nil, nil)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "no-such-uuid"}),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Msg.Turns)
+}
+
+func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t *testing.T) {
+	store := tokens.NewTokenStore("")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	store.Start(ctx)
+	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil)
+
+	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+	require.Eventually(t, func() bool {
+		return store.GetByUUID("valid_session") != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	resp, err := svc.GetSessionTurnTimeline(
+		context.Background(),
+		connect.NewRequest(&sessionv1.GetSessionTurnTimelineRequest{ConversationId: "valid_session"}),
+	)
+	require.NoError(t, err)
+	assert.Len(t, resp.Msg.Turns, 3)
+}
+
 func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *testing.T) {
 	store := tokens.NewTokenStore("")
 	ctx, cancel := context.WithCancel(context.Background())

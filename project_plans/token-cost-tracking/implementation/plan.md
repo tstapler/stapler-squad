@@ -562,15 +562,16 @@ flagged table,
 - **Task 3.2.3b** (same file): Compute
   `const threshold = computeOutlierThreshold(turns);` once per render; for each row where
   `isOutlierTurn(turn, threshold)`, wrap the Input/Output cell values in `<span
-  className={[badge, badgeVariant.warning].join(" ")}>...</span>`, importing **both**
-  `badge` and `badgeVariant` from `@/components/shared/TokenBadge.css` (existing
-  warning/alert palette, per `research/ux.md` §5's explicit "reuse `TokenBadge.css.ts`'s
-  variant colors" guidance — no new colors invented). **Corrected during `/sdd:4-validate`**
-  (pre-mortem.md finding #2, P2): `badgeVariant.warning` alone omits the shared `badge` base
-  class that supplies padding/pill-shape/inline-flex/border-radius — confirmed against
-  `TokenBadge.tsx:47`'s own composition, `[badge, badgeVariant[variant], className].filter(
-  Boolean).join(" ")`. Applying `badgeVariant.warning` alone would render unstyled colored
-  text with no padding, not a pill. Follow-on edit, same file/task group.
+  className={outlierCell}>...</span>`. **Superseded during implementation**: design/ux.md's
+  own "Outlier-highlight visual design" section flags that composing `TokenBadge`'s pill-
+  shaped `badge`+`badgeVariant.warning` classes produces "pill soup" for sessions with
+  several outlier turns in a dense table, and recommends a narrower, table-cell-scoped
+  class instead (`background: warningBg, color: warningText, borderRadius: radii.sm,
+  padding: "0 4px"`, no pill shell) — that recommendation was followed instead of composing
+  `badge`+`badgeVariant.warning` (this also sidesteps pre-mortem.md finding #2's composition
+  bug entirely, since `badgeVariant.warning` alone is never used). `outlierCell` lives in
+  `SessionDetailDrawer.css.ts`, not `TokenBadge.css.ts` — it's specific to this table, not a
+  reusable badge variant. Follow-on edit, same file/task group.
 
 No new registry file for `SessionDetailDrawer` yet — deferred to Phase 5 (Epic 5.1), once
 this story's test surface (turnTimelineUtils.test.ts) exists to cite.
