@@ -30,14 +30,15 @@ present on `main`:
 
 - `3546c2b12` — *"fix(session): stop repeated '1' keystroke on
   directory-approval prompts (#146)"*. `session_driver.go`'s
-  `NeedsApproval`-driven auto-answer path had no cooldown: the driver polls
-  every 2s, `NeedsApproval` can remain the detected status for several ticks
-  after `"1\r"` is sent while the PTY redraws, and each tick re-matched the
-  same dialog text and resent `"1"`. Commit message explicitly: *"reported in
-  #165 as 'repeated 1 keystroke sent to agent on session open/reconnect',
-  worse during reconnect churn since the driver keeps polling through it."*
-  Fix: `shouldApprovePromptWithCooldown` / `lastApprovalAnsweredAt`, mirroring
-  the pre-existing `shouldAnswerStartupDialog` cooldown.
+  `NeedsApproval`-driven auto-answer path had no guard against resending: the
+  driver polls every 2s, `NeedsApproval` can remain the detected status for
+  several ticks after `"1\r"` is sent while the PTY redraws, and each tick
+  re-matched the same dialog text and resent `"1"`. Commit message
+  explicitly: *"reported in #165 as 'repeated 1 keystroke sent to agent on
+  session open/reconnect', worse during reconnect churn since the driver
+  keeps polling through it."* Fix: `shouldApprovePromptOnce`, an
+  edge-triggered latch keyed on an `awaitingClear` flag (not a time-based
+  cooldown), mirroring the pre-existing `shouldAnswerStartupDialog` latch.
 - `c0e6c4ce6` — *"fix: stop repeated key sends on trust/approval dialogs and
   stale preview reads"*. `Instance.Preview()` called `GetRecentOutput(0)`,
   which the PTY buffer treats as "entire session-lifetime buffer" rather than
@@ -46,12 +47,18 @@ present on `main`:
   the resend loop worse *during* reconnect/flap churn (stale buffer content
   outlives the live pane). `Preview()` now prefers tmux `capture-pane` (real
   terminal emulation) for tmux-backed instances. Also generalized the
-  cooldown latch (`shouldSendOnce`/`withinCooldown`) to both the startup
-  dialog and the approval-dialog auto-answer paths.
+  shared edge-triggered latch (`shouldSendOnce`, keyed on `awaitingClear`) to
+  both the startup dialog and the approval-dialog auto-answer paths. Per the
+  code's own doc comment (`session_driver.go:145`): "A fixed time-based
+  cooldown is not sufficient here" — `shouldSendOnce`/`awaitingClear` is
+  deliberately not a cooldown/timestamp mechanism.
 
 Verified present on this branch: `session/session_driver.go` (`shouldSendOnce`,
-`shouldAnswerStartupDialog`, `shouldApprovePromptOnce`,
-`withinCooldown`/cooldown timestamps) and `session/instance_terminal_test.go`.
+`shouldAnswerStartupDialog`, `shouldApprovePromptOnce`, the `awaitingClear`
+edge-triggered latch state) and `session/instance_terminal_test.go`. No
+`withinCooldown`, `lastApprovalAnsweredAt`, or `shouldApprovePromptWithCooldown`
+identifiers exist anywhere in this file — an earlier draft of this document
+misdescribed the mechanism using those names; corrected here.
 **AC1 and AC2 are therefore satisfied by code already on `main`** — this
 effort's job is to verify that with a regression test tied to this backlog
 item (not just re-derive the fix) and close the remaining gap below.
@@ -112,7 +119,8 @@ boundary.
   protocol itself, beyond what's needed to make input delivery idempotent
   across reconnects.
 - Re-implementing or second-guessing the already-merged `session_driver.go`
-  cooldown-latch fix (#146 / `c0e6c4ce6`); this work builds on it.
+  `shouldSendOnce`/`awaitingClear` edge-triggered latch fix (#146 /
+  `c0e6c4ce6`); this work builds on it.
 
 ## Acceptance Criteria
 

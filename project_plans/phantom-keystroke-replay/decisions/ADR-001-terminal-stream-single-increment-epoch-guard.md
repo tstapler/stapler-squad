@@ -108,6 +108,47 @@ avoids a subtle ordering bug where a *different* logic change to the entry
 guard's condition in the future could accidentally let two calls compute
 the same epoch value before either increments.
 
+### Addendum — `disconnect()` participates as a reader, not an incrementer
+
+This ADR's analysis above concerns `connect()`-vs-`connect()` re-entrancy
+only. During plan repair (2026-08-02), both `implementation/architecture-review.md`
+and `implementation/adversarial-review.md` independently identified a second,
+distinct interleaving this ADR did not originally address:
+`disconnect()`-vs-`connect()` — `disconnect()` (`useTerminalStream.ts:371-413`)
+has its own `await` point (the `setTimeout`-backed promise at line 392-407)
+and, prior to this repair, its post-await continuation mutated the same
+shared refs (`isConnectedRef` via `setIsConnected`, the two decoder refs)
+unconditionally, regardless of whether a *different*, independently-triggered
+`connect()` call had started and completed while `disconnect()` was still
+awaiting. `shouldReconnectRef.current = false` (set synchronously at
+`disconnect()`'s entry) does **not** close this gap — it only suppresses a
+*future* auto-reconnect from being scheduled; it has no effect on a
+`connect()` call that was already triggered by something else (e.g. the
+visibility/online listener) before or during `disconnect()`'s await.
+
+This gap was also raised, and left unresolved, in this exact codebase's own
+prior (unmerged) adversarial review pass on an earlier version of this hook.
+Three independent findings converging on the same gap was treated as strong
+signal that it needs an actual code-level guard rather than a documented
+"this is fine" justification.
+
+**Resolution**: `disconnect()` now captures `connectionEpochRef.current`
+at its own entry (`epochAtDisconnectStart`, read-only — `disconnect()` never
+increments the counter, since it is not itself a new connection attempt) and
+gates its post-await connection-state mutations (`setIsConnected(false)`,
+the two decoder resets) behind `epochAtDisconnectStart ===
+connectionEpochRef.current`. Its `isDisconnectingRef.current = false`
+bookkeeping reset is not gated — it always runs, since a stuck-`true`
+in-progress flag would permanently block all future `disconnect()` calls
+regardless of which epoch is current. See `implementation/plan.md` Task
+3.1.1.5 for the implementation task and Task 3.2.1.4 for the corresponding
+Jest regression test.
+
+This does not change the Decision above (`connect()` still increments
+exactly once, for the reasons already argued) — it only extends the epoch
+counter's set of *readers* to include `disconnect()`, alongside `connect()`'s
+own loop/catch/finally checkpoints.
+
 ## Consequences
 
 ### Positive

@@ -57,14 +57,15 @@ Decisions table below; summary:
 
 | Term | Definition | Realized as |
 |---|---|---|
-| Connection epoch | A monotonically increasing integer identifying one `connect()` attempt's lifetime, from entry to its `finally` block completing. | `connectionEpochRef: React.MutableRefObject<number>` in `useTerminalStream.ts` |
-| Current epoch / `epoch` | The epoch value captured locally by a specific `connect()` invocation at entry, before any `await`. | `const epoch = ++connectionEpochRef.current` |
-| Superseded attempt | A `connect()` invocation whose captured `epoch` no longer equals `connectionEpochRef.current` — a newer attempt has since started. | Comparison `epoch !== connectionEpochRef.current` at each checkpoint |
+| Connection epoch | A monotonically increasing integer identifying one `connect()` attempt's lifetime, from entry to its `finally` block completing. `disconnect()` also reads (never increments) this same counter to detect that a newer `connect()` has superseded it mid-disconnect. | `connectionEpochRef: React.MutableRefObject<number>` in `useTerminalStream.ts` |
+| Current epoch / `epoch` | The epoch value captured locally by a specific `connect()` invocation at entry, before any `await`; `disconnect()` captures it at its own entry (without incrementing) for the same purpose. | `const epoch = ++connectionEpochRef.current` (connect); `const epochAtDisconnectStart = connectionEpochRef.current` (disconnect) |
+| Superseded attempt | A `connect()` invocation whose captured `epoch` no longer equals `connectionEpochRef.current` — a newer attempt has since started. The same comparison, applied to `disconnect()`'s captured value, detects a `connect()` that started and is now the current epoch while `disconnect()` was still awaiting. | Comparison `epoch !== connectionEpochRef.current` at each checkpoint |
 | Drop count | The number of `TerminalData` messages discarded from a `MessageQueue`'s internal buffer at the moment `close()` is called. | Return value of `MessageQueue.close(): number` |
-| Dropped-input event | A React state value describing the most recent coalesced batch of dropped input, exposed by the hook for the UI layer to render/announce. | `droppedInputEvent: { count: number; at: number } \| null` returned from `useTerminalStream` |
-| Drop-and-signal badge | The visible + audible UI signal shown when input is dropped. | `InputDropBadge` component (`web-app/src/components/sessions/InputDropBadge.tsx`) |
-| Assertive announcement | The `aria-live="assertive"` screen-reader announcement accompanying a drop, distinguishing it from routine `polite` connection-status chatter. | `useLiveRegion().announce(...)` with `politeness="assertive"`, `role="alert"` |
-| Coalescing window | The short (debounced) time window during which multiple drop events are batched into a single badge update + single announcement, rather than one per dropped chunk. | Local timer/ref state inside `InputDropBadge` |
+| `DroppedInputEvent` / `recordDrop` | A smart constructor making the domain-illegal `count <= 0` state unrepresentable at the point a drop is reported: `recordDrop(count: number): DroppedInputEvent \| null` returns `null` for `count <= 0`, otherwise `{ count, at: Date.now() }`. Used at all three drop-reporting call sites (`connect()`'s close-before-install, `disconnect()`'s close, `useTerminalFlowControl`'s `onDrop`) instead of each duplicating a `> 0` guard — a type-driven-design smart-constructor / parse-don't-validate pattern. | `function recordDrop(count: number): DroppedInputEvent \| null` in `useTerminalStream.ts`; `type DroppedInputEvent = { count: number; at: number }` |
+| Dropped-input event | A single reported drop occurrence — one `recordDrop()` result — exposed by the hook as `droppedInputEvent` for the UI layer. This is **not** itself a coalesced/running total; `useTerminalStream` reports each occurrence as it happens and performs no accumulation of its own. | `droppedInputEvent: DroppedInputEvent \| null` returned from `useTerminalStream` |
+| Drop-and-signal badge | The visible + audible UI signal shown when input is dropped. Owns **all** coalescing across occurrences — both the visual running-total pill and triggering the assertive announcement — so `useTerminalStream`/`TerminalOutput.tsx` never coalesce or announce on their own. | `InputDropBadge` component (`web-app/src/components/sessions/InputDropBadge.tsx`) |
+| Assertive announcement | The `aria-live="assertive"` screen-reader announcement accompanying a drop, distinguishing it from routine `polite` connection-status chatter. Invoked by `InputDropBadge` itself (via its own `useLiveRegion()` call), not by a `TerminalOutput`-level effect keyed on the hook's raw event. | `useLiveRegion().announce(...)` with `politeness="assertive"`, `role="alert"`, called from inside `InputDropBadge` |
+| Coalescing window | The time window — "however long the badge is continuously visible" (its dwell timer, reset on each new occurrence) — during which multiple `droppedInputEvent` occurrences are batched into a single running-total badge update **and** a single re-triggered announcement per content change, rather than one announcement per occurrence. | Local timer/ref state inside `InputDropBadge`, which also owns invoking `announce()` for the window |
 | Bounded read-goroutine exit | The guarantee that the WebSocket input-forwarding goroutine (Goroutine 2 of `streamViaControlMode`) terminates within a fixed timeout once its underlying connection closes, rather than leaking indefinitely. | `controlModeReadLoop` + `readWG sync.WaitGroup` + `waitWithTimeout` in `server/services/connectrpc_websocket.go` / `_test.go` |
 | `controlModeReadLoop` | Extracted function implementing Goroutine 2's read-and-classify loop, isolated from `session.Instance`/tmux dependencies so it is directly testable against a real (tmux-free) `*websocket.Conn`. | New method on `ConnectRPCWebSocketHandler` |
 | Read-loop WaitGroup (`readWG`) | Instrumentation making Goroutine 2's exit externally observable for tests, without changing its read/error-handling behavior. | `var readWG sync.WaitGroup` in `streamViaControlMode` |
@@ -78,11 +79,13 @@ Decisions table below; summary:
 |---|---|---|---|
 | Client reconnect race guard | Monotonic `connectionEpochRef` (mirrors `useSessionService.ts:185,829,833`) | AbortController-signal-only guard | Signal is a single-shot boolean, cannot distinguish 3 overlapping attempts (AC4's triple-rapid-connect case); see Step 0.5 #2. |
 | Client reconnect race guard | (same) | Promise-chain mutex serializing `connect()` calls | Adds latency to legitimate rapid reconnects during the exact flapping scenario this bug is about; new primitive with no precedent in this codebase; see Step 0.5 #3. |
+| `disconnect()` vs. in-flight `connect()` race | `disconnect()` captures `connectionEpochRef.current` at entry (read-only, no increment — it isn't starting a new attempt) and gates its post-`await` state mutations (`setIsConnected(false)`, decoder resets) on that captured value still matching `connectionEpochRef.current`; the `isDisconnectingRef.current = false` bookkeeping reset always runs regardless | Leave `disconnect()` unguarded and rely solely on `shouldReconnectRef.current = false` (set synchronously at `disconnect()`'s entry) to make the race harmless | `shouldReconnectRef` only stops a *future* auto-reconnect from being scheduled — it does nothing to prevent `disconnect()`'s own pending `await` continuation from later clobbering state that a *different*, already-in-flight `connect()` call (e.g. the visibility/online listener firing between `disconnect()`'s entry and its `await` resolving) has since set. Both architecture-review.md and adversarial-review.md independently flagged this gap (the latter noting it was also raised, and left unresolved, in this exact codebase's own prior unmerged adversarial review); three independent findings on the same gap is treated as strong signal that it needs a code-level guard, not just a documented justification in ADR-001. |
 | `MessageQueue.close()` drop semantics | Clear `this.queue = []` in place, return dropped count | Add a separate `abandon()`/`discard()` method distinct from `close()` | No caller in this codebase ever wants a superseded/closing queue to still flush buffered input afterward (confirmed: `close()` has one call shape, always reconnect- or disconnect-triggered, both of which need discard semantics per ADR-023's "one-shot MessageQueue" rationale) — a second method is speculative API surface with no real second caller (interface-pollution-checklist smell #1). |
 | Drop-signal UI placement | New `InputDropBadge`, mounted per-terminal-instance in `TerminalOutput.tsx` | Extend the existing global `ConnectionIndicator` (`components/layout/`) to also show input-drop state | `ConnectionIndicator` is one instance per app shell representing session-list-wide connection status (no `sessionId` prop); input-drop is inherently per-open-terminal state owned by `useTerminalStream`. Reaching a global component would require prop-drilling/new context to carry per-session state into a component that structurally isn't per-session. ux.md research explicitly recommends keeping the two "distinct and complementary." |
 | No new interface/abstraction | Patch `MessageQueue` and `useTerminalStream` in place; no `Manager`/`Service` wrapper | — | Per `.claude/rules/interface-pollution-checklist.md`: `MessageQueue` is already a minimal single-purpose class with exactly one real shape of caller; wrapping it or introducing an interface would be a speculative interface (smell #1) with no second implementation in sight. Confirmed independently by `research/build-vs-buy.md`. |
-| Coalescing/debounce ownership | Local state inside `InputDropBadge` (no new custom hook) | A shared `useCoalescedAnnouncement()` hook | Single consumer today; a generic hook for one call site is an unjustified generic (interface-pollution-checklist smell #5) — write the concrete version first. |
-| `LiveRegion` accessibility role | Add an optional `role` prop (default `"status"`, backward compatible) so `InputDropBadge` can pass `role="alert"` | Compose a second, parallel live-region primitive for the assertive case | `LiveRegion`/`useLiveRegion` currently has **zero real consumers** (`ConnectionIndicator.tsx` hand-rolls its own `aria-live` div instead of importing it — confirmed by grep, no import statement exists). `InputDropBadge` becomes its first real adopter; extending the existing shared primitive with a role prop is minimal and keeps this codebase from growing a second live-region pattern, per pitfalls.md's explicit warning against ad-hoc bespoke patterns. |
+| Coalescing/debounce ownership | Local state inside `InputDropBadge` (no new custom hook) owns **both** the visual running-total pill **and** triggering the assertive `announce()` call for its coalescing window — `useTerminalStream`/`TerminalOutput.tsx` never compute a running total or call `announce()` themselves | (1) A shared `useCoalescedAnnouncement()` hook; (2) hook-level running-total accumulation in `useTerminalStream` (`setDroppedInputEvent` computing a cumulative count itself) with `TerminalOutput.tsx` firing `announce()` from a `useEffect` keyed on raw `droppedInputEvent?.at` | (1) Single consumer today; a generic hook for one call site is an unjustified generic (interface-pollution-checklist smell #5) — write the concrete version first. (2) This was the plan's original (buggy) design: an inline `prev?.at === Date.now()` comparison at the hook level never matched (two different `Date.now()` calls), so counts never accumulated, and a raw per-`at` effect fired one assertive announcement per drop instead of one per coalescing window — directly contradicting research/ux.md §4's "coalesce, don't spam" requirement. Splitting ownership across two layers also let the spoken count (latest event only) diverge from the displayed running total. Both reviews (architecture-review.md, adversarial-review.md) independently flagged this; consolidating ownership entirely in `InputDropBadge` fixes both the bug and the split-responsibility smell. |
+| Illegal-state prevention for drop reports | `recordDrop(count: number): DroppedInputEvent \| null` smart constructor, used at every call site that reports a drop | Each call site duplicating its own `count > 0` guard before constructing `{ count, at: Date.now() }` inline | A domain-illegal `count <= 0` `DroppedInputEvent` was representable at the type level even though `InputDropBadge` already treats `null` as the "no event" sentinel — per type-driven-design's smart-constructor/parse-don't-validate pattern, a single helper makes the illegal state unconstructable and is also more reviewable than a bespoke inline updater (this is exactly the kind of bug a shared helper would have caught — see the coalescing-ownership row above). |
+| `LiveRegion` accessibility role | Add an optional `role` prop (default `"status"`, backward compatible) so `InputDropBadge` can pass `role="alert"`; `InputDropBadge` renders its own (visually hidden) `<LiveRegion>` instance internally, alongside the visible pill, rather than `TerminalOutput.tsx` rendering a separate `LiveRegion` driven by a hook-level effect | Compose a second, parallel live-region primitive for the assertive case | `LiveRegion`/`useLiveRegion` currently has **zero real consumers** (`ConnectionIndicator.tsx` hand-rolls its own `aria-live` div instead of importing it — confirmed by grep, no import statement exists). `InputDropBadge` becomes its first real adopter; extending the existing shared primitive with a role prop is minimal and keeps this codebase from growing a second live-region pattern, per pitfalls.md's explicit warning against ad-hoc bespoke patterns. Keeping the `LiveRegion` instance inside `InputDropBadge` (rather than split across `InputDropBadge` for visuals and `TerminalOutput.tsx` for the announcement) is what makes single-owner coalescing possible — see the coalescing-ownership row above. |
 | Go read-goroutine testability | Extract `controlModeReadLoop` (blocking-read + exit classification only; business-logic dispatch stays a caller-supplied closure) | Test the pattern in isolation with a synthetic goroutine that merely *mirrors* the shape, without touching production code | pitfalls.md explicitly warns that a test proving only "the pattern is correct" (not "this codebase's actual code uses the pattern correctly") repeats the exact false-positive-marking failure mode that already happened once on this ticket (AC3 was marked done against code that didn't do what was claimed). Extracting real production logic into a directly-callable, tmux-free function ties the test to the actual code path. |
 | Go bounded-exit enforcement | Test-only: instrument `readWG` to make existing (already-correct, per architecture.md) exit-on-`conn.Close()` behavior observable; do **not** add a blocking `readWG.Wait()` call inside `streamViaControlMode` before it returns | Add a synchronous bounded-wait inside `streamViaControlMode` before returning | `HandleWebSocket`'s `defer conn.Close()` (the thing that actually unblocks Goroutine 2's `ReadMessage()`) only runs **after** `streamViaControlMode` returns, one stack frame up. A blocking wait added before that return would deadlock/timeout on every single normal disconnect, since the very close that would satisfy the wait hasn't happened yet — this would add multi-second latency (or spurious timeout logs) to the common case. Flagged explicitly in this plan's Unresolved Questions as a real, but out-of-scope-for-this-ticket, latent goroutine-leak vector (a `doneChan` close triggered by something other than the connection itself dying). |
 
@@ -126,10 +129,25 @@ Omitted — no schema, proto, or persisted-data changes in this plan.
 
 ## Unresolved Questions
 
-1. **Should `useTerminalFlowControl.sendInput`'s pre-existing silent early-return** (`useTerminalFlowControl.ts:143`, `if (!pushMessageRef.current || !isConnectedRef.current) return;`) **also feed the drop signal?** pitfalls.md §5 flags this as a second, older silent-drop path in the same input pipeline that AC3's "visibly and audibly signaled" language arguably also covers (a keystroke typed while already-known-disconnected never reaches `MessageQueue` at all, so `MessageQueue.close()`'s drop-count fix never sees it). This plan's Epic 4.1 wires it in as the more complete reading of AC3, but it's worth confirming with the backlog item's stakeholder that this is in-scope rather than a distinct future ticket, since requirements.md's own "Remaining confirmed gap" section does not name this specific file/line.
-2. **`doneChan` closing for a reason unrelated to the WebSocket connection itself dying** (e.g. an output-side send error to a channel other than `errChan`) is a real, separate goroutine-leak vector named in pitfalls.md §3, distinct from what AC4 asks this plan to test (which is specifically "exit is bounded once the connection closes"). Not fixed here — flagged as a follow-up. If it recurs, the fix is a proactive `stream.conn.Close()`/`SetReadDeadline` call at the point `streamViaControlMode` is about to return, which this plan's Pattern Decisions table explicitly rejected adding *unconditionally* (would break the common case's latency).
-3. **`streamShellViaControlMode` and `streamViaTmuxCapturePane`** (`connectrpc_websocket.go:~1104`, `~1494`) are structurally duplicated goroutine-coordination code with the same `doneChan`/`select`/`default`/`ReadMessage()` shape as `streamViaControlMode`'s Goroutine 2, per pitfalls.md §3's explicit "one fix, N-1 near-duplicates unaudited" warning (itself citing this exact ticket's server-side history as the precedent for that failure mode). This plan intentionally does not extend the `controlModeReadLoop` extraction/test to those two handlers — out of scope per Non-Goals — but a future ticket should audit whether they need the same test coverage.
-4. **Should the badge auto-dismiss timing (visual dwell) be a fixed constant or configurable?** ux.md recommends "a few seconds, tunable" but doesn't pin an exact number; this plan picks 4000ms (matching the rough order of magnitude research suggested, roughly 4x `useLiveRegion`'s 1000ms announcement-clear window so the visual badge outlives the announcement) as a starting value — flagged in case product/UX wants a different default after real usage.
+1. **`doneChan` closing for a reason unrelated to the WebSocket connection itself dying** (e.g. an output-side send error to a channel other than `errChan`) is a real, separate goroutine-leak vector named in pitfalls.md §3, distinct from what AC4 asks this plan to test (which is specifically "exit is bounded once the connection closes"). Not fixed here — flagged as a follow-up. If it recurs, the fix is a proactive `stream.conn.Close()`/`SetReadDeadline` call at the point `streamViaControlMode` is about to return, which this plan's Pattern Decisions table explicitly rejected adding *unconditionally* (would break the common case's latency).
+2. **`streamShellViaControlMode` and `streamViaTmuxCapturePane`** (`connectrpc_websocket.go:~1104`, `~1494`) are structurally duplicated goroutine-coordination code with the same `doneChan`/`select`/`default`/`ReadMessage()` shape as `streamViaControlMode`'s Goroutine 2, per pitfalls.md §3's explicit "one fix, N-1 near-duplicates unaudited" warning (itself citing this exact ticket's server-side history as the precedent for that failure mode). This plan intentionally does not extend the `controlModeReadLoop` extraction/test to those two handlers — out of scope per Non-Goals — but a future ticket should audit whether they need the same test coverage.
+3. **Should the badge auto-dismiss timing (visual dwell) be a fixed constant or configurable?** ux.md recommends "a few seconds, tunable" but doesn't pin an exact number; this plan picks 4000ms (matching the rough order of magnitude research suggested, roughly 4x `useLiveRegion`'s 1000ms announcement-clear window so the visual badge outlives the announcement) as a starting value — flagged in case product/UX wants a different default after real usage.
+
+**Resolved during plan repair (2026-08-02):** whether `useTerminalFlowControl.sendInput`'s
+pre-existing silent early-return (`useTerminalFlowControl.ts:143`,
+`if (!pushMessageRef.current || !isConnectedRef.current) return;`) should also
+feed the drop signal was previously listed here pending stakeholder
+confirmation. Resolved in-scope: requirements.md's Remaining confirmed gap
+section and AC3 both describe the drop-and-signal requirement in terms of
+*any* input silently lost around a disconnect boundary, not only input that
+made it as far as `MessageQueue` before being discarded — a keystroke
+rejected at the flow-control layer because the hook already knows it's
+disconnected is the same class of silent input loss AC3 is about. Task
+4.1.1.2 now implements this unconditionally rather than as a
+confirmation-gated task; see that task and the adversarial-review.md nitpick
+it addresses for why the other five near-identical guards in
+`useTerminalFlowControl.ts` (resize/scrollback, not keystrokes) are
+deliberately left unwired.
 
 ---
 
@@ -205,7 +223,7 @@ story exists only to record the Given-When-Then for completeness.
 Nothing to implement; requirements.md already records this. Skip directly to
 Story 1.1.2.
 
-#### Story 1.1.2 — AC2: add a regression test tying the cooldown-latch fix to this backlog item
+#### Story 1.1.2 — AC2: add a regression test tying the `awaitingClear` latch fix to this backlog item
 
 `session/session_driver_test.go:165-183` already has `TestShouldApprovePromptOnce`
 covering issue #165 at the pure-function level (3 isolated assertions on
@@ -229,7 +247,7 @@ the same stateful sequence a real flapping episode would produce.
   same-dialog resend that produced the original ticket's repeated `"1"` does
   not happen across the full 6-tick simulated flap.
 
-##### Task 1.1.2.1 — Add `TestApprovalCooldownLatch_PreventsPhantomReplayAcrossReconnectChurn` to `session/session_driver_test.go`
+##### Task 1.1.2.1 — Add `TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn` to `session/session_driver_test.go`
 
 - File: `session/session_driver_test.go` (add after `TestShouldApprovePromptOnce`, ~line 184).
 - Doc comment references backlog item `04089969-0f19-499c-be34-2e8bcfc4f13e`
@@ -237,7 +255,14 @@ the same stateful sequence a real flapping episode would produce.
 - Implements the 6-tick simulation above using only `shouldApprovePromptOnce`
   (already exported/package-visible in this test file) — no new production
   code.
-- Run: `go test ./session/... -run TestApprovalCooldownLatch_PreventsPhantomReplayAcrossReconnectChurn -v`
+- Naming note: the real production mechanism is `shouldSendOnce`, an
+  edge-triggered latch keyed on `awaitingClear` (`session_driver.go:661-673`)
+  — not a time-based cooldown. `session_driver.go`'s own doc comment
+  explicitly disclaims one: "A fixed time-based cooldown is deliberately not
+  used here." The test name and requirements.md's Root Cause section are
+  corrected to match (see requirements.md diff); this is a naming fix only —
+  the Given-When-Then/simulation logic above was already correct.
+- Run: `go test ./session/... -run TestApprovalAwaitingClearLatch_PreventsPhantomReplayAcrossReconnectChurn -v`
 
 ---
 
@@ -314,7 +339,7 @@ Covers the `useTerminalStream` half of **AC3** and the epoch-guard portion of
 
 ### Epic 3.1 — Introduce `connectionEpochRef` and gate all state-mutating checkpoints
 
-#### Story 3.1.1 — Add the epoch ref, gate the loop/catch/finally, collapse the queue-close asymmetry
+#### Story 3.1.1 — Add the epoch ref, gate the loop/catch/finally/`disconnect()` continuation, collapse the queue-close asymmetry
 
 **AC3 (epoch guard half) Given-When-Then:**
 - **Given** `connect()` is called for session `sess-flap-1` (attempt A,
@@ -393,6 +418,55 @@ Covers the `useTerminalStream` half of **AC3** and the epoch-guard portion of
   generation's `finally` must not schedule a reconnect timer for an attempt
   that's already been superseded.
 
+**`disconnect()` vs. in-flight `connect()` Given-When-Then** (both
+architecture-review.md and adversarial-review.md, the latter also noting this
+exact gap was raised and left unresolved in this codebase's own prior
+unmerged adversarial review — three independent findings, treated as strong
+signal a code-level guard is needed, not just a documented justification):
+- **Given** `disconnect()` is called for session `sess-flap-1` while no
+  reconnect is currently scheduled (`connectionEpochRef.current` is `3`,
+  captured by `disconnect()` at entry as `epochAtDisconnectStart = 3`), and
+  `disconnect()` reaches its `await new Promise(...)` at line 392,
+- **When**, before that `await` resolves, an independent `connect()` call
+  (e.g. the visibility/online listener firing, or a manual-reconnect action)
+  starts and completes far enough to increment `connectionEpochRef.current`
+  to `4` and call `setIsConnected(true)`,
+- **Then** `disconnect()`'s post-`await` continuation (line 409-412) detects
+  `epochAtDisconnectStart (3) !== connectionEpochRef.current (4)` and skips
+  `setIsConnected(false)` and the decoder resets — it must not silently flip
+  a freshly-(re)connected UI back to "disconnected" or corrupt the new
+  connection's in-flight streaming-decoder state — while still always
+  resetting `isDisconnectingRef.current = false` (bookkeeping, not
+  connection state, so it is not gated).
+
+##### Task 3.1.1.5 — Gate `disconnect()`'s post-`await` continuation on `connectionEpochRef`
+
+- File: `web-app/src/lib/hooks/useTerminalStream.ts:371-413`.
+- At the top of `disconnect()` (before the `shouldReconnectRef.current =
+  false` line, so an early-returning call still captures a value — mirroring
+  Task 3.1.1.1's increment-before-guard placement discipline), add
+  `const epochAtDisconnectStart = connectionEpochRef.current;` — a read-only
+  capture, **not** an increment; `disconnect()` isn't starting a new attempt,
+  it's checking whether one has started since.
+- After the `await new Promise<void>((resolve) => { ... })` block (line
+  392-407), split the post-await continuation:
+  ```ts
+  isDisconnectingRef.current = false; // bookkeeping — always reset regardless of epoch
+
+  if (epochAtDisconnectStart === connectionEpochRef.current) {
+    setIsConnected(false);
+    textDecoderRef.current = new TextDecoder();
+    scrollbackDecoderRef.current = new TextDecoder();
+  }
+  ```
+  Connection-state mutation and decoder resets are gated (a newer `connect()`
+  already owns both); `isDisconnectingRef.current`'s reset always runs so a
+  future `disconnect()` call is never permanently blocked by a stale
+  in-progress flag.
+- Update ADR-001 with a short addendum documenting that `disconnect()`
+  participates in the same epoch counter as a reader (never an incrementer)
+  — see `decisions/ADR-001-terminal-stream-single-increment-epoch-guard.md`.
+
 ---
 
 ### Epic 3.2 — Jest regression coverage for the epoch guard
@@ -449,6 +523,27 @@ Covers the `useTerminalStream` half of **AC3** and the epoch-guard portion of
   called (Task 3.1.1.2's unconditional close) and instance #2 is the one
   installed — proving queued input from a superseded attempt is discarded,
   not carried forward into the new queue.
+
+##### Task 3.2.1.4 — `disconnect_should_notClobberNewerConnect_When_reconnectCompletesWhileDisconnectStillAwaiting`
+
+- Same describe block. Covers Task 3.1.1.5's `disconnect()`-vs-`connect()`
+  interleaving guard (both architecture-review.md and adversarial-review.md
+  flagged this gap; not covered by Tasks 3.2.1.1-3.2.1.3, which are all
+  connect()-vs-connect()).
+- Sequence: render the hook with `autoConnect: false`; call `connect()`
+  (attempt A) and let it reach `isConnected === true` (push a message on
+  `pushStreamA`); call `disconnect()` but do **not** yet let its internal
+  `await new Promise(...)` resolve (mock `setTimeout`/use fake timers so the
+  test controls when it resolves); while `disconnect()`'s promise is still
+  pending, call `connect()` again (attempt B) and let it also reach
+  `isConnected === true` (push a message on `pushStreamB`); only then let
+  `disconnect()`'s pending promise resolve.
+- Assert: after `disconnect()`'s continuation runs, `isConnected` is still
+  `true` (attempt B's state was not clobbered back to `false`), and the
+  decoder state was not reset a second time out from under attempt B —
+  proving `disconnect()`'s stale continuation recognized it had been
+  superseded and skipped its state mutations per
+  `epochAtDisconnectStart !== connectionEpochRef.current`.
 - Run: `cd web-app && npx jest --no-coverage --testPathPatterns="useTerminalStream.test"`
 
 ---
@@ -470,40 +565,81 @@ Covers the drop-and-signal portion of **AC3**.
 - **Then** the hook's returned `droppedInputEvent` becomes
   `{ count: 3, at: <timestamp> }` on the next render, distinct from `null`
   (its value on a clean disconnect with an empty queue — the "silent on the
-  normal case" constraint).
+  normal case" constraint). This is a **single reported occurrence** — the
+  hook performs no accumulation across occurrences; see Epic 4.2 for where
+  coalescing across occurrences (and the resulting announcement) lives.
 
 ##### Task 4.1.1.1 — Add `droppedInputEvent` state and wire it from Task 3.1.1.2's close call
 
 - File: `web-app/src/lib/hooks/useTerminalStream.ts`.
-- Add `const [droppedInputEvent, setDroppedInputEvent] = useState<{ count: number; at: number } | null>(null);`
+- Add a module-level type and smart constructor (per the Domain Glossary /
+  Pattern Decisions "Illegal-state prevention for drop reports" entry),
+  above the hook definition:
+  ```ts
+  type DroppedInputEvent = { count: number; at: number };
+
+  /** Reports one drop occurrence. Returns null for count <= 0 so a
+   *  domain-illegal "0 keystrokes not sent" event can never be constructed. */
+  function recordDrop(count: number): DroppedInputEvent | null {
+    return count > 0 ? { count, at: Date.now() } : null;
+  }
+  ```
+- Add `const [droppedInputEvent, setDroppedInputEvent] = useState<DroppedInputEvent | null>(null);`
   near the other state declarations (line ~96).
 - In Task 3.1.1.2's block, replace the bare `console.warn` with:
   ```ts
-  if (droppedCount > 0) {
-    setDroppedInputEvent({ count: droppedCount, at: Date.now() });
-    console.warn(...);
+  const dropEvent = recordDrop(droppedCount);
+  if (dropEvent) {
+    setDroppedInputEvent(dropEvent);
+    console.warn(`[useTerminalStream] dropped ${dropEvent.count} buffered input message(s) on reconnect`, { sessionId });
   }
   ```
-- Also apply the identical pattern inside `disconnect()`
-  (`useTerminalStream.ts:387-390`) where `messageQueueRef.current.close()` is
-  already called — an explicit user-initiated disconnect with pending input
-  must fire the same signal.
+- Also apply the identical `recordDrop(...)`-based pattern inside
+  `disconnect()` (`useTerminalStream.ts:387-390`) where
+  `messageQueueRef.current.close()` is already called — an explicit
+  user-initiated disconnect with pending input must fire the same signal.
 - Add `droppedInputEvent` to the returned `TerminalStreamResult` object
-  (line ~469) and its interface (line ~54).
+  (line ~469) and its interface (line ~54), typed as `DroppedInputEvent | null`.
+- Do **not** attempt to accumulate a running count at this layer (e.g. no
+  `setDroppedInputEvent((prev) => ...)` reducer-style update) — each call
+  site reports its own single occurrence via `recordDrop`; `InputDropBadge`
+  (Story 4.2.1) owns turning a sequence of occurrences into a running total
+  and a coalesced announcement.
 
 ##### Task 4.1.1.2 — Wire `useTerminalFlowControl.sendInput`'s pre-existing silent drop into the same signal
 
-*(See Unresolved Question 1 — implemented here as the more complete reading
-of AC3; flag for stakeholder confirmation.)*
+*(Resolved in-scope during plan repair — see Unresolved Questions' "Resolved"
+note. requirements.md's Remaining confirmed gap / AC3 describe silent input
+loss around a disconnect boundary generally, not only loss that reaches
+`MessageQueue` before being discarded; a keystroke rejected at the
+flow-control layer because the hook already knows it's disconnected is the
+same class of loss.)*
 - File: `web-app/src/lib/hooks/useTerminalFlowControl.ts:142-143`.
 - Add an `onDrop?: () => void` option to `UseTerminalFlowControlOptions`;
   call it in `sendInput`'s early return (`if (!pushMessageRef.current ||
   !isConnectedRef.current) { onDrop?.(); return; }`).
 - File: `web-app/src/lib/hooks/useTerminalStream.ts` — pass
-  `onDrop: () => setDroppedInputEvent((prev) => ({ count: (prev?.at === Date.now() ? prev.count : 0) + 1, at: Date.now() }))`
-  into the `useTerminalFlowControl({...})` call (line 144), so a keystroke
-  rejected at the flow-control layer (already-known-disconnected) also
-  surfaces via the same `droppedInputEvent` the badge consumes.
+  ```ts
+  onDrop: () => {
+    const dropEvent = recordDrop(1);
+    if (dropEvent) setDroppedInputEvent(dropEvent);
+  }
+  ```
+  into the `useTerminalFlowControl({...})` call (line 144) — a single
+  reported occurrence via the same `recordDrop` helper used by Task 4.1.1.1,
+  no inline accumulation logic (the previous inline
+  `prev?.at === Date.now() ? prev.count : 0` attempt compared two different
+  `Date.now()` calls and effectively never matched — deleted entirely per
+  architecture-review.md, not fixed in place, since coalescing belongs in
+  `InputDropBadge` regardless).
+- Note (per adversarial-review.md's nitpick): `useTerminalFlowControl.ts` has
+  six near-identical `if (!pushMessageRef.current || !isConnectedRef.current)
+  return;` guards (lines 143, 171, 198, 234, 252, 294, 319 per grep). Only
+  the `sendInput` occurrence (line 143, keystroke input) is wired to
+  `onDrop` here — the other five guard resize/scrollback requests, not
+  keystrokes, and are deliberately left unwired as out of scope for this
+  "phantom keystroke" ticket. A future reader should not read this as an
+  incomplete fix.
 
 ---
 
@@ -511,18 +647,41 @@ of AC3; flag for stakeholder confirmation.)*
 
 #### Story 4.2.1 — Build the component, following `GitHubBadge.tsx`'s structural template
 
+`InputDropBadge` owns **all** coalescing across drop occurrences — both the
+visual running-total pill and triggering the assertive announcement itself
+(per architecture-review.md's remediation: `useTerminalStream` and
+`TerminalOutput.tsx` must not compute a running total or call `announce()`).
+
 ##### Task 4.2.1.1 — Create `web-app/src/components/sessions/InputDropBadge.tsx`
 
-- Props: `{ droppedInputEvent: { count: number; at: number } | null }`.
+- Props: `{ droppedInputEvent: DroppedInputEvent | null }` (import the type
+  from `useTerminalStream.ts`, or a shared location if one already exists
+  for hook-adjacent types).
 - Structural template: `GitHubBadge.tsx` — plain function component, renders
   `null` when `droppedInputEvent === null` (matches `GitHubBadge`'s
   `if (!hasPR && !hasRepo) return null;` idiom), `title`/`aria-label` built
   from state.
 - Internal state: `useRef<ReturnType<typeof setTimeout> | null>(null)` for
-  the visual dwell/fade timer (4000ms, per Unresolved Question 4) and a
+  the visual dwell/fade timer (4000ms, per Unresolved Question 3) and a
   `useRef<number>(0)` running total for the current coalescing episode,
   reset when a new `droppedInputEvent` arrives after the previous badge has
   fully faded (`at` gap larger than the dwell window).
+- **Announcement ownership**: call `const { message, announce } =
+  useLiveRegion();` inside this component. Whenever a new
+  `droppedInputEvent` prop arrives while the badge is already visible (i.e.
+  the dwell timer has not yet fired), update the running-total ref, update
+  the pill's rendered text, reset the dwell timer to a fresh 4000ms, **and**
+  call `announce(...)` once with the updated running-total string (e.g.
+  `"3 keystrokes not sent — connection interrupted"`) — this is the single
+  point that fires an announcement; nothing outside this component calls
+  `announce()`. When a new `droppedInputEvent` starts a fresh episode (badge
+  was not visible / prior episode's dwell timer had already fired), the
+  running total resets to that event's own `count` before rendering +
+  announcing.
+- Render, alongside the visible pill, this component's own (visually
+  hidden, `srOnly`) `<LiveRegion message={message} politeness="assertive"
+  role="alert" />` instance — the `LiveRegion` DOM node lives inside
+  `InputDropBadge`, not in `TerminalOutput.tsx` (see Task 4.2.2.2).
 - Renders a small pill: icon (reuse a simple "no-entry"/circle-slash inline
   SVG, `aria-hidden="true"`), text `"N keystroke(s) not sent"`, no color-only
   signal (pairs icon + text per `.claude/rules` a11y convention already used
@@ -530,6 +689,11 @@ of AC3; flag for stakeholder confirmation.)*
 - Uses `zIndex.floatingTerminalUI` (`theme-contract.css.ts:215`, already the
   named slot for terminal-anchored floating UI — no new slot needed).
 - No focus-stealing (per ux.md §3 — no `autoFocus`, no `tabIndex` on mount).
+- **Unmount safety (ux.md AC-RESOLVE-2):** the dwell-timer `useEffect` must
+  return a cleanup function that calls `clearTimeout` on the pending timer
+  ref — if the component unmounts while a timer is pending (e.g. the
+  terminal closes mid-flap), the timer must not fire a `setState` call
+  against an unmounted component. Covered by Task 4.2.3.1's unmount test.
 
 ##### Task 4.2.1.2 — Create `web-app/src/components/sessions/InputDropBadge.css.ts`
 
@@ -539,7 +703,7 @@ of AC3; flag for stakeholder confirmation.)*
 - Variants: default pill style using `vars.color.warning`/`vars.color.textPrimary`
   (a drop is a warning-severity event, not a hard error) — no bespoke color.
 
-#### Story 4.2.2 — Mount the badge and assertive announcement in `TerminalOutput.tsx`
+#### Story 4.2.2 — Mount the badge in `TerminalOutput.tsx`
 
 **AC3 (mount/wiring) Given-When-Then:**
 - **Given** `TerminalOutput` rendered for `sessionId = "sess-flap-1"` with an
@@ -548,9 +712,12 @@ of AC3; flag for stakeholder confirmation.)*
   `{ count: 3, at: 1700000000000 }`,
 - **Then** `InputDropBadge` renders visibly inside `styles.terminal`
   (alongside the existing `reconnectingBanner`/`hardFailedBanner` overlays,
-  `TerminalOutput.tsx:1652-1662`) **and** a `LiveRegion` with
-  `politeness="assertive"` `role="alert"` announces `"3 keystrokes not
-  sent — connection interrupted"` exactly once for this coalesced episode.
+  `TerminalOutput.tsx:1652-1662`) **and**, from inside `InputDropBadge`
+  itself (not from any `TerminalOutput.tsx`-level effect), a `LiveRegion`
+  with `politeness="assertive"` `role="alert"` announces `"3 keystrokes not
+  sent — connection interrupted"` exactly once for this coalesced episode —
+  `TerminalOutput.tsx` itself contains no `announce()`/`LiveRegion` wiring
+  of its own for this feature.
 
 ##### Task 4.2.2.1 — Extend `LiveRegion` with an optional `role` prop
 
@@ -559,21 +726,21 @@ of AC3; flag for stakeholder confirmation.)*
   compatible — no existing real consumer to break, confirmed via grep).
 - Pass through to the rendered `<div role={role} ...>` (line 22).
 
-##### Task 4.2.2.2 — Mount `InputDropBadge` + `LiveRegion` in `TerminalOutput.tsx`
+##### Task 4.2.2.2 — Mount `InputDropBadge` in `TerminalOutput.tsx`
 
 - File: `web-app/src/components/sessions/TerminalOutput.tsx`.
 - Destructure `droppedInputEvent` from the `useTerminalStream(...)` call
   (line 456).
-- Add `const { announce } = useLiveRegion();` and a `useEffect` keyed on
-  `droppedInputEvent?.at` that calls
-  `announce(\`${droppedInputEvent.count} keystroke${droppedInputEvent.count === 1 ? '' : 's'} not sent — connection interrupted\`)`
-  only when `at` actually changes (guards the "don't spam" requirement —
-  mirrors `ConnectionIndicator.tsx:31-36`'s `prevStateRef`-gated transition
-  announcement, not a raw effect on every render).
 - Render `<InputDropBadge droppedInputEvent={droppedInputEvent} />` inside
-  `styles.terminal` (near line 1652, alongside the reconnect banners) and
-  `<LiveRegion message={message} politeness="assertive" role="alert" />`
-  nearby (visually hidden, per `LiveRegion`'s existing `srOnly` styling).
+  `styles.terminal` (near line 1652, alongside the reconnect banners).
+- Do **not** add a `useLiveRegion()`/`announce()` call or a separate
+  `<LiveRegion>` element at this layer — per Story 4.2.1, `InputDropBadge`
+  owns its own announcement internally. (This replaces the plan's earlier,
+  buggy design of a `TerminalOutput`-level `useEffect` keyed on
+  `droppedInputEvent?.at` calling `announce()` on every raw event — that
+  design fired one assertive interruption per drop during a flapping
+  episode instead of coalescing, contradicting research/ux.md §4; see
+  architecture-review.md and adversarial-review.md.)
 
 #### Story 4.2.3 — Jest tests for `InputDropBadge`
 
@@ -584,19 +751,45 @@ of AC3; flag for stakeholder confirmation.)*
   the drop count when droppedInputEvent is set`; `has no color-only signal
   (icon + text both present)`; `does not set focus/tabIndex on mount`
   (queries `document.activeElement` is unchanged after render).
+- Unmount-safety test (ux.md AC-RESOLVE-2): render with a `droppedInputEvent`
+  set (dwell timer pending), `unmount()` before the 4000ms timer fires,
+  advance fake timers past 4000ms, assert no React `act()`/"state update on
+  an unmounted component" warning is logged (spy on `console.error`) — proves
+  the dwell-timer `useEffect`'s cleanup function actually clears the timer.
 - Run: `cd web-app && npx jest --no-coverage --testPathPatterns="InputDropBadge.test"`
 
-##### Task 4.2.3.2 — Accessibility assertions for the assertive announcement
+##### Task 4.2.3.2 — Coalescing and assertive-announcement assertions
 
-- Add to `TerminalOutput.test.tsx` (or a new focused test file if that file
-  is already large — check line count first): a test asserting that when
-  `droppedInputEvent` changes, a `role="alert"` element with
-  `aria-live="assertive"` and `aria-atomic="true"` appears in the DOM
-  containing the drop count, and that a second `droppedInputEvent` with a
-  new `at` (same count) still produces a new announcement text (covers
-  pitfalls.md §4's "identical string suppressed by AT" risk — assert the
-  announced string changes, e.g. includes a running total, not just the
-  same static copy twice).
+*(Rewritten during plan repair — the original scope asserted that a second
+`droppedInputEvent` with a new `at` "still produces a new announcement,"
+i.e. it tested that per-event spam was the correct behavior. Both
+architecture-review.md and adversarial-review.md flagged this as locking in
+the exact "spam risk" research/ux.md §4 explicitly warns against. Rewritten
+to assert coalescing instead.)*
+- File: `web-app/src/components/sessions/InputDropBadge.test.tsx` (same file
+  as Task 4.2.3.1, since coalescing/announcement now lives entirely inside
+  `InputDropBadge`).
+- Test: render with a first `droppedInputEvent={{ count: 1, at: t0 }}`;
+  assert one assertive announcement fired with text containing `"1
+  keystroke"`. Re-render (props update, simulating a second occurrence
+  arriving while the badge is still visible, `at: t0 + 800`) with
+  `droppedInputEvent={{ count: 2, at: t0 + 800 }}`; assert the pill's
+  rendered text now shows the **accumulated** total (`"3 keystrokes"`, i.e.
+  `1 + 2`), and a **second** announcement fired containing `"3 keystrokes"`
+  — not `"2 keystrokes"` (the raw latest-event count) and not a repeat of
+  `"1 keystroke"`. Re-render again with a third occurrence (`count: 1`) and
+  assert the total becomes `4` and a third announcement contains `"4
+  keystrokes"`.
+- Test: assert the **number of announcements fired** across N rapid
+  `droppedInputEvent` prop updates within the dwell window equals N (one per
+  content change), never fewer (proves it isn't silently dropping updates)
+  and never more (proves no per-byte/per-render spam) — bounding the
+  announcement count to actual content changes, per research/ux.md §4 and
+  AC-SR-3.
+- Test: a `role="alert"` element with `aria-live="assertive"` and
+  `aria-atomic="true"` is present whenever `droppedInputEvent` is non-null
+  (covers the DOM-shape assertion the original task also intended).
+- Run: `cd web-app && npx jest --no-coverage --testPathPatterns="InputDropBadge.test"`
 
 ---
 
@@ -714,6 +907,24 @@ Covers the Go portion of **AC4**.
   `04089969-0f19-499c-be34-2e8bcfc4f13e` and AC4.
 - Run: `go test ./server/services/... -run TestControlModeReadLoop_BoundedExitOnConnClose -race -v`
 
+##### Task 5.1.2.2 — Re-run the existing `connectrpc_websocket_test.go` suite to confirm zero regressions from the extraction
+
+- Task 5.1.1.1's extraction is a refactor of live production code (envelope
+  parse/EndStream/error classification moved verbatim into
+  `controlModeReadLoop`, per the Pattern Decisions table's "pure logic move"
+  claim) — that claim must be verified by actually running the pre-existing
+  27 tests in this file, not just the new test above (per
+  adversarial-review.md: nothing in the original Phase 5 scope directed this
+  explicitly, only implied by a later `make test`/`make ci`).
+- Run: `go test ./server/services/... -run TestStreamViaControlMode -race -v`
+  (or the equivalent invocation covering the full existing test set in
+  `connectrpc_websocket_test.go` — confirm the exact test-name pattern that
+  matches all 27 pre-existing tests before running, since some may not share
+  the `TestStreamViaControlMode` prefix).
+- All 27 must pass unchanged; any failure indicates the extraction altered
+  behavior, not just structure, and must be fixed before Phase 5 is
+  considered complete.
+
 ---
 
 ## Phase 6 — Manual Verification (AC5)
@@ -727,18 +938,26 @@ Covers the Go portion of **AC4**.
   `mcp__stapler-squad__create_session` (e.g. a throwaway directory session,
   not one-off, so it has a real tmux pane) with its terminal WebSocket open
   in a browser tab,
-- **When** `mcp__stapler-squad__pause_session` and
-  `mcp__stapler-squad__resume_session` are called in rapid alternation
-  (5-10 cycles, no delay) against that session's `id` — this drives
+- **When**, for each of 5-10 rapid `pause_session`/`resume_session` cycles
+  (no delay between calls) against that session's `id`, a distinguishable
+  counted string (e.g. `cycle-01-marker`, `cycle-02-marker`, ... — a
+  different, greppable token per cycle so a duplicate/replayed occurrence is
+  unambiguous) is **typed into the terminal immediately before or during**
+  each `pause_session` call — this is a required, scripted action for every
+  cycle, not a hypothetical aside — driving both
   `session/instance_tmux.go:471-472`'s `!i.started.Load() || i.Status ==
-  Paused` branch, producing the exact `"session not started or paused"`
-  error string from the ticket's log excerpt, and correspondingly flaps the
-  terminal WebSocket connect → error → reconnect cycle,
-- **Then** `mcp__stapler-squad__read_session_output` shows no repeated
-  phantom `"1"` (or any other single-character repeat) appearing in the
-  pane content that wasn't actually typed, and (if any input was in flight
-  during a pause boundary) the browser shows the `InputDropBadge` +
-  assertive announcement rather than silently losing or replaying it.
+  Paused` branch (producing the exact `"session not started or paused"`
+  error string from the ticket's log excerpt) and the client-side
+  epoch-guard/`MessageQueue`-drop mechanism this session's Phase 2-4 work
+  delivers,
+- **Then** `mcp__stapler-squad__read_session_output` confirms each cycle's
+  marker string appears **at most once** in the pane content (never
+  duplicated/replayed, and never appears as a phantom repeat of a prior
+  cycle's marker or a bare `"1"`), and for any cycle where a `pause_session`
+  call landed while a marker was still mid-flight (not yet fully
+  acknowledged), the browser shows the `InputDropBadge` + assertive
+  announcement for that cycle rather than silently losing or replaying the
+  keystrokes.
 
 ##### Task 6.1.1.1 — Run the repro against a manual test instance
 
@@ -752,10 +971,29 @@ Covers the Go portion of **AC4**.
   default, use the browser directly against `:8999` and `read_session_output`/
   manual terminal typing to observe — confirm which is reachable before
   starting).
-- Execute the pause/resume alternation from the Given-When-Then above while
-  the terminal tab is open and actively receiving keystrokes.
-- Record the outcome (pass/fail, any anomalies observed) directly on the
-  browser session and via `mcp__stapler-squad__report_progress` with
+- Execute the pause/resume alternation as an explicit script, one step per
+  cycle (repeat 5-10 times):
+  1. Type a distinguishable, cycle-numbered marker string into the terminal
+     (e.g. `echo cycle-0N-marker` or, if mid-command, just the raw token) —
+     immediately before or during the next step, not after.
+  2. Call `mcp__stapler-squad__pause_session` for the session `id`.
+  3. Call `mcp__stapler-squad__resume_session` for the same `id`, no
+     deliberate delay.
+  4. Call `mcp__stapler-squad__read_session_output` and confirm this cycle's
+     marker string appears exactly once (not zero times if it was
+     successfully sent before the pause landed, not more than once), and
+     note whether `InputDropBadge`/the assertive announcement fired for
+     this cycle.
+- This scripted-typing repro is a deliberate improvement over the two prior
+  (unmerged) branches' repro procedures — it uses
+  `mcp__stapler-squad__create_session` (which attaches a real
+  `SessionDriver`, unlike omnibar-created sessions, avoiding the
+  `dca931a04` wrong-session-creation-path mistake) and does not depend on
+  the trust dialog firing at all (sidestepping the prior branches'
+  `~/.claude.json` global-trust-cache dead end).
+- Record the outcome (pass/fail, any anomalies observed, and per-cycle
+  marker/badge results) directly on the browser session and via
+  `mcp__stapler-squad__report_progress` with
   `item_id=04089969-0f19-499c-be34-2e8bcfc4f13e`, `criteria_index=4`
   (AC5 is the 5th criterion, 0-indexed), `status` reflecting the outcome —
   per this repo's `backlog:done-4`/`backlog:fail-4` convention.
@@ -778,6 +1016,18 @@ Covers the Go portion of **AC4**.
   attached tabs is explicitly a distinct problem, not a regression of this
   work.
 
-##### Task 7.1.1.1 — No action
+##### Task 7.1.1.1 — Grep-verified confirmation (no production code change)
 
-Already satisfied; no code or doc change required.
+Make the "verified, no task" claim an actual, repeatable check rather than
+an assumption (per adversarial-review.md):
+
+- Run `grep -rn "BroadcastChannel\|localStorage" web-app/src/lib/hooks/useTerminalStream.ts web-app/src/lib/terminal/MessageQueue.ts`
+  and confirm no matches — this diff's actual scope (single-hook,
+  single-queue, single-Go-handler) never introduces cross-tab shared state
+  (a `BroadcastChannel`, a shared `localStorage` key, or similar) that would
+  make multi-tab behavior implicitly in-scope.
+- Confirm `requirements.md`'s Non-Goals section wording is unchanged by this
+  session's diff (still explicitly names concurrent multi-tab/multi-window
+  input as out of scope).
+- No production code or doc change required beyond this check; record the
+  grep's empty result as the AC6 evidence.
