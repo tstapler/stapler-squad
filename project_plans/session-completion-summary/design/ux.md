@@ -281,9 +281,14 @@ string):
 | `error_stage` | Displayed sentence |
 |---|---|
 | `"decisions"` | "Failed while computing approval decisions." |
-| `"diff"` | "Failed while computing the diff summary." |
+| `"diff"` | "Failed while computing the diff summary." (see note below — currently unreachable) |
+| `"persist"` | "Failed while saving the generated summary." |
 | `"restart-interrupted"` | "Generation was interrupted, possibly by a server restart." |
 | *(anything else / unmapped)* | "Something went wrong while generating this summary." |
+
+**Note on `"diff"`**: this stage is currently unreachable given `BuildDiffSnapshot`'s nil-safe, always-succeeds design (`plan.md` Task 1.3.1a — it returns a zero-value `DiffSnapshot` for `nil`/empty input rather than erroring). It's kept in the table as a defensive/future-proofing entry rather than a live path — informational, not a bug, and not something this pass proposes removing.
+
+**Note on `"persist"`**: this is the real failure mode from `plan.md` Task 1.5.2b step 6 (the final upsert write itself failing after the LLM cost has already been spent) — previously missing from this table, which meant it fell through to the generic "Something went wrong" text instead of a tailored message.
 
 `error_message` (the raw backend string) is never shown inline in the
 primary text — it's placed inside the collapsed "▸ Details" disclosure

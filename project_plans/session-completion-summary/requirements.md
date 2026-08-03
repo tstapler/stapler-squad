@@ -109,10 +109,19 @@ No manual action is required to produce the document.
 ### FR-2: Document content (AC-2)
 
 The generated markdown includes, at minimum:
-1. **What Was Done** — an LLM-generated narrative summarized from session
-   history (last N tool uses/outputs). Must have a deterministic,
-   non-LLM fallback line if the narrative generation step fails or times
-   out (see FR-5).
+1. **What Was Done** — an LLM-generated narrative grounded in the diff, the
+   approval-decision breakdown, and the session's goal/title (not raw
+   tool-use/tool-output history — see `implementation/plan.md`'s Pattern
+   Decisions table for the "Narrative input scope" decision). Grounding in
+   the goal/title alongside the diff and decisions gives the model real
+   signal for low-diff/high-effort sessions (e.g. exploration or
+   investigation work with little or no diff) without the hallucination
+   risk and cost of ingesting full tool-call transcripts; the deterministic
+   sections (Changes, Decisions, Timeline, Token usage) already cover the
+   factual "what changed," so the narrative's job is framing/context rather
+   than an independent factual record. Must have a deterministic, non-LLM
+   fallback line if the narrative generation step fails or times out (see
+   FR-5).
 2. **Changes** — files modified, added/removed line counts (from
    `DiffStats`/`GetSessionDiff`), and a link to the full diff.
 3. **Decisions** — counts and percentages for: auto-approved, manually
@@ -237,7 +246,14 @@ last.
 - 100% of sessions ending via natural exit or explicit stop/delete (i.e.
   every `EventExited` with reason != `reconcile-session-missing`, and every
   `EventStopped`) produce a retrievable `READY` or `ERROR`-with-Regenerate
-  summary — never silently nothing.
+  summary — never silently nothing — **for any session whose Summary tab or
+  standalone route is subsequently visited at least once** (which triggers
+  the lazy read-time staleness check, `session/session_summary_service.go`'s
+  `reconcileStaleness`). A session whose summary is never revisited after a
+  crash mid-generation stays stuck in `GENERATING` indefinitely — this is a
+  known, accepted v1 limitation of the lazy-reconciliation design (no
+  background sweep in v1); see `implementation/plan.md`'s Pattern Decisions
+  table, "FR-7 restart-survival dedup" row, for the trade-off rationale.
 - Zero measurable added latency to `stop_session`/`DeleteSession` RPC
   response time attributable to summary generation.
 - A generated document can be pasted as a PR body with no manual editing
