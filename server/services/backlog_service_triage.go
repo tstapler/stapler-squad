@@ -1216,21 +1216,39 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session
 
 // resolveSessionPath determines the file-system path for a new work session.
 // It first tries to create a git worktree; if that fails it falls back to a plain
-// directory. Returns the resolved path, whether a worktree was used, and any error.
+// directory session ONLY when repoPath is not git-managed at all. Returns the
+// resolved path, whether a worktree was used, and any error.
+//
+// BUG-057: a worktree-creation failure on a repo that IS git-managed (disk
+// quota, a detached HEAD, a locked ref — anything past the "not a git repo"
+// check) used to fall back to session.ResolveSessionPath(repoPath), which
+// returns repoPath itself unscoped. CreateDirectorySession would then spawn
+// the session directly in the live checkout — editing and committing against
+// the real working tree of whatever repo the backlog item targets, main
+// included — instead of failing loudly. Confirmed: this is the shape that
+// left session-resume-fix work committed directly on stapler-squad's own
+// main branch outside a worktree.
 func resolveSessionPath(repoPath, slug string) (worktreePath string, useWorktree bool, err error) {
 	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug)
 	if wtErr == nil {
 		return wt, true, nil
 	}
-	log.WarningLog.Printf("[SpawnSessionFromItem] worktree creation failed (%v), falling back to directory mode", wtErr)
-	dirPath, pathErr := session.ResolveSessionPath(repoPath)
+
+	resolvedRepo, pathErr := session.ResolveSessionPath(repoPath)
 	if pathErr != nil {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", pathErr))
 	}
-	if dirErr := session.EnsureDirectorySessionPath(dirPath); dirErr != nil {
+
+	if git.IsGitRepo(resolvedRepo) {
+		log.ErrorLog.Printf("[SpawnSessionFromItem] worktree creation failed for git-managed repo %s (%v)", resolvedRepo, wtErr)
+		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create git worktree: %w", wtErr))
+	}
+
+	log.WarningLog.Printf("[SpawnSessionFromItem] %s is not git-managed, falling back to directory mode (%v)", resolvedRepo, wtErr)
+	if dirErr := session.EnsureDirectorySessionPath(resolvedRepo); dirErr != nil {
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to prepare session directory: %w", dirErr))
 	}
-	return dirPath, false, nil
+	return resolvedRepo, false, nil
 }
 
 // writeSessionFiles writes the backlog slash-command files and context file to the session
