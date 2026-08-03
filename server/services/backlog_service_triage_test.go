@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -96,6 +97,64 @@ func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *tes
 }
 
 func intPtr(v int) *int { return &v }
+
+// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
+// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
+// which lives behind the "harness" build tag and isn't linked into normal
+// `go test` runs.
+func initGitRepoForTest(t *testing.T, dir string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, args := range [][]string{
+		{"init", dir},
+		{"-C", dir, "config", "user.email", "test@example.com"},
+		{"-C", dir, "config", "user.name", "Test"},
+	} {
+		cmd := safeexec.CommandContext(ctx, "git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, out)
+		}
+	}
+}
+
+// TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
+// guards BUG-057: a worktree-creation failure on a repo that IS git-managed
+// must fail loudly, not fall back to session.ResolveSessionPath(repoPath) —
+// which returns repoPath itself unscoped, silently pointing the spawned
+// session directly at the live checkout.
+func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoForTest(t, repoPath)
+
+	// Force CreateBacklogWorktree's worktree-directory creation to fail
+	// deterministically: os.MkdirAll(worktreesDir, ...) errors when a path
+	// component already exists as a regular file instead of a directory.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.Error(t, err)
+	assert.False(t, useWorktree)
+	assert.Empty(t, path, "must not silently fall back to a path when the repo is git-managed")
+}
+
+// TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged verifies
+// the legitimate fallback path still works: a plain, never-git-initialized
+// directory should still spawn a directory session at that path.
+func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(t *testing.T) {
+	repoPath := t.TempDir()
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.NoError(t, err)
+	assert.False(t, useWorktree)
+	resolved, resolveErr := session.ResolveSessionPath(repoPath)
+	require.NoError(t, resolveErr)
+	assert.Equal(t, resolved, path)
+}
 
 // --- Story 2.1.2: rework_cap durable write (notifyReworkCapHit) ---
 
