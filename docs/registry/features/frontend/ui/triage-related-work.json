@@ -1,0 +1,19 @@
+{
+  "id": "backlog:triage-related-work",
+  "type": "frontend",
+  "component": "TriageRelatedWorkSection",
+  "path": "web-app/src/components/backlog/TriageRelatedWorkSection.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "pre-populates query with backlog item title on mount",
+    "does not auto-search when itemTitle is empty",
+    "shows reassuring copy when zero matches found",
+    "shows inline alert with retry on search failure",
+    "clicking Retry re-invokes search with the same query and options",
+    "SessionHitCard renders as a link targeting the session's history page with sessionId and messageIndex",
+    "omits TriageRelatedWorkSection entirely when readOnly is true",
+    "e2e:triage-related-work - Find related past work surfaces prior sessions"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
+}

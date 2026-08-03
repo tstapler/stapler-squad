@@ -2179,9 +2179,13 @@ type ListClaudeHistoryRequest struct {
 	// Opaque pagination token returned by a previous ListClaudeHistory call.
 	// When set, returns the page of results after the cursor position.
 	// Leave empty to start from the beginning.
-	PageToken     string `protobuf:"bytes,5,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PageToken string `protobuf:"bytes,5,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	// When true, best-effort exclude sessions whose live Instance has
+	// Hidden=true — same semantics as SearchClaudeHistoryRequest's field of
+	// the same name. Default false.
+	ExcludeAutomationSessions *bool `protobuf:"varint,6,opt,name=exclude_automation_sessions,json=excludeAutomationSessions,proto3,oneof" json:"exclude_automation_sessions,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ListClaudeHistoryRequest) Reset() {
@@ -2247,6 +2251,13 @@ func (x *ListClaudeHistoryRequest) GetPageToken() string {
 		return x.PageToken
 	}
 	return ""
+}
+
+func (x *ListClaudeHistoryRequest) GetExcludeAutomationSessions() bool {
+	if x != nil && x.ExcludeAutomationSessions != nil {
+		return *x.ExcludeAutomationSessions
+	}
+	return false
 }
 
 type ListClaudeHistoryResponse struct {
@@ -2575,7 +2586,12 @@ type GetClaudeHistoryMessagesRequest struct {
 	// first `limit` messages.  Used by the preview panel to efficiently read
 	// the tail of a large conversation file without loading the whole file.
 	// Mutually exclusive with offset.
-	Tail          bool `protobuf:"varint,4,opt,name=tail,proto3" json:"tail,omitempty"`
+	Tail bool `protobuf:"varint,4,opt,name=tail,proto3" json:"tail,omitempty"`
+	// When set, overrides offset: the server centers the returned page on
+	// this message index (offset = max(0, anchor_index - limit/2)),
+	// enabling forward/backward scroll paging without re-running search.
+	// Mutually exclusive with tail.
+	AnchorIndex   *int32 `protobuf:"varint,5,opt,name=anchor_index,json=anchorIndex,proto3,oneof" json:"anchor_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2636,6 +2652,13 @@ func (x *GetClaudeHistoryMessagesRequest) GetTail() bool {
 		return x.Tail
 	}
 	return false
+}
+
+func (x *GetClaudeHistoryMessagesRequest) GetAnchorIndex() int32 {
+	if x != nil && x.AnchorIndex != nil {
+		return *x.AnchorIndex
+	}
+	return 0
 }
 
 type GetClaudeHistoryMessagesResponse struct {
@@ -2779,9 +2802,19 @@ type SearchClaudeHistoryRequest struct {
 	// Maximum number of results to return (default: 20, max: 100).
 	Limit int32 `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
 	// Number of results to skip for pagination (default: 0).
-	Offset        int32 `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Offset int32 `protobuf:"varint,7,opt,name=offset,proto3" json:"offset,omitempty"`
+	// When true, collapse results to one entry per session (highest-scored
+	// hit kept; others counted via more_matches_in_session_count). Default false.
+	GroupBySession *bool `protobuf:"varint,8,opt,name=group_by_session,json=groupBySession,proto3,oneof" json:"group_by_session,omitempty"`
+	// When true, populate context_window/bookend_first/bookend_last on each
+	// retained result. Default false.
+	IncludeContext *bool `protobuf:"varint,9,opt,name=include_context,json=includeContext,proto3,oneof" json:"include_context,omitempty"`
+	// When true, best-effort exclude sessions whose live Instance has
+	// Hidden=true. Sessions with no live Instance record are NOT excluded
+	// (signal unavailable, not assumed absent). Default false.
+	ExcludeAutomationSessions *bool `protobuf:"varint,10,opt,name=exclude_automation_sessions,json=excludeAutomationSessions,proto3,oneof" json:"exclude_automation_sessions,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *SearchClaudeHistoryRequest) Reset() {
@@ -2861,6 +2894,27 @@ func (x *SearchClaudeHistoryRequest) GetOffset() int32 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *SearchClaudeHistoryRequest) GetGroupBySession() bool {
+	if x != nil && x.GroupBySession != nil {
+		return *x.GroupBySession
+	}
+	return false
+}
+
+func (x *SearchClaudeHistoryRequest) GetIncludeContext() bool {
+	if x != nil && x.IncludeContext != nil {
+		return *x.IncludeContext
+	}
+	return false
+}
+
+func (x *SearchClaudeHistoryRequest) GetExcludeAutomationSessions() bool {
+	if x != nil && x.ExcludeAutomationSessions != nil {
+		return *x.ExcludeAutomationSessions
+	}
+	return false
 }
 
 type SearchClaudeHistoryResponse struct {
@@ -2950,7 +3004,19 @@ type SearchResult struct {
 	// Contextual snippets showing where the query terms appear.
 	Snippets []*SearchSnippet `protobuf:"bytes,6,rep,name=snippets,proto3" json:"snippets,omitempty"`
 	// Metadata about the match source.
-	Metadata      *SearchResultMetadata `protobuf:"bytes,7,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Metadata *SearchResultMetadata `protobuf:"bytes,7,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// Count of additional matching messages in this session beyond this hit.
+	// Only meaningful when the request set group_by_session=true.
+	MoreMatchesInSessionCount int32 `protobuf:"varint,8,opt,name=more_matches_in_session_count,json=moreMatchesInSessionCount,proto3" json:"more_matches_in_session_count,omitempty"`
+	// ±5 messages around message_index, read from the raw conversation file.
+	// Populated only when the request set include_context=true.
+	ContextWindow []*ClaudeMessage `protobuf:"bytes,9,rep,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
+	// First 3 messages of the session. Empty when context_window already
+	// spans the full session (see contextWindowAndBookends).
+	BookendFirst []*ClaudeMessage `protobuf:"bytes,10,rep,name=bookend_first,json=bookendFirst,proto3" json:"bookend_first,omitempty"`
+	// Last 3 messages of the session. Empty when context_window already
+	// spans the full session.
+	BookendLast   []*ClaudeMessage `protobuf:"bytes,11,rep,name=bookend_last,json=bookendLast,proto3" json:"bookend_last,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3030,6 +3096,34 @@ func (x *SearchResult) GetSnippets() []*SearchSnippet {
 func (x *SearchResult) GetMetadata() *SearchResultMetadata {
 	if x != nil {
 		return x.Metadata
+	}
+	return nil
+}
+
+func (x *SearchResult) GetMoreMatchesInSessionCount() int32 {
+	if x != nil {
+		return x.MoreMatchesInSessionCount
+	}
+	return 0
+}
+
+func (x *SearchResult) GetContextWindow() []*ClaudeMessage {
+	if x != nil {
+		return x.ContextWindow
+	}
+	return nil
+}
+
+func (x *SearchResult) GetBookendFirst() []*ClaudeMessage {
+	if x != nil {
+		return x.BookendFirst
+	}
+	return nil
+}
+
+func (x *SearchResult) GetBookendLast() []*ClaudeMessage {
+	if x != nil {
+		return x.BookendLast
 	}
 	return nil
 }
@@ -15301,17 +15395,19 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x03 \x01(\tR\acontent\x125\n" +
-	"\bmod_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\amodTime\"\xd0\x01\n" +
+	"\bmod_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\amodTime\"\xb5\x02\n" +
 	"\x18ListClaudeHistoryRequest\x12\x1d\n" +
 	"\aproject\x18\x01 \x01(\tH\x00R\aproject\x88\x01\x01\x12&\n" +
 	"\fsearch_query\x18\x02 \x01(\tH\x01R\vsearchQuery\x88\x01\x01\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x1b\n" +
 	"\tpage_size\x18\x04 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x05 \x01(\tR\tpageTokenB\n" +
+	"page_token\x18\x05 \x01(\tR\tpageToken\x12C\n" +
+	"\x1bexclude_automation_sessions\x18\x06 \x01(\bH\x02R\x19excludeAutomationSessions\x88\x01\x01B\n" +
 	"\n" +
 	"\b_projectB\x0f\n" +
-	"\r_search_query\"\x9e\x01\n" +
+	"\r_search_queryB\x1e\n" +
+	"\x1c_exclude_automation_sessions\"\x9e\x01\n" +
 	"\x19ListClaudeHistoryResponse\x128\n" +
 	"\aentries\x18\x01 \x03(\v2\x1e.session.v1.ClaudeHistoryEntryR\aentries\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +
@@ -15338,12 +15434,14 @@ const file_session_v1_session_proto_rawDesc = "" +
 	" \x01(\x0e2\x19.session.v1.SessionStatusR\rsessionStatus\x12,\n" +
 	"\x12git_status_summary\x18\v \x01(\tR\x10gitStatusSummary\x12.\n" +
 	"\x13last_commit_message\x18\f \x01(\tR\x11lastCommitMessage\x12&\n" +
-	"\x0fdiff_file_count\x18\r \x01(\x05R\rdiffFileCount\"s\n" +
+	"\x0fdiff_file_count\x18\r \x01(\x05R\rdiffFileCount\"\xac\x01\n" +
 	"\x1fGetClaudeHistoryMessagesRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x03 \x01(\x05R\x06offset\x12\x12\n" +
-	"\x04tail\x18\x04 \x01(\bR\x04tail\"z\n" +
+	"\x04tail\x18\x04 \x01(\bR\x04tail\x12&\n" +
+	"\fanchor_index\x18\x05 \x01(\x05H\x00R\vanchorIndex\x88\x01\x01B\x0f\n" +
+	"\r_anchor_index\"z\n" +
 	" GetClaudeHistoryMessagesResponse\x125\n" +
 	"\bmessages\x18\x01 \x03(\v2\x19.session.v1.ClaudeMessageR\bmessages\x12\x1f\n" +
 	"\vtotal_count\x18\x02 \x01(\x05R\n" +
@@ -15352,7 +15450,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x128\n" +
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x14\n" +
-	"\x05model\x18\x04 \x01(\tR\x05model\"\xc8\x02\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\"\xb3\x04\n" +
 	"\x1aSearchClaudeHistoryRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1d\n" +
 	"\aproject\x18\x02 \x01(\tH\x00R\aproject\x88\x01\x01\x12\x19\n" +
@@ -15361,17 +15459,24 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"start_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampH\x02R\tstartTime\x88\x01\x01\x12:\n" +
 	"\bend_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x03R\aendTime\x88\x01\x01\x12\x14\n" +
 	"\x05limit\x18\x06 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06offset\x18\a \x01(\x05R\x06offsetB\n" +
+	"\x06offset\x18\a \x01(\x05R\x06offset\x12-\n" +
+	"\x10group_by_session\x18\b \x01(\bH\x04R\x0egroupBySession\x88\x01\x01\x12,\n" +
+	"\x0finclude_context\x18\t \x01(\bH\x05R\x0eincludeContext\x88\x01\x01\x12C\n" +
+	"\x1bexclude_automation_sessions\x18\n" +
+	" \x01(\bH\x06R\x19excludeAutomationSessions\x88\x01\x01B\n" +
 	"\n" +
 	"\b_projectB\b\n" +
 	"\x06_modelB\r\n" +
 	"\v_start_timeB\v\n" +
-	"\t_end_time\"\xb5\x01\n" +
+	"\t_end_timeB\x13\n" +
+	"\x11_group_by_sessionB\x12\n" +
+	"\x10_include_contextB\x1e\n" +
+	"\x1c_exclude_automation_sessions\"\xb5\x01\n" +
 	"\x1bSearchClaudeHistoryResponse\x122\n" +
 	"\aresults\x18\x01 \x03(\v2\x18.session.v1.SearchResultR\aresults\x12#\n" +
 	"\rtotal_matches\x18\x02 \x01(\x05R\ftotalMatches\x12\"\n" +
 	"\rquery_time_ms\x18\x03 \x01(\x03R\vqueryTimeMs\x12\x19\n" +
-	"\bhas_more\x18\x04 \x01(\bR\ahasMore\"\x9a\x02\n" +
+	"\bhas_more\x18\x04 \x01(\bR\ahasMore\"\x9c\x04\n" +
 	"\fSearchResult\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12!\n" +
@@ -15380,7 +15485,12 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\rmessage_index\x18\x04 \x01(\x05R\fmessageIndex\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x02R\x05score\x125\n" +
 	"\bsnippets\x18\x06 \x03(\v2\x19.session.v1.SearchSnippetR\bsnippets\x12<\n" +
-	"\bmetadata\x18\a \x01(\v2 .session.v1.SearchResultMetadataR\bmetadata\"\xcc\x01\n" +
+	"\bmetadata\x18\a \x01(\v2 .session.v1.SearchResultMetadataR\bmetadata\x12@\n" +
+	"\x1dmore_matches_in_session_count\x18\b \x01(\x05R\x19moreMatchesInSessionCount\x12@\n" +
+	"\x0econtext_window\x18\t \x03(\v2\x19.session.v1.ClaudeMessageR\rcontextWindow\x12>\n" +
+	"\rbookend_first\x18\n" +
+	" \x03(\v2\x19.session.v1.ClaudeMessageR\fbookendFirst\x12<\n" +
+	"\fbookend_last\x18\v \x03(\v2\x19.session.v1.ClaudeMessageR\vbookendLast\"\xcc\x01\n" +
 	"\rSearchSnippet\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12E\n" +
 	"\x10highlight_ranges\x18\x02 \x03(\v2\x1a.session.v1.HighlightRangeR\x0fhighlightRanges\x12!\n" +
@@ -16763,347 +16873,350 @@ var file_session_v1_session_proto_depIdxs = []int32{
 	42,  // 36: session.v1.SearchClaudeHistoryResponse.results:type_name -> session.v1.SearchResult
 	43,  // 37: session.v1.SearchResult.snippets:type_name -> session.v1.SearchSnippet
 	45,  // 38: session.v1.SearchResult.metadata:type_name -> session.v1.SearchResultMetadata
-	44,  // 39: session.v1.SearchSnippet.highlight_ranges:type_name -> session.v1.HighlightRange
-	269, // 40: session.v1.SearchSnippet.message_time:type_name -> google.protobuf.Timestamp
-	269, // 41: session.v1.SearchResultMetadata.created_at:type_name -> google.protobuf.Timestamp
-	271, // 42: session.v1.GetPRInfoResponse.pr_info:type_name -> session.v1.PRInfo
-	272, // 43: session.v1.GetPRCommentsResponse.comments:type_name -> session.v1.PRComment
-	273, // 44: session.v1.SendNotificationRequest.notification_type:type_name -> session.v1.NotificationType
-	274, // 45: session.v1.SendNotificationRequest.priority:type_name -> session.v1.NotificationPriority
-	253, // 46: session.v1.SendNotificationRequest.metadata:type_name -> session.v1.SendNotificationRequest.MetadataEntry
-	262, // 47: session.v1.RenameSessionResponse.session:type_name -> session.v1.Session
-	262, // 48: session.v1.RestartSessionResponse.session:type_name -> session.v1.Session
-	275, // 49: session.v1.GetWorkspaceInfoResponse.vcs_info:type_name -> session.v1.VCSInfo
-	276, // 50: session.v1.ListWorkspaceTargetsResponse.targets:type_name -> session.v1.AvailableWorkspaceTargets
-	277, // 51: session.v1.SwitchWorkspaceRequest.switch_type:type_name -> session.v1.WorkspaceSwitchType
-	278, // 52: session.v1.SwitchWorkspaceRequest.change_strategy:type_name -> session.v1.ChangeStrategy
-	279, // 53: session.v1.ListPendingApprovalsResponse.approvals:type_name -> session.v1.PendingApprovalProto
-	280, // 54: session.v1.SwitchWorkspaceResponse.vcs_type:type_name -> session.v1.VCSType
-	262, // 55: session.v1.SwitchWorkspaceResponse.session:type_name -> session.v1.Session
-	273, // 56: session.v1.NotificationHistoryRecord.notification_type:type_name -> session.v1.NotificationType
-	274, // 57: session.v1.NotificationHistoryRecord.priority:type_name -> session.v1.NotificationPriority
-	254, // 58: session.v1.NotificationHistoryRecord.metadata:type_name -> session.v1.NotificationHistoryRecord.MetadataEntry
-	269, // 59: session.v1.NotificationHistoryRecord.created_at:type_name -> google.protobuf.Timestamp
-	269, // 60: session.v1.NotificationHistoryRecord.read_at:type_name -> google.protobuf.Timestamp
-	269, // 61: session.v1.NotificationHistoryRecord.last_occurred_at:type_name -> google.protobuf.Timestamp
-	273, // 62: session.v1.GetNotificationHistoryRequest.type_filter:type_name -> session.v1.NotificationType
-	76,  // 63: session.v1.GetNotificationHistoryResponse.notifications:type_name -> session.v1.NotificationHistoryRecord
-	281, // 64: session.v1.ListApprovalRulesResponse.rules:type_name -> session.v1.ApprovalRuleProto
-	281, // 65: session.v1.UpsertApprovalRuleRequest.rule:type_name -> session.v1.ApprovalRuleProto
-	281, // 66: session.v1.UpsertApprovalRuleResponse.rule:type_name -> session.v1.ApprovalRuleProto
-	282, // 67: session.v1.GetApprovalAnalyticsResponse.summary:type_name -> session.v1.AnalyticsSummaryProto
-	283, // 68: session.v1.GetApprovalAnalyticsResponse.daily_buckets:type_name -> session.v1.DailyBucketProto
-	284, // 69: session.v1.GetProgramAnalyticsResponse.subcommands:type_name -> session.v1.SubcommandBreakdownProto
-	283, // 70: session.v1.GetProgramAnalyticsResponse.trend:type_name -> session.v1.DailyBucketProto
-	285, // 71: session.v1.ListDatabasesResponse.databases:type_name -> session.v1.DatabaseInfo
-	285, // 72: session.v1.GetCurrentDatabaseResponse.database:type_name -> session.v1.DatabaseInfo
-	286, // 73: session.v1.CreateCheckpointResponse.checkpoint:type_name -> session.v1.CheckpointProto
-	286, // 74: session.v1.ListCheckpointsResponse.checkpoints:type_name -> session.v1.CheckpointProto
-	262, // 75: session.v1.ForkSessionResponse.session:type_name -> session.v1.Session
-	287, // 76: session.v1.ListFilesResponse.files:type_name -> session.v1.FileNode
-	287, // 77: session.v1.SearchFilesResponse.files:type_name -> session.v1.FileNode
-	115, // 78: session.v1.ListPathCompletionsResponse.entries:type_name -> session.v1.PathEntry
-	255, // 79: session.v1.ProfileDefaultsProto.env_vars:type_name -> session.v1.ProfileDefaultsProto.EnvVarsEntry
-	269, // 80: session.v1.ProfileDefaultsProto.created_at:type_name -> google.protobuf.Timestamp
-	269, // 81: session.v1.ProfileDefaultsProto.updated_at:type_name -> google.protobuf.Timestamp
-	116, // 82: session.v1.DirectoryRuleProto.overrides:type_name -> session.v1.ProfileDefaultsProto
-	256, // 83: session.v1.SessionDefaultsConfig.env_vars:type_name -> session.v1.SessionDefaultsConfig.EnvVarsEntry
-	257, // 84: session.v1.SessionDefaultsConfig.profiles:type_name -> session.v1.SessionDefaultsConfig.ProfilesEntry
-	117, // 85: session.v1.SessionDefaultsConfig.directory_rules:type_name -> session.v1.DirectoryRuleProto
-	118, // 86: session.v1.GetSessionDefaultsResponse.defaults:type_name -> session.v1.SessionDefaultsConfig
-	258, // 87: session.v1.ResolveDefaultsResponse.env_vars:type_name -> session.v1.ResolveDefaultsResponse.EnvVarsEntry
-	259, // 88: session.v1.UpdateGlobalDefaultsRequest.env_vars:type_name -> session.v1.UpdateGlobalDefaultsRequest.EnvVarsEntry
-	118, // 89: session.v1.UpdateGlobalDefaultsResponse.defaults:type_name -> session.v1.SessionDefaultsConfig
-	116, // 90: session.v1.UpsertProfileRequest.profile:type_name -> session.v1.ProfileDefaultsProto
-	116, // 91: session.v1.UpsertProfileResponse.profile:type_name -> session.v1.ProfileDefaultsProto
-	117, // 92: session.v1.UpsertDirectoryRuleRequest.rule:type_name -> session.v1.DirectoryRuleProto
-	117, // 93: session.v1.UpsertDirectoryRuleResponse.rule:type_name -> session.v1.DirectoryRuleProto
-	260, // 94: session.v1.AliasProto.env_vars:type_name -> session.v1.AliasProto.EnvVarsEntry
-	263, // 95: session.v1.AliasProto.session_type:type_name -> session.v1.SessionType
-	133, // 96: session.v1.ListAliasesResponse.aliases:type_name -> session.v1.AliasProto
-	133, // 97: session.v1.UpsertAliasRequest.alias:type_name -> session.v1.AliasProto
-	133, // 98: session.v1.UpsertAliasResponse.alias:type_name -> session.v1.AliasProto
-	141, // 99: session.v1.ListWorktreesResponse.worktrees:type_name -> session.v1.WorktreeEntry
-	269, // 100: session.v1.PromptHistoryEntry.last_used:type_name -> google.protobuf.Timestamp
-	269, // 101: session.v1.PromptHistoryEntry.created_at:type_name -> google.protobuf.Timestamp
-	143, // 102: session.v1.ListPromptHistoryResponse.entries:type_name -> session.v1.PromptHistoryEntry
-	263, // 103: session.v1.BatchSessionRequest.session_type:type_name -> session.v1.SessionType
-	148, // 104: session.v1.BatchCreateSessionsRequest.sessions:type_name -> session.v1.BatchSessionRequest
-	149, // 105: session.v1.BatchCreateSessionsResponse.results:type_name -> session.v1.BatchCreateResult
-	269, // 106: session.v1.Project.created_at:type_name -> google.protobuf.Timestamp
-	269, // 107: session.v1.Project.updated_at:type_name -> google.protobuf.Timestamp
-	154, // 108: session.v1.CreateProjectResponse.project:type_name -> session.v1.Project
-	154, // 109: session.v1.ListProjectsResponse.projects:type_name -> session.v1.Project
-	154, // 110: session.v1.UpdateProjectResponse.project:type_name -> session.v1.Project
-	171, // 111: session.v1.LogClientEventsRequest.entries:type_name -> session.v1.ClientLogEntry
-	269, // 112: session.v1.ErrorEventRecord.first_seen:type_name -> google.protobuf.Timestamp
-	269, // 113: session.v1.ErrorEventRecord.last_seen:type_name -> google.protobuf.Timestamp
-	175, // 114: session.v1.ListErrorsResponse.errors:type_name -> session.v1.ErrorEventRecord
-	181, // 115: session.v1.GetFeatureFlagsResponse.flags:type_name -> session.v1.FeatureFlag
-	185, // 116: session.v1.InstallHooksResponse.status:type_name -> session.v1.GetHookStatusResponse
-	181, // 117: session.v1.UpdateFeatureFlagResponse.flag:type_name -> session.v1.FeatureFlag
-	269, // 118: session.v1.EscapeEventProto.wall_time:type_name -> google.protobuf.Timestamp
-	269, // 119: session.v1.QueryEscapeAnalyticsRequest.start_time:type_name -> google.protobuf.Timestamp
-	269, // 120: session.v1.QueryEscapeAnalyticsRequest.end_time:type_name -> google.protobuf.Timestamp
-	190, // 121: session.v1.QueryEscapeAnalyticsResponse.events:type_name -> session.v1.EscapeEventProto
-	269, // 122: session.v1.GetEscapeAnalyticsSummaryRequest.start_time:type_name -> google.protobuf.Timestamp
-	269, // 123: session.v1.GetEscapeAnalyticsSummaryRequest.end_time:type_name -> google.protobuf.Timestamp
-	193, // 124: session.v1.GetEscapeAnalyticsSummaryResponse.histogram:type_name -> session.v1.EscapeSequenceCount
-	288, // 125: session.v1.SpawnShellResponse.shell:type_name -> session.v1.Shell
-	288, // 126: session.v1.ListShellsResponse.shells:type_name -> session.v1.Shell
-	289, // 127: session.v1.GenerateSuggestedRuleRequest.source:type_name -> session.v1.SuggestionSource
-	290, // 128: session.v1.GenerateSuggestedRuleResponse.suggestions:type_name -> session.v1.SuggestedRuleProto
-	262, // 129: session.v1.HibernateSessionResponse.session:type_name -> session.v1.Session
-	262, // 130: session.v1.ResumeHibernatedSessionResponse.session:type_name -> session.v1.Session
-	214, // 131: session.v1.ValidateRulesResponse.results:type_name -> session.v1.ParsedRuleResult
-	281, // 132: session.v1.ParsedRuleResult.rule:type_name -> session.v1.ApprovalRuleProto
-	281, // 133: session.v1.BulkUpsertRulesRequest.rules:type_name -> session.v1.ApprovalRuleProto
-	281, // 134: session.v1.GetConfigFileRulesResponse.rules:type_name -> session.v1.ApprovalRuleProto
-	281, // 135: session.v1.SaveRulesToConfigFileRequest.rule:type_name -> session.v1.ApprovalRuleProto
-	269, // 136: session.v1.WorkflowProto.created_at:type_name -> google.protobuf.Timestamp
-	269, // 137: session.v1.WorkflowProto.updated_at:type_name -> google.protobuf.Timestamp
-	223, // 138: session.v1.CreateWorkflowResponse.workflow:type_name -> session.v1.WorkflowProto
-	223, // 139: session.v1.UpdateWorkflowResponse.workflow:type_name -> session.v1.WorkflowProto
-	223, // 140: session.v1.ListWorkflowsResponse.workflows:type_name -> session.v1.WorkflowProto
-	234, // 141: session.v1.ListSlashCommandsResponse.commands:type_name -> session.v1.SlashCommandInfo
-	269, // 142: session.v1.DetectionEventProto.timestamp:type_name -> google.protobuf.Timestamp
-	237, // 143: session.v1.GetDetectionEventsResponse.events:type_name -> session.v1.DetectionEventProto
-	269, // 144: session.v1.ProviderLimitsProto.requests_reset:type_name -> google.protobuf.Timestamp
-	269, // 145: session.v1.ProviderLimitsProto.tokens_reset:type_name -> google.protobuf.Timestamp
-	269, // 146: session.v1.ProviderLimitsProto.fetched_at:type_name -> google.protobuf.Timestamp
-	249, // 147: session.v1.GetProviderLimitsResponse.limits:type_name -> session.v1.ProviderLimitsProto
-	116, // 148: session.v1.SessionDefaultsConfig.ProfilesEntry.value:type_name -> session.v1.ProfileDefaultsProto
-	0,   // 149: session.v1.SessionService.ListSessions:input_type -> session.v1.ListSessionsRequest
-	2,   // 150: session.v1.SessionService.GetSession:input_type -> session.v1.GetSessionRequest
-	4,   // 151: session.v1.SessionService.CreateSession:input_type -> session.v1.CreateSessionRequest
-	6,   // 152: session.v1.SessionService.UpdateSession:input_type -> session.v1.UpdateSessionRequest
-	8,   // 153: session.v1.SessionService.DeleteSession:input_type -> session.v1.DeleteSessionRequest
-	10,  // 154: session.v1.SessionService.WatchSessions:input_type -> session.v1.WatchSessionsRequest
-	291, // 155: session.v1.SessionService.StreamTerminal:input_type -> session.v1.TerminalData
-	11,  // 156: session.v1.SessionService.GetSessionDiff:input_type -> session.v1.GetSessionDiffRequest
-	13,  // 157: session.v1.SessionService.GetVCSStatus:input_type -> session.v1.GetVCSStatusRequest
-	15,  // 158: session.v1.SessionService.GetReviewQueue:input_type -> session.v1.GetReviewQueueRequest
-	17,  // 159: session.v1.SessionService.AcknowledgeSession:input_type -> session.v1.AcknowledgeSessionRequest
-	19,  // 160: session.v1.SessionService.GetLogs:input_type -> session.v1.GetLogsRequest
-	22,  // 161: session.v1.SessionService.WatchReviewQueue:input_type -> session.v1.WatchReviewQueueRequest
-	23,  // 162: session.v1.SessionService.LogUserInteraction:input_type -> session.v1.LogUserInteractionRequest
-	25,  // 163: session.v1.SessionService.GetClaudeConfig:input_type -> session.v1.GetClaudeConfigRequest
-	27,  // 164: session.v1.SessionService.ListClaudeConfigs:input_type -> session.v1.ListClaudeConfigsRequest
-	29,  // 165: session.v1.SessionService.UpdateClaudeConfig:input_type -> session.v1.UpdateClaudeConfigRequest
-	32,  // 166: session.v1.SessionService.ListClaudeHistory:input_type -> session.v1.ListClaudeHistoryRequest
-	34,  // 167: session.v1.SessionService.GetClaudeHistoryDetail:input_type -> session.v1.GetClaudeHistoryDetailRequest
-	37,  // 168: session.v1.SessionService.GetClaudeHistoryMessages:input_type -> session.v1.GetClaudeHistoryMessagesRequest
-	40,  // 169: session.v1.SessionService.SearchClaudeHistory:input_type -> session.v1.SearchClaudeHistoryRequest
-	46,  // 170: session.v1.SessionService.GetPRInfo:input_type -> session.v1.GetPRInfoRequest
-	48,  // 171: session.v1.SessionService.GetPRComments:input_type -> session.v1.GetPRCommentsRequest
-	50,  // 172: session.v1.SessionService.PostPRComment:input_type -> session.v1.PostPRCommentRequest
-	52,  // 173: session.v1.SessionService.MergePR:input_type -> session.v1.MergePRRequest
-	54,  // 174: session.v1.SessionService.ClosePR:input_type -> session.v1.ClosePRRequest
-	56,  // 175: session.v1.SessionService.SendNotification:input_type -> session.v1.SendNotificationRequest
-	58,  // 176: session.v1.SessionService.FocusWindow:input_type -> session.v1.FocusWindowRequest
-	60,  // 177: session.v1.SessionService.RenameSession:input_type -> session.v1.RenameSessionRequest
-	62,  // 178: session.v1.SessionService.RestartSession:input_type -> session.v1.RestartSessionRequest
-	64,  // 179: session.v1.SessionService.GetWorkspaceInfo:input_type -> session.v1.GetWorkspaceInfoRequest
-	66,  // 180: session.v1.SessionService.ListWorkspaceTargets:input_type -> session.v1.ListWorkspaceTargetsRequest
-	68,  // 181: session.v1.SessionService.SwitchWorkspace:input_type -> session.v1.SwitchWorkspaceRequest
-	69,  // 182: session.v1.SessionService.ResolveApproval:input_type -> session.v1.ResolveApprovalRequest
-	71,  // 183: session.v1.SessionService.ListPendingApprovals:input_type -> session.v1.ListPendingApprovalsRequest
-	74,  // 184: session.v1.SessionService.CreateDebugSnapshot:input_type -> session.v1.CreateDebugSnapshotRequest
-	77,  // 185: session.v1.SessionService.GetNotificationHistory:input_type -> session.v1.GetNotificationHistoryRequest
-	79,  // 186: session.v1.SessionService.MarkNotificationRead:input_type -> session.v1.MarkNotificationReadRequest
-	81,  // 187: session.v1.SessionService.ClearNotificationHistory:input_type -> session.v1.ClearNotificationHistoryRequest
-	83,  // 188: session.v1.SessionService.ListApprovalRules:input_type -> session.v1.ListApprovalRulesRequest
-	85,  // 189: session.v1.SessionService.UpsertApprovalRule:input_type -> session.v1.UpsertApprovalRuleRequest
-	87,  // 190: session.v1.SessionService.DeleteApprovalRule:input_type -> session.v1.DeleteApprovalRuleRequest
-	89,  // 191: session.v1.SessionService.GetApprovalAnalytics:input_type -> session.v1.GetApprovalAnalyticsRequest
-	91,  // 192: session.v1.SessionService.GetProgramAnalytics:input_type -> session.v1.GetProgramAnalyticsRequest
-	206, // 193: session.v1.SessionService.GenerateSuggestedRule:input_type -> session.v1.GenerateSuggestedRuleRequest
-	212, // 194: session.v1.SessionService.ValidateRules:input_type -> session.v1.ValidateRulesRequest
-	215, // 195: session.v1.SessionService.ExportRules:input_type -> session.v1.ExportRulesRequest
-	217, // 196: session.v1.SessionService.BulkUpsertRules:input_type -> session.v1.BulkUpsertRulesRequest
-	219, // 197: session.v1.SessionService.GetConfigFileRules:input_type -> session.v1.GetConfigFileRulesRequest
-	221, // 198: session.v1.SessionService.SaveRulesToConfigFile:input_type -> session.v1.SaveRulesToConfigFileRequest
-	93,  // 199: session.v1.SessionService.ListDatabases:input_type -> session.v1.ListDatabasesRequest
-	95,  // 200: session.v1.SessionService.GetCurrentDatabase:input_type -> session.v1.GetCurrentDatabaseRequest
-	97,  // 201: session.v1.SessionService.SwitchDatabase:input_type -> session.v1.SwitchDatabaseRequest
-	99,  // 202: session.v1.SessionService.MergeDatabase:input_type -> session.v1.MergeDatabaseRequest
-	101, // 203: session.v1.SessionService.CreateCheckpoint:input_type -> session.v1.CreateCheckpointRequest
-	103, // 204: session.v1.SessionService.ListCheckpoints:input_type -> session.v1.ListCheckpointsRequest
-	105, // 205: session.v1.SessionService.ForkSession:input_type -> session.v1.ForkSessionRequest
-	179, // 206: session.v1.SessionService.ClearConversationState:input_type -> session.v1.ClearConversationStateRequest
-	107, // 207: session.v1.SessionService.ListFiles:input_type -> session.v1.ListFilesRequest
-	109, // 208: session.v1.SessionService.GetFileContent:input_type -> session.v1.GetFileContentRequest
-	111, // 209: session.v1.SessionService.SearchFiles:input_type -> session.v1.SearchFilesRequest
-	113, // 210: session.v1.SessionService.ListPathCompletions:input_type -> session.v1.ListPathCompletionsRequest
-	119, // 211: session.v1.SessionService.GetSessionDefaults:input_type -> session.v1.GetSessionDefaultsRequest
-	121, // 212: session.v1.SessionService.ResolveDefaults:input_type -> session.v1.ResolveDefaultsRequest
-	123, // 213: session.v1.SessionService.UpdateGlobalDefaults:input_type -> session.v1.UpdateGlobalDefaultsRequest
-	125, // 214: session.v1.SessionService.UpsertProfile:input_type -> session.v1.UpsertProfileRequest
-	127, // 215: session.v1.SessionService.DeleteProfile:input_type -> session.v1.DeleteProfileRequest
-	129, // 216: session.v1.SessionService.UpsertDirectoryRule:input_type -> session.v1.UpsertDirectoryRuleRequest
-	131, // 217: session.v1.SessionService.DeleteDirectoryRule:input_type -> session.v1.DeleteDirectoryRuleRequest
-	140, // 218: session.v1.SessionService.ListWorktrees:input_type -> session.v1.ListWorktreesRequest
-	144, // 219: session.v1.SessionService.ListPromptHistory:input_type -> session.v1.ListPromptHistoryRequest
-	146, // 220: session.v1.SessionService.DeletePromptHistory:input_type -> session.v1.DeletePromptHistoryRequest
-	150, // 221: session.v1.SessionService.BatchCreateSessions:input_type -> session.v1.BatchCreateSessionsRequest
-	152, // 222: session.v1.SessionService.RunOneShot:input_type -> session.v1.RunOneShotRequest
-	155, // 223: session.v1.SessionService.CreateProject:input_type -> session.v1.CreateProjectRequest
-	157, // 224: session.v1.SessionService.ListProjects:input_type -> session.v1.ListProjectsRequest
-	159, // 225: session.v1.SessionService.UpdateProject:input_type -> session.v1.UpdateProjectRequest
-	161, // 226: session.v1.SessionService.DeleteProject:input_type -> session.v1.DeleteProjectRequest
-	163, // 227: session.v1.SessionService.AssignSessionsToProject:input_type -> session.v1.AssignSessionsToProjectRequest
-	165, // 228: session.v1.SessionService.ListBranches:input_type -> session.v1.ListBranchesRequest
-	167, // 229: session.v1.SessionService.GetTerminalSnapshot:input_type -> session.v1.GetTerminalSnapshotRequest
-	169, // 230: session.v1.SessionService.WriteToSession:input_type -> session.v1.WriteToSessionRequest
-	172, // 231: session.v1.SessionService.LogClientEvents:input_type -> session.v1.LogClientEventsRequest
-	174, // 232: session.v1.SessionService.ListErrors:input_type -> session.v1.ListErrorsRequest
-	177, // 233: session.v1.SessionService.AcknowledgeError:input_type -> session.v1.AcknowledgeErrorRequest
-	182, // 234: session.v1.SessionService.GetFeatureFlags:input_type -> session.v1.GetFeatureFlagsRequest
-	188, // 235: session.v1.SessionService.UpdateFeatureFlag:input_type -> session.v1.UpdateFeatureFlagRequest
-	191, // 236: session.v1.SessionService.QueryEscapeAnalytics:input_type -> session.v1.QueryEscapeAnalyticsRequest
-	194, // 237: session.v1.SessionService.GetEscapeAnalyticsSummary:input_type -> session.v1.GetEscapeAnalyticsSummaryRequest
-	208, // 238: session.v1.SessionService.HibernateSession:input_type -> session.v1.HibernateSessionRequest
-	210, // 239: session.v1.SessionService.ResumeHibernatedSession:input_type -> session.v1.ResumeHibernatedSessionRequest
-	196, // 240: session.v1.SessionService.SpawnShell:input_type -> session.v1.SpawnShellRequest
-	198, // 241: session.v1.SessionService.StopShell:input_type -> session.v1.StopShellRequest
-	200, // 242: session.v1.SessionService.RestartShell:input_type -> session.v1.RestartShellRequest
-	202, // 243: session.v1.SessionService.ListShells:input_type -> session.v1.ListShellsRequest
-	204, // 244: session.v1.SessionService.DeleteShell:input_type -> session.v1.DeleteShellRequest
-	224, // 245: session.v1.SessionService.CreateWorkflow:input_type -> session.v1.CreateWorkflowRequest
-	226, // 246: session.v1.SessionService.UpdateWorkflow:input_type -> session.v1.UpdateWorkflowRequest
-	228, // 247: session.v1.SessionService.DeleteWorkflow:input_type -> session.v1.DeleteWorkflowRequest
-	230, // 248: session.v1.SessionService.ListWorkflows:input_type -> session.v1.ListWorkflowsRequest
-	232, // 249: session.v1.SessionService.RunWorkflow:input_type -> session.v1.RunWorkflowRequest
-	238, // 250: session.v1.SessionService.GetDetectionEvents:input_type -> session.v1.GetDetectionEventsRequest
-	233, // 251: session.v1.SessionService.ListSlashCommands:input_type -> session.v1.ListSlashCommandsRequest
-	134, // 252: session.v1.SessionService.ListAliases:input_type -> session.v1.ListAliasesRequest
-	136, // 253: session.v1.SessionService.UpsertAlias:input_type -> session.v1.UpsertAliasRequest
-	138, // 254: session.v1.SessionService.DeleteAlias:input_type -> session.v1.DeleteAliasRequest
-	240, // 255: session.v1.SessionService.ArchiveSession:input_type -> session.v1.ArchiveSessionRequest
-	242, // 256: session.v1.SessionService.UnarchiveSession:input_type -> session.v1.UnarchiveSessionRequest
-	244, // 257: session.v1.SessionService.ArchiveWorkflowSessions:input_type -> session.v1.ArchiveWorkflowSessionsRequest
-	246, // 258: session.v1.SessionService.DeleteWorkflowFailedSessions:input_type -> session.v1.DeleteWorkflowFailedSessionsRequest
-	248, // 259: session.v1.SessionService.GetProviderLimits:input_type -> session.v1.GetProviderLimitsRequest
-	184, // 260: session.v1.SessionService.GetHookStatus:input_type -> session.v1.GetHookStatusRequest
-	186, // 261: session.v1.SessionService.InstallHooks:input_type -> session.v1.InstallHooksRequest
-	1,   // 262: session.v1.SessionService.ListSessions:output_type -> session.v1.ListSessionsResponse
-	3,   // 263: session.v1.SessionService.GetSession:output_type -> session.v1.GetSessionResponse
-	5,   // 264: session.v1.SessionService.CreateSession:output_type -> session.v1.CreateSessionResponse
-	7,   // 265: session.v1.SessionService.UpdateSession:output_type -> session.v1.UpdateSessionResponse
-	9,   // 266: session.v1.SessionService.DeleteSession:output_type -> session.v1.DeleteSessionResponse
-	292, // 267: session.v1.SessionService.WatchSessions:output_type -> session.v1.SessionEvent
-	291, // 268: session.v1.SessionService.StreamTerminal:output_type -> session.v1.TerminalData
-	12,  // 269: session.v1.SessionService.GetSessionDiff:output_type -> session.v1.GetSessionDiffResponse
-	14,  // 270: session.v1.SessionService.GetVCSStatus:output_type -> session.v1.GetVCSStatusResponse
-	16,  // 271: session.v1.SessionService.GetReviewQueue:output_type -> session.v1.GetReviewQueueResponse
-	18,  // 272: session.v1.SessionService.AcknowledgeSession:output_type -> session.v1.AcknowledgeSessionResponse
-	20,  // 273: session.v1.SessionService.GetLogs:output_type -> session.v1.GetLogsResponse
-	293, // 274: session.v1.SessionService.WatchReviewQueue:output_type -> session.v1.ReviewQueueEvent
-	24,  // 275: session.v1.SessionService.LogUserInteraction:output_type -> session.v1.LogUserInteractionResponse
-	26,  // 276: session.v1.SessionService.GetClaudeConfig:output_type -> session.v1.GetClaudeConfigResponse
-	28,  // 277: session.v1.SessionService.ListClaudeConfigs:output_type -> session.v1.ListClaudeConfigsResponse
-	30,  // 278: session.v1.SessionService.UpdateClaudeConfig:output_type -> session.v1.UpdateClaudeConfigResponse
-	33,  // 279: session.v1.SessionService.ListClaudeHistory:output_type -> session.v1.ListClaudeHistoryResponse
-	35,  // 280: session.v1.SessionService.GetClaudeHistoryDetail:output_type -> session.v1.GetClaudeHistoryDetailResponse
-	38,  // 281: session.v1.SessionService.GetClaudeHistoryMessages:output_type -> session.v1.GetClaudeHistoryMessagesResponse
-	41,  // 282: session.v1.SessionService.SearchClaudeHistory:output_type -> session.v1.SearchClaudeHistoryResponse
-	47,  // 283: session.v1.SessionService.GetPRInfo:output_type -> session.v1.GetPRInfoResponse
-	49,  // 284: session.v1.SessionService.GetPRComments:output_type -> session.v1.GetPRCommentsResponse
-	51,  // 285: session.v1.SessionService.PostPRComment:output_type -> session.v1.PostPRCommentResponse
-	53,  // 286: session.v1.SessionService.MergePR:output_type -> session.v1.MergePRResponse
-	55,  // 287: session.v1.SessionService.ClosePR:output_type -> session.v1.ClosePRResponse
-	57,  // 288: session.v1.SessionService.SendNotification:output_type -> session.v1.SendNotificationResponse
-	59,  // 289: session.v1.SessionService.FocusWindow:output_type -> session.v1.FocusWindowResponse
-	61,  // 290: session.v1.SessionService.RenameSession:output_type -> session.v1.RenameSessionResponse
-	63,  // 291: session.v1.SessionService.RestartSession:output_type -> session.v1.RestartSessionResponse
-	65,  // 292: session.v1.SessionService.GetWorkspaceInfo:output_type -> session.v1.GetWorkspaceInfoResponse
-	67,  // 293: session.v1.SessionService.ListWorkspaceTargets:output_type -> session.v1.ListWorkspaceTargetsResponse
-	73,  // 294: session.v1.SessionService.SwitchWorkspace:output_type -> session.v1.SwitchWorkspaceResponse
-	70,  // 295: session.v1.SessionService.ResolveApproval:output_type -> session.v1.ResolveApprovalResponse
-	72,  // 296: session.v1.SessionService.ListPendingApprovals:output_type -> session.v1.ListPendingApprovalsResponse
-	75,  // 297: session.v1.SessionService.CreateDebugSnapshot:output_type -> session.v1.CreateDebugSnapshotResponse
-	78,  // 298: session.v1.SessionService.GetNotificationHistory:output_type -> session.v1.GetNotificationHistoryResponse
-	80,  // 299: session.v1.SessionService.MarkNotificationRead:output_type -> session.v1.MarkNotificationReadResponse
-	82,  // 300: session.v1.SessionService.ClearNotificationHistory:output_type -> session.v1.ClearNotificationHistoryResponse
-	84,  // 301: session.v1.SessionService.ListApprovalRules:output_type -> session.v1.ListApprovalRulesResponse
-	86,  // 302: session.v1.SessionService.UpsertApprovalRule:output_type -> session.v1.UpsertApprovalRuleResponse
-	88,  // 303: session.v1.SessionService.DeleteApprovalRule:output_type -> session.v1.DeleteApprovalRuleResponse
-	90,  // 304: session.v1.SessionService.GetApprovalAnalytics:output_type -> session.v1.GetApprovalAnalyticsResponse
-	92,  // 305: session.v1.SessionService.GetProgramAnalytics:output_type -> session.v1.GetProgramAnalyticsResponse
-	207, // 306: session.v1.SessionService.GenerateSuggestedRule:output_type -> session.v1.GenerateSuggestedRuleResponse
-	213, // 307: session.v1.SessionService.ValidateRules:output_type -> session.v1.ValidateRulesResponse
-	216, // 308: session.v1.SessionService.ExportRules:output_type -> session.v1.ExportRulesResponse
-	218, // 309: session.v1.SessionService.BulkUpsertRules:output_type -> session.v1.BulkUpsertRulesResponse
-	220, // 310: session.v1.SessionService.GetConfigFileRules:output_type -> session.v1.GetConfigFileRulesResponse
-	222, // 311: session.v1.SessionService.SaveRulesToConfigFile:output_type -> session.v1.SaveRulesToConfigFileResponse
-	94,  // 312: session.v1.SessionService.ListDatabases:output_type -> session.v1.ListDatabasesResponse
-	96,  // 313: session.v1.SessionService.GetCurrentDatabase:output_type -> session.v1.GetCurrentDatabaseResponse
-	98,  // 314: session.v1.SessionService.SwitchDatabase:output_type -> session.v1.SwitchDatabaseResponse
-	100, // 315: session.v1.SessionService.MergeDatabase:output_type -> session.v1.MergeDatabaseResponse
-	102, // 316: session.v1.SessionService.CreateCheckpoint:output_type -> session.v1.CreateCheckpointResponse
-	104, // 317: session.v1.SessionService.ListCheckpoints:output_type -> session.v1.ListCheckpointsResponse
-	106, // 318: session.v1.SessionService.ForkSession:output_type -> session.v1.ForkSessionResponse
-	180, // 319: session.v1.SessionService.ClearConversationState:output_type -> session.v1.ClearConversationStateResponse
-	108, // 320: session.v1.SessionService.ListFiles:output_type -> session.v1.ListFilesResponse
-	110, // 321: session.v1.SessionService.GetFileContent:output_type -> session.v1.GetFileContentResponse
-	112, // 322: session.v1.SessionService.SearchFiles:output_type -> session.v1.SearchFilesResponse
-	114, // 323: session.v1.SessionService.ListPathCompletions:output_type -> session.v1.ListPathCompletionsResponse
-	120, // 324: session.v1.SessionService.GetSessionDefaults:output_type -> session.v1.GetSessionDefaultsResponse
-	122, // 325: session.v1.SessionService.ResolveDefaults:output_type -> session.v1.ResolveDefaultsResponse
-	124, // 326: session.v1.SessionService.UpdateGlobalDefaults:output_type -> session.v1.UpdateGlobalDefaultsResponse
-	126, // 327: session.v1.SessionService.UpsertProfile:output_type -> session.v1.UpsertProfileResponse
-	128, // 328: session.v1.SessionService.DeleteProfile:output_type -> session.v1.DeleteProfileResponse
-	130, // 329: session.v1.SessionService.UpsertDirectoryRule:output_type -> session.v1.UpsertDirectoryRuleResponse
-	132, // 330: session.v1.SessionService.DeleteDirectoryRule:output_type -> session.v1.DeleteDirectoryRuleResponse
-	142, // 331: session.v1.SessionService.ListWorktrees:output_type -> session.v1.ListWorktreesResponse
-	145, // 332: session.v1.SessionService.ListPromptHistory:output_type -> session.v1.ListPromptHistoryResponse
-	147, // 333: session.v1.SessionService.DeletePromptHistory:output_type -> session.v1.DeletePromptHistoryResponse
-	151, // 334: session.v1.SessionService.BatchCreateSessions:output_type -> session.v1.BatchCreateSessionsResponse
-	153, // 335: session.v1.SessionService.RunOneShot:output_type -> session.v1.RunOneShotResponse
-	156, // 336: session.v1.SessionService.CreateProject:output_type -> session.v1.CreateProjectResponse
-	158, // 337: session.v1.SessionService.ListProjects:output_type -> session.v1.ListProjectsResponse
-	160, // 338: session.v1.SessionService.UpdateProject:output_type -> session.v1.UpdateProjectResponse
-	162, // 339: session.v1.SessionService.DeleteProject:output_type -> session.v1.DeleteProjectResponse
-	164, // 340: session.v1.SessionService.AssignSessionsToProject:output_type -> session.v1.AssignSessionsToProjectResponse
-	166, // 341: session.v1.SessionService.ListBranches:output_type -> session.v1.ListBranchesResponse
-	168, // 342: session.v1.SessionService.GetTerminalSnapshot:output_type -> session.v1.GetTerminalSnapshotResponse
-	170, // 343: session.v1.SessionService.WriteToSession:output_type -> session.v1.WriteToSessionResponse
-	173, // 344: session.v1.SessionService.LogClientEvents:output_type -> session.v1.LogClientEventsResponse
-	176, // 345: session.v1.SessionService.ListErrors:output_type -> session.v1.ListErrorsResponse
-	178, // 346: session.v1.SessionService.AcknowledgeError:output_type -> session.v1.AcknowledgeErrorResponse
-	183, // 347: session.v1.SessionService.GetFeatureFlags:output_type -> session.v1.GetFeatureFlagsResponse
-	189, // 348: session.v1.SessionService.UpdateFeatureFlag:output_type -> session.v1.UpdateFeatureFlagResponse
-	192, // 349: session.v1.SessionService.QueryEscapeAnalytics:output_type -> session.v1.QueryEscapeAnalyticsResponse
-	195, // 350: session.v1.SessionService.GetEscapeAnalyticsSummary:output_type -> session.v1.GetEscapeAnalyticsSummaryResponse
-	209, // 351: session.v1.SessionService.HibernateSession:output_type -> session.v1.HibernateSessionResponse
-	211, // 352: session.v1.SessionService.ResumeHibernatedSession:output_type -> session.v1.ResumeHibernatedSessionResponse
-	197, // 353: session.v1.SessionService.SpawnShell:output_type -> session.v1.SpawnShellResponse
-	199, // 354: session.v1.SessionService.StopShell:output_type -> session.v1.StopShellResponse
-	201, // 355: session.v1.SessionService.RestartShell:output_type -> session.v1.RestartShellResponse
-	203, // 356: session.v1.SessionService.ListShells:output_type -> session.v1.ListShellsResponse
-	205, // 357: session.v1.SessionService.DeleteShell:output_type -> session.v1.DeleteShellResponse
-	225, // 358: session.v1.SessionService.CreateWorkflow:output_type -> session.v1.CreateWorkflowResponse
-	227, // 359: session.v1.SessionService.UpdateWorkflow:output_type -> session.v1.UpdateWorkflowResponse
-	229, // 360: session.v1.SessionService.DeleteWorkflow:output_type -> session.v1.DeleteWorkflowResponse
-	231, // 361: session.v1.SessionService.ListWorkflows:output_type -> session.v1.ListWorkflowsResponse
-	236, // 362: session.v1.SessionService.RunWorkflow:output_type -> session.v1.RunWorkflowResponse
-	239, // 363: session.v1.SessionService.GetDetectionEvents:output_type -> session.v1.GetDetectionEventsResponse
-	235, // 364: session.v1.SessionService.ListSlashCommands:output_type -> session.v1.ListSlashCommandsResponse
-	135, // 365: session.v1.SessionService.ListAliases:output_type -> session.v1.ListAliasesResponse
-	137, // 366: session.v1.SessionService.UpsertAlias:output_type -> session.v1.UpsertAliasResponse
-	139, // 367: session.v1.SessionService.DeleteAlias:output_type -> session.v1.DeleteAliasResponse
-	241, // 368: session.v1.SessionService.ArchiveSession:output_type -> session.v1.ArchiveSessionResponse
-	243, // 369: session.v1.SessionService.UnarchiveSession:output_type -> session.v1.UnarchiveSessionResponse
-	245, // 370: session.v1.SessionService.ArchiveWorkflowSessions:output_type -> session.v1.ArchiveWorkflowSessionsResponse
-	247, // 371: session.v1.SessionService.DeleteWorkflowFailedSessions:output_type -> session.v1.DeleteWorkflowFailedSessionsResponse
-	250, // 372: session.v1.SessionService.GetProviderLimits:output_type -> session.v1.GetProviderLimitsResponse
-	185, // 373: session.v1.SessionService.GetHookStatus:output_type -> session.v1.GetHookStatusResponse
-	187, // 374: session.v1.SessionService.InstallHooks:output_type -> session.v1.InstallHooksResponse
-	262, // [262:375] is the sub-list for method output_type
-	149, // [149:262] is the sub-list for method input_type
-	149, // [149:149] is the sub-list for extension type_name
-	149, // [149:149] is the sub-list for extension extendee
-	0,   // [0:149] is the sub-list for field type_name
+	39,  // 39: session.v1.SearchResult.context_window:type_name -> session.v1.ClaudeMessage
+	39,  // 40: session.v1.SearchResult.bookend_first:type_name -> session.v1.ClaudeMessage
+	39,  // 41: session.v1.SearchResult.bookend_last:type_name -> session.v1.ClaudeMessage
+	44,  // 42: session.v1.SearchSnippet.highlight_ranges:type_name -> session.v1.HighlightRange
+	269, // 43: session.v1.SearchSnippet.message_time:type_name -> google.protobuf.Timestamp
+	269, // 44: session.v1.SearchResultMetadata.created_at:type_name -> google.protobuf.Timestamp
+	271, // 45: session.v1.GetPRInfoResponse.pr_info:type_name -> session.v1.PRInfo
+	272, // 46: session.v1.GetPRCommentsResponse.comments:type_name -> session.v1.PRComment
+	273, // 47: session.v1.SendNotificationRequest.notification_type:type_name -> session.v1.NotificationType
+	274, // 48: session.v1.SendNotificationRequest.priority:type_name -> session.v1.NotificationPriority
+	253, // 49: session.v1.SendNotificationRequest.metadata:type_name -> session.v1.SendNotificationRequest.MetadataEntry
+	262, // 50: session.v1.RenameSessionResponse.session:type_name -> session.v1.Session
+	262, // 51: session.v1.RestartSessionResponse.session:type_name -> session.v1.Session
+	275, // 52: session.v1.GetWorkspaceInfoResponse.vcs_info:type_name -> session.v1.VCSInfo
+	276, // 53: session.v1.ListWorkspaceTargetsResponse.targets:type_name -> session.v1.AvailableWorkspaceTargets
+	277, // 54: session.v1.SwitchWorkspaceRequest.switch_type:type_name -> session.v1.WorkspaceSwitchType
+	278, // 55: session.v1.SwitchWorkspaceRequest.change_strategy:type_name -> session.v1.ChangeStrategy
+	279, // 56: session.v1.ListPendingApprovalsResponse.approvals:type_name -> session.v1.PendingApprovalProto
+	280, // 57: session.v1.SwitchWorkspaceResponse.vcs_type:type_name -> session.v1.VCSType
+	262, // 58: session.v1.SwitchWorkspaceResponse.session:type_name -> session.v1.Session
+	273, // 59: session.v1.NotificationHistoryRecord.notification_type:type_name -> session.v1.NotificationType
+	274, // 60: session.v1.NotificationHistoryRecord.priority:type_name -> session.v1.NotificationPriority
+	254, // 61: session.v1.NotificationHistoryRecord.metadata:type_name -> session.v1.NotificationHistoryRecord.MetadataEntry
+	269, // 62: session.v1.NotificationHistoryRecord.created_at:type_name -> google.protobuf.Timestamp
+	269, // 63: session.v1.NotificationHistoryRecord.read_at:type_name -> google.protobuf.Timestamp
+	269, // 64: session.v1.NotificationHistoryRecord.last_occurred_at:type_name -> google.protobuf.Timestamp
+	273, // 65: session.v1.GetNotificationHistoryRequest.type_filter:type_name -> session.v1.NotificationType
+	76,  // 66: session.v1.GetNotificationHistoryResponse.notifications:type_name -> session.v1.NotificationHistoryRecord
+	281, // 67: session.v1.ListApprovalRulesResponse.rules:type_name -> session.v1.ApprovalRuleProto
+	281, // 68: session.v1.UpsertApprovalRuleRequest.rule:type_name -> session.v1.ApprovalRuleProto
+	281, // 69: session.v1.UpsertApprovalRuleResponse.rule:type_name -> session.v1.ApprovalRuleProto
+	282, // 70: session.v1.GetApprovalAnalyticsResponse.summary:type_name -> session.v1.AnalyticsSummaryProto
+	283, // 71: session.v1.GetApprovalAnalyticsResponse.daily_buckets:type_name -> session.v1.DailyBucketProto
+	284, // 72: session.v1.GetProgramAnalyticsResponse.subcommands:type_name -> session.v1.SubcommandBreakdownProto
+	283, // 73: session.v1.GetProgramAnalyticsResponse.trend:type_name -> session.v1.DailyBucketProto
+	285, // 74: session.v1.ListDatabasesResponse.databases:type_name -> session.v1.DatabaseInfo
+	285, // 75: session.v1.GetCurrentDatabaseResponse.database:type_name -> session.v1.DatabaseInfo
+	286, // 76: session.v1.CreateCheckpointResponse.checkpoint:type_name -> session.v1.CheckpointProto
+	286, // 77: session.v1.ListCheckpointsResponse.checkpoints:type_name -> session.v1.CheckpointProto
+	262, // 78: session.v1.ForkSessionResponse.session:type_name -> session.v1.Session
+	287, // 79: session.v1.ListFilesResponse.files:type_name -> session.v1.FileNode
+	287, // 80: session.v1.SearchFilesResponse.files:type_name -> session.v1.FileNode
+	115, // 81: session.v1.ListPathCompletionsResponse.entries:type_name -> session.v1.PathEntry
+	255, // 82: session.v1.ProfileDefaultsProto.env_vars:type_name -> session.v1.ProfileDefaultsProto.EnvVarsEntry
+	269, // 83: session.v1.ProfileDefaultsProto.created_at:type_name -> google.protobuf.Timestamp
+	269, // 84: session.v1.ProfileDefaultsProto.updated_at:type_name -> google.protobuf.Timestamp
+	116, // 85: session.v1.DirectoryRuleProto.overrides:type_name -> session.v1.ProfileDefaultsProto
+	256, // 86: session.v1.SessionDefaultsConfig.env_vars:type_name -> session.v1.SessionDefaultsConfig.EnvVarsEntry
+	257, // 87: session.v1.SessionDefaultsConfig.profiles:type_name -> session.v1.SessionDefaultsConfig.ProfilesEntry
+	117, // 88: session.v1.SessionDefaultsConfig.directory_rules:type_name -> session.v1.DirectoryRuleProto
+	118, // 89: session.v1.GetSessionDefaultsResponse.defaults:type_name -> session.v1.SessionDefaultsConfig
+	258, // 90: session.v1.ResolveDefaultsResponse.env_vars:type_name -> session.v1.ResolveDefaultsResponse.EnvVarsEntry
+	259, // 91: session.v1.UpdateGlobalDefaultsRequest.env_vars:type_name -> session.v1.UpdateGlobalDefaultsRequest.EnvVarsEntry
+	118, // 92: session.v1.UpdateGlobalDefaultsResponse.defaults:type_name -> session.v1.SessionDefaultsConfig
+	116, // 93: session.v1.UpsertProfileRequest.profile:type_name -> session.v1.ProfileDefaultsProto
+	116, // 94: session.v1.UpsertProfileResponse.profile:type_name -> session.v1.ProfileDefaultsProto
+	117, // 95: session.v1.UpsertDirectoryRuleRequest.rule:type_name -> session.v1.DirectoryRuleProto
+	117, // 96: session.v1.UpsertDirectoryRuleResponse.rule:type_name -> session.v1.DirectoryRuleProto
+	260, // 97: session.v1.AliasProto.env_vars:type_name -> session.v1.AliasProto.EnvVarsEntry
+	263, // 98: session.v1.AliasProto.session_type:type_name -> session.v1.SessionType
+	133, // 99: session.v1.ListAliasesResponse.aliases:type_name -> session.v1.AliasProto
+	133, // 100: session.v1.UpsertAliasRequest.alias:type_name -> session.v1.AliasProto
+	133, // 101: session.v1.UpsertAliasResponse.alias:type_name -> session.v1.AliasProto
+	141, // 102: session.v1.ListWorktreesResponse.worktrees:type_name -> session.v1.WorktreeEntry
+	269, // 103: session.v1.PromptHistoryEntry.last_used:type_name -> google.protobuf.Timestamp
+	269, // 104: session.v1.PromptHistoryEntry.created_at:type_name -> google.protobuf.Timestamp
+	143, // 105: session.v1.ListPromptHistoryResponse.entries:type_name -> session.v1.PromptHistoryEntry
+	263, // 106: session.v1.BatchSessionRequest.session_type:type_name -> session.v1.SessionType
+	148, // 107: session.v1.BatchCreateSessionsRequest.sessions:type_name -> session.v1.BatchSessionRequest
+	149, // 108: session.v1.BatchCreateSessionsResponse.results:type_name -> session.v1.BatchCreateResult
+	269, // 109: session.v1.Project.created_at:type_name -> google.protobuf.Timestamp
+	269, // 110: session.v1.Project.updated_at:type_name -> google.protobuf.Timestamp
+	154, // 111: session.v1.CreateProjectResponse.project:type_name -> session.v1.Project
+	154, // 112: session.v1.ListProjectsResponse.projects:type_name -> session.v1.Project
+	154, // 113: session.v1.UpdateProjectResponse.project:type_name -> session.v1.Project
+	171, // 114: session.v1.LogClientEventsRequest.entries:type_name -> session.v1.ClientLogEntry
+	269, // 115: session.v1.ErrorEventRecord.first_seen:type_name -> google.protobuf.Timestamp
+	269, // 116: session.v1.ErrorEventRecord.last_seen:type_name -> google.protobuf.Timestamp
+	175, // 117: session.v1.ListErrorsResponse.errors:type_name -> session.v1.ErrorEventRecord
+	181, // 118: session.v1.GetFeatureFlagsResponse.flags:type_name -> session.v1.FeatureFlag
+	185, // 119: session.v1.InstallHooksResponse.status:type_name -> session.v1.GetHookStatusResponse
+	181, // 120: session.v1.UpdateFeatureFlagResponse.flag:type_name -> session.v1.FeatureFlag
+	269, // 121: session.v1.EscapeEventProto.wall_time:type_name -> google.protobuf.Timestamp
+	269, // 122: session.v1.QueryEscapeAnalyticsRequest.start_time:type_name -> google.protobuf.Timestamp
+	269, // 123: session.v1.QueryEscapeAnalyticsRequest.end_time:type_name -> google.protobuf.Timestamp
+	190, // 124: session.v1.QueryEscapeAnalyticsResponse.events:type_name -> session.v1.EscapeEventProto
+	269, // 125: session.v1.GetEscapeAnalyticsSummaryRequest.start_time:type_name -> google.protobuf.Timestamp
+	269, // 126: session.v1.GetEscapeAnalyticsSummaryRequest.end_time:type_name -> google.protobuf.Timestamp
+	193, // 127: session.v1.GetEscapeAnalyticsSummaryResponse.histogram:type_name -> session.v1.EscapeSequenceCount
+	288, // 128: session.v1.SpawnShellResponse.shell:type_name -> session.v1.Shell
+	288, // 129: session.v1.ListShellsResponse.shells:type_name -> session.v1.Shell
+	289, // 130: session.v1.GenerateSuggestedRuleRequest.source:type_name -> session.v1.SuggestionSource
+	290, // 131: session.v1.GenerateSuggestedRuleResponse.suggestions:type_name -> session.v1.SuggestedRuleProto
+	262, // 132: session.v1.HibernateSessionResponse.session:type_name -> session.v1.Session
+	262, // 133: session.v1.ResumeHibernatedSessionResponse.session:type_name -> session.v1.Session
+	214, // 134: session.v1.ValidateRulesResponse.results:type_name -> session.v1.ParsedRuleResult
+	281, // 135: session.v1.ParsedRuleResult.rule:type_name -> session.v1.ApprovalRuleProto
+	281, // 136: session.v1.BulkUpsertRulesRequest.rules:type_name -> session.v1.ApprovalRuleProto
+	281, // 137: session.v1.GetConfigFileRulesResponse.rules:type_name -> session.v1.ApprovalRuleProto
+	281, // 138: session.v1.SaveRulesToConfigFileRequest.rule:type_name -> session.v1.ApprovalRuleProto
+	269, // 139: session.v1.WorkflowProto.created_at:type_name -> google.protobuf.Timestamp
+	269, // 140: session.v1.WorkflowProto.updated_at:type_name -> google.protobuf.Timestamp
+	223, // 141: session.v1.CreateWorkflowResponse.workflow:type_name -> session.v1.WorkflowProto
+	223, // 142: session.v1.UpdateWorkflowResponse.workflow:type_name -> session.v1.WorkflowProto
+	223, // 143: session.v1.ListWorkflowsResponse.workflows:type_name -> session.v1.WorkflowProto
+	234, // 144: session.v1.ListSlashCommandsResponse.commands:type_name -> session.v1.SlashCommandInfo
+	269, // 145: session.v1.DetectionEventProto.timestamp:type_name -> google.protobuf.Timestamp
+	237, // 146: session.v1.GetDetectionEventsResponse.events:type_name -> session.v1.DetectionEventProto
+	269, // 147: session.v1.ProviderLimitsProto.requests_reset:type_name -> google.protobuf.Timestamp
+	269, // 148: session.v1.ProviderLimitsProto.tokens_reset:type_name -> google.protobuf.Timestamp
+	269, // 149: session.v1.ProviderLimitsProto.fetched_at:type_name -> google.protobuf.Timestamp
+	249, // 150: session.v1.GetProviderLimitsResponse.limits:type_name -> session.v1.ProviderLimitsProto
+	116, // 151: session.v1.SessionDefaultsConfig.ProfilesEntry.value:type_name -> session.v1.ProfileDefaultsProto
+	0,   // 152: session.v1.SessionService.ListSessions:input_type -> session.v1.ListSessionsRequest
+	2,   // 153: session.v1.SessionService.GetSession:input_type -> session.v1.GetSessionRequest
+	4,   // 154: session.v1.SessionService.CreateSession:input_type -> session.v1.CreateSessionRequest
+	6,   // 155: session.v1.SessionService.UpdateSession:input_type -> session.v1.UpdateSessionRequest
+	8,   // 156: session.v1.SessionService.DeleteSession:input_type -> session.v1.DeleteSessionRequest
+	10,  // 157: session.v1.SessionService.WatchSessions:input_type -> session.v1.WatchSessionsRequest
+	291, // 158: session.v1.SessionService.StreamTerminal:input_type -> session.v1.TerminalData
+	11,  // 159: session.v1.SessionService.GetSessionDiff:input_type -> session.v1.GetSessionDiffRequest
+	13,  // 160: session.v1.SessionService.GetVCSStatus:input_type -> session.v1.GetVCSStatusRequest
+	15,  // 161: session.v1.SessionService.GetReviewQueue:input_type -> session.v1.GetReviewQueueRequest
+	17,  // 162: session.v1.SessionService.AcknowledgeSession:input_type -> session.v1.AcknowledgeSessionRequest
+	19,  // 163: session.v1.SessionService.GetLogs:input_type -> session.v1.GetLogsRequest
+	22,  // 164: session.v1.SessionService.WatchReviewQueue:input_type -> session.v1.WatchReviewQueueRequest
+	23,  // 165: session.v1.SessionService.LogUserInteraction:input_type -> session.v1.LogUserInteractionRequest
+	25,  // 166: session.v1.SessionService.GetClaudeConfig:input_type -> session.v1.GetClaudeConfigRequest
+	27,  // 167: session.v1.SessionService.ListClaudeConfigs:input_type -> session.v1.ListClaudeConfigsRequest
+	29,  // 168: session.v1.SessionService.UpdateClaudeConfig:input_type -> session.v1.UpdateClaudeConfigRequest
+	32,  // 169: session.v1.SessionService.ListClaudeHistory:input_type -> session.v1.ListClaudeHistoryRequest
+	34,  // 170: session.v1.SessionService.GetClaudeHistoryDetail:input_type -> session.v1.GetClaudeHistoryDetailRequest
+	37,  // 171: session.v1.SessionService.GetClaudeHistoryMessages:input_type -> session.v1.GetClaudeHistoryMessagesRequest
+	40,  // 172: session.v1.SessionService.SearchClaudeHistory:input_type -> session.v1.SearchClaudeHistoryRequest
+	46,  // 173: session.v1.SessionService.GetPRInfo:input_type -> session.v1.GetPRInfoRequest
+	48,  // 174: session.v1.SessionService.GetPRComments:input_type -> session.v1.GetPRCommentsRequest
+	50,  // 175: session.v1.SessionService.PostPRComment:input_type -> session.v1.PostPRCommentRequest
+	52,  // 176: session.v1.SessionService.MergePR:input_type -> session.v1.MergePRRequest
+	54,  // 177: session.v1.SessionService.ClosePR:input_type -> session.v1.ClosePRRequest
+	56,  // 178: session.v1.SessionService.SendNotification:input_type -> session.v1.SendNotificationRequest
+	58,  // 179: session.v1.SessionService.FocusWindow:input_type -> session.v1.FocusWindowRequest
+	60,  // 180: session.v1.SessionService.RenameSession:input_type -> session.v1.RenameSessionRequest
+	62,  // 181: session.v1.SessionService.RestartSession:input_type -> session.v1.RestartSessionRequest
+	64,  // 182: session.v1.SessionService.GetWorkspaceInfo:input_type -> session.v1.GetWorkspaceInfoRequest
+	66,  // 183: session.v1.SessionService.ListWorkspaceTargets:input_type -> session.v1.ListWorkspaceTargetsRequest
+	68,  // 184: session.v1.SessionService.SwitchWorkspace:input_type -> session.v1.SwitchWorkspaceRequest
+	69,  // 185: session.v1.SessionService.ResolveApproval:input_type -> session.v1.ResolveApprovalRequest
+	71,  // 186: session.v1.SessionService.ListPendingApprovals:input_type -> session.v1.ListPendingApprovalsRequest
+	74,  // 187: session.v1.SessionService.CreateDebugSnapshot:input_type -> session.v1.CreateDebugSnapshotRequest
+	77,  // 188: session.v1.SessionService.GetNotificationHistory:input_type -> session.v1.GetNotificationHistoryRequest
+	79,  // 189: session.v1.SessionService.MarkNotificationRead:input_type -> session.v1.MarkNotificationReadRequest
+	81,  // 190: session.v1.SessionService.ClearNotificationHistory:input_type -> session.v1.ClearNotificationHistoryRequest
+	83,  // 191: session.v1.SessionService.ListApprovalRules:input_type -> session.v1.ListApprovalRulesRequest
+	85,  // 192: session.v1.SessionService.UpsertApprovalRule:input_type -> session.v1.UpsertApprovalRuleRequest
+	87,  // 193: session.v1.SessionService.DeleteApprovalRule:input_type -> session.v1.DeleteApprovalRuleRequest
+	89,  // 194: session.v1.SessionService.GetApprovalAnalytics:input_type -> session.v1.GetApprovalAnalyticsRequest
+	91,  // 195: session.v1.SessionService.GetProgramAnalytics:input_type -> session.v1.GetProgramAnalyticsRequest
+	206, // 196: session.v1.SessionService.GenerateSuggestedRule:input_type -> session.v1.GenerateSuggestedRuleRequest
+	212, // 197: session.v1.SessionService.ValidateRules:input_type -> session.v1.ValidateRulesRequest
+	215, // 198: session.v1.SessionService.ExportRules:input_type -> session.v1.ExportRulesRequest
+	217, // 199: session.v1.SessionService.BulkUpsertRules:input_type -> session.v1.BulkUpsertRulesRequest
+	219, // 200: session.v1.SessionService.GetConfigFileRules:input_type -> session.v1.GetConfigFileRulesRequest
+	221, // 201: session.v1.SessionService.SaveRulesToConfigFile:input_type -> session.v1.SaveRulesToConfigFileRequest
+	93,  // 202: session.v1.SessionService.ListDatabases:input_type -> session.v1.ListDatabasesRequest
+	95,  // 203: session.v1.SessionService.GetCurrentDatabase:input_type -> session.v1.GetCurrentDatabaseRequest
+	97,  // 204: session.v1.SessionService.SwitchDatabase:input_type -> session.v1.SwitchDatabaseRequest
+	99,  // 205: session.v1.SessionService.MergeDatabase:input_type -> session.v1.MergeDatabaseRequest
+	101, // 206: session.v1.SessionService.CreateCheckpoint:input_type -> session.v1.CreateCheckpointRequest
+	103, // 207: session.v1.SessionService.ListCheckpoints:input_type -> session.v1.ListCheckpointsRequest
+	105, // 208: session.v1.SessionService.ForkSession:input_type -> session.v1.ForkSessionRequest
+	179, // 209: session.v1.SessionService.ClearConversationState:input_type -> session.v1.ClearConversationStateRequest
+	107, // 210: session.v1.SessionService.ListFiles:input_type -> session.v1.ListFilesRequest
+	109, // 211: session.v1.SessionService.GetFileContent:input_type -> session.v1.GetFileContentRequest
+	111, // 212: session.v1.SessionService.SearchFiles:input_type -> session.v1.SearchFilesRequest
+	113, // 213: session.v1.SessionService.ListPathCompletions:input_type -> session.v1.ListPathCompletionsRequest
+	119, // 214: session.v1.SessionService.GetSessionDefaults:input_type -> session.v1.GetSessionDefaultsRequest
+	121, // 215: session.v1.SessionService.ResolveDefaults:input_type -> session.v1.ResolveDefaultsRequest
+	123, // 216: session.v1.SessionService.UpdateGlobalDefaults:input_type -> session.v1.UpdateGlobalDefaultsRequest
+	125, // 217: session.v1.SessionService.UpsertProfile:input_type -> session.v1.UpsertProfileRequest
+	127, // 218: session.v1.SessionService.DeleteProfile:input_type -> session.v1.DeleteProfileRequest
+	129, // 219: session.v1.SessionService.UpsertDirectoryRule:input_type -> session.v1.UpsertDirectoryRuleRequest
+	131, // 220: session.v1.SessionService.DeleteDirectoryRule:input_type -> session.v1.DeleteDirectoryRuleRequest
+	140, // 221: session.v1.SessionService.ListWorktrees:input_type -> session.v1.ListWorktreesRequest
+	144, // 222: session.v1.SessionService.ListPromptHistory:input_type -> session.v1.ListPromptHistoryRequest
+	146, // 223: session.v1.SessionService.DeletePromptHistory:input_type -> session.v1.DeletePromptHistoryRequest
+	150, // 224: session.v1.SessionService.BatchCreateSessions:input_type -> session.v1.BatchCreateSessionsRequest
+	152, // 225: session.v1.SessionService.RunOneShot:input_type -> session.v1.RunOneShotRequest
+	155, // 226: session.v1.SessionService.CreateProject:input_type -> session.v1.CreateProjectRequest
+	157, // 227: session.v1.SessionService.ListProjects:input_type -> session.v1.ListProjectsRequest
+	159, // 228: session.v1.SessionService.UpdateProject:input_type -> session.v1.UpdateProjectRequest
+	161, // 229: session.v1.SessionService.DeleteProject:input_type -> session.v1.DeleteProjectRequest
+	163, // 230: session.v1.SessionService.AssignSessionsToProject:input_type -> session.v1.AssignSessionsToProjectRequest
+	165, // 231: session.v1.SessionService.ListBranches:input_type -> session.v1.ListBranchesRequest
+	167, // 232: session.v1.SessionService.GetTerminalSnapshot:input_type -> session.v1.GetTerminalSnapshotRequest
+	169, // 233: session.v1.SessionService.WriteToSession:input_type -> session.v1.WriteToSessionRequest
+	172, // 234: session.v1.SessionService.LogClientEvents:input_type -> session.v1.LogClientEventsRequest
+	174, // 235: session.v1.SessionService.ListErrors:input_type -> session.v1.ListErrorsRequest
+	177, // 236: session.v1.SessionService.AcknowledgeError:input_type -> session.v1.AcknowledgeErrorRequest
+	182, // 237: session.v1.SessionService.GetFeatureFlags:input_type -> session.v1.GetFeatureFlagsRequest
+	188, // 238: session.v1.SessionService.UpdateFeatureFlag:input_type -> session.v1.UpdateFeatureFlagRequest
+	191, // 239: session.v1.SessionService.QueryEscapeAnalytics:input_type -> session.v1.QueryEscapeAnalyticsRequest
+	194, // 240: session.v1.SessionService.GetEscapeAnalyticsSummary:input_type -> session.v1.GetEscapeAnalyticsSummaryRequest
+	208, // 241: session.v1.SessionService.HibernateSession:input_type -> session.v1.HibernateSessionRequest
+	210, // 242: session.v1.SessionService.ResumeHibernatedSession:input_type -> session.v1.ResumeHibernatedSessionRequest
+	196, // 243: session.v1.SessionService.SpawnShell:input_type -> session.v1.SpawnShellRequest
+	198, // 244: session.v1.SessionService.StopShell:input_type -> session.v1.StopShellRequest
+	200, // 245: session.v1.SessionService.RestartShell:input_type -> session.v1.RestartShellRequest
+	202, // 246: session.v1.SessionService.ListShells:input_type -> session.v1.ListShellsRequest
+	204, // 247: session.v1.SessionService.DeleteShell:input_type -> session.v1.DeleteShellRequest
+	224, // 248: session.v1.SessionService.CreateWorkflow:input_type -> session.v1.CreateWorkflowRequest
+	226, // 249: session.v1.SessionService.UpdateWorkflow:input_type -> session.v1.UpdateWorkflowRequest
+	228, // 250: session.v1.SessionService.DeleteWorkflow:input_type -> session.v1.DeleteWorkflowRequest
+	230, // 251: session.v1.SessionService.ListWorkflows:input_type -> session.v1.ListWorkflowsRequest
+	232, // 252: session.v1.SessionService.RunWorkflow:input_type -> session.v1.RunWorkflowRequest
+	238, // 253: session.v1.SessionService.GetDetectionEvents:input_type -> session.v1.GetDetectionEventsRequest
+	233, // 254: session.v1.SessionService.ListSlashCommands:input_type -> session.v1.ListSlashCommandsRequest
+	134, // 255: session.v1.SessionService.ListAliases:input_type -> session.v1.ListAliasesRequest
+	136, // 256: session.v1.SessionService.UpsertAlias:input_type -> session.v1.UpsertAliasRequest
+	138, // 257: session.v1.SessionService.DeleteAlias:input_type -> session.v1.DeleteAliasRequest
+	240, // 258: session.v1.SessionService.ArchiveSession:input_type -> session.v1.ArchiveSessionRequest
+	242, // 259: session.v1.SessionService.UnarchiveSession:input_type -> session.v1.UnarchiveSessionRequest
+	244, // 260: session.v1.SessionService.ArchiveWorkflowSessions:input_type -> session.v1.ArchiveWorkflowSessionsRequest
+	246, // 261: session.v1.SessionService.DeleteWorkflowFailedSessions:input_type -> session.v1.DeleteWorkflowFailedSessionsRequest
+	248, // 262: session.v1.SessionService.GetProviderLimits:input_type -> session.v1.GetProviderLimitsRequest
+	184, // 263: session.v1.SessionService.GetHookStatus:input_type -> session.v1.GetHookStatusRequest
+	186, // 264: session.v1.SessionService.InstallHooks:input_type -> session.v1.InstallHooksRequest
+	1,   // 265: session.v1.SessionService.ListSessions:output_type -> session.v1.ListSessionsResponse
+	3,   // 266: session.v1.SessionService.GetSession:output_type -> session.v1.GetSessionResponse
+	5,   // 267: session.v1.SessionService.CreateSession:output_type -> session.v1.CreateSessionResponse
+	7,   // 268: session.v1.SessionService.UpdateSession:output_type -> session.v1.UpdateSessionResponse
+	9,   // 269: session.v1.SessionService.DeleteSession:output_type -> session.v1.DeleteSessionResponse
+	292, // 270: session.v1.SessionService.WatchSessions:output_type -> session.v1.SessionEvent
+	291, // 271: session.v1.SessionService.StreamTerminal:output_type -> session.v1.TerminalData
+	12,  // 272: session.v1.SessionService.GetSessionDiff:output_type -> session.v1.GetSessionDiffResponse
+	14,  // 273: session.v1.SessionService.GetVCSStatus:output_type -> session.v1.GetVCSStatusResponse
+	16,  // 274: session.v1.SessionService.GetReviewQueue:output_type -> session.v1.GetReviewQueueResponse
+	18,  // 275: session.v1.SessionService.AcknowledgeSession:output_type -> session.v1.AcknowledgeSessionResponse
+	20,  // 276: session.v1.SessionService.GetLogs:output_type -> session.v1.GetLogsResponse
+	293, // 277: session.v1.SessionService.WatchReviewQueue:output_type -> session.v1.ReviewQueueEvent
+	24,  // 278: session.v1.SessionService.LogUserInteraction:output_type -> session.v1.LogUserInteractionResponse
+	26,  // 279: session.v1.SessionService.GetClaudeConfig:output_type -> session.v1.GetClaudeConfigResponse
+	28,  // 280: session.v1.SessionService.ListClaudeConfigs:output_type -> session.v1.ListClaudeConfigsResponse
+	30,  // 281: session.v1.SessionService.UpdateClaudeConfig:output_type -> session.v1.UpdateClaudeConfigResponse
+	33,  // 282: session.v1.SessionService.ListClaudeHistory:output_type -> session.v1.ListClaudeHistoryResponse
+	35,  // 283: session.v1.SessionService.GetClaudeHistoryDetail:output_type -> session.v1.GetClaudeHistoryDetailResponse
+	38,  // 284: session.v1.SessionService.GetClaudeHistoryMessages:output_type -> session.v1.GetClaudeHistoryMessagesResponse
+	41,  // 285: session.v1.SessionService.SearchClaudeHistory:output_type -> session.v1.SearchClaudeHistoryResponse
+	47,  // 286: session.v1.SessionService.GetPRInfo:output_type -> session.v1.GetPRInfoResponse
+	49,  // 287: session.v1.SessionService.GetPRComments:output_type -> session.v1.GetPRCommentsResponse
+	51,  // 288: session.v1.SessionService.PostPRComment:output_type -> session.v1.PostPRCommentResponse
+	53,  // 289: session.v1.SessionService.MergePR:output_type -> session.v1.MergePRResponse
+	55,  // 290: session.v1.SessionService.ClosePR:output_type -> session.v1.ClosePRResponse
+	57,  // 291: session.v1.SessionService.SendNotification:output_type -> session.v1.SendNotificationResponse
+	59,  // 292: session.v1.SessionService.FocusWindow:output_type -> session.v1.FocusWindowResponse
+	61,  // 293: session.v1.SessionService.RenameSession:output_type -> session.v1.RenameSessionResponse
+	63,  // 294: session.v1.SessionService.RestartSession:output_type -> session.v1.RestartSessionResponse
+	65,  // 295: session.v1.SessionService.GetWorkspaceInfo:output_type -> session.v1.GetWorkspaceInfoResponse
+	67,  // 296: session.v1.SessionService.ListWorkspaceTargets:output_type -> session.v1.ListWorkspaceTargetsResponse
+	73,  // 297: session.v1.SessionService.SwitchWorkspace:output_type -> session.v1.SwitchWorkspaceResponse
+	70,  // 298: session.v1.SessionService.ResolveApproval:output_type -> session.v1.ResolveApprovalResponse
+	72,  // 299: session.v1.SessionService.ListPendingApprovals:output_type -> session.v1.ListPendingApprovalsResponse
+	75,  // 300: session.v1.SessionService.CreateDebugSnapshot:output_type -> session.v1.CreateDebugSnapshotResponse
+	78,  // 301: session.v1.SessionService.GetNotificationHistory:output_type -> session.v1.GetNotificationHistoryResponse
+	80,  // 302: session.v1.SessionService.MarkNotificationRead:output_type -> session.v1.MarkNotificationReadResponse
+	82,  // 303: session.v1.SessionService.ClearNotificationHistory:output_type -> session.v1.ClearNotificationHistoryResponse
+	84,  // 304: session.v1.SessionService.ListApprovalRules:output_type -> session.v1.ListApprovalRulesResponse
+	86,  // 305: session.v1.SessionService.UpsertApprovalRule:output_type -> session.v1.UpsertApprovalRuleResponse
+	88,  // 306: session.v1.SessionService.DeleteApprovalRule:output_type -> session.v1.DeleteApprovalRuleResponse
+	90,  // 307: session.v1.SessionService.GetApprovalAnalytics:output_type -> session.v1.GetApprovalAnalyticsResponse
+	92,  // 308: session.v1.SessionService.GetProgramAnalytics:output_type -> session.v1.GetProgramAnalyticsResponse
+	207, // 309: session.v1.SessionService.GenerateSuggestedRule:output_type -> session.v1.GenerateSuggestedRuleResponse
+	213, // 310: session.v1.SessionService.ValidateRules:output_type -> session.v1.ValidateRulesResponse
+	216, // 311: session.v1.SessionService.ExportRules:output_type -> session.v1.ExportRulesResponse
+	218, // 312: session.v1.SessionService.BulkUpsertRules:output_type -> session.v1.BulkUpsertRulesResponse
+	220, // 313: session.v1.SessionService.GetConfigFileRules:output_type -> session.v1.GetConfigFileRulesResponse
+	222, // 314: session.v1.SessionService.SaveRulesToConfigFile:output_type -> session.v1.SaveRulesToConfigFileResponse
+	94,  // 315: session.v1.SessionService.ListDatabases:output_type -> session.v1.ListDatabasesResponse
+	96,  // 316: session.v1.SessionService.GetCurrentDatabase:output_type -> session.v1.GetCurrentDatabaseResponse
+	98,  // 317: session.v1.SessionService.SwitchDatabase:output_type -> session.v1.SwitchDatabaseResponse
+	100, // 318: session.v1.SessionService.MergeDatabase:output_type -> session.v1.MergeDatabaseResponse
+	102, // 319: session.v1.SessionService.CreateCheckpoint:output_type -> session.v1.CreateCheckpointResponse
+	104, // 320: session.v1.SessionService.ListCheckpoints:output_type -> session.v1.ListCheckpointsResponse
+	106, // 321: session.v1.SessionService.ForkSession:output_type -> session.v1.ForkSessionResponse
+	180, // 322: session.v1.SessionService.ClearConversationState:output_type -> session.v1.ClearConversationStateResponse
+	108, // 323: session.v1.SessionService.ListFiles:output_type -> session.v1.ListFilesResponse
+	110, // 324: session.v1.SessionService.GetFileContent:output_type -> session.v1.GetFileContentResponse
+	112, // 325: session.v1.SessionService.SearchFiles:output_type -> session.v1.SearchFilesResponse
+	114, // 326: session.v1.SessionService.ListPathCompletions:output_type -> session.v1.ListPathCompletionsResponse
+	120, // 327: session.v1.SessionService.GetSessionDefaults:output_type -> session.v1.GetSessionDefaultsResponse
+	122, // 328: session.v1.SessionService.ResolveDefaults:output_type -> session.v1.ResolveDefaultsResponse
+	124, // 329: session.v1.SessionService.UpdateGlobalDefaults:output_type -> session.v1.UpdateGlobalDefaultsResponse
+	126, // 330: session.v1.SessionService.UpsertProfile:output_type -> session.v1.UpsertProfileResponse
+	128, // 331: session.v1.SessionService.DeleteProfile:output_type -> session.v1.DeleteProfileResponse
+	130, // 332: session.v1.SessionService.UpsertDirectoryRule:output_type -> session.v1.UpsertDirectoryRuleResponse
+	132, // 333: session.v1.SessionService.DeleteDirectoryRule:output_type -> session.v1.DeleteDirectoryRuleResponse
+	142, // 334: session.v1.SessionService.ListWorktrees:output_type -> session.v1.ListWorktreesResponse
+	145, // 335: session.v1.SessionService.ListPromptHistory:output_type -> session.v1.ListPromptHistoryResponse
+	147, // 336: session.v1.SessionService.DeletePromptHistory:output_type -> session.v1.DeletePromptHistoryResponse
+	151, // 337: session.v1.SessionService.BatchCreateSessions:output_type -> session.v1.BatchCreateSessionsResponse
+	153, // 338: session.v1.SessionService.RunOneShot:output_type -> session.v1.RunOneShotResponse
+	156, // 339: session.v1.SessionService.CreateProject:output_type -> session.v1.CreateProjectResponse
+	158, // 340: session.v1.SessionService.ListProjects:output_type -> session.v1.ListProjectsResponse
+	160, // 341: session.v1.SessionService.UpdateProject:output_type -> session.v1.UpdateProjectResponse
+	162, // 342: session.v1.SessionService.DeleteProject:output_type -> session.v1.DeleteProjectResponse
+	164, // 343: session.v1.SessionService.AssignSessionsToProject:output_type -> session.v1.AssignSessionsToProjectResponse
+	166, // 344: session.v1.SessionService.ListBranches:output_type -> session.v1.ListBranchesResponse
+	168, // 345: session.v1.SessionService.GetTerminalSnapshot:output_type -> session.v1.GetTerminalSnapshotResponse
+	170, // 346: session.v1.SessionService.WriteToSession:output_type -> session.v1.WriteToSessionResponse
+	173, // 347: session.v1.SessionService.LogClientEvents:output_type -> session.v1.LogClientEventsResponse
+	176, // 348: session.v1.SessionService.ListErrors:output_type -> session.v1.ListErrorsResponse
+	178, // 349: session.v1.SessionService.AcknowledgeError:output_type -> session.v1.AcknowledgeErrorResponse
+	183, // 350: session.v1.SessionService.GetFeatureFlags:output_type -> session.v1.GetFeatureFlagsResponse
+	189, // 351: session.v1.SessionService.UpdateFeatureFlag:output_type -> session.v1.UpdateFeatureFlagResponse
+	192, // 352: session.v1.SessionService.QueryEscapeAnalytics:output_type -> session.v1.QueryEscapeAnalyticsResponse
+	195, // 353: session.v1.SessionService.GetEscapeAnalyticsSummary:output_type -> session.v1.GetEscapeAnalyticsSummaryResponse
+	209, // 354: session.v1.SessionService.HibernateSession:output_type -> session.v1.HibernateSessionResponse
+	211, // 355: session.v1.SessionService.ResumeHibernatedSession:output_type -> session.v1.ResumeHibernatedSessionResponse
+	197, // 356: session.v1.SessionService.SpawnShell:output_type -> session.v1.SpawnShellResponse
+	199, // 357: session.v1.SessionService.StopShell:output_type -> session.v1.StopShellResponse
+	201, // 358: session.v1.SessionService.RestartShell:output_type -> session.v1.RestartShellResponse
+	203, // 359: session.v1.SessionService.ListShells:output_type -> session.v1.ListShellsResponse
+	205, // 360: session.v1.SessionService.DeleteShell:output_type -> session.v1.DeleteShellResponse
+	225, // 361: session.v1.SessionService.CreateWorkflow:output_type -> session.v1.CreateWorkflowResponse
+	227, // 362: session.v1.SessionService.UpdateWorkflow:output_type -> session.v1.UpdateWorkflowResponse
+	229, // 363: session.v1.SessionService.DeleteWorkflow:output_type -> session.v1.DeleteWorkflowResponse
+	231, // 364: session.v1.SessionService.ListWorkflows:output_type -> session.v1.ListWorkflowsResponse
+	236, // 365: session.v1.SessionService.RunWorkflow:output_type -> session.v1.RunWorkflowResponse
+	239, // 366: session.v1.SessionService.GetDetectionEvents:output_type -> session.v1.GetDetectionEventsResponse
+	235, // 367: session.v1.SessionService.ListSlashCommands:output_type -> session.v1.ListSlashCommandsResponse
+	135, // 368: session.v1.SessionService.ListAliases:output_type -> session.v1.ListAliasesResponse
+	137, // 369: session.v1.SessionService.UpsertAlias:output_type -> session.v1.UpsertAliasResponse
+	139, // 370: session.v1.SessionService.DeleteAlias:output_type -> session.v1.DeleteAliasResponse
+	241, // 371: session.v1.SessionService.ArchiveSession:output_type -> session.v1.ArchiveSessionResponse
+	243, // 372: session.v1.SessionService.UnarchiveSession:output_type -> session.v1.UnarchiveSessionResponse
+	245, // 373: session.v1.SessionService.ArchiveWorkflowSessions:output_type -> session.v1.ArchiveWorkflowSessionsResponse
+	247, // 374: session.v1.SessionService.DeleteWorkflowFailedSessions:output_type -> session.v1.DeleteWorkflowFailedSessionsResponse
+	250, // 375: session.v1.SessionService.GetProviderLimits:output_type -> session.v1.GetProviderLimitsResponse
+	185, // 376: session.v1.SessionService.GetHookStatus:output_type -> session.v1.GetHookStatusResponse
+	187, // 377: session.v1.SessionService.InstallHooks:output_type -> session.v1.InstallHooksResponse
+	265, // [265:378] is the sub-list for method output_type
+	152, // [152:265] is the sub-list for method input_type
+	152, // [152:152] is the sub-list for extension type_name
+	152, // [152:152] is the sub-list for extension extendee
+	0,   // [0:152] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_session_proto_init() }
@@ -17122,6 +17235,7 @@ func file_session_v1_session_proto_init() {
 	file_session_v1_session_proto_msgTypes[23].OneofWrappers = []any{}
 	file_session_v1_session_proto_msgTypes[24].OneofWrappers = []any{}
 	file_session_v1_session_proto_msgTypes[32].OneofWrappers = []any{}
+	file_session_v1_session_proto_msgTypes[37].OneofWrappers = []any{}
 	file_session_v1_session_proto_msgTypes[40].OneofWrappers = []any{}
 	file_session_v1_session_proto_msgTypes[52].OneofWrappers = []any{}
 	file_session_v1_session_proto_msgTypes[58].OneofWrappers = []any{}

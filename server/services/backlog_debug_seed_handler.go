@@ -217,6 +217,14 @@ type seedHeadlessTriageSessionRequest struct {
 	Title   string `json:"title"`
 	Status  string `json:"status"`  // defaults to "review" if empty
 	Summary string `json:"summary"` // defaults to a canned summary if empty
+	// Ended, when true, also records an EndedAt on the seeded ItemSession so
+	// mapBacklogItem's triageStatus derivation (web-app's useBacklogService.ts)
+	// resolves to "completed" rather than "running" — needed to exercise the
+	// item's own live (non-readOnly) TriageReviewPanel, which requires
+	// status:"idea" + triageStatus:"completed" (BacklogItemDetail.tsx). The
+	// default (false) preserves the original behavior for callers exercising
+	// SessionDiagnosticPanel's readOnly branch, which doesn't consult EndedAt.
+	Ended bool `json:"ended"`
 }
 
 type seedHeadlessTriageSessionResponse struct {
@@ -303,6 +311,14 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		log.Error("backlog debug seed: create headless triage item session failed", "err", err)
 		http.Error(w, "failed to create item session: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if req.Ended {
+		if err := h.storage.UpdateItemSessionEnded(ctx, itemSession.ID, time.Now()); err != nil {
+			log.Error("backlog debug seed: mark headless triage item session ended failed", "err", err)
+			http.Error(w, "failed to mark item session ended: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

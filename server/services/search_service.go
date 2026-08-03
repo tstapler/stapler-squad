@@ -261,6 +261,10 @@ func (ss *SearchService) ListClaudeHistory(
 		entries = hist.GetAll()
 	}
 
+	if req.Msg.GetExcludeAutomationSessions() && ss.getInstances != nil {
+		entries = filterHistoryEntriesByAutomation(entries, ss.getInstances())
+	}
+
 	totalCount := len(entries)
 
 	// --- Cursor pagination ---------------------------------------------------
@@ -431,23 +435,23 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 	totalCount := len(messages)
 	offset := int(req.Msg.Offset)
 	limit := int(req.Msg.Limit)
-
-	if offset > 0 && offset < len(messages) {
+	if req.Msg.AnchorIndex != nil {
+		anchor := int(*req.Msg.AnchorIndex)
+		offset = anchor - limit/2
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	if offset >= len(messages) {
+		messages = messages[:0]
+	} else if offset > 0 {
 		messages = messages[offset:]
 	}
 	if limit > 0 && limit < len(messages) {
 		messages = messages[:limit]
 	}
 
-	protoMessages := make([]*sessionv1.ClaudeMessage, 0, len(messages))
-	for _, msg := range messages {
-		protoMessages = append(protoMessages, &sessionv1.ClaudeMessage{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Timestamp: timestamppb.New(msg.Timestamp),
-			Model:     msg.Model,
-		})
-	}
+	protoMessages := toProtoClaudeMessages(messages)
 
 	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
 		Messages:   protoMessages,
@@ -498,12 +502,12 @@ func (ss *SearchService) SearchClaudeHistory(
 		log.Info("search index sync", "result", syncResult.String())
 	}
 
-	limit := int(req.Msg.Limit)
-	if limit <= 0 {
-		limit = 20
+	requestedLimit := int(req.Msg.Limit)
+	if requestedLimit <= 0 {
+		requestedLimit = 20
 	}
-	if limit > 100 {
-		limit = 100
+	if requestedLimit > 100 {
+		requestedLimit = 100
 	}
 
 	offset := int(req.Msg.Offset)
@@ -511,8 +515,35 @@ func (ss *SearchService) SearchClaudeHistory(
 		offset = 0
 	}
 
+	// Known limitation: offset is applied directly to the raw engine fetch
+	// even when post-processing runs below, so it addresses a position in
+	// the raw (pre-dedup/filter) result stream, not the post-processed one
+	// — paginating (offset>0) together with group_by_session/
+	// exclude_automation_sessions/project can skip or duplicate sessions
+	// across pages. Not exercised today: RelatedWorkQuery (the only caller
+	// of these flags) never sets offset. Fixing this would require re-basing
+	// offset against the deduped/filtered set, which is out of scope here.
+	//
+	// needsPostProcessing is true whenever a post-fetch filter/dedup step will
+	// run on protoResults below. In that case, truncating the *raw* engine
+	// fetch to requestedLimit first would let a single busy or filtered-out
+	// session consume the entire raw window before dedup/filtering ever gets
+	// a chance to run — so over-fetch a larger raw candidate set instead, and
+	// apply requestedLimit only after post-processing (see the truncation
+	// step near the end of this function). This raises but does not remove
+	// the starvation threshold: if more than rawLimit/requestedLimit sessions
+	// outscore a relevant one, it can still be crowded out of the raw window.
+	needsPostProcessing := req.Msg.GetGroupBySession() || req.Msg.GetExcludeAutomationSessions() || req.Msg.GetProject() != ""
+	rawLimit := requestedLimit
+	if needsPostProcessing {
+		rawLimit = requestedLimit * 5
+		if rawLimit > 100 {
+			rawLimit = 100
+		}
+	}
+
 	searchOpts := search.SearchOptions{
-		Limit:  limit,
+		Limit:  rawLimit,
 		Offset: offset,
 	}
 
@@ -587,6 +618,54 @@ func (ss *SearchService) SearchClaudeHistory(
 				CreatedAt:       timestamppb.New(createdAt),
 			},
 		})
+	}
+
+	// Post-processing order matters: project scoping is the broadest filter
+	// and narrows the candidate set first, then automation-session filtering,
+	// then dedup — so an out-of-project or excluded-automation hit never
+	// contributes to more_matches_in_session_count on a kept result. Each
+	// step below aliases protoResults' backing array (the results[:0] filter
+	// idiom) and reassigns it — inserting a step between these without also
+	// reassigning would corrupt the aliased slice, so keep this reassignment
+	// pattern if the ordering changes.
+	var instances []*session.Instance
+	if ss.getInstances != nil && (req.Msg.GetProject() != "" || req.Msg.GetExcludeAutomationSessions()) {
+		instances = ss.getInstances()
+	}
+
+	if project := req.Msg.GetProject(); project != "" {
+		protoResults = filterByProject(protoResults, project, instances)
+	}
+
+	if req.Msg.GetExcludeAutomationSessions() {
+		excludedBefore := len(protoResults)
+		protoResults = filterAutomationSessions(protoResults, instances)
+		if excluded := excludedBefore - len(protoResults); excluded > 0 {
+			log.Info("search: excluded automation sessions", "count", excluded)
+		}
+	}
+
+	if req.Msg.GetGroupBySession() {
+		protoResults = groupResultsBySession(protoResults)
+	}
+
+	if needsPostProcessing && len(protoResults) > requestedLimit {
+		protoResults = protoResults[:requestedLimit]
+	}
+
+	// Context/bookends are computed only for the final, post-truncation
+	// result set, not wastefully on raw hits that get discarded above.
+	if req.Msg.GetIncludeContext() {
+		for _, r := range protoResults {
+			msgs, err := hist.GetMessagesFromConversationFile(r.SessionId, 0)
+			if err != nil {
+				continue // best-effort: leave context fields empty rather than failing the whole search
+			}
+			window, first, last := contextWindowAndBookends(msgs, int(r.MessageIndex))
+			r.ContextWindow = toProtoClaudeMessages(window)
+			r.BookendFirst = toProtoClaudeMessages(first)
+			r.BookendLast = toProtoClaudeMessages(last)
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{

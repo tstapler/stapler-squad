@@ -241,4 +241,18 @@ export const backlogFeatures = {
     status: 'experimental',
     since: '1.0.0',
   },
+  'triage-related-work': {
+    id: 'triage-related-work',
+    title: 'Find Related Past Work',
+    description: 'Triage panel search box that surfaces session-deduped prior sessions related to a backlog item, pre-populated with the item title.',
+    rpcIds: ['history:search'],
+    componentPaths: ['web-app/src/components/backlog/TriageRelatedWorkSection.tsx'],
+    testIds: [
+      'pre-populates query with backlog item title on mount',
+      'shows reassuring copy when zero matches found',
+      'e2e:triage-related-work - Find related past work surfaces prior sessions',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
 } as const satisfies Record<string, Feature>;
