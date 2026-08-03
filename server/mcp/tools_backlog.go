@@ -240,7 +240,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("Workflow:\n")
 		sb.WriteString("1. Run parallel research subagents → write research/*.md files\n")
 		sb.WriteString("2. Synthesize into plan.md + validation.md\n")
-		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path\n")
+		sb.WriteString("3. Write acceptance criteria: call submit_triage_result with item_id, summary, acceptance_criteria (full AC list), suggestions (gaps/questions), tasks (max 12), plan_artifact_path, priority (1-5, real assessment — this drives automatic implementation order), item_category (bugfix/feature/chore/refactor)\n")
 	case "work":
 		sb.WriteString("## Your Role: Work\n")
 		sb.WriteString("Implement the acceptance criteria. Do NOT call submit_triage_result or submit_review_verdict.\n\n")
@@ -1135,6 +1135,21 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 		itemUpdate.PlanArtifactsPath = &pap
 	}
 
+	// Priority/item_category assessment, same "apply only if valid, never clobber
+	// with a missing/invalid value" convention as the headless triage path
+	// (applyTriageResultToUpdate, server/services/backlog_service_triage.go) — this
+	// is what makes an interactive (non-headless) triage session assign labels/
+	// priority too, not just the headless one. MCP numeric args decode as float64.
+	if rawPriority, exists := args["priority"]; exists {
+		if p, ok := rawPriority.(float64); ok && p >= 1 && p <= 5 {
+			priority := int(p)
+			itemUpdate.Priority = &priority
+		}
+	}
+	if itemCategory, ok := args["item_category"].(string); ok && itemCategory != "" && session.IsValidBacklogCategory(itemCategory) {
+		itemUpdate.Category = &itemCategory
+	}
+
 	// Parse and merge acceptance_criteria if provided.
 	// Merges into existing criteria: adds new ones, updates matching indices, never
 	// silently deletes criteria that aren't mentioned — deletions must be intentional.
@@ -1181,7 +1196,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 		}
 	}
 
-	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil {
+	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil || itemUpdate.Priority != nil || itemUpdate.Category != nil {
 		if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, itemUpdate, nil); updateErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("update backlog item: %v", updateErr), ""), nil
 		}
@@ -1370,10 +1385,17 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 
 	s.AddTool(
 		mcpgo.NewTool("submit_triage_result",
-			mcpgo.WithDescription("Record completed triage analysis for a backlog item. Role: triage only. Call this LAST — after all research/*.md, plan.md, and validation.md files are written. 'suggestions' = proposed additions or improvements to acceptance criteria/spec (include clarifying questions here with rationale='question'). 'tasks' = implementation task breakdown shown as an interactive checklist to the operator (max 12, each needs text + estimate + category). 'plan_artifact_path' = absolute path to the docs/tasks/[slug] directory. Calling this notifies the operator that triage is complete and ready for review."),
+			mcpgo.WithDescription("Record completed triage analysis for a backlog item. Role: triage only. Call this LAST — after all research/*.md, plan.md, and validation.md files are written. 'suggestions' = proposed additions or improvements to acceptance criteria/spec (include clarifying questions here with rationale='question'). 'tasks' = implementation task breakdown shown as an interactive checklist to the operator (max 12, each needs text + estimate + category). 'plan_artifact_path' = absolute path to the docs/tasks/[slug] directory. 'priority' and 'item_category' = your assessed urgency and classification for this item, used to order automatic implementation — make a real assessment, don't default to P3 reflexively. Calling this notifies the operator that triage is complete and ready for review."),
 			mcpgo.WithString("item_id",
 				mcpgo.Description("UUID of the backlog item"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithNumber("priority",
+				mcpgo.Description("Your assessed urgency/impact after investigating the item and codebase: 1=P1 critical (blocking, security, data loss, broken build/CI), 2=P2 high, 3=P3 normal, 4=P4 low, 5=P5 trivial/nice-to-have. Omit only if genuinely unable to assess — this drives the priority order automatic implementation spawns items in."),
+			),
+			mcpgo.WithString("item_category",
+				mcpgo.Description("Classify what kind of work this item is."),
+				mcpgo.Enum("bugfix", "feature", "chore", "refactor"),
 			),
 			mcpgo.WithArray("suggestions",
 				mcpgo.Description("Array of suggestion objects, each with text and rationale fields"),

@@ -284,6 +284,15 @@ const (
 	headlessReReviewUUIDPrefix = "headless-re-review-"
 )
 
+// triageCallBudget bounds a single headless triage LLM call (TriggerTriage's own
+// triageCtx). session.maxHeadlessTriageSessionStaleness (session/backlog_lifecycle.go)
+// — the periodic sweep's threshold for treating a still-open triage session as
+// dead — MUST stay strictly greater than this, with enough margin that a call
+// finishing at (or timing out at) its own full budget has already ended by the
+// time the sweep's next tick considers it stale; otherwise the sweep and this
+// call's own natural completion/timeout race on every slow call. See BUG-055.
+const triageCallBudget = 30 * time.Minute
+
 // The auto-rework iteration cap bounds how many automated work sessions can be
 // spawned for a single backlog item by the auto-reopen loop. When this ceiling
 // is hit, the item stays in review so a human can inspect it rather than
@@ -520,30 +529,43 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 }
 
 // DequeueNextQueuedItems implements session.QueueDequeuer. It claims and spawns as
-// many queued items as there are free WIP slots, oldest-queued (FIFO) first. Called
-// from BacklogLifecycleListener.onSessionExited (immediate dequeue the moment a slot
-// frees up) and the periodic ReconcileStuck sweep (safety net for a missed hook or a
-// concurrency limit raised while items were queued) — see session/backlog_lifecycle.go.
+// many queued items as there are free WIP slots, highest-priority (P1) first, oldest
+// (by queued time, or created time for a "ready" candidate that was never explicitly
+// queued) as the tiebreaker. When autoSpawnReadyItemsEnabled (default true —
+// config.Config.AutoSpawnReadyItemsOrDefault) is set, "ready" items are eligible
+// candidates too, not just ones already sitting in "queued" — this is what makes
+// auto-implementation the default: an item reaching "ready" no longer needs either a
+// human to click "Spawn Session" or an explicit AutoSpawnSession flag to eventually
+// get worked, it just needs a free WIP slot and the highest priority among what's
+// waiting. Called from BacklogLifecycleListener.onSessionExited (immediate dequeue
+// the moment a slot frees up) and the periodic ReconcileStuck sweep (safety net for a
+// missed hook, a concurrency limit raised while items were waiting, or an item that
+// reached "ready" between ticks) — see session/backlog_lifecycle.go.
 //
-// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress,
-// ExpectedStatus=queued) before spawning, so concurrent callers (this method running
-// from both the exit hook and the sweep, or multiple server processes sharing one DB)
-// cannot double-claim the SAME item — see TransitionBacklogItemStatus's doc comment.
-// That per-item CAS alone does not prevent two concurrent calls to this method from
-// each computing their own freeSlots from an unsynchronized snapshot and jointly
-// claiming DIFFERENT queued items past the cap, so dequeueMu additionally serializes
-// the whole method body, making this method single-flight system-wide (PR #199
-// review F2 — the exact "uncontrolled concurrency overshoot" class of bug the WIP
-// cap feature exists to prevent).
+// Each candidate is claimed via a SQL-level compare-and-swap (queued->in_progress or
+// ready->in_progress, ExpectedStatus set to whichever status the candidate was found
+// in) before spawning, so concurrent callers (this method running from both the exit
+// hook and the sweep, or multiple server processes sharing one DB) cannot double-claim
+// the SAME item — see TransitionBacklogItemStatus's doc comment. That per-item CAS
+// alone does not prevent two concurrent calls to this method from each computing
+// their own freeSlots from an unsynchronized snapshot and jointly claiming DIFFERENT
+// candidates past the cap, so dequeueMu additionally serializes the whole method
+// body, making this method single-flight system-wide (PR #199 review F2 — the exact
+// "uncontrolled concurrency overshoot" class of bug the WIP cap feature exists to
+// prevent).
 //
 // The claim itself now goes through transitionWithGuard (PR #199 review F4), so an
 // item without an approved plan (SkipPlanning=false, PlanApproved=false) cannot be
 // claimed at all — defense-in-depth against F3, on top of SpawnSessionFromItem's own
-// planning gate now running before the WIP-cap queue gate.
+// planning gate now running before the WIP-cap queue gate. This is also what makes a
+// "ready" candidate safe to auto-claim directly: ready->in_progress carries the exact
+// same ErrPlanRequired/ErrPlanArtifactsRequired guard as queued->in_progress (see
+// domain.TransitionGuard), so an unapproved-plan item is silently skipped (left at
+// ready) rather than auto-spawned without review.
 //
 // If the claim succeeds but the spawn itself fails (missing repo_path, stale plan
-// approval, SessionCreator error), the item is rolled back to queued rather than left
-// stranded in_progress with no session.
+// approval, SessionCreator error), the item is rolled back to whichever status it was
+// claimed from (queued or ready) rather than left stranded in_progress with no session.
 func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -560,28 +582,32 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return nil
 	}
 
-	queued, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusQueued)},
+	statuses := []string{string(session.BacklogStatusQueued)}
+	if s.autoSpawnReadyItemsEnabled() {
+		statuses = append(statuses, string(session.BacklogStatusReady))
+	}
+	candidates, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+		Statuses: statuses,
 	})
 	if err != nil {
-		return fmt.Errorf("list queued items: %w", err)
+		return fmt.Errorf("list queued/ready items: %w", err)
 	}
-	sort.Slice(queued, func(i, j int) bool {
-		ai, aj := queued[i].QueuedAt, queued[j].QueuedAt
-		if ai == nil || aj == nil {
-			return aj == nil && ai != nil
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority < candidates[j].Priority // P1 (1) before P5 (5)
 		}
-		return ai.Before(*aj)
+		return effectiveQueueTime(candidates[i]).Before(effectiveQueueTime(candidates[j]))
 	})
 
 	spawned := 0
-	for _, item := range queued {
+	for _, item := range candidates {
 		if spawned >= freeSlots {
 			break
 		}
+		fromStatus := session.BacklogStatus(item.Status)
 		claimed, claimErr := s.transitionWithGuard(ctx, &item,
 			session.BacklogStatusInProgress,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued), Note: "dequeued: WIP slot freed"},
+			&session.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
 			session.TriggeredBySystem)
 		if claimErr != nil {
 			switch {
@@ -591,24 +617,24 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
 				// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 				// now that SpawnSessionFromItem's planning gate runs before the
-				// WIP-cap gate that queues an item, but refuse the claim rather
-				// than silently spawning an unapproved item if this is ever hit
-				// (e.g. a future call site regression, or a pre-existing queued
-				// row from before that ordering fix).
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s: %v — leaving queued", item.ID, claimErr)
+				// WIP-cap queue gate, but refuse the claim rather than silently
+				// spawning an unapproved item if this is ever hit (e.g. a future
+				// call site regression, or a pre-existing queued/ready row from
+				// before that ordering fix).
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim blocked by planning gate item=%s status=%s: %v — leaving as-is", item.ID, fromStatus, claimErr)
 			default:
-				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s: %v", item.ID, claimErr)
+				log.WarningLog.Printf("[DequeueNextQueuedItems] claim failed item=%s status=%s: %v", item.ID, fromStatus, claimErr)
 			}
 			continue
 		}
 
 		resp, spawnErr := s.spawnSessionAfterGates(ctx, claimed, true, item.QueuedAutonomous)
 		if spawnErr != nil {
-			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to queued", item.ID, spawnErr)
-			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusQueued,
+			log.WarningLog.Printf("[DequeueNextQueuedItems] spawn failed for dequeued item=%s: %v; rolling back to %s", item.ID, spawnErr, fromStatus)
+			if _, rbErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, fromStatus,
 				&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 				session.TriggeredBySystem); rbErr != nil {
-				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to queued failed item=%s: %v", item.ID, rbErr)
+				log.ErrorLog.Printf("[DequeueNextQueuedItems] rollback to %s failed item=%s: %v", fromStatus, item.ID, rbErr)
 				// The same silent-stranding shape notifySpawnAndRollbackFailed was
 				// built for (BUG-030) — that fix only wired this helper into
 				// AutoReopenAfterFailedReview's own spawn+rollback path, missing this
@@ -619,9 +645,20 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			continue
 		}
 		spawned++
-		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s session=%s", item.ID, resp.Msg.SessionUuid)
+		log.InfoLog.Printf("[DequeueNextQueuedItems] dequeued and spawned item=%s (was %s, priority=%d) session=%s", item.ID, fromStatus, item.Priority, resp.Msg.SessionUuid)
 	}
 	return nil
+}
+
+// effectiveQueueTime is the timestamp DequeueNextQueuedItems' priority-tiebreaker sort
+// uses: QueuedAt for a genuinely queued item, or CreatedAt for a "ready" candidate that
+// was never explicitly queued (QueuedAt is nil for those) — so older work still wins
+// ties within the same priority tier regardless of which status it's waiting in.
+func effectiveQueueTime(item session.BacklogItemData) time.Time {
+	if item.QueuedAt != nil {
+		return *item.QueuedAt
+	}
+	return item.CreatedAt
 }
 
 // spawnSessionAfterGates performs the actual session spawn for item once all gating
@@ -691,9 +728,8 @@ func (s *BacklogService) spawnSessionAfterGates(
 	s.killEndedWorkSessionPanes(ctx, priorSessions)
 
 	// 8b. Guard against spawning a duplicate work session when one is already active.
-	if hasActiveWorkSession(priorSessions) {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("a work session is already active for this item; wait for it to finish or kill it first"))
+	if active := findActiveWorkSession(priorSessions); active != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, s.activeWorkSessionBlockedError(active))
 	}
 
 	// 8. Build agent prompt. Routed through PipelineEngine (Epic 1.5, Story 1.5.5) so a
@@ -924,12 +960,48 @@ func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int,
 // hasActiveWorkSession reports whether any of the provided ItemSessions is an
 // open (not yet ended) work-role session.
 func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
-	for _, ps := range priorSessions {
-		if ps.Role == session.SessionRoleWork && ps.EndedAt == nil {
-			return true
+	return findActiveWorkSession(priorSessions) != nil
+}
+
+// findActiveWorkSession returns the open (not yet ended) work-role
+// ItemSession, if any — the same match hasActiveWorkSession checks for, but
+// returning the session itself so a caller blocked by it (spawnSessionAfterGates'
+// 8b guard) can enrich its error with a progress signal instead of a bare
+// "already active."
+func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
 		}
 	}
-	return false
+	return nil
+}
+
+// activeWorkSessionBlockedError builds the CodeAlreadyExists error for
+// spawnSessionAfterGates' 8b guard, enriched with the same progress signal
+// notifyIfActiveWorkSessionStale already computes for the review-reopen path
+// (via the shared workSessionStaleness helper below) — without this, a
+// caller blocked here has no way to tell "still working" from "silently
+// stuck" short of manually cross-referencing a session's last-activity
+// timestamp, a full diff pull, and a live tmux check (see
+// docs/tasks/backlog-feature-improvement.md's 2026-07-31 entry: discovered
+// live while manually unsticking backlog item 04089969). Reuses
+// maxReworkBlockStaleness (15min) as the same "stalled" threshold that path
+// already established, rather than inventing a second one.
+func (s *BacklogService) activeWorkSessionBlockedError(active *session.ItemSessionSummary) error {
+	base := fmt.Sprintf("a work session (%s) is already active for this item; wait for it to finish or kill it first", active.SessionUUID)
+	if s.sessionStopper == nil {
+		return fmt.Errorf("%s — progress signal unavailable: sessionStopper not wired", base)
+	}
+	idle, live, stale := s.workSessionStaleness(active.SessionUUID)
+	if !live {
+		return fmt.Errorf("%s — progress signal unavailable: session not currently tracked live", base)
+	}
+	if stale {
+		return fmt.Errorf("%s — likely stalled: no output in %s (stale threshold %s), consider checking it manually",
+			base, idle.Round(time.Second), maxReworkBlockStaleness)
+	}
+	return fmt.Errorf("%s — still active: output %s ago", base, idle.Round(time.Second))
 }
 
 // maxReworkBlockStaleness is the threshold notifyIfActiveWorkSessionStale (and
@@ -944,6 +1016,27 @@ func hasActiveWorkSession(priorSessions []session.ItemSessionSummary) bool {
 // a low-stakes "might be worth a look" badge). Used by both the mark side
 // (this function) and the resolve side so they agree on one number.
 const maxReworkBlockStaleness = 15 * time.Minute
+
+// workSessionStaleness reports how long sessionUUID has been idle (no
+// meaningful output) and whether it currently exceeds maxReworkBlockStaleness.
+// Shared by the three call sites that all need this exact computation —
+// activeWorkSessionBlockedError (the blocked-spawn error, enriched with a
+// progress signal), notifyIfActiveWorkSessionStale (the mark side of the
+// rework-blocked-stale notification), and ResolveReworkBlockedStaleIfRecovered
+// (its resolve-side counterpart) — so the "idle vs. threshold" comparison
+// can't drift between them. live mirrors TimeSinceLastMeaningfulOutput's own
+// liveness flag; idle and stale are meaningless when live is false. Returns
+// (0, false, false) when no sessionStopper is wired — callers that need to
+// distinguish "no stopper" from "stopper says not live" (activeWorkSessionBlockedError
+// does, for its own distinct error message) must still check s.sessionStopper == nil
+// themselves before calling this.
+func (s *BacklogService) workSessionStaleness(sessionUUID string) (idle time.Duration, live, stale bool) {
+	if s.sessionStopper == nil {
+		return 0, false, false
+	}
+	idle, live = s.sessionStopper.TimeSinceLastMeaningfulOutput(sessionUUID)
+	return idle, live, live && idle > maxReworkBlockStaleness
+}
 
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
 // live gap: AutoReopenAfterFailedReview's hasActiveWorkSession guard treats
@@ -1003,16 +1096,12 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	if active == nil {
 		return
 	}
-	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
-	if !live {
-		return
-	}
-	threshold := maxReworkBlockStaleness
-	if idle <= threshold {
+	idle, _, stale := s.workSessionStaleness(active.SessionUUID)
+	if !stale {
 		return
 	}
 	log.WarningLog.Printf("[AutoReopenAfterFailedReview] item %s reopen blocked by active work session %s that is itself stale (%s since last meaningful output, threshold %s)",
-		itemID, active.SessionUUID, idle.Round(time.Second), threshold)
+		itemID, active.SessionUUID, idle.Round(time.Second), maxReworkBlockStaleness)
 
 	// Durably mark the item, best-effort: a storage error or a status
 	// precondition mismatch (item moved off review between read and write)
@@ -1081,8 +1170,8 @@ func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Contex
 	if s.sessionStopper == nil {
 		return nil
 	}
-	idle, live := s.sessionStopper.TimeSinceLastMeaningfulOutput(active.SessionUUID)
-	if !live || idle <= maxReworkBlockStaleness {
+	_, _, stale := s.workSessionStaleness(active.SessionUUID)
+	if !stale {
 		s.resolveReworkBlockedStaleLogged(ctx, itemID)
 	}
 	return nil
@@ -1678,6 +1767,18 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	return nil
 }
 
+// IsTriageLive reports whether this process itself still has a headless triage call
+// genuinely in flight for itemID, per the triageInFlight field's doc comment. This is
+// the single source of truth both tombstoneOrphanTriageSessions (in this file) and
+// session.BacklogLifecycleListener's periodic staleness sweep (reconcileOrphanedTriageItems,
+// via the TriageRespawner interface this method satisfies) consult — see BUG-055: before
+// this method existed, that sweep had its own separate, liveness-blind staleness-only gate
+// that could tombstone a call genuinely still running past maxHeadlessTriageSessionStaleness.
+func (s *BacklogService) IsTriageLive(itemID string) bool {
+	_, live := s.triageInFlight.Load(itemID)
+	return live
+}
+
 // syncPRBranchWithMain merges prFixMainBranch into the worktree of item's most recent
 // work session — the branch behind the currently open, failing PR — and pushes the
 // merge when it brings in new commits, so the live PR is resynced with main before the
@@ -1743,9 +1844,8 @@ func (s *BacklogService) syncPRBranchWithMain(ctx context.Context, itemID string
 //     problem, not a per-call one.
 //   - "other": anything else (e.g. a storage/DB error surfaced through the same path).
 func classifyHeadlessCallError(err error, elapsed time.Duration) string {
-	const timeoutBudget = 30 * time.Minute
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), timeoutBudget-elapsed < 5*time.Second:
+	case errors.Is(err, context.DeadlineExceeded), triageCallBudget-elapsed < 5*time.Second:
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "shutdown"
@@ -1792,8 +1892,9 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
-	// genuinely still running. Headless sessions are always orphaned if not ended
-	// (no live tmux session to check) — tombstone them and allow re-trigger.
+	// genuinely still running — via s.triageInFlight for a headless call (this
+	// process's own in-memory liveness record, see that field's doc comment) or via
+	// sessionStopper for a live tmux session — and tombstone it only if it is not.
 	existingSessions, listErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	if listErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list triage sessions: %w", listErr))
@@ -1801,6 +1902,25 @@ func (s *BacklogService) TriggerTriage(
 	if err := s.tombstoneOrphanTriageSessions(ctx, req.Msg.ItemId, item.Status, existingSessions); err != nil {
 		return nil, err
 	}
+
+	// 3a-i. Atomic check-and-set, closing the TOCTOU window between the check above
+	// (which only sees already-persisted session rows) and this item's new
+	// ItemSession row being created below: two concurrent TriggerTriage calls for the
+	// same item (a manual "Retry now" racing the periodic reconciliation sweep, say)
+	// could otherwise both pass the check above before either has written its row.
+	// Mirrors spawnInFlight's identical guard on SpawnSessionFromItem above. Cleared
+	// via triageStarted below if this call returns before actually launching the
+	// goroutine, or via the goroutine's own defer once it does launch.
+	if _, alreadyInFlight := s.triageInFlight.LoadOrStore(req.Msg.ItemId, struct{}{}); alreadyInFlight {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("triage session already running for item %s", req.Msg.ItemId))
+	}
+	triageStarted := false
+	defer func() {
+		if !triageStarted {
+			s.triageInFlight.Delete(req.Msg.ItemId)
+		}
+	}()
 
 	// 3b. If re-triggering on a "ready" item, move it back to "idea".
 	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
@@ -1889,7 +2009,12 @@ func (s *BacklogService) TriggerTriage(
 	itemRepoPath := item.RepoPath
 	isID := is.ID
 	iteration := nextIteration
+	triageStarted = true
 	go func() {
+		// Clears the triageInFlight entry set at 3a-i above no matter how this
+		// goroutine exits, so the item is never left permanently un-retriggerable.
+		defer s.triageInFlight.Delete(itemID)
+
 		// Acquire concurrency semaphore (max 8 concurrent triage calls).
 		select {
 		case s.triageSem <- struct{}{}:
@@ -1904,7 +2029,7 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, triageCallBudget)
 		defer cancel()
 
 		callStart := time.Now()
@@ -1948,9 +2073,10 @@ func (s *BacklogService) TriggerTriage(
 			// the 2026-07-24 stuck-triage incident. errType classifies the error
 			// into a few high-signal buckets so a grep over historical logs can
 			// answer "how often do we hit each failure mode" without parsing %v text.
+			errType := classifyHeadlessCallError(callErr, callElapsed)
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s elapsed=%s errType=%s: %v",
-				itemID, callElapsed.Round(time.Second), classifyHeadlessCallError(callErr, callElapsed), callErr)
-			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+				itemID, callElapsed.Round(time.Second), errType, callErr)
+			_ = s.storage.UpdateItemSessionEndedWithReason(cleanupCtx, isID, time.Now(), errType)
 			return
 		}
 
@@ -1983,7 +2109,7 @@ func (s *BacklogService) TriggerTriage(
 
 		pap := artifactAbsPath
 		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
-		applyTriageACToUpdate(&result, &update)
+		applyTriageResultToUpdate(&result, &update)
 		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 			persistFailures = append(persistFailures, "saving the plan artifacts path")
@@ -2546,12 +2672,21 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		if is.Role != string(session.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
-		// Headless triage sessions have no live in-memory instance; treat as orphaned.
-		// Sessions older than maxTriageSessionAge are also treated as orphaned to prevent
-		// a hung or leaked session from blocking re-trigger indefinitely.
+		// A headless triage session has no live tmux instance to query — check this
+		// process's own triageInFlight record instead (see that field's doc comment;
+		// BUG-054). A non-headless (tmux-backed) session falls back to sessionStopper
+		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
+		// regardless, to prevent a genuinely hung or leaked call from blocking
+		// re-trigger indefinitely.
 		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
-		notLive := isHeadless || isStale || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
+		var live bool
+		if isHeadless {
+			live = s.IsTriageLive(itemID)
+		} else {
+			live = s.sessionStopper != nil && s.sessionStopper.IsSessionLive(is.SessionUUID)
+		}
+		notLive := isStale || !live
 		statusAdvanced := itemStatus != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
 			_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now())
@@ -2579,21 +2714,41 @@ func findPriorTriageResult(sessions []session.ItemSessionSummary) (session.Headl
 	return session.HeadlessTriageResult{}, false
 }
 
-// applyTriageACToUpdate re-indexes and status-normalises the AC criteria from a triage
-// result, then writes the serialized JSON into the provided update struct.
-func applyTriageACToUpdate(result *session.HeadlessTriageResult, update *session.BacklogItemUpdate) {
-	if len(result.AcceptanceCriteria) == 0 {
-		return
-	}
-	// Re-index to ensure 0-based contiguous indices regardless of what the model output.
-	for i := range result.AcceptanceCriteria {
-		result.AcceptanceCriteria[i].Index = i
-		if result.AcceptanceCriteria[i].Status == "" {
-			result.AcceptanceCriteria[i].Status = "pending"
+// applyTriageResultToUpdate re-indexes and status-normalises the AC criteria from a
+// triage result, then writes the serialized JSON into the provided update struct.
+// Also applies the LLM's assessed priority and item category, when it provided valid
+// ones — this is what makes triage assign labels/priority rather than leaving every
+// item at DefaultBacklogPriority forever, which is otherwise indistinguishable from
+// "genuinely assessed as normal" and defeats priority-ordered auto-spawn (see
+// DequeueNextQueuedItems). Each field is independently optional: a missing or invalid
+// value leaves the item's existing priority/category untouched rather than
+// clobbering it with a zero value — same convention AcceptanceCriteria already uses
+// here (an empty result means "no assessment", not "clear the existing value").
+func applyTriageResultToUpdate(result *session.HeadlessTriageResult, update *session.BacklogItemUpdate) {
+	if len(result.AcceptanceCriteria) > 0 {
+		// Re-index to ensure 0-based contiguous indices regardless of what the model output.
+		for i := range result.AcceptanceCriteria {
+			result.AcceptanceCriteria[i].Index = i
+			if result.AcceptanceCriteria[i].Status == "" {
+				result.AcceptanceCriteria[i].Status = "pending"
+			}
+		}
+		if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
+			update.AcceptanceCriteria = &acJSON
 		}
 	}
-	if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
-		update.AcceptanceCriteria = &acJSON
+
+	if result.Priority >= 1 && result.Priority <= 5 {
+		p := result.Priority
+		update.Priority = &p
+	}
+
+	// IsValidBacklogCategory also accepts "" (its own "uncategorized" convention),
+	// which must NOT be treated as a real assessment here — an omitted
+	// item_category means "no assessment", not "clear the existing category".
+	if result.ItemCategory != "" && session.IsValidBacklogCategory(result.ItemCategory) {
+		c := result.ItemCategory
+		update.Category = &c
 	}
 }
 

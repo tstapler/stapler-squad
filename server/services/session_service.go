@@ -516,7 +516,9 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if inst == nil {
 		return nil // already gone / never tracked
 	}
-	if !inst.SetArchivedAtIfNil(time.Now()) {
+	// SetArchivedAtIfNilAndStop also transitions Status to Stopped (see ArchiveSession's
+	// comment) — safe to call unconditionally: no-ops the transition if already Stopped.
+	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
@@ -1986,6 +1988,16 @@ func (s *SessionService) DeleteSession(
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
 	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
+	// Capture the live instance BEFORE removing from pollers. removeFromAllPollers
+	// (below) evicts this session from the ReviewQueuePoller's instance list — the
+	// exact list FindLiveInstance searches — so calling FindLiveInstance after
+	// removeFromAllPollers always returned nil here, silently skipping Destroy()'s
+	// git worktree cleanup for every delete (live or not) in favor of the
+	// tmux-only KillTmuxSessionByTitle fallback. Capturing the pointer first fixes
+	// that without reopening the race the ordering comment below is about (that
+	// race is between removeFromAllPollers and storage.DeleteInstance, not this).
+	liveInst := s.FindLiveInstance(sessionTitle)
+
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
 	// re-add the session between storage deletion and the old LoadInstances() reload.
@@ -1995,9 +2007,9 @@ func (s *SessionService) DeleteSession(
 	// Destroy tmux/git resources asynchronously so the RPC returns immediately
 	// after storage deletion. Cleanup errors are non-fatal — they are logged and
 	// do not affect the success response the caller receives.
-	if inst := s.FindLiveInstance(sessionTitle); inst != nil {
+	if liveInst != nil {
 		go func() {
-			if err := inst.Destroy(); err != nil {
+			if err := liveInst.Destroy(); err != nil {
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
@@ -4222,7 +4234,12 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.SetArchivedAt(&now)
+	// ArchiveWithStop also transitions Status to Stopped (best-effort — archiving
+	// previously left ArchivedAt set while Status stayed Active/Paused/Hibernated,
+	// which the retention sweep and other Stopped-gated logic depend on being in sync).
+	if err := inst.ArchiveWithStop(now); err != nil {
+		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
+	}
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}

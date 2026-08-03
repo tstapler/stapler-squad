@@ -295,6 +295,7 @@ type ItemSessionSummary struct {
 	CommitCountSinceSpawn    int
 	StartedAt                *time.Time
 	EndedAt                  *time.Time
+	EndReason                string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
 	LastCommitAt             *time.Time
 	LastFileTouchAt          *time.Time
 	LastProgressAt           *time.Time

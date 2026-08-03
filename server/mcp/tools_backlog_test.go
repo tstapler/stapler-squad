@@ -545,6 +545,65 @@ func TestSubmitTriageResult_PublishesNotificationOnSuccess(t *testing.T) {
 	}
 }
 
+// TestSubmitTriageResult_AppliesPriorityAndItemCategory_When_Provided guards the
+// interactive (non-headless) triage path's own priority/item_category assignment —
+// the same fix applied to the headless TriggerTriage path
+// (applyTriageResultToUpdate, server/services/backlog_service_triage.go), so an
+// agent-driven "sdd" pipeline-mode triage session assigns labels/priority too, not
+// just the headless one.
+func TestSubmitTriageResult_AppliesPriorityAndItemCategory_When_Provided(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupTriageSession(t, storage) // created with Priority: 2
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       itemID,
+		"summary":       "Critical bug found",
+		"priority":      float64(1),
+		"item_category": "bugfix",
+		"suggestions": []interface{}{
+			map[string]interface{}{"text": "Add tests", "rationale": "coverage"},
+		},
+	})
+
+	_, err := handler.submitTriageResult(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	updated, loadErr := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, 1, updated.Priority, "the assessed priority must be applied")
+	assert.Equal(t, "bugfix", updated.Category, "the assessed item_category must be applied")
+}
+
+// TestSubmitTriageResult_IgnoresInvalidPriorityAndCategory_When_OutOfRange verifies
+// an out-of-range priority or an invalid item_category is silently ignored (item's
+// existing priority/category untouched) rather than corrupting the item — same
+// convention as applyTriageResultToUpdate's headless-path equivalent.
+func TestSubmitTriageResult_IgnoresInvalidPriorityAndCategory_When_OutOfRange(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID := setupTriageSession(t, storage) // created with Priority: 2
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       itemID,
+		"summary":       "Out of range values",
+		"priority":      float64(9),
+		"item_category": "not-a-real-category",
+	})
+
+	_, err := handler.submitTriageResult(ctxWithUUID, req)
+	require.NoError(t, err)
+
+	updated, loadErr := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, 2, updated.Priority, "an out-of-range priority must not be applied")
+	assert.Empty(t, updated.Category, "an invalid item_category must not be applied")
+}
+
 // TestRequestReview_TransitionsItemToReview verifies that requestReview
 // transitions the item from in_progress to review.
 func TestRequestReview_TransitionsItemToReview(t *testing.T) {

@@ -8,11 +8,16 @@ Backlog item `f5f6d339-c741-4f34-ab39-db60fc619b0b`, migrated from
 this session; requirements below are derived from the item's description plus
 pre-implementation codebase triage.
 
-## Problem Statement (from the original item)
+## Problem Statement (from the original item — superseded, kept for provenance only)
 
-Users running Claude Code or other API-backed agents through stapler-squad have no
-visibility into token consumption or API costs per session. Costs are only
-discoverable after the fact from provider dashboards.
+> Users running Claude Code or other API-backed agents through stapler-squad have no
+> visibility into token consumption or API costs per session. Costs are only
+> discoverable after the fact from provider dashboards.
+
+**This framing is stale as of this project's triage** (see below) — the actual current
+problem this project solves is narrower: closing 5 specific display/sort/test-coverage
+gaps in a token-cost feature that already shipped. Left verbatim above only so the
+original item's ask is traceable; do not treat it as the live problem statement.
 
 ## IMPORTANT: This feature is already substantially implemented
 

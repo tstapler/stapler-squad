@@ -17,6 +17,7 @@ import sessionsReducer, {
   selectSessionsError,
   selectDetectedStatusMap,
   removeDetectedStatus,
+  selectActiveSessionsSortedByUpdatedAt,
 } from "../sessionsSlice";
 import { Session, SessionSchema, SessionStatus, SubStatus, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
@@ -449,6 +450,74 @@ describe("sessionsSlice", () => {
       expect(sessionAfter).toBeDefined();
       expect(sessionAfter?.id).toBe("s1");
       expect(selectSessionsTotal(store.getState())).toBe(1);
+    });
+  });
+
+  describe("selectActiveSessionsSortedByUpdatedAt — tiebreak", () => {
+    it("sorts by updatedAt descending when values are distinct (primary order)", () => {
+      const store = makeStore();
+      const older = create(SessionSchema, {
+        id: "older",
+        status: SessionStatus.ACTIVE,
+        updatedAt: { seconds: 100n, nanos: 0 },
+      });
+      const newer = create(SessionSchema, {
+        id: "newer",
+        status: SessionStatus.ACTIVE,
+        updatedAt: { seconds: 200n, nanos: 0 },
+      });
+      store.dispatch(setSessions([older, newer]));
+
+      const result = selectActiveSessionsSortedByUpdatedAt(store.getState() as any);
+      expect(result.map((s) => s.id)).toEqual(["newer", "older"]);
+    });
+
+    it("breaks a tie in updatedAt by createdAt descending", () => {
+      const store = makeStore();
+      const a = create(SessionSchema, {
+        id: "a",
+        status: SessionStatus.ACTIVE,
+        updatedAt: { seconds: 100n, nanos: 0 },
+        createdAt: { seconds: 50n, nanos: 0 },
+      });
+      const b = create(SessionSchema, {
+        id: "b",
+        status: SessionStatus.ACTIVE,
+        updatedAt: { seconds: 100n, nanos: 0 },
+        createdAt: { seconds: 60n, nanos: 0 },
+      });
+      store.dispatch(setSessions([a, b]));
+
+      const result = selectActiveSessionsSortedByUpdatedAt(store.getState() as any);
+      expect(result.map((s) => s.id)).toEqual(["b", "a"]);
+    });
+
+    it("breaks a tie in both updatedAt and createdAt by id ascending", () => {
+      const store = makeStore();
+      const z = create(SessionSchema, { id: "z-session", status: SessionStatus.ACTIVE });
+      const a = create(SessionSchema, { id: "a-session", status: SessionStatus.ACTIVE });
+      store.dispatch(setSessions([z, a]));
+
+      const result = selectActiveSessionsSortedByUpdatedAt(store.getState() as any);
+      expect(result.map((s) => s.id)).toEqual(["a-session", "z-session"]);
+    });
+
+    it("excludes UNSPECIFIED-status sessions regardless of recency", () => {
+      const store = makeStore();
+      const active = create(SessionSchema, {
+        id: "active",
+        status: SessionStatus.ACTIVE,
+        updatedAt: { seconds: 1n, nanos: 0 },
+      });
+      const unspecified = create(SessionSchema, {
+        id: "unspecified",
+        status: SessionStatus.UNSPECIFIED,
+        updatedAt: { seconds: 999n, nanos: 0 },
+      });
+      store.dispatch(setSessions([active, unspecified]));
+
+      const result = selectActiveSessionsSortedByUpdatedAt(store.getState() as any);
+      expect(result.map((s) => s.id)).toEqual(["active"]);
     });
   });
 });
