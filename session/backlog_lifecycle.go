@@ -2268,13 +2268,56 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 	}()
 }
 
-// reconcileOrphanedTriageItems flags idea-status items whose most recent triage-role
-// ItemSession never got the item to "ready". Two distinct shapes share this one
-// detector and StuckReason:
+// latestTriageSession returns the most recent triage-role ItemSession (by
+// CreatedAt), regardless of whether it has ended yet, or nil if none exists.
+// Shared by reconcileOrphanedTriageItems (which needs both the open-and-stale
+// and already-ended cases) and reconcilePlanNotApprovedItems (which only
+// needs to check whether the latest attempt left a usable result behind).
+func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
+	var latest *ItemSessionSummary
+	for i := range sessions {
+		if sessions[i].Role != SessionRoleTriage {
+			continue
+		}
+		if latest == nil || sessions[i].CreatedAt.After(latest.CreatedAt) {
+			latest = &sessions[i]
+		}
+	}
+	return latest
+}
+
+// reconcileOrphanedTriageItems flags items gated on plan approval (no
+// SkipPlanning, no PlanApproved) whose most recent triage-role ItemSession
+// never left a usable plan behind. Originally scoped to idea-status items
+// only; generalized 2026-08-03 (docs/tasks/backlog-feature-improvement.md)
+// after item be676dab sat 22h+ stuck with a null triageResult: its triage
+// session ran 8h52m and produced nothing usable, but the item had already
+// advanced from idea to queued (via the WIP cap) before that mattered, which
+// put it entirely outside this detector's old status==idea-only scope —
+// reconcilePlanNotApprovedItems flagged it too, but treated it identically to
+// the normal "plan generated, awaiting your review" wait, with no
+// distinction and no automated retry path. The key generalization: this
+// detector now keys off "item lacks an approved/skippable plan and lacks a
+// usable triage result" rather than "item status == idea" — a superset that
+// still covers the original idea-status shapes unchanged.
 //
-//  1. Still open and stale — the triage process crashed, was killed, or a server
-//     restart happened mid-triage before the completion goroutine ever ran.
-//     Previously this class of failure was only caught by
+// Deliberately NOT generalized to "ready" status: TriggerTriage only ever
+// transitions idea->ready immediately after a successful *parse* of the
+// headless call's output (see its cleanupCtx block) — that transition is
+// NOT additionally gated on the subsequent TriageResult persist write also
+// succeeding (persistFailures there only drives a one-time notification, not
+// a rollback), so a transient persist failure can in principle still leave a
+// ready item with an empty TriageResult on its latest session. That's a
+// real, pre-existing gap (nothing today detects "ready" items at all), but
+// one step further down the pipeline than this generalization's scope —
+// tracked separately rather than folded in here. idea and queued are the two
+// statuses this detector understands today.
+//
+// Three shapes share this one detector and StuckReason:
+//
+//  1. Still open and stale (idea only) — the triage process crashed, was
+//     killed, or a server restart happened mid-triage before the completion
+//     goroutine ever ran. Previously this class of failure was only caught by
 //     tombstoneOrphanTriageSessions (same package, server/services/
 //     backlog_service_triage.go), and only when a human manually re-triggered
 //     triage on the item; this is the standing-sweep equivalent. Pure staleness
@@ -2285,24 +2328,30 @@ func (l *BacklogLifecycleListener) remediateStaleWorkWithBackoffGate(ctx context
 //     common case) get the much shorter maxHeadlessTriageSessionStaleness (30m)
 //     rather than the general-purpose maxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
-//     doc comment).
-//  2. Already ended, but the item never left idea — the headless call errored, or
-//     returned output ParseHeadlessTriageResult rejected (e.g. a premature-
+//     doc comment). Not generalized beyond idea: nothing in this codebase creates
+//     a new triage-role session while an item is queued, so an open session found
+//     on a queued item would be an unmodeled anomaly, not this shape.
+//  2. Already ended, idea-status item never left idea — the headless call errored,
+//     or returned output ParseHeadlessTriageResult rejected (e.g. a premature-
 //     completion status message instead of the final JSON block — see
 //     docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry for the live
 //     incident, item 04089969, this shape was added for). Unlike shape 1, no
 //     staleness wait is needed: TriggerTriage always attempts the idea->ready
-//     transition immediately after a successful parse (see its cleanupCtx block),
-//     so a triage session with EndedAt set while the item is still in idea is an
-//     unambiguous "triage did not succeed" signal, not a race with an in-flight
-//     write. Before this shape existed, a session in this state had no detector at
-//     all: it doesn't match shape 1 (EndedAt is non-nil), and nothing else flags an
-//     idea-status item whose triage session simply exited without transitioning it.
+//     transition immediately after a successful parse, so a triage session with
+//     EndedAt set while the item is still in idea is an unambiguous "triage did
+//     not succeed" signal, not a race with an in-flight write.
+//  3. Already ended, item advanced past idea (queued) while still gated (no
+//     SkipPlanning, no PlanApproved) and the ended session left no usable
+//     TriageResult — the 2026-08-03 generalized shape. Unlike shape 2, "ended"
+//     alone isn't the signal (a queued item legitimately has an ended,
+//     SUCCESSFUL triage session behind it in the common case — that's a normal,
+//     working-as-designed wait for human plan approval, not a failure): this
+//     shape additionally requires the latest session's TriageResult be empty.
 //
 // Best-effort: query/notify failures are logged, never returned.
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, BacklogItemFilter{
-		Statuses: []string{string(BacklogStatusIdea)},
+		Statuses: []string{string(BacklogStatusIdea), string(BacklogStatusQueued)},
 	})
 	if err != nil {
 		log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems list error: %v", err)
@@ -2316,26 +2365,24 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 		// Find the most recent triage-role session regardless of whether it has
-		// ended yet — shape 1 above needs the open-and-stale case, shape 2 needs
-		// the already-ended case, and both only ever care about the single latest
-		// attempt (an older, already-superseded session should never re-trigger
-		// this detector).
-		var latestTriage *ItemSessionSummary
-		for i := range sessions {
-			if sessions[i].Role != SessionRoleTriage {
-				continue
-			}
-			if latestTriage == nil || sessions[i].CreatedAt.After(latestTriage.CreatedAt) {
-				latestTriage = &sessions[i]
-			}
-		}
+		// ended yet — shape 1 above needs the open-and-stale case, shapes 2/3 need
+		// the already-ended case, and all three only ever care about the single
+		// latest attempt (an older, already-superseded session should never
+		// re-trigger this detector).
+		latestTriage := latestTriageSession(sessions)
 		if latestTriage == nil {
 			continue // no triage session has ever run for this item
 		}
 
+		isIdea := item.Status == string(BacklogStatusIdea)
+
 		var reasonDetail string
 		if latestTriage.EndedAt == nil {
-			// Shape 1: still open. Staleness gate as before.
+			// Shape 1: still open. Staleness gate as before — idea only, see doc
+			// comment above for why this isn't generalized to queued.
+			if !isIdea {
+				continue
+			}
 			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
 			if isHeadless {
@@ -2367,8 +2414,9 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			}
 			reasonDetail = fmt.Sprintf("triage session %s still open after %s", latestTriage.SessionUUID, staleness)
 		} else {
-			// Shape 2: already ended, item still in idea. Nothing to tombstone —
-			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			// Already ended. The shutdown carve-out applies to both shape 2 (idea)
+			// and shape 3 (queued) identically — a self-inflicted, zero-evidence
+			// event either way.
 			if latestTriage.EndReason == "shutdown" { // must match classifyHeadlessCallError's bucket name (server/services/backlog_service_triage.go)
 				// The prior attempt was killed by our OWN graceful shutdown (a routine
 				// deploy restart cancelling s.shutdownCtx mid-call, not a failure of
@@ -2389,10 +2437,26 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				}
 				continue
 			}
-			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
+
+			if isIdea {
+				// Shape 2: already ended, item still in idea. Nothing to tombstone —
+				// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+				reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
+			} else {
+				// Shape 3 (generalized): item advanced past idea (queued) but is
+				// still gated on plan approval, and its most recent triage session
+				// left no usable plan. An item that IS gated but DOES have a real
+				// plan (or has SkipPlanning/PlanApproved set) is
+				// reconcilePlanNotApprovedItems' normal "awaiting human review"
+				// case, not this detector's concern.
+				if item.SkipPlanning || item.PlanApproved || latestTriage.TriageResult != "" {
+					continue
+				}
+				reasonDetail = fmt.Sprintf("triage session %s ended with no usable plan while item was gated on plan approval (status=%s)", latestTriage.SessionUUID, item.Status)
+			}
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, reasonDetail)
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck item=%s: %v", item.ID, markErr)
 			continue
@@ -2413,7 +2477,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		log.WarningLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned (%s)", item.ID, latestTriage.SessionUUID, reasonDetail)
 		l.notify(item.ID,
 			"Triage may be stuck",
-			fmt.Sprintf("%s — its triage session ended without moving the item to Ready and nothing is running. Re-trigger triage or investigate.", item.Title),
+			fmt.Sprintf("%s — its triage session ended without producing a usable plan and nothing is running. Re-trigger triage or investigate.", item.Title),
 			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 			2, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM
 		)
@@ -2422,7 +2486,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		}
 	}
 	// No resolve pass needed here: selfHealStuck (status-anchored) clears this
-	// reason once the item leaves 'idea' — i.e. once triage is re-triggered and succeeds.
+	// reason once the item leaves idea/queued — i.e. once triage is
+	// re-triggered and succeeds (idea->ready), or the item is otherwise resolved.
 }
 
 // reconcileOrphanedTriageRemediation retries triage for every open
@@ -2447,8 +2512,8 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx contex
 		if row.Reason != domain.StuckReasonOrphanedTriage {
 			continue
 		}
-		if row.ItemStatus != BacklogStatusIdea {
-			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea
+		if row.ItemStatus != BacklogStatusIdea && row.ItemStatus != BacklogStatusQueued {
+			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea/queued
 		}
 		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)
 	}
@@ -2536,6 +2601,21 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 		}
 		if item.QueuedAt == nil || time.Since(*item.QueuedAt) <= planApprovalStaleness {
 			continue // still plausibly about to be approved/dequeued
+		}
+
+		// An item whose most recent triage session never left a usable plan
+		// behind isn't "awaiting human review of a real plan" — it's the
+		// generalized orphaned-triage shape reconcileOrphanedTriageItems now
+		// also covers (docs/tasks/backlog-feature-improvement.md's 2026-08-03
+		// entry, item be676dab). Defer to that detector instead of flagging the
+		// same item under two differently-worded stuck reasons at once.
+		sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcilePlanNotApprovedItems ListItemSessions item=%s: %v", item.ID, sessErr)
+			// Fail open (still flag as plan-not-approved below) — losing session
+			// visibility for one tick shouldn't suppress the pre-existing signal.
+		} else if latest := latestTriageSession(sessions); latest != nil && latest.EndedAt != nil && latest.TriageResult == "" {
+			continue
 		}
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, BacklogStatusQueued,
@@ -3051,7 +3131,14 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *EntRep
 		case domain.StuckReasonBouncing:
 			resolve = row.ItemStatus != BacklogStatusInProgress && row.ItemStatus != BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
-			resolve = row.ItemStatus != BacklogStatusIdea
+			// Generalized 2026-08-03 to also anchor at queued (see
+			// reconcileOrphanedTriageItems' doc comment): a retry that
+			// successfully re-triages moves the item queued->idea->ready,
+			// landing outside both anchor statuses, so this still resolves
+			// correctly on genuine success. A retry still in flight (queued
+			// reset to idea) or a repeat failure (back to idea) keeps the row
+			// open, matching the pre-existing idea-only behavior.
+			resolve = row.ItemStatus != BacklogStatusIdea && row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPlanNotApproved:
 			resolve = row.ItemStatus != BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:

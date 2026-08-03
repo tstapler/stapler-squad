@@ -1805,6 +1805,14 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 // (the caller's caller, via the backoff gate) already ended the orphaned session before
 // marking the item stuck, so by the time this runs there is normally nothing left for
 // TriggerTriage's own tombstone step to do; it is still safe to call unconditionally.
+//
+// Generalized 2026-08-03 (docs/tasks/backlog-feature-improvement.md, item be676dab) to
+// also handle a queued item: TriggerTriage only ever accepts idea/ready, so a queued item
+// gated on plan approval with no usable triage result first needs the same reset-to-idea
+// step the manual "Return to Triage" escape hatch performs (ActionsSection.tsx's
+// send_back_idea action, session/domain's queued->idea "backward: re-triage from scratch"
+// transition) before triage can run again — this mirrors the manual recovery already
+// performed for be676dab exactly, just automated.
 func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -1814,7 +1822,16 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusIdea {
+
+	switch session.BacklogStatus(item.Status) {
+	case session.BacklogStatusIdea:
+		// Already in the state TriggerTriage requires — fall through below.
+	case session.BacklogStatusQueued:
+		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusIdea, precondition, session.TriggeredBySystem); transErr != nil {
+			return fmt.Errorf("reset queued item to idea before retriage: %w", transErr)
+		}
+	default:
 		// Already moved on by the time this async call runs (e.g. a human already
 		// re-triggered triage manually, or the item was otherwise resolved) —
 		// nothing to do. Mirrors AutoRespawnReview's identical staleness guard.
