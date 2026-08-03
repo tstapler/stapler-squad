@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
@@ -51,6 +52,108 @@ func TestClassifyHeadlessCallError_should_BucketErrorsForLogGrepping(t *testing.
 			assert.Equal(t, tc.want, classifyHeadlessCallError(tc.err, tc.elapsed))
 		})
 	}
+}
+
+// TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory covers the
+// decision table for what triage's assessed priority/item_category actually get
+// applied vs. left alone: out-of-range priority, invalid/empty category, and the
+// happy path all need to behave correctly for auto-spawn's priority ordering to be
+// trustworthy (a clobbered or garbage value would be worse than never assigning one).
+func TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory(t *testing.T) {
+	tests := []struct {
+		name         string
+		priority     int
+		itemCategory string
+		wantPriority *int
+		wantCategory *string
+	}{
+		{"valid priority and category", 1, "bugfix", intPtr(1), strPtr("bugfix")},
+		{"zero priority (omitted) leaves it unset", 0, "feature", nil, strPtr("feature")},
+		{"negative priority rejected", -1, "", nil, nil},
+		{"priority above range rejected", 6, "", nil, nil},
+		{"empty category leaves it unset", 3, "", intPtr(3), nil},
+		{"invalid category rejected", 2, "not-a-real-category", intPtr(2), nil},
+		{"all valid categories accepted", 3, "chore", intPtr(3), strPtr("chore")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &session.HeadlessTriageResult{Priority: tc.priority, ItemCategory: tc.itemCategory}
+			update := &session.BacklogItemUpdate{}
+			applyTriageResultToUpdate(result, update)
+			if tc.wantPriority == nil {
+				assert.Nil(t, update.Priority)
+			} else {
+				require.NotNil(t, update.Priority)
+				assert.Equal(t, *tc.wantPriority, *update.Priority)
+			}
+			if tc.wantCategory == nil {
+				assert.Nil(t, update.Category)
+			} else {
+				require.NotNil(t, update.Category)
+				assert.Equal(t, *tc.wantCategory, *update.Category)
+			}
+		})
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+// initGitRepoForTest initialises a minimal git repository in dir. A smaller,
+// dependency-free duplicate of backlog_triage_harness_test.go's initGitRepo,
+// which lives behind the "harness" build tag and isn't linked into normal
+// `go test` runs.
+func initGitRepoForTest(t *testing.T, dir string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, args := range [][]string{
+		{"init", dir},
+		{"-C", dir, "config", "user.email", "test@example.com"},
+		{"-C", dir, "config", "user.name", "Test"},
+	} {
+		cmd := safeexec.CommandContext(ctx, "git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, out)
+		}
+	}
+}
+
+// TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails
+// guards BUG-057: a worktree-creation failure on a repo that IS git-managed
+// must fail loudly, not fall back to session.ResolveSessionPath(repoPath) —
+// which returns repoPath itself unscoped, silently pointing the spawned
+// session directly at the live checkout.
+func TestResolveSessionPath_should_ErrorNotFallBackToRepoPath_When_GitManagedWorktreeCreationFails(t *testing.T) {
+	repoPath := t.TempDir()
+	initGitRepoForTest(t, repoPath)
+
+	// Force CreateBacklogWorktree's worktree-directory creation to fail
+	// deterministically: os.MkdirAll(worktreesDir, ...) errors when a path
+	// component already exists as a regular file instead of a directory.
+	testDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "worktrees"), []byte("not a directory"), 0o644))
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.Error(t, err)
+	assert.False(t, useWorktree)
+	assert.Empty(t, path, "must not silently fall back to a path when the repo is git-managed")
+}
+
+// TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged verifies
+// the legitimate fallback path still works: a plain, never-git-initialized
+// directory should still spawn a directory session at that path.
+func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(t *testing.T) {
+	repoPath := t.TempDir()
+
+	path, useWorktree, err := resolveSessionPath(repoPath, "test-slug")
+
+	require.NoError(t, err)
+	assert.False(t, useWorktree)
+	resolved, resolveErr := session.ResolveSessionPath(repoPath)
+	require.NoError(t, resolveErr)
+	assert.Equal(t, resolved, path)
 }
 
 // --- Story 2.1.2: rework_cap durable write (notifyReworkCapHit) ---
@@ -542,6 +645,131 @@ func TestDequeueNextQueuedItems_should_LeaveQueued_When_ClaimedItemLacksApproved
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusQueued), final.Status, "an unapproved-plan item must never be claimed off the queue")
 	assert.Empty(t, creator.calls, "no session should have been spawned for an unapproved-plan item")
+}
+
+// TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfigDefault
+// guards the "software factory" default switch: a "ready" item that was never
+// explicitly queued (no manual "Spawn Session" click, no AutoSpawnSession flag) must
+// still be picked up and spawned by DequeueNextQueuedItems when a WIP slot is free —
+// this is what makes auto-implementation the default (config.Config.
+// AutoSpawnReadyItemsOrDefault defaults to true with cfg=nil, matching every other
+// test in this file).
+func TestDequeueNextQueuedItems_should_AutoSpawnReadyItem_When_SlotFreeAndConfigDefault(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "never manually spawned")
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", item.Msg.Item.Status, "a ready item must be auto-spawned once a slot is free, with no manual trigger")
+	assert.Len(t, creator.calls, 1)
+}
+
+// TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled verifies
+// the opt-out: explicit AutoSpawnReadyItems=false must leave "ready" items exactly
+// where manual-spawn-only behavior left them before this feature existed.
+func TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	disabled := false
+	cfg := &config.Config{AutoSpawnReadyItems: &disabled}
+	svc := NewBacklogService(storage, creator, cfg, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "manual spawn only")
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", item.Msg.Item.Status, "with the feature disabled, a ready item must NOT be auto-spawned")
+	assert.Empty(t, creator.calls)
+}
+
+// TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_OnlyOneSlotFree
+// is the direct regression test for "in priority order": P1 must win over P5 for the
+// one free slot, regardless of which was created first.
+func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_OnlyOneSlotFree(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	// Fill the (default, cfg=nil) WIP cap of 2 first, then free exactly one slot —
+	// mirrors TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst's setup.
+	inProgressIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		id := createReadyItemForSpawn(t, svc, repoPath, fmt.Sprintf("in-progress %d", i))
+		_, err := svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: id}))
+		require.NoError(t, err)
+		inProgressIDs = append(inProgressIDs, id)
+	}
+
+	// Lower-priority item created first, higher-priority item created second — a
+	// pure FIFO/creation-order dequeue would pick the P5 one; priority order must
+	// pick the P1 one instead.
+	p5ID := createReadyItemWithPriority(t, svc, repoPath, "low priority", 5)
+	time.Sleep(5 * time.Millisecond)
+	p1ID := createReadyItemWithPriority(t, svc, repoPath, "high priority", 1)
+
+	sessions, err := storage.ListItemSessions(t.Context(), inProgressIDs[0])
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
+	_, err = storage.TransitionBacklogItemStatus(t.Context(), inProgressIDs[0], session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	p1Item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: p1ID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", p1Item.Msg.Item.Status, "the P1 item must be spawned first, regardless of creation order")
+
+	p5Item, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: p5ID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", p5Item.Msg.Item.Status, "the P5 item must stay ready — only one slot was free")
+}
+
+// TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItemSpawnFails
+// mirrors TestDequeueNextQueuedItems_RollsBackToQueuedOnSpawnFailure for the new
+// ready-origin claim path: rollback must target "ready" (where the item actually
+// came from), not unconditionally "queued" — in_progress->queued isn't even a valid
+// transition for an item that was never queued.
+func TestDequeueNextQueuedItems_should_RollBackToReady_When_AutoClaimedReadyItemSpawnFails(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:              "ready with no repo path",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
+		SkipTriage:         true,
+		SkipPlanning:       true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId: itemID, TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
+
+	getResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "ready", getResp.Msg.Item.Status, "spawn failure for an auto-claimed ready item must roll back to ready, not queued")
+	assert.Empty(t, creator.calls)
 }
 
 // --- AutoReopenForPRFix: live-bug regression (ReconcilePRPending churn) ---
@@ -1858,6 +2086,153 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "quick", sessions[0].PipelineModeSnapshot)
 	assert.Equal(t, wantHash, sessions[0].PipelineModeSnapshotHash)
+}
+
+// spawnReadyItemWithActiveWorkSession is shared setup for the two
+// TestSpawnSessionFromItem_should_..._When_BlockedByActiveWorkSession tests
+// below: creates a ready item, spawns its first work session, and returns
+// that session's UUID so the caller can wire a mockSessionStopper's
+// liveUUIDs/staleFor maps before attempting the blocked second spawn.
+func spawnReadyItemWithActiveWorkSession(t *testing.T, svc *BacklogService, storage *session.Storage, ctx context.Context) (itemID, activeSessionUUID string) {
+	t.Helper()
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	createResp, err := svc.CreateBacklogItem(ctx, connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:        "blocked-spawn test item",
+		RepoPath:     repoPath,
+		SkipTriage:   true,
+		SkipPlanning: true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID = createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+
+	spawnResp, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.NotEmpty(t, spawnResp.Msg.SessionUuid)
+
+	return itemID, spawnResp.Msg.SessionUuid
+}
+
+// TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession
+// is the regression test for the 2026-07-31 finding in
+// docs/tasks/backlog-feature-improvement.md: before this fix, a blocked
+// second spawn returned a bare "already active... wait or kill it" error
+// with no signal about whether the blocking session was actually making
+// progress — a caller (human or agent) had to reconstruct that answer by
+// hand via get_session's timestamps, a full diff pull, and a live tmux
+// check. This asserts the blocked-spawn error itself now carries the same
+// progress signal notifyIfActiveWorkSessionStale already computes for the
+// analogous review-reopen path (TimeSinceLastMeaningfulOutput vs.
+// maxReworkBlockStaleness), so a caller can tell "stalled" from "still
+// working" from this one RPC response.
+func TestSpawnSessionFromItem_should_ReportStalled_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{},
+		staleFor:  map[string]time.Duration{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true
+	stopper.staleFor[activeUUID] = 20 * time.Minute // > maxReworkBlockStaleness (15min)
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "likely stalled")
+	assert.Contains(t, err.Error(), "20m0s")
+}
+
+// TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkSession
+// is the healthy-case counterpart above: a blocking session that has produced
+// output recently (well within maxReworkBlockStaleness) must be reported as
+// active, not stalled — the enrichment must not cry wolf on a genuinely
+// healthy in-progress session.
+func TestSpawnSessionFromItem_should_ReportStillActive_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs: map[string]bool{},
+		staleFor:  map[string]time.Duration{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true
+	stopper.staleFor[activeUUID] = 30 * time.Second // well within maxReworkBlockStaleness
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "still active")
+	assert.NotContains(t, err.Error(), "likely stalled")
+}
+
+// TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession
+// covers the third of activeWorkSessionBlockedError's four branches: no
+// sessionStopper was ever wired via SetSessionStopper (NewBacklogService's
+// zero value). The blocked-spawn error must say so explicitly rather than
+// silently falling back to a bare "already active" message with no
+// indication that the progress signal couldn't even be attempted.
+func TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	// Deliberately no svc.SetSessionStopper call.
+	ctx := t.Context()
+
+	itemID, _ := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "progress signal unavailable: sessionStopper not wired")
+}
+
+// TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWorkSession
+// covers the fourth branch: a sessionStopper is wired and the blocking
+// session is live (IsSessionLive true, so spawnSessionAfterGates' 8a orphan
+// sweep does NOT tombstone it), but TimeSinceLastMeaningfulOutput itself
+// reports live=false — the disagreement mockSessionStopper's
+// tslmoOverrideNotLive models (see its doc comment). The blocked-spawn error
+// must say the progress signal is unavailable for that reason, not silently
+// mislabel it as fresh or stale.
+func TestSpawnSessionFromItem_should_ReportNotTrackedLive_When_BlockedByActiveWorkSession(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{
+		liveUUIDs:            map[string]bool{},
+		staleFor:             map[string]time.Duration{},
+		tslmoOverrideNotLive: map[string]bool{},
+	}
+	svc.SetSessionStopper(stopper)
+	ctx := t.Context()
+
+	itemID, activeUUID := spawnReadyItemWithActiveWorkSession(t, svc, storage, ctx)
+	stopper.liveUUIDs[activeUUID] = true            // IsSessionLive → true: not tombstoned as orphan.
+	stopper.tslmoOverrideNotLive[activeUUID] = true // TimeSinceLastMeaningfulOutput → live=false.
+
+	_, err := svc.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "progress signal unavailable: session not currently tracked live")
 }
 
 // TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaultOrUnresolved

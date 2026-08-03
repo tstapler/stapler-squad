@@ -10,6 +10,7 @@ function makeModel(fields: {
   pricingUnavailable?: boolean;
   totalInputTokens?: bigint;
   totalOutputTokens?: bigint;
+  cacheReadTokens?: bigint;
 }): ModelBreakdown {
   return create(ModelBreakdownSchema, {
     modelFamily: fields.modelFamily,
@@ -17,7 +18,7 @@ function makeModel(fields: {
     pricingUnavailable: fields.pricingUnavailable ?? false,
     totalInputTokens: fields.totalInputTokens ?? 0n,
     totalOutputTokens: fields.totalOutputTokens ?? 0n,
-    cacheReadTokens: 0n,
+    cacheReadTokens: fields.cacheReadTokens ?? 0n,
     sessionCount: 1,
   });
 }
@@ -83,5 +84,40 @@ describe("ModelBreakdownChart", () => {
     expect(screen.getByText(/claude-sonnet-5/)).toBeInTheDocument();
     expect(screen.getByText(/claude-opus-6/)).toBeInTheDocument();
     expect(screen.getAllByText(/pricing unavailable/i)).toHaveLength(2);
+  });
+
+  it("ModelBreakdownChart_should_showCacheHitRate_When_modelHasCacheReads", () => {
+    render(
+      <ModelBreakdownChart
+        models={[
+          makeModel({
+            modelFamily: "claude-opus-6",
+            estimatedCostUsd: 1.0,
+            totalInputTokens: 300n,
+            cacheReadTokens: 700n,
+          }),
+        ]}
+      />
+    );
+
+    // 700 / (300 + 700) = 70.0%
+    expect(screen.getByText(/70\.0% cache hit/)).toBeInTheDocument();
+  });
+
+  it("ModelBreakdownChart_should_showZeroPercentCacheHit_When_noCacheEligibleTokens", () => {
+    render(
+      <ModelBreakdownChart
+        models={[
+          makeModel({
+            modelFamily: "claude-sonnet-4",
+            estimatedCostUsd: 0.02,
+            totalInputTokens: 0n,
+            cacheReadTokens: 0n,
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText(/0\.0% cache hit/)).toBeInTheDocument();
   });
 });

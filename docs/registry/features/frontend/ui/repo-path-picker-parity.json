@@ -1,0 +1,22 @@
+{
+  "id": "repo-path-picker-parity",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "T-E2E-RPP-001",
+    "T-E2E-RPP-002",
+    "T-E2E-RPP-003",
+    "T-E2E-RPP-004",
+    "T-E2E-RPP-005",
+    "T-E2E-RPP-006",
+    "T-E2E-RPP-007",
+    "T-E2E-RPP-008",
+    "RepoPathInput — Escape key handling",
+    "RepoPathInput — combobox a11y",
+    "selectActiveSessionsSortedByUpdatedAt — tiebreak",
+    "useSessionRepoPaths — recency-ordered paths"
+  ],
+  "lastModified": "2026-08-01T00:00:00Z"
+}

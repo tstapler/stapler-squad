@@ -111,6 +111,10 @@ type AnalyticsSummary struct {
 	// truncated to top-N. Use this for drill-down analysis such as "which gh subcommands
 	// does Claude use most?" or "what sed patterns need rules?".
 	CommandSubcommandStats []SubcommandStat `json:"command_subcommand_stats"`
+
+	// EscalationReasonCounts breaks down escalations by category (classifier.EscalationCategory
+	// string values) — no-match, explicit-rule, domain-age, secret-scan, unclassifiable.
+	EscalationReasonCounts map[string]int `json:"escalation_reason_counts"`
 }
 
 // AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite
@@ -337,6 +341,8 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	uncoveredProgramStats := make(map[string]ProgramStat)
 	// full (program, subcommand) distribution — keyed by "program\x00subcommand"
 	subcommandStats := make(map[string]SubcommandStat)
+	// escalation-reason breakdown: category → count
+	escalationReasonCounts := make(map[string]int)
 
 	for _, e := range entries {
 		summary.TotalDecisions++
@@ -404,6 +410,16 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 				uncoveredProgramStats[e.CommandProgram] = stat
 			}
 		}
+
+		// Escalation-reason breakdown: every escalate decision, plus the terminal
+		// secret-scan auto-deny (which never reaches this loop via `escalate` since it's
+		// an AutoDeny — see requirements.md's AC4 scope note). Broader than the
+		// coverage-gap branch above (which only catches RuleID == ""): this must catch
+		// all 5 categories.
+		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
+			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
+			escalationReasonCounts[string(cat)]++
+		}
 	}
 
 	// Build sorted top lists (top 10).
@@ -435,6 +451,8 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		summary.ManualReviewRate = manual / total
 		summary.CoverageGapRate = float64(summary.CoverageGapCount) / total * 100
 	}
+
+	summary.EscalationReasonCounts = escalationReasonCounts
 
 	return summary
 }

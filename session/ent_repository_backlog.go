@@ -116,6 +116,7 @@ func itemSessionToSummary(is *ent.ItemSession) ItemSessionSummary {
 		CommitCountSinceSpawn:    is.CommitCountSinceSpawn,
 		StartedAt:                is.StartedAt,
 		EndedAt:                  is.EndedAt,
+		EndReason:                is.EndReason,
 		LastCommitAt:             is.LastCommitAt,
 		LastFileTouchAt:          is.LastFileTouchAt,
 		LastProgressAt:           is.LastProgressAt,
@@ -196,6 +197,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedApprovedCount:         item.ShippedApprovedCount,
 		ShippedChangesReqCount:       item.ShippedChangesReqCount,
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
+		PrFeedbackAddressedAt:        item.PrFeedbackAddressedAt,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
@@ -622,6 +624,11 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ShippedSnapshotAt != nil {
 		u.SetShippedSnapshotAt(*update.ShippedSnapshotAt)
 	}
+	if update.ClearPrFeedbackAddressedAt {
+		u.ClearPrFeedbackAddressedAt()
+	} else if update.PrFeedbackAddressedAt != nil {
+		u.SetPrFeedbackAddressedAt(*update.PrFeedbackAddressedAt)
+	}
 	if update.ShippedFileStats != nil {
 		u.SetShippedFileStats(*update.ShippedFileStats)
 	}
@@ -724,6 +731,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ShippedSnapshotAt != nil {
 		fields = append(fields, "shippedSnapshotAt")
+	}
+	if update.PrFeedbackAddressedAt != nil || update.ClearPrFeedbackAddressedAt {
+		fields = append(fields, "prFeedbackAddressedAt")
 	}
 	if update.ShippedFileStats != nil {
 		fields = append(fields, "shippedFileStats")

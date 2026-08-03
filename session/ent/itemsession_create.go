@@ -66,6 +66,20 @@ func (_c *ItemSessionCreate) SetNillableEndedAt(v *time.Time) *ItemSessionCreate
 	return _c
 }
 
+// SetEndReason sets the "end_reason" field.
+func (_c *ItemSessionCreate) SetEndReason(v string) *ItemSessionCreate {
+	_c.mutation.SetEndReason(v)
+	return _c
+}
+
+// SetNillableEndReason sets the "end_reason" field if the given value is not nil.
+func (_c *ItemSessionCreate) SetNillableEndReason(v *string) *ItemSessionCreate {
+	if v != nil {
+		_c.SetEndReason(*v)
+	}
+	return _c
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_c *ItemSessionCreate) SetAcSnapshot(v string) *ItemSessionCreate {
 	_c.mutation.SetAcSnapshot(v)
@@ -327,6 +341,10 @@ func (_c *ItemSessionCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *ItemSessionCreate) defaults() {
+	if _, ok := _c.mutation.EndReason(); !ok {
+		v := itemsession.DefaultEndReason
+		_c.mutation.SetEndReason(v)
+	}
 	if _, ok := _c.mutation.PipelineModeSnapshot(); !ok {
 		v := itemsession.DefaultPipelineModeSnapshot
 		_c.mutation.SetPipelineModeSnapshot(v)
@@ -427,6 +445,10 @@ func (_c *ItemSessionCreate) createSpec() (*ItemSession, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.EndedAt(); ok {
 		_spec.SetField(itemsession.FieldEndedAt, field.TypeTime, value)
 		_node.EndedAt = &value
+	}
+	if value, ok := _c.mutation.EndReason(); ok {
+		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
+		_node.EndReason = value
 	}
 	if value, ok := _c.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
@@ -622,6 +644,24 @@ func (u *ItemSessionUpsert) UpdateEndedAt() *ItemSessionUpsert {
 // ClearEndedAt clears the value of the "ended_at" field.
 func (u *ItemSessionUpsert) ClearEndedAt() *ItemSessionUpsert {
 	u.SetNull(itemsession.FieldEndedAt)
+	return u
+}
+
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsert) SetEndReason(v string) *ItemSessionUpsert {
+	u.Set(itemsession.FieldEndReason, v)
+	return u
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsert) UpdateEndReason() *ItemSessionUpsert {
+	u.SetExcluded(itemsession.FieldEndReason)
+	return u
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsert) ClearEndReason() *ItemSessionUpsert {
+	u.SetNull(itemsession.FieldEndReason)
 	return u
 }
 
@@ -953,6 +993,27 @@ func (u *ItemSessionUpsertOne) UpdateEndedAt() *ItemSessionUpsertOne {
 func (u *ItemSessionUpsertOne) ClearEndedAt() *ItemSessionUpsertOne {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEndedAt()
+	})
+}
+
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsertOne) SetEndReason(v string) *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEndReason(v)
+	})
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsertOne) UpdateEndReason() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEndReason()
+	})
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsertOne) ClearEndReason() *ItemSessionUpsertOne {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEndReason()
 	})
 }
 
@@ -1486,6 +1547,27 @@ func (u *ItemSessionUpsertBulk) UpdateEndedAt() *ItemSessionUpsertBulk {
 func (u *ItemSessionUpsertBulk) ClearEndedAt() *ItemSessionUpsertBulk {
 	return u.Update(func(s *ItemSessionUpsert) {
 		s.ClearEndedAt()
+	})
+}
+
+// SetEndReason sets the "end_reason" field.
+func (u *ItemSessionUpsertBulk) SetEndReason(v string) *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.SetEndReason(v)
+	})
+}
+
+// UpdateEndReason sets the "end_reason" field to the value that was provided on create.
+func (u *ItemSessionUpsertBulk) UpdateEndReason() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.UpdateEndReason()
+	})
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (u *ItemSessionUpsertBulk) ClearEndReason() *ItemSessionUpsertBulk {
+	return u.Update(func(s *ItemSessionUpsert) {
+		s.ClearEndReason()
 	})
 }
 

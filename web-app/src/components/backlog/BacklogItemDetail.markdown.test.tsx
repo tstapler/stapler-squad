@@ -5,20 +5,9 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { BacklogItemDetail } from "./BacklogItemDetail";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
-
-/**
- * DescriptionSection (Story 3.1.3) is collapsed by default — its content is
- * removed from the DOM (not just hidden) until the header is expanded, per
- * CollapsibleSection's contract. Expand it before asserting on rendered
- * description content.
- */
-async function expandDescription() {
-  const header = await screen.findByTestId("collapsible-header-description");
-  fireEvent.click(header);
-}
 
 jest.mock("./SessionMonitor", () => ({ SessionMonitor: () => null }));
 jest.mock("./GateVerdictBox", () => ({ GateVerdictBox: () => null }));
@@ -114,10 +103,17 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     getBacklogItem.mockReset();
     // Story 3.1.4's useSectionExpandState persists collapse state to
     // localStorage keyed by itemId — clear between tests so one test's
-    // expand click never leaks into the next test reusing "item-1".
+    // stored preference never leaks into the next test reusing "item-1".
     localStorage.clear();
   });
 
+  // Description now defaults expanded (backlog-description-prominence) — no
+  // click needed before asserting on rendered content. This suite renders
+  // the real BacklogItemDetail (not the isolated DescriptionSection), so it
+  // is the only place that verifies the seed value
+  // (BacklogItemDetail.tsx's useSectionExpandState default) and the
+  // threaded defaultExpanded prop stay in sync end-to-end — don't assume
+  // DescriptionSection.test.tsx already covers this.
   it("renders bold text and links instead of literal markdown syntax", async () => {
     getBacklogItem.mockResolvedValue({
       ...baseItem,
@@ -125,7 +121,6 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("strong")).toHaveTextContent("bold");
@@ -141,7 +136,6 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     const img = rendered.querySelector("img");
@@ -155,10 +149,23 @@ describe("BacklogItemDetail — description markdown rendering", () => {
     });
 
     render(<BacklogItemDetail itemId="item-1" />);
-    await expandDescription();
 
     const rendered = await screen.findByTestId("backlog-description-rendered");
     expect(rendered.querySelector("script")).not.toBeInTheDocument();
     expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+  });
+
+  it("keeps Description collapsed when a stored per-item preference says so, even though the new default is expanded", async () => {
+    getBacklogItem.mockResolvedValue({
+      ...baseItem,
+      description: "**bold**",
+    });
+    localStorage.setItem("backlog-detail-section-item-1-description", "false");
+
+    render(<BacklogItemDetail itemId="item-1" />);
+
+    const header = await screen.findByTestId("collapsible-header-description");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("backlog-description-rendered")).not.toBeInTheDocument();
   });
 });

@@ -1131,6 +1131,9 @@ message AnalyticsSummaryProto {
   // Full (program, subcommand) distribution for drill-down analysis.
   // Not truncated to top-N — use to investigate specific programs like "gh" or "sed".
   repeated SubcommandStatProto command_subcommand_stats = 16;
+  // Escalation-reason breakdown: counts per category ("no-match", "explicit-rule",
+  // "domain-age", "secret-scan", "unclassifiable") — see classifier.EscalationCategory.
+  map<string, int32> escalation_reason_counts = 17;
 }
 
 message ToolStatProto {

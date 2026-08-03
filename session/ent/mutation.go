@@ -3017,6 +3017,7 @@ type BacklogItemMutation struct {
 	shipped_changes_req_count       *int
 	addshipped_changes_req_count    *int
 	shipped_snapshot_at             *time.Time
+	pr_feedback_addressed_at        *time.Time
 	shipped_file_stats              *string
 	shipped_snapshot_capture_failed *bool
 	rework_cap_override             *int
@@ -4462,6 +4463,55 @@ func (m *BacklogItemMutation) ResetShippedSnapshotAt() {
 	delete(m.clearedFields, backlogitem.FieldShippedSnapshotAt)
 }
 
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (m *BacklogItemMutation) SetPrFeedbackAddressedAt(t time.Time) {
+	m.pr_feedback_addressed_at = &t
+}
+
+// PrFeedbackAddressedAt returns the value of the "pr_feedback_addressed_at" field in the mutation.
+func (m *BacklogItemMutation) PrFeedbackAddressedAt() (r time.Time, exists bool) {
+	v := m.pr_feedback_addressed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPrFeedbackAddressedAt returns the old "pr_feedback_addressed_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldPrFeedbackAddressedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPrFeedbackAddressedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPrFeedbackAddressedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPrFeedbackAddressedAt: %w", err)
+	}
+	return oldValue.PrFeedbackAddressedAt, nil
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (m *BacklogItemMutation) ClearPrFeedbackAddressedAt() {
+	m.pr_feedback_addressed_at = nil
+	m.clearedFields[backlogitem.FieldPrFeedbackAddressedAt] = struct{}{}
+}
+
+// PrFeedbackAddressedAtCleared returns if the "pr_feedback_addressed_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) PrFeedbackAddressedAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldPrFeedbackAddressedAt]
+	return ok
+}
+
+// ResetPrFeedbackAddressedAt resets all changes to the "pr_feedback_addressed_at" field.
+func (m *BacklogItemMutation) ResetPrFeedbackAddressedAt() {
+	m.pr_feedback_addressed_at = nil
+	delete(m.clearedFields, backlogitem.FieldPrFeedbackAddressedAt)
+}
+
 // SetShippedFileStats sets the "shipped_file_stats" field.
 func (m *BacklogItemMutation) SetShippedFileStats(s string) {
 	m.shipped_file_stats = &s
@@ -5045,7 +5095,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 33)
+	fields := make([]string, 0, 34)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5130,6 +5180,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.shipped_snapshot_at != nil {
 		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
 	}
+	if m.pr_feedback_addressed_at != nil {
+		fields = append(fields, backlogitem.FieldPrFeedbackAddressedAt)
+	}
 	if m.shipped_file_stats != nil {
 		fields = append(fields, backlogitem.FieldShippedFileStats)
 	}
@@ -5209,6 +5262,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedChangesReqCount()
 	case backlogitem.FieldShippedSnapshotAt:
 		return m.ShippedSnapshotAt()
+	case backlogitem.FieldPrFeedbackAddressedAt:
+		return m.PrFeedbackAddressedAt()
 	case backlogitem.FieldShippedFileStats:
 		return m.ShippedFileStats()
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
@@ -5284,6 +5339,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedChangesReqCount(ctx)
 	case backlogitem.FieldShippedSnapshotAt:
 		return m.OldShippedSnapshotAt(ctx)
+	case backlogitem.FieldPrFeedbackAddressedAt:
+		return m.OldPrFeedbackAddressedAt(ctx)
 	case backlogitem.FieldShippedFileStats:
 		return m.OldShippedFileStats(ctx)
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
@@ -5499,6 +5556,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetShippedSnapshotAt(v)
 		return nil
+	case backlogitem.FieldPrFeedbackAddressedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPrFeedbackAddressedAt(v)
+		return nil
 	case backlogitem.FieldShippedFileStats:
 		v, ok := value.(string)
 		if !ok {
@@ -5678,6 +5742,9 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	if m.FieldCleared(backlogitem.FieldShippedSnapshotAt) {
 		fields = append(fields, backlogitem.FieldShippedSnapshotAt)
 	}
+	if m.FieldCleared(backlogitem.FieldPrFeedbackAddressedAt) {
+		fields = append(fields, backlogitem.FieldPrFeedbackAddressedAt)
+	}
 	if m.FieldCleared(backlogitem.FieldShippedFileStats) {
 		fields = append(fields, backlogitem.FieldShippedFileStats)
 	}
@@ -5751,6 +5818,9 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotAt:
 		m.ClearShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldPrFeedbackAddressedAt:
+		m.ClearPrFeedbackAddressedAt()
 		return nil
 	case backlogitem.FieldShippedFileStats:
 		m.ClearShippedFileStats()
@@ -5852,6 +5922,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldShippedSnapshotAt:
 		m.ResetShippedSnapshotAt()
+		return nil
+	case backlogitem.FieldPrFeedbackAddressedAt:
+		m.ResetPrFeedbackAddressedAt()
 		return nil
 	case backlogitem.FieldShippedFileStats:
 		m.ResetShippedFileStats()
@@ -14006,6 +14079,7 @@ type ItemSessionMutation struct {
 	session_role                *string
 	started_at                  *time.Time
 	ended_at                    *time.Time
+	end_reason                  *string
 	ac_snapshot                 *string
 	pipeline_mode_snapshot      *string
 	pipeline_mode_snapshot_hash *string
@@ -14303,6 +14377,55 @@ func (m *ItemSessionMutation) EndedAtCleared() bool {
 func (m *ItemSessionMutation) ResetEndedAt() {
 	m.ended_at = nil
 	delete(m.clearedFields, itemsession.FieldEndedAt)
+}
+
+// SetEndReason sets the "end_reason" field.
+func (m *ItemSessionMutation) SetEndReason(s string) {
+	m.end_reason = &s
+}
+
+// EndReason returns the value of the "end_reason" field in the mutation.
+func (m *ItemSessionMutation) EndReason() (r string, exists bool) {
+	v := m.end_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndReason returns the old "end_reason" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldEndReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndReason: %w", err)
+	}
+	return oldValue.EndReason, nil
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (m *ItemSessionMutation) ClearEndReason() {
+	m.end_reason = nil
+	m.clearedFields[itemsession.FieldEndReason] = struct{}{}
+}
+
+// EndReasonCleared returns if the "end_reason" field was cleared in this mutation.
+func (m *ItemSessionMutation) EndReasonCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldEndReason]
+	return ok
+}
+
+// ResetEndReason resets all changes to the "end_reason" field.
+func (m *ItemSessionMutation) ResetEndReason() {
+	m.end_reason = nil
+	delete(m.clearedFields, itemsession.FieldEndReason)
 }
 
 // SetAcSnapshot sets the "ac_snapshot" field.
@@ -15043,7 +15166,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 18)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -15055,6 +15178,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	}
 	if m.ended_at != nil {
 		fields = append(fields, itemsession.FieldEndedAt)
+	}
+	if m.end_reason != nil {
+		fields = append(fields, itemsession.FieldEndReason)
 	}
 	if m.ac_snapshot != nil {
 		fields = append(fields, itemsession.FieldAcSnapshot)
@@ -15111,6 +15237,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.StartedAt()
 	case itemsession.FieldEndedAt:
 		return m.EndedAt()
+	case itemsession.FieldEndReason:
+		return m.EndReason()
 	case itemsession.FieldAcSnapshot:
 		return m.AcSnapshot()
 	case itemsession.FieldPipelineModeSnapshot:
@@ -15154,6 +15282,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldStartedAt(ctx)
 	case itemsession.FieldEndedAt:
 		return m.OldEndedAt(ctx)
+	case itemsession.FieldEndReason:
+		return m.OldEndReason(ctx)
 	case itemsession.FieldAcSnapshot:
 		return m.OldAcSnapshot(ctx)
 	case itemsession.FieldPipelineModeSnapshot:
@@ -15216,6 +15346,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEndedAt(v)
+		return nil
+	case itemsession.FieldEndReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndReason(v)
 		return nil
 	case itemsession.FieldAcSnapshot:
 		v, ok := value.(string)
@@ -15371,6 +15508,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldEndedAt) {
 		fields = append(fields, itemsession.FieldEndedAt)
 	}
+	if m.FieldCleared(itemsession.FieldEndReason) {
+		fields = append(fields, itemsession.FieldEndReason)
+	}
 	if m.FieldCleared(itemsession.FieldAcSnapshot) {
 		fields = append(fields, itemsession.FieldAcSnapshot)
 	}
@@ -15418,6 +15558,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 	case itemsession.FieldEndedAt:
 		m.ClearEndedAt()
 		return nil
+	case itemsession.FieldEndReason:
+		m.ClearEndReason()
+		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ClearAcSnapshot()
 		return nil
@@ -15464,6 +15607,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldEndedAt:
 		m.ResetEndedAt()
+		return nil
+	case itemsession.FieldEndReason:
+		m.ResetEndReason()
 		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ResetAcSnapshot()

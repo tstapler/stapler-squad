@@ -159,6 +159,18 @@ type mockSessionStopper struct {
 	// TimeSinceLastMeaningfulOutput should report for it. A UUID present in
 	// liveUUIDs but absent here reports (0, true) — live and fresh.
 	staleFor map[string]time.Duration
+	// tslmoOverrideNotLive forces TimeSinceLastMeaningfulOutput to report
+	// live=false for a UUID even though it's present (true) in liveUUIDs, so
+	// IsSessionLive still reports it as live. Models the real SessionService
+	// implementation's rare edge case where a session is deregistered from the
+	// live poller between an earlier IsSessionLive check (e.g.
+	// tombstoneOrphanWorkSessions' orphan sweep) and a later
+	// TimeSinceLastMeaningfulOutput call in the same request — both are backed
+	// by the same FindLiveInstance lookup in production, so they normally
+	// agree, but a caller enriching an error message with the progress signal
+	// must still handle the disagreement gracefully rather than assume it. Nil
+	// (the default) preserves the old coupled behavior for every other test.
+	tslmoOverrideNotLive map[string]bool
 }
 
 func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
@@ -166,7 +178,7 @@ func (m *mockSessionStopper) IsSessionLive(uuid string) bool {
 }
 
 func (m *mockSessionStopper) TimeSinceLastMeaningfulOutput(uuid string) (time.Duration, bool) {
-	if !m.liveUUIDs[uuid] {
+	if !m.liveUUIDs[uuid] || m.tslmoOverrideNotLive[uuid] {
 		return 0, false
 	}
 	return m.staleFor[uuid], true
@@ -1140,6 +1152,31 @@ func createReadyItemForSpawn(t *testing.T, svc *BacklogService, repoPath, title 
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    title,
 		RepoPath: repoPath,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipTriage:   true,
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: "ready",
+	}))
+	require.NoError(t, err)
+	return itemID
+}
+
+// createReadyItemWithPriority is createReadyItemForSpawn plus an explicit priority
+// (1 = P1/highest ... 5 = P5/lowest), for tests asserting dequeue ordering.
+func createReadyItemWithPriority(t *testing.T, svc *BacklogService, repoPath, title string, priority int32) string {
+	t.Helper()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    title,
+		RepoPath: repoPath,
+		Priority: priority,
 		AcceptanceCriteria: []*sessionv1.AcCriterion{
 			{Index: 0, Text: "test", Status: "pending"},
 		},
@@ -2632,6 +2669,78 @@ func TestTriggerTriage_Success(t *testing.T) {
 	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
 }
 
+// TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem guards
+// the fix making triage actually assign priority/category instead of leaving every item
+// at DefaultBacklogPriority forever (which defeats DequeueNextQueuedItems' priority-order
+// auto-spawn — every item tied at the same priority is effectively still FIFO). The LLM's
+// assessed priority and item_category must land on the item once triage completes.
+func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "assessed priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: session.DefaultBacklogPriority,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updated.Priority, "the LLM's assessed priority must be applied to the item")
+	assert.Equal(t, "bugfix", updated.Category, "the LLM's assessed item_category must be applied to the item")
+}
+
+// TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem
+// guards the "don't clobber" half of the same fix: a triage result with no priority/
+// item_category (the model didn't provide one, or ParseHeadlessTriageResult zero-values
+// them) must leave whatever the item already had untouched, not reset it.
+func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()} // no priority/item_category field
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "pre-set priority item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 2,
+		Category: string(session.BacklogCategoryChore),
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.Priority, "an omitted priority must not clobber the item's existing priority")
+	assert.Equal(t, string(session.BacklogCategoryChore), updated.Category, "an omitted item_category must not clobber the item's existing category")
+}
+
 // TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick verifies the
 // opt-in auto-spawn-session toggle: when AutoSpawnSession is true, TriggerTriage's
 // completion goroutine spawns a work session automatically (Autonomous: true, bypassing
@@ -2947,6 +3056,59 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// TestTriggerTriage_AlreadyExists_LiveHeadlessSession guards the fix for BUG-054:
+// before triageInFlight existed, a headless triage session with EndedAt == nil was
+// *always* treated as dead (see the removed isHeadless-implies-notLive branch this
+// test replaces the assumption behind), so retriggering triage for an item whose
+// headless call was genuinely still running silently tombstoned the live session in
+// the DB and started a fully redundant duplicate LLM call — confirmed live
+// 2026-08-01 (docs/bugs/fixed/BUG-054): a manual "Retry now" click raced a still-running
+// auto-respawned triage call, producing a real "concurrent modification detected"
+// error when the older call finally finished and tried to also transition idea->ready.
+// A headless triage session must now be treated as live exactly when this process's
+// own triageInFlight record says so.
+func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "live headless triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// Open headless triage session, exactly like the genuinely-still-running case:
+	// no EndedAt, headless-prefixed UUID.
+	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-11111111-live-0000-000000000000",
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, isErr)
+
+	// Simulate the goroutine actually still running this call, the way TriggerTriage
+	// itself would have set it before launching that goroutine.
+	svc.triageInFlight.Store(item.ID, struct{}{})
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr, "a live headless triage call must block re-trigger instead of being silently tombstoned and duplicated")
+	var connErr *connect.Error
+	require.ErrorAs(t, trigErr, &connErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connErr.Code())
+
+	// The original session must NOT have been tombstoned.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a genuinely live headless session must not be marked ended")
 }
 
 // ─── TriggerSync / GetSyncHistory ──────────────────────────────────────────────

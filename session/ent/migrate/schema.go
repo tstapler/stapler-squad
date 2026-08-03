@@ -135,6 +135,7 @@ var (
 		{Name: "shipped_approved_count", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "shipped_changes_req_count", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "shipped_snapshot_at", Type: field.TypeTime, Nullable: true},
+		{Name: "pr_feedback_addressed_at", Type: field.TypeTime, Nullable: true},
 		{Name: "shipped_file_stats", Type: field.TypeString, Nullable: true},
 		{Name: "shipped_snapshot_capture_failed", Type: field.TypeBool, Nullable: true, Default: false},
 		{Name: "rework_cap_override", Type: field.TypeInt, Nullable: true},
@@ -150,7 +151,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[34]},
+				Columns:    []*schema.Column{BacklogItemsColumns[35]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -164,7 +165,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[33]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[34]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",
@@ -503,6 +504,7 @@ var (
 		{Name: "session_role", Type: field.TypeString},
 		{Name: "started_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
+		{Name: "end_reason", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "ac_snapshot", Type: field.TypeString, Nullable: true},
 		{Name: "pipeline_mode_snapshot", Type: field.TypeString, Default: ""},
 		{Name: "pipeline_mode_snapshot_hash", Type: field.TypeString, Default: ""},
@@ -526,7 +528,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "item_sessions_backlog_items_item_sessions",
-				Columns:    []*schema.Column{ItemSessionsColumns[18]},
+				Columns:    []*schema.Column{ItemSessionsColumns[19]},
 				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -540,7 +542,7 @@ var (
 			{
 				Name:    "itemsession_created_at_backlog_item_item_sessions",
 				Unique:  false,
-				Columns: []*schema.Column{ItemSessionsColumns[16], ItemSessionsColumns[18]},
+				Columns: []*schema.Column{ItemSessionsColumns[17], ItemSessionsColumns[19]},
 			},
 		},
 	}

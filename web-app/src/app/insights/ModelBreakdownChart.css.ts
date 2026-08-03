@@ -56,3 +56,8 @@ export const unpricedLabel = style({
   color: vars.color.warningText,
   fontStyle: "italic",
 });
+
+export const cacheHitLabel = style({
+  color: vars.color.textMuted,
+  fontStyle: "italic",
+});

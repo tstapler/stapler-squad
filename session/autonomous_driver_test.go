@@ -59,6 +59,79 @@ func TestParseOrchestrationResponse_Malformed(t *testing.T) {
 	}
 }
 
+// TestParseOrchestrationResponse_DirectiveWithNoLeadingSeparator is the exact
+// real-world response captured live 2026-08-01 (BUG-056): the orchestrator model
+// writes a full free-text explanation and appends "DONE:" directly onto the end of
+// its last sentence with no separating newline at all. The old exact-prefix parser
+// rejected this outright as malformed, wasting the turn (8 of 20 turns wasted this
+// way on one live item, 1 on another).
+func TestParseOrchestrationResponse_DirectiveWithNoLeadingSeparator(t *testing.T) {
+	resp := "This is the final turn (20/20). The agent made solid progress, reflecting real findings rather than guesswork.DONE: Reached the 20-turn limit for this supervision session."
+	_, done, reason, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !done {
+		t.Error("expected done=true")
+	}
+	want := "Reached the 20-turn limit for this supervision session."
+	if reason != want {
+		t.Errorf("expected reason %q, got %q", want, reason)
+	}
+}
+
+// TestParseOrchestrationResponse_PreferLastDirective_When_ModelEchoesInstructionsFirst
+// guards the "prefer the LAST occurrence" decision: a model that restates part of its
+// own instructions (which literally contain "NEXT_MESSAGE:"/"DONE:") before giving its
+// real answer must not have that echo mistaken for the actual directive.
+func TestParseOrchestrationResponse_PreferLastDirective_When_ModelEchoesInstructionsFirst(t *testing.T) {
+	resp := "I was told to reply with NEXT_MESSAGE: <message> or DONE: <reason>. Given the state, DONE: the goal is complete."
+	_, done, reason, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !done {
+		t.Error("expected done=true")
+	}
+	if reason != "the goal is complete." {
+		t.Errorf("expected the LAST directive to win, got reason %q", reason)
+	}
+}
+
+// TestParseOrchestrationResponse_CaseInsensitiveDirective verifies a lowercase or
+// mixed-case directive keyword still parses — the system prompt asks for uppercase,
+// but nothing enforces the model actually complies.
+func TestParseOrchestrationResponse_CaseInsensitiveDirective(t *testing.T) {
+	msg, done, _, err := parseOrchestrationResponse("next_message: keep going please")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done {
+		t.Error("expected done=false")
+	}
+	if msg != "keep going please" {
+		t.Errorf("expected %q, got %q", "keep going please", msg)
+	}
+}
+
+// TestParseOrchestrationResponse_PreservesMultilineNextMessage guards against a
+// regression where switching from CutPrefix (whole-string) to a marker-search approach
+// accidentally truncates a NEXT_MESSAGE body that spans multiple lines.
+func TestParseOrchestrationResponse_PreservesMultilineNextMessage(t *testing.T) {
+	resp := "NEXT_MESSAGE: please do the following:\n1. fix the bug\n2. add a test"
+	msg, done, _, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done {
+		t.Error("expected done=false")
+	}
+	want := "please do the following:\n1. fix the bug\n2. add a test"
+	if msg != want {
+		t.Errorf("expected %q, got %q", want, msg)
+	}
+}
+
 func TestBuildOrchestrationPrompt_ContainsGoalAndTail(t *testing.T) {
 	prompt := buildOrchestrationPrompt("fix the login bug", "some tail output", 1, 20)
 	if !strContains(prompt, "fix the login bug") {
@@ -114,6 +187,20 @@ func TestExtractPRURL_NoURL(t *testing.T) {
 	}
 }
 
+// withShrunkIdleSettleTimers shrinks idleSettlePollInterval/idleSettleWindow
+// for the duration of a test (restored via t.Cleanup), so tests exercising
+// the between-turn settle-window debounce run in milliseconds instead of
+// waiting out the real 500ms/60s production values.
+func withShrunkIdleSettleTimers(t *testing.T) {
+	t.Helper()
+	origPoll, origWindow := idleSettlePollInterval, idleSettleWindow
+	idleSettlePollInterval = 5 * time.Millisecond
+	idleSettleWindow = 100 * time.Millisecond
+	t.Cleanup(func() {
+		idleSettlePollInterval, idleSettleWindow = origPoll, origWindow
+	})
+}
+
 // pumpIdleSignals sends detection.StatusIdle to all listeners registered on cc
 // at a fixed cadence until ctx is cancelled.
 func pumpIdleSignals(ctx context.Context, cc *ClaudeController) {
@@ -135,6 +222,7 @@ func pumpIdleSignals(ctx context.Context, cc *ClaudeController) {
 }
 
 func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{}
 
 	inst := &Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
@@ -174,6 +262,7 @@ func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 }
 
 func TestAutonomousDriver_DoneSignal(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		// DONE on the very first turn so no SendCommandImmediate is needed
 		responses: []string{
@@ -221,6 +310,7 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 }
 
 func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: done"},
 	}
@@ -252,6 +342,7 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 }
 
 func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: complete"},
 	}
@@ -291,6 +382,7 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 }
 
 func TestAutonomousDriver_PanicRecovery(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &panicPool{}
 
 	inst := &Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
@@ -319,6 +411,7 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 }
 
 func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{}
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
@@ -385,6 +478,7 @@ func TestAutonomousDriver_NilPool_Start(t *testing.T) {
 
 // TestAutonomousDriver_ShortUUID verifies no panic when UUID is shorter than 8 chars.
 func TestAutonomousDriver_ShortUUID(t *testing.T) {
+	withShrunkIdleSettleTimers(t)
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: ok"},
 	}
@@ -438,6 +532,113 @@ func TestBuildOrchestrationPrompt_GoalWrappedInDelimiters(t *testing.T) {
 	// by verifying it's inside the goal block
 	if strContains(prompt[:goalIdx], "NEXT_MESSAGE:") {
 		t.Error("NEXT_MESSAGE: found before <goal> delimiter — prompt injection possible")
+	}
+}
+
+// --- waitForIdle settle-window debounce ---
+
+// TestWaitForIdle_should_returnImmediately_When_SettleWindowIsZero verifies
+// settleWindow=0 (the startup-wait case) restores the original
+// first-idle-signal-wins behavior with no debounce.
+func TestWaitForIdle_should_returnImmediately_When_SettleWindowIsZero(t *testing.T) {
+	inst := &Instance{Title: "test-waitforidle-zero", UUID: "abcdefgh-wfi0"}
+	cc, _ := NewClaudeController(inst)
+
+	statusCh := make(chan detection.DetectedStatus, 1)
+	statusCh <- detection.StatusIdle
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	ok := waitForIdle(ctx, statusCh, cc, 0)
+	elapsed := time.Since(start)
+
+	if !ok {
+		t.Fatal("expected waitForIdle to return true on first idle signal")
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("expected near-immediate return with settleWindow=0, took %v", elapsed)
+	}
+}
+
+// TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet verifies
+// a single idle blip is not enough to satisfy a non-zero settle window: an
+// idle signal immediately followed by renewed activity (e.g. a background
+// fork resuming) must not trigger a turn until idle genuinely persists for
+// the full window.
+func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testing.T) {
+	inst := &Instance{Title: "test-waitforidle-sustain", UUID: "abcdefgh-wfi1"}
+	cc, _ := NewClaudeController(inst)
+
+	settleWindow := 80 * time.Millisecond
+	statusCh := make(chan detection.DetectedStatus, 4)
+	// A blip: idle, then busy again — must NOT satisfy the window on its own.
+	statusCh <- detection.StatusIdle
+	statusCh <- detection.StatusExecuting
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		time.Sleep(settleWindow / 2)
+		// Now go genuinely idle and stay there.
+		statusCh <- detection.StatusIdle
+	}()
+
+	start := time.Now()
+	ok := waitForIdle(ctx, statusCh, cc, settleWindow)
+	elapsed := time.Since(start)
+
+	if !ok {
+		t.Fatal("expected waitForIdle to eventually return true once idle sustains")
+	}
+	if elapsed < settleWindow {
+		t.Errorf("expected to wait at least the settle window (%v) after the real idle signal, took %v", settleWindow, elapsed)
+	}
+}
+
+// TestWaitForIdle_should_returnImmediately_When_ExplicitStatusArrives verifies
+// approval/input/error/tests-failing statuses bypass the settle window
+// entirely — those already mean the session needs redirection right now.
+func TestWaitForIdle_should_returnImmediately_When_ExplicitStatusArrives(t *testing.T) {
+	inst := &Instance{Title: "test-waitforidle-explicit", UUID: "abcdefgh-wfi2"}
+	cc, _ := NewClaudeController(inst)
+
+	statusCh := make(chan detection.DetectedStatus, 1)
+	statusCh <- detection.StatusNeedsApproval
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	ok := waitForIdle(ctx, statusCh, cc, 60*time.Second) // long settle window
+	elapsed := time.Since(start)
+
+	if !ok {
+		t.Fatal("expected waitForIdle to return true on explicit status")
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("expected explicit status to bypass the settle window, took %v", elapsed)
+	}
+}
+
+// TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowElapses
+// verifies a session that goes idle but never sustains it long enough times
+// out via ctx rather than hanging or returning a false positive.
+func TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowElapses(t *testing.T) {
+	inst := &Instance{Title: "test-waitforidle-ctxexpire", UUID: "abcdefgh-wfi3"}
+	cc, _ := NewClaudeController(inst)
+
+	statusCh := make(chan detection.DetectedStatus, 1)
+	statusCh <- detection.StatusIdle
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	ok := waitForIdle(ctx, statusCh, cc, 5*time.Second)
+	if ok {
+		t.Error("expected waitForIdle to return false when ctx expires before the settle window elapses")
 	}
 }
 

@@ -295,6 +295,7 @@ type ItemSessionSummary struct {
 	CommitCountSinceSpawn    int
 	StartedAt                *time.Time
 	EndedAt                  *time.Time
+	EndReason                string // set alongside EndedAt for a headless call; see ItemSession.end_reason schema comment
 	LastCommitAt             *time.Time
 	LastFileTouchAt          *time.Time
 	LastProgressAt           *time.Time
@@ -418,6 +419,11 @@ type BacklogItemData struct {
 	// ShippedSnapshotAt is the timestamp the durable ship snapshot was
 	// captured at. Nil when no snapshot has ever been captured.
 	ShippedSnapshotAt *time.Time
+	// PrFeedbackAddressedAt is the comment-feedback dedup watermark: the
+	// newest substantive PR review-feedback timestamp a fix session has
+	// already been dispatched to address. Nil when no feedback-triggered fix
+	// has ever been dispatched for this item's current PR.
+	PrFeedbackAddressedAt *time.Time
 	// ShippedFileStats holds the JSON-encoded []ShippedFileStat snapshot of
 	// per-file diff stats captured at ship time.
 	ShippedFileStats string
@@ -537,6 +543,15 @@ type BacklogItemUpdate struct {
 	ShippedSnapshotAt            *time.Time
 	ShippedFileStats             *string
 	ShippedSnapshotCaptureFailed *bool
+	// PrFeedbackAddressedAt follows the same partial-update-presence
+	// convention: nil means "leave untouched", a non-nil pointer sets the
+	// comment-feedback dedup watermark. Since a plain pointer can't
+	// distinguish "leave untouched" from "clear it back to nil", use
+	// ClearPrFeedbackAddressedAt to explicitly clear it (e.g. when a PR
+	// closes without merging and a fresh PR should start with a clean
+	// watermark).
+	PrFeedbackAddressedAt      *time.Time
+	ClearPrFeedbackAddressedAt bool
 	// ReworkCapOverride follows the same single-pointer presence convention as
 	// the fields above: nil means "leave untouched". A non-nil pointer sets the
 	// item's override (0 = unlimited, >0 = this item's own cap). There is
