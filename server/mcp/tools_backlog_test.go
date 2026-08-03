@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -675,6 +677,62 @@ func TestRequestReview_PersistsVerificationNotesOnWorkSession(t *testing.T) {
 	assert.Equal(t, notes, fetched.VerificationNotes)
 }
 
+// TestRequestReview_AppendsToExistingVerificationNotes_RatherThanOverwriting
+// verifies requestReview's notes-persistence now mirrors reportDuplicate's
+// own append-not-overwrite fix (see the notesMarker/UpdateItemSessionVerificationNotes
+// comment in reportDuplicate, tools_backlog.go): UpdateItemSessionVerificationNotes
+// is a plain overwrite, not an append, so a request_review call that follows
+// an earlier report_duplicate call (or an earlier request_review call, e.g.
+// before a rework cycle) on the same ItemSession must not silently erase that
+// prior evidence. Added as a new test rather than extending
+// TestRequestReview_PersistsVerificationNotesOnWorkSession per AC9/FR9: that
+// test's existing single-call, empty-starting-state assertion
+// (assert.Equal(t, notes, fetched.VerificationNotes)) must keep holding
+// unmodified.
+func TestRequestReview_AppendsToExistingVerificationNotes_RatherThanOverwriting(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	itemData := session.BacklogItemData{
+		Title:  "Review me again",
+		Status: string(session.BacklogStatusInProgress),
+	}
+	item, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// Seed prior evidence on the ItemSession, as if left by an earlier
+	// report_duplicate call before a rework cycle.
+	priorNotes := "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/272 reason=turned out not to be a duplicate after all"
+	require.NoError(t, storage.UpdateItemSessionVerificationNotes(ctx, workIS.ID, priorNotes))
+
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	newNotes := "ran `go test ./session/...` -> ok (41 tests)"
+	req := makeToolReq(map[string]interface{}{
+		"item_id":            item.ID,
+		"message":            "Implemented the feature after all, all criteria done.",
+		"verification_notes": newNotes,
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+
+	fetched, err := storage.GetItemSession(ctx, workIS.ID)
+	require.NoError(t, err)
+	assert.Contains(t, fetched.VerificationNotes, priorNotes, "prior VerificationNotes must be preserved, not overwritten")
+	assert.Contains(t, fetched.VerificationNotes, newNotes, "the new verification_notes must also be present")
+}
+
 // TestRequestReview_RejectsVerificationNotesOver4000Chars verifies the length
 // guard on verification_notes mirrors the existing guard on message.
 func TestRequestReview_RejectsVerificationNotesOver4000Chars(t *testing.T) {
@@ -1012,6 +1070,21 @@ func TestRequestReview_FailsClosed_WhenListItemSessionsErrors(t *testing.T) {
 	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
 }
 
+// callToolRaceResult pairs a CallToolResult with its error for use with
+// channels fed from spawned goroutines racing an MCP tool call. require/assert
+// calls must never run inside the goroutine itself — t.FailNow() (which
+// require calls on failure) only unwinds the goroutine that's running, not
+// the main test goroutine — so both the result AND error are collected here
+// and all assertions happen in the main test goroutine after collection.
+type callToolRaceResult struct {
+	result *mcpgo.CallToolResult
+	err    error
+}
+
+// requestReviewRaceResult is a request_review-specific alias for readability
+// at call sites in TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails.
+type requestReviewRaceResult = callToolRaceResult
+
 // TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails verifies
 // pitfalls.md §1/§5c: when two request_review calls genuinely race on the
 // same in_progress item, the DB-level atomic UPDATE...WHERE guarantees
@@ -1042,7 +1115,7 @@ func TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails(t *testin
 	var wg sync.WaitGroup
 	var startBarrier sync.WaitGroup
 	startBarrier.Add(1)
-	results := make(chan *mcpgo.CallToolResult, 2)
+	results := make(chan requestReviewRaceResult, 2)
 
 	race := func() {
 		defer wg.Done()
@@ -1052,8 +1125,12 @@ func TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails(t *testin
 			"message": "Racing request_review call.",
 		})
 		result, callErr := handler.requestReview(ctxWithUUID, req)
-		require.NoError(t, callErr)
-		results <- result
+		// Do not require/assert here — this closure runs in a spawned
+		// goroutine, and t.FailNow() (which require calls internally) only
+		// unwinds the goroutine that calls it, not the test goroutine. Send
+		// both the result and error through the channel and let the main
+		// test goroutine make all require/assert calls after collecting.
+		results <- requestReviewRaceResult{result: result, err: callErr}
 	}
 
 	wg.Add(2)
@@ -1065,7 +1142,9 @@ func TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails(t *testin
 
 	var successes, failures int
 	var failureMsg string
-	for result := range results {
+	for rr := range results {
+		require.NoError(t, rr.err)
+		result := rr.result
 		require.Len(t, result.Content, 1)
 		tc, ok := result.Content[0].(mcpgo.TextContent)
 		require.True(t, ok)
@@ -1462,6 +1541,68 @@ type fakeReviewTrigger struct {
 
 func (f *fakeReviewTrigger) TriggerReviewForSession(sessionUUID string) {
 	f.calls = append(f.calls, sessionUUID)
+}
+
+// resetGhBaseURL overrides githubpkg.GhBaseURL for a test and returns a
+// restore func. Mirrors github/commits_test.go's and
+// server/services/backlog_github_rpc_test.go's identically-named helpers —
+// GhBaseURL is exported specifically so each consuming package can point it
+// at an httptest.Server without needing a shared cross-package test helper.
+func resetGhBaseURL(ts *httptest.Server) func() {
+	githubpkg.GhBaseURL = ts.URL + "/"
+	return func() { githubpkg.GhBaseURL = "https://api.github.com/" }
+}
+
+// TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR
+// exercises the real verifyGitHubRefExists dispatch switch (tools_backlog.go)
+// end to end. Every other TestReportDuplicate_* test constructs backlogHandlers
+// with a stubbed verifyGitHubRef field, so the real `switch ref.Type { case
+// RefTypePR: ... case RefTypeIssue: ... case RefTypeCommit: ... }` dispatcher
+// is never reached by any other test in this package — this leaves
+// verifyGitHubRef nil so reportDuplicate falls through to verifyRef's real
+// fallback (h.verifyGitHubRefExists), and points githubpkg.GhBaseURL at an
+// httptest.Server (same pattern as github/repos_pr_test.go's TestGetPR and
+// github/commits_test.go) to prove the PR branch of the switch actually
+// invokes githubpkg.GetPR against the expected REST path.
+func TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportDuplicateFixture(t, storage, session.BacklogStatusInProgress)
+
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"number":272,"title":"fix: something","state":"open",` +
+			`"html_url":"https://github.com/tstapler/stapler-squad/pull/272"}`))
+	}))
+	defer ts.Close()
+	defer resetGhBaseURL(ts)()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	// verifyGitHubRef deliberately left nil — the real verifyRef/
+	// verifyGitHubRefExists dispatch chain must run.
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	req := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "fc63d55b superseded by PR #272, same fix already merged",
+	})
+
+	result, err := handler.reportDuplicate(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, "review")
+
+	assert.Equal(t, "/repos/tstapler/stapler-squad/pulls/272", gotPath,
+		"the real dispatcher must route RefTypePR to GetPR's REST path, not shell out or skip verification")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }
 
 // --- Story 4.2.1: success paths ---
@@ -2180,6 +2321,163 @@ func TestReportDuplicate_RejectsDifferentRefAfterAlreadyResolved(t *testing.T) {
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
 	require.Len(t, fetched.StatusEvents, 1, "the rejected second call must not add a status event")
+}
+
+// TestReportDuplicate_DoesNotTreatPrefixRefAsIdempotentMatch is the regression
+// test for the idempotency check's deliberate use of an exact, delimited-line
+// match (strings.HasPrefix(line, notesMarker+" ")) instead of
+// strings.Contains — see the notesMarker comment in reportDuplicate
+// (tools_backlog.go) and project_plans/backlog-self-resolve/research/pitfalls.md
+// §0 / implementation/architecture-review.md for the real bug this fixed: a
+// shorter ref (e.g. .../pull/27) is a literal string-prefix of a longer,
+// unrelated ref (.../pull/272) sharing the same URL prefix. This test proves
+// the collision is not silently misclassified as the exact-retry no-op —
+// after the item leaves the {in_progress, pr_pending} whitelist, a second
+// call with a differing (even if prefix-colliding) ref must hit the ordinary
+// disallowed-source-status refusal path, same as any other second call
+// (ADR-004's "reject, don't merge").
+func TestReportDuplicate_DoesNotTreatPrefixRefAsIdempotentMatch(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportDuplicateFixture(t, storage, session.BacklogStatusInProgress)
+
+	handler := &backlogHandlers{
+		storage:         storage,
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+	}
+	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
+
+	// First call: the longer ref, .../pull/272. Item transitions to review.
+	firstReq := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+		"reason":        "duplicate of the longer PR",
+	})
+	firstResult, err := handler.reportDuplicate(ctxWithUUID, firstReq)
+	require.NoError(t, err)
+	firstTC, ok := firstResult.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, firstTC.Text, "review")
+
+	fetchedAfterFirst, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetchedAfterFirst.Status)
+
+	// Second call on the SAME item: a shorter ref, .../pull/27, which is a
+	// literal string-prefix of the first call's .../pull/272. Must NOT be
+	// verified against GitHub — must not reach that far — because the item
+	// is already outside the {in_progress, pr_pending} whitelist regardless
+	// of idempotency classification.
+	handler.verifyGitHubRef = failOnCallVerifyGitHubRef(t)
+	secondReq := makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/27",
+		"reason":        "a different, shorter PR that happens to prefix-collide",
+	})
+	secondResult, err := handler.reportDuplicate(ctxWithUUID, secondReq)
+	require.NoError(t, err)
+
+	m := parseResult(t, secondResult)
+	require.False(t, m["success"].(bool),
+		"a prefix-colliding ref must not be silently treated as the idempotent no-op success")
+	errObj := m["error"].(map[string]interface{})
+	assert.Equal(t, ErrInvalidArgument, errObj["code"],
+		"must hit the ordinary disallowed-source-status refusal, not report a false idempotent success")
+	assert.Contains(t, errObj["message"], "review")
+
+	fetchedFinal, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetchedFinal.StatusEvents, 1, "the refused prefix-colliding second call must not add a status event")
+}
+
+// TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails mirrors
+// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
+// real-concurrency structure for report_duplicate's identical
+// errors.Is(transErr, session.ErrPreconditionFailed) branch (tools_backlog.go,
+// near where TransitionBacklogItemStatus is called): when two report_duplicate
+// calls genuinely race on the same in_progress item, the DB-level atomic
+// UPDATE...WHERE guarantees exactly one winner; the loser must see the same
+// distinct, non-retry "state changed" message, still under ErrInternalError.
+func TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Racing duplicate reports",
+		Status: string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	handler := &backlogHandlers{
+		storage:         storage,
+		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	var wg sync.WaitGroup
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+	results := make(chan callToolRaceResult, 2)
+
+	race := func() {
+		defer wg.Done()
+		startBarrier.Wait()
+		req := makeToolReq(map[string]interface{}{
+			"item_id":       item.ID,
+			"duplicate_ref": "https://github.com/tstapler/stapler-squad/pull/272",
+			"reason":        "Racing report_duplicate call.",
+		})
+		result, callErr := handler.reportDuplicate(ctxWithUUID, req)
+		// See callToolRaceResult's doc comment: no require/assert calls
+		// inside this goroutine — send both result and error and assert in
+		// the main test goroutine after collecting from the channel.
+		results <- callToolRaceResult{result: result, err: callErr}
+	}
+
+	wg.Add(2)
+	go race()
+	go race()
+	startBarrier.Done()
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	var failureMsg string
+	for rr := range results {
+		require.NoError(t, rr.err)
+		result := rr.result
+		require.Len(t, result.Content, 1)
+		tc, ok := result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+
+		// The success path returns plain (non-JSON) text; errResult always
+		// emits a JSON-encoded MCPResult. Distinguish on that, since both
+		// possible outcomes here arrive as mcpgo.TextContent.
+		var parsed map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &parsed); jsonErr != nil {
+			successes++
+			continue
+		}
+		failures++
+		errObj := parsed["error"].(map[string]interface{})
+		require.Equal(t, ErrInternalError, errObj["code"])
+		failureMsg, _ = errObj["message"].(string)
+	}
+
+	require.Equal(t, 1, successes, "exactly one racer should win")
+	require.Equal(t, 1, failures, "the loser must get a distinct message, not silently succeed")
+	require.Contains(t, failureMsg, "state changed")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }
 
 // --- Story 4.2.5: FR5 messaging tests ---

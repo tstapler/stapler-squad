@@ -484,10 +484,18 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	// Persist verification evidence on the work ItemSession so the review gate can
-	// surface it in the reviewer's prompt (see BuildReviewPrompt). Best-effort: a
-	// failure here should not block the status transition that already succeeded.
+	// surface it in the reviewer's prompt (see BuildReviewPrompt). Append, don't
+	// overwrite, any notes already on this ItemSession (e.g. left by an earlier
+	// report_duplicate call before a rework cycle) — UpdateItemSessionVerificationNotes
+	// is a plain overwrite, not an append; mirrors reportDuplicate's identical
+	// append-not-overwrite fix. Best-effort: a failure here should not block the
+	// status transition that already succeeded.
 	if verificationNotes != "" {
-		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, verificationNotes); updateErr != nil {
+		notes := verificationNotes
+		if itemSession.VerificationNotes != "" {
+			notes = itemSession.VerificationNotes + "\n\n---\n\n" + verificationNotes
+		}
+		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, notes); updateErr != nil {
 			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
 		}
 	}
