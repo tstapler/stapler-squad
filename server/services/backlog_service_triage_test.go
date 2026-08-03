@@ -817,6 +817,113 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 	assert.Empty(t, creator.calls, "no new session should be spawned while one is already active")
 }
 
+// TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive is the
+// regression test for the audit-trail gap this fix closes: before it, the
+// skip branch above only log.InfoLog.Printf'd — no durable
+// BacklogStuckState row and no operator notification, unlike every other
+// "an automated action was skipped" path in this file (notifyReworkCapHit,
+// notifySpawnAndRollbackFailed). Verifies a StuckReasonRespawnBlockedActive
+// row is written and a notification is published when the skip fires.
+func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item with an active fix session",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 42,
+		PrURL:    "https://github.com/example/repo/pull/42",
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: tests broke"))
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonRespawnBlockedActive, open[0].Reason)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "active-work-uuid")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+		assert.Equal(t, item.ID, ev.NotificationMetadata["item_id"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when auto-respawn is skipped for an active session")
+	}
+}
+
+// TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow
+// is AutoReopenForPRFix's counterpart to
+// TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow
+// — verifies the inline resolve at the top of AutoReopenForPRFix clears a
+// pre-existing respawn_blocked_active row once its guard passes. (The
+// independent periodic sweep, reconcileRespawnBlockedActiveResolution in
+// session/backlog_lifecycle.go, additionally guarantees resolution even when
+// this inline path is never reached again — see that function's doc comment
+// and TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded.)
+func TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "PR-pending item whose blocking fix session has since ended",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusPRPending),
+		PrNumber: 44,
+		PrURL:    "https://github.com/example/repo/pull/44",
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "ended-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
+
+	applied, err := storage.MarkStuck(context.Background(), item.ID, domain.StuckReasonRespawnBlockedActive,
+		session.BacklogStatusPRPending, "pre-existing open row from a prior blocked attempt")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), item.ID, "CI failing: tests broke"))
+	assert.Len(t, creator.calls, 1, "a fresh fix session must be spawned now that nothing is blocking")
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.NotEqual(t, domain.StuckReasonRespawnBlockedActive, row.Reason,
+			"the respawn_blocked_active row must be resolved once the guard passes")
+	}
+}
+
 // TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens verifies the other half:
 // a work session that IS confirmed dead (not live) must be tombstoned automatically so
 // the reopen can proceed normally, rather than blocking forever like the bug above.
@@ -856,6 +963,108 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 	deadFetched, err := storage.GetItemSession(context.Background(), deadIS.ID)
 	require.NoError(t, err)
 	assert.NotNil(t, deadFetched.EndedAt, "the dead session must be tombstoned")
+}
+
+// --- AutoRespawnAutonomousWork: closes the same audit-trail gap as AutoReopenForPRFix ---
+
+// TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive
+// is AutoRespawnAutonomousWork's counterpart to
+// TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive — the
+// first of the three call sites this fix covers. Before this fix, an
+// in_progress item whose autonomous work session was still active only
+// produced a bare log.InfoLog.Printf'd skip with no durable record and no
+// operator notification.
+func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"active-work-uuid": true}}
+	svc.SetSessionStopper(stopper)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "In-progress item with an active autonomous work session",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnAutonomousWork(context.Background(), item.ID))
+	assert.Empty(t, creator.calls, "no new session should be spawned while one is already active")
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonRespawnBlockedActive, open[0].Reason)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "active-work-uuid")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when auto-respawn is skipped for an active session")
+	}
+}
+
+// TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow
+// verifies the other half: once the blocking session ends and the guard
+// passes, a previously-open respawn_blocked_active row must be resolved
+// rather than left open forever (mirrors ResolveReworkBlockedStaleIfRecovered's
+// resolve-side responsibility for its own reason).
+func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+	svc.SetSessionStopper(&mockSessionStopper{liveUUIDs: map[string]bool{}})
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "In-progress item whose blocking session has since ended",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+	// Ended work session — findActiveWorkSession must not treat this as active.
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "ended-work-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
+
+	applied, err := storage.MarkStuck(context.Background(), item.ID, domain.StuckReasonRespawnBlockedActive,
+		session.BacklogStatusInProgress, "pre-existing open row from a prior blocked attempt")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	require.NoError(t, svc.AutoRespawnAutonomousWork(context.Background(), item.ID))
+	assert.Len(t, creator.calls, 1, "a fresh work session must be spawned now that nothing is blocking")
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.NotEqual(t, domain.StuckReasonRespawnBlockedActive, row.Reason,
+			"the respawn_blocked_active row must be resolved once the guard passes")
+	}
 }
 
 // --- AutoRespawnReview: closes the "detected/notified but never respawned" gap ---
@@ -1495,6 +1704,106 @@ func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testin
 	respawnErr := svc.AutoRespawnReview(context.Background(), item.ID)
 	require.NoError(t, respawnErr)
 	assert.Empty(t, pool.calls, "must not start a second headless review call while one is already active")
+}
+
+// TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive is
+// AutoRespawnReview's counterpart to
+// TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive above
+// — same audit-trail gap, third of the three call sites this fix covers.
+func TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	bus := events.NewEventBus(4)
+	svc.SetEventBus(bus)
+	subCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(subCtx)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Review item with an active re-review already running",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "active-review-uuid",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnReview(context.Background(), item.ID))
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, domain.StuckReasonRespawnBlockedActive, open[0].Reason)
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Contains(t, open[0].Context, "active-review-uuid")
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, events.EventNotification, ev.Type)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an operator-facing notification when auto-respawn is skipped for an active review session")
+	}
+}
+
+// TestAutoRespawnReview_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow
+// is AutoRespawnReview's counterpart to
+// TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow
+// — verifies the inline resolve at the top of AutoRespawnReview clears a
+// pre-existing respawn_blocked_active row once its guard passes. This is the
+// less critical of the two resolution paths for AutoRespawnReview: its only
+// real caller, markAbandonedReview, is backoff-gated and can eventually stop
+// re-invoking this function entirely, at which point only the independent
+// periodic sweep (reconcileRespawnBlockedActiveResolution,
+// session/backlog_lifecycle.go) still guarantees resolution — see
+// TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded
+// for that scenario, exercised with no call to AutoRespawnReview at all.
+func TestAutoRespawnReview_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	pool := &fakeHeadlessPool{response: `{"overall":"PASS","summary":"ok","verdicts":[]}`}
+	svc.SetHeadlessPool(pool)
+	svc.SetCapabilityCheck(headless.NewPassedCapabilitySelfCheckForTesting())
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:    "Review item whose blocking session has since ended",
+		RepoPath: repoPath,
+		Status:   string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "ended-review-uuid",
+		SessionRole: session.SessionRoleReview,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
+
+	applied, err := storage.MarkStuck(context.Background(), item.ID, domain.StuckReasonRespawnBlockedActive,
+		session.BacklogStatusReview, "pre-existing open row from a prior blocked attempt")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	require.NoError(t, svc.AutoRespawnReview(context.Background(), item.ID))
+	assert.NotEmpty(t, pool.calls, "must actually invoke the headless review call now that nothing is blocking")
+
+	open, err := storage.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.NotEqual(t, domain.StuckReasonRespawnBlockedActive, row.Reason,
+			"the respawn_blocked_active row must be resolved once the guard passes")
+	}
 }
 
 // TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns verifies the
