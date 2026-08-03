@@ -1187,10 +1187,12 @@ func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, it
 	}
 }
 
-// hasActiveReviewSession reports whether any of the provided ItemSessions is an
+// HasActiveReviewSession reports whether any of the provided ItemSessions is an
 // open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
-// AutoRespawnReview to avoid double-spawning a review pass that is already running.
-func hasActiveReviewSession(priorSessions []session.ItemSessionSummary) bool {
+// AutoRespawnReview to avoid double-spawning a review pass that is already running,
+// and by server/mcp's request_review handler to refuse re-routing a pr_pending item
+// out from under a running reviewer (FR2).
+func HasActiveReviewSession(priorSessions []session.ItemSessionSummary) bool {
 	for _, ps := range priorSessions {
 		if ps.Role == session.SessionRoleReview && ps.EndedAt == nil {
 			return true
@@ -1714,7 +1716,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	// since the detector query that found the item abandoned. Tombstone any work
 	// session confirmed dead first, mirroring AutoReopenForPRFix's identical guard.
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if hasActiveWorkSession(sessions) || hasActiveReviewSession(sessions) {
+	if hasActiveWorkSession(sessions) || HasActiveReviewSession(sessions) {
 		log.InfoLog.Printf("[AutoRespawnReview] item %s already has an active session; skipping respawn", itemID)
 		return nil
 	}
