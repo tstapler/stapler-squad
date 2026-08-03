@@ -435,6 +435,12 @@ type BacklogItemData struct {
 	// issue updated_at value most recently synced from GitHub into this item.
 	// Nil when the item has never been synced from GitHub.
 	GitHubSyncedIssueUpdatedAt *time.Time
+	// UserModifiedFields is the JSON-encoded set of field names (title,
+	// description, priority) the user has directly edited via UpdateBacklogItem
+	// — see ParseUserModifiedFields/MergeUserModifiedFields. Empty string means
+	// no field is locally locked; backward sync (SyncOne) treats any field in
+	// this set as local-wins and skips overwriting it from the remote source.
+	UserModifiedFields string
 	// ShippedFileStats holds the JSON-encoded []ShippedFileStat snapshot of
 	// per-file diff stats captured at ship time.
 	ShippedFileStats string
@@ -582,6 +588,11 @@ type BacklogItemUpdate struct {
 	// default" via this struct — a deliberate simplification; add a
 	// ClearReworkCapOverride bool alongside this if that's needed later.
 	ReworkCapOverride *int
+	// UserModifiedFields follows the same partial-update-presence convention:
+	// nil means "leave untouched", a non-nil pointer sets the stored
+	// JSON-encoded set of user-modified field names (e.g. `["title"]`). Build
+	// the value with MergeUserModifiedFields rather than hand-encoding JSON.
+	UserModifiedFields *string
 }
 
 // BacklogItemPrecondition is used for optimistic locking on update/transition.

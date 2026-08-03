@@ -436,3 +436,98 @@ func TestSyncByID_ReturnsErrNotFoundForMissingSource(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNotFound))
 }
+
+// TestMergeUserModifiedFields pins the exact merge semantics MergeUserModifiedFields
+// must provide (Epic 0.3, Story 0.3.1): order-independent set union, no
+// duplicates when re-adding a field already present.
+func TestMergeUserModifiedFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		newFields []string
+		want      []string
+	}{
+		{
+			name:      "empty raw plus one new field",
+			raw:       "",
+			newFields: []string{"title"},
+			want:      []string{"title"},
+		},
+		{
+			name:      "existing fields plus a duplicate of an existing field",
+			raw:       `["title"]`,
+			newFields: []string{"title"},
+			want:      []string{"title"},
+		},
+		{
+			name:      "existing fields plus a genuinely new field",
+			raw:       `["title"]`,
+			newFields: []string{"priority"},
+			want:      []string{"title", "priority"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged, err := MergeUserModifiedFields(tt.raw, tt.newFields...)
+			require.NoError(t, err)
+
+			got := ParseUserModifiedFields(merged)
+			require.ElementsMatch(t, tt.want, got)
+			require.Len(t, got, len(tt.want), "must not contain duplicates")
+		})
+	}
+}
+
+// TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync exercises the
+// actual regression Epic 0.3 exists to fix (pitfalls research §1): a user
+// edit to Title, once recorded in UserModifiedFields via MergeUserModifiedFields
+// (the same helper the UpdateBacklogItem RPC handler uses in
+// server/services/backlog_service_lifecycle.go — session cannot import
+// server/services, so this seeds UserModifiedFields via the production merge
+// helper rather than a live RPC call), must survive a subsequent backward
+// sync tick that fetches a different title from the plugin. This proves the
+// pre-existing containsField/ContainsModifiedField gate in SyncOne is
+// actually reachable in production now that Epic 0.3 wires up the RPC path.
+func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Remote Title (Changed)", Description: "Remote Desc", Priority: 5},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:       "Original Title",
+		Description: "Remote Desc",
+		Priority:    1,
+		Status:      string(BacklogStatusIdea),
+		ExternalID:  "ext-1",
+		SourceID:    sourceID,
+	})
+	require.NoError(t, err)
+
+	// Simulate the UpdateBacklogItem RPC handler's value-diff + merge flow:
+	// the user edits Title, so touchedFields = ["title"], merged into the
+	// item's (currently empty) UserModifiedFields via the production helper.
+	merged, err := MergeUserModifiedFields(created.UserModifiedFields, "title")
+	require.NoError(t, err)
+	newTitle := "User Edited Title"
+	_, err = storage.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{
+		Title:              &newTitle,
+		UserModifiedFields: &merged,
+	}, nil)
+	require.NoError(t, err)
+
+	entSrc, err := storage.repo.(*EntRepository).GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, "User Edited Title", refetched.Title, "user-edited title must survive backward sync")
+	require.Equal(t, 5, refetched.Priority, "priority was not user-modified, so remote wins")
+}

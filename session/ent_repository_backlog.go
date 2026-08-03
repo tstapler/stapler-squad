@@ -201,6 +201,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
 		PrFeedbackAddressedAt:        item.PrFeedbackAddressedAt,
 		GitHubSyncedIssueUpdatedAt:   item.GithubSyncedIssueUpdatedAt,
+		UserModifiedFields:           item.UserModifiedFields,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
@@ -658,6 +659,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	} else if update.GitHubSyncedIssueUpdatedAt != nil {
 		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
 	}
+	if update.UserModifiedFields != nil {
+		u.SetUserModifiedFields(*update.UserModifiedFields)
+	}
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -772,6 +776,9 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.GitHubSyncedIssueUpdatedAt != nil || update.ClearGitHubSyncedIssueUpdatedAt {
 		fields = append(fields, "gitHubSyncedIssueUpdatedAt")
+	}
+	if update.UserModifiedFields != nil {
+		fields = append(fields, "userModifiedFields")
 	}
 	return fields
 }

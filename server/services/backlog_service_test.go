@@ -474,6 +474,60 @@ func TestUpdateBacklogItem_GitHubResolveError_ReturnsInvalidArgument(t *testing.
 	assert.Contains(t, connErr.Error(), "https://github.com/owner/does-not-exist")
 }
 
+// TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit is the Epic 0.3
+// prerequisite test (plan.md Task 0.3.2c): a genuinely different Title
+// populates the item's UserModifiedFields with "title".
+func TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "Original Title",
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId: created.Msg.Item.Id,
+		Title:  "New Title",
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "New Title", refetched.Title)
+	assert.True(t, session.ContainsModifiedField(session.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
+		"UserModifiedFields must contain \"title\" after a genuine title edit, got %q", refetched.UserModifiedFields)
+}
+
+// TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged is the
+// regression test for the pre-mortem P1 #2 value-diff correction (plan.md
+// Task 0.3.2b/0.3.2c): the frontend edit form always resubmits the current
+// Title verbatim, so a presence-only check would falsely mark it as
+// user-modified on nearly every edit. Resubmitting the unchanged Title
+// alongside a genuinely different Priority must mark only "priority".
+func TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "Unchanged Title",
+		Priority: 3,
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		Title:    "Unchanged Title", // resubmitted verbatim, mirroring the real edit form
+		Priority: 5,                 // genuinely changed
+	}))
+	require.NoError(t, err)
+
+	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 5, refetched.Priority)
+	modified := session.ParseUserModifiedFields(refetched.UserModifiedFields)
+	assert.True(t, session.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
+	assert.False(t, session.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
+}
+
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────
 
 // UT-013: Default filter hides done and archived items

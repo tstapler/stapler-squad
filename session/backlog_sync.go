@@ -271,20 +271,20 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		}
 
 		// Existing item — apply local-wins: only update fields not in UserModifiedFields.
-		modifiedFields := parseUserModifiedFields(existing.UserModifiedFields)
+		modifiedFields := ParseUserModifiedFields(existing.UserModifiedFields)
 
 		update := BacklogItemUpdate{}
 		anyField := false
 
-		if !containsField(modifiedFields, "title") {
+		if !ContainsModifiedField(modifiedFields, "title") {
 			update.Title = &data.Title
 			anyField = true
 		}
-		if !containsField(modifiedFields, "description") {
+		if !ContainsModifiedField(modifiedFields, "description") {
 			update.Description = &data.Description
 			anyField = true
 		}
-		if !containsField(modifiedFields, "priority") {
+		if !ContainsModifiedField(modifiedFields, "priority") {
 			update.Priority = &data.Priority
 			anyField = true
 		}
@@ -316,8 +316,8 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	return nil
 }
 
-// parseUserModifiedFields deserializes UserModifiedFields JSON (e.g. ["title","description"]).
-func parseUserModifiedFields(raw string) []string {
+// ParseUserModifiedFields deserializes UserModifiedFields JSON (e.g. ["title","description"]).
+func ParseUserModifiedFields(raw string) []string {
 	if raw == "" {
 		return nil
 	}
@@ -328,12 +328,39 @@ func parseUserModifiedFields(raw string) []string {
 	return fields
 }
 
-// containsField returns true if name is in the fields slice.
-func containsField(fields []string, name string) bool {
+// ContainsModifiedField returns true if name is in the fields slice.
+func ContainsModifiedField(fields []string, name string) bool {
 	for _, f := range fields {
 		if f == name {
 			return true
 		}
 	}
 	return false
+}
+
+// MergeUserModifiedFields adds newFields to the existing JSON-encoded set of
+// user-modified field names, deduplicating, and returns the re-serialized JSON.
+func MergeUserModifiedFields(raw string, newFields ...string) (string, error) {
+	existing := ParseUserModifiedFields(raw)
+
+	seen := make(map[string]bool, len(existing)+len(newFields))
+	merged := make([]string, 0, len(existing)+len(newFields))
+	for _, f := range existing {
+		if !seen[f] {
+			seen[f] = true
+			merged = append(merged, f)
+		}
+	}
+	for _, f := range newFields {
+		if !seen[f] {
+			seen[f] = true
+			merged = append(merged, f)
+		}
+	}
+
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal user modified fields: %w", err)
+	}
+	return string(out), nil
 }
