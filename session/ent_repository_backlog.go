@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,14 @@ import (
 // other; without this guard each sweep would append its own audit row for what
 // is really one respawn decision.
 const respawnEventDedupeWindow = 10 * time.Second
+
+// respawnEventFallbackMu serializes CreateRespawnEvent's non-transactional
+// fallback path (used only when r.client.Tx fails to begin) against itself.
+// Sufficient because this is a single-process, single-SQLite-file deployment
+// — a process-local lock closes the same dedupe-check-then-insert race the
+// primary transactional path closes via the DB connection, without needing
+// the DB transaction that wasn't available on this path.
+var respawnEventFallbackMu sync.Mutex
 
 // recordRespawnEvent appends an immutable RespawnEvent audit row, deduped
 // against any row with the same (item_id, triggering_session_uuid, reason)
@@ -1402,8 +1411,13 @@ func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *d
 // otherwise leave open for call sites with no other in-flight guard (e.g.
 // AutoRespawnReview has none, unlike AutoRespawnAutonomousWork's
 // spawnInFlight or AutoRespawnTriage's triageInFlight). If the transaction
-// itself fails to begin, falls back to a non-tx write rather than dropping
-// the audit row — a lost dedupe guarantee is preferable to a lost event.
+// itself fails to begin (e.g. ctx already canceled — plausible during
+// shutdown, exactly when several respawn paths are most likely to race each
+// other closing out in-flight work), falls back to a non-tx write guarded by
+// respawnEventFallbackMu rather than dropping the audit row entirely — a
+// process-local mutex is sufficient here (single SQLite file, single
+// process) and re-closes the same TOCTOU window the transaction closes on
+// the primary path, rather than silently reopening it.
 func (r *EntRepository) CreateRespawnEvent(ctx context.Context, itemID, reason, triggeringSessionUUID, resultingSessionUUID string, queued bool) error {
 	parsedItemID, err := uuid.Parse(itemID)
 	if err != nil {
@@ -1412,8 +1426,10 @@ func (r *EntRepository) CreateRespawnEvent(ctx context.Context, itemID, reason, 
 
 	tx, txErr := r.client.Tx(ctx)
 	if txErr != nil {
-		log.ErrorLog.Printf("[CreateRespawnEvent] begin transaction failed for item=%s reason=%s, falling back to non-transactional write: %v", itemID, reason, txErr)
+		log.ErrorLog.Printf("[CreateRespawnEvent] begin transaction failed for item=%s reason=%s, falling back to mutex-guarded non-transactional write: %v", itemID, reason, txErr)
+		respawnEventFallbackMu.Lock()
 		recordRespawnEvent(ctx, r.client.RespawnEvent, parsedItemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+		respawnEventFallbackMu.Unlock()
 		return nil
 	}
 	defer tx.Rollback() //nolint:errcheck

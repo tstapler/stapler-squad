@@ -1550,14 +1550,16 @@ func TestAutoRespawnTriage_should_RecordRespawnEventWithReasonTriageOrphaned_Whe
 
 	require.NoError(t, svc.AutoRespawnTriage(t.Context(), item.ID))
 
-	require.Eventually(t, func() bool {
-		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && len(updated.RespawnEvents) == 1
-	}, 5*time.Second, 50*time.Millisecond, "expected exactly one RespawnEvent row")
-
+	// No polling needed: TriggerTriage creates the ItemSession synchronously
+	// (before spawning the async headless-call goroutine), and CreateRespawnEvent
+	// runs synchronously right after TriggerTriage returns — the row exists the
+	// moment AutoRespawnTriage returns above. A require.Eventually here would
+	// mask a real regression if CreateRespawnEvent's call ever moved into the
+	// async path (the row would only sometimes exist yet by the time this reads
+	// it, and the poll would silently paper over the flakiness).
 	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	require.Len(t, updated.RespawnEvents, 1)
+	require.Len(t, updated.RespawnEvents, 1, "expected exactly one RespawnEvent row")
 	ev := updated.RespawnEvents[0]
 	assert.Equal(t, session.RespawnReasonTriageOrphaned, ev.Reason)
 	assert.Nil(t, ev.TriggeringSessionUUID)

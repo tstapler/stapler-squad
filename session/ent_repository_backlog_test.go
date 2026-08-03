@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -350,4 +351,41 @@ func TestCreateRespawnEvent_should_RecordQueuedAttemptWithEmptyResultingUuid_Whe
 	require.Len(t, fetched.RespawnEvents, 1)
 	assert.True(t, fetched.RespawnEvents[0].Queued)
 	assert.Nil(t, fetched.RespawnEvents[0].ResultingSessionUUID)
+}
+
+// TestGetBacklogItem_should_CapRespawnEventsAtFiftyMostRecent_When_MoreThanFiftyExist verifies
+// the eager-load cap documented on GetBacklogItem's WithRespawnEvents call (session/
+// ent_repository_backlog.go): RespawnEvent is append-only with no retention/pruning by
+// design (ADR-001), so an item that accumulates more than 50 rows over its lifetime must
+// still return only the 50 most recent, not the full unbounded history.
+func TestGetBacklogItem_should_CapRespawnEventsAtFiftyMostRecent_When_MoreThanFiftyExist(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item with many respawn events"})
+	require.NoError(t, err)
+
+	const total = 55
+	for i := 0; i < total; i++ {
+		require.NoError(t, repo.CreateRespawnEvent(
+			ctx, item.ID, RespawnReasonStaleWork,
+			fmt.Sprintf("trigger-%d", i), fmt.Sprintf("result-%d", i), false,
+		))
+	}
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 50, "must cap at 50 even though %d rows were written", total)
+
+	// Most-recent-first: the 5 oldest (result-0..result-4) must have been dropped,
+	// the most recent (result-54) must be present.
+	uuids := make([]string, 0, len(fetched.RespawnEvents))
+	for _, ev := range fetched.RespawnEvents {
+		require.NotNil(t, ev.ResultingSessionUUID)
+		uuids = append(uuids, *ev.ResultingSessionUUID)
+	}
+	assert.Contains(t, uuids, "result-54")
+	assert.NotContains(t, uuids, "result-0")
+	assert.NotContains(t, uuids, "result-4")
 }
