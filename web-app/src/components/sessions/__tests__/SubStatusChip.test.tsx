@@ -36,21 +36,21 @@ describe("SubStatusChip", () => {
 
   it("renders count in Waiting for Agents chip when subagentCount > 0", () => {
     renderChip(SubStatus.WAITING_FOR_AGENT, 2);
-    expect(screen.getByText(/2 Agents/)).toBeInTheDocument();
+    expect(screen.getByText(/2 Tasks/)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveAttribute(
       "title",
-      "Claude is waiting for 2 background agents to finish",
+      "Claude is waiting for 2 background tasks to finish",
     );
     expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Waiting for agents");
   });
 
-  it("renders singular Agent for subagentCount === 1", () => {
+  it("renders singular Task for subagentCount === 1", () => {
     renderChip(SubStatus.WAITING_FOR_AGENT, 1);
-    expect(screen.getByText(/1 Agent\b/)).toBeInTheDocument();
-    expect(screen.queryByText(/1 Agents/)).not.toBeInTheDocument();
+    expect(screen.getByText(/1 Task\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 Tasks/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveAttribute(
       "title",
-      "Claude is waiting for 1 background agent to finish",
+      "Claude is waiting for 1 background task to finish",
     );
   });
 
@@ -70,19 +70,19 @@ describe("SubStatusChip", () => {
 
   it("renders large counts verbatim without clamping", () => {
     renderChip(SubStatus.WAITING_FOR_AGENT, 847);
-    expect(screen.getByText(/847 Agents/)).toBeInTheDocument();
+    expect(screen.getByText(/847 Tasks/)).toBeInTheDocument();
   });
 
   it("shows the fresh count on reappearance, not a stale count from a prior WAITING_FOR_AGENT occurrence", () => {
     const { rerender } = render(renderProps({ subStatus: SubStatus.WAITING_FOR_AGENT, subagentCount: 3 }));
-    expect(screen.getByText(/3 Agents/)).toBeInTheDocument();
+    expect(screen.getByText(/3 Tasks/)).toBeInTheDocument();
 
     rerender(renderProps({ subStatus: SubStatus.PROCESSING }));
     expect(screen.queryByText(/Waiting for/)).not.toBeInTheDocument();
 
     rerender(renderProps({ subStatus: SubStatus.WAITING_FOR_AGENT, subagentCount: 1 }));
-    expect(screen.getByText(/1 Agent\b/)).toBeInTheDocument();
-    expect(screen.queryByText(/3 Agents/)).not.toBeInTheDocument();
+    expect(screen.getByText(/1 Task\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/3 Tasks/)).not.toBeInTheDocument();
   });
 
   it("renders processing chip for PROCESSING with an aria-hidden spinner", () => {

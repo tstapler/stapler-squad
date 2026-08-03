@@ -46,12 +46,16 @@ export function SubStatusChip({ subStatus, subagentCount }: SubStatusChipProps) 
           role="status"
           aria-label="Waiting for agents"
           title={
+            // The count comes from three distinct WaitingForAgent sources (background
+            // agents, shells still running, monitors still running) collapsed into one
+            // int — "task" is deliberately source-neutral rather than "agent", which
+            // would be wrong when the match was actually a shell/monitor count.
             hasCount
-              ? `Claude is waiting for ${subagentCount} background agent${isSingular ? "" : "s"} to finish`
+              ? `Claude is waiting for ${subagentCount} background task${isSingular ? "" : "s"} to finish`
               : "Claude is waiting for background agents to finish"
           }
         >
-          ⏳ Waiting for {hasCount ? `${subagentCount} ${isSingular ? "Agent" : "Agents"}` : "Agents"}
+          ⏳ Waiting for {hasCount ? `${subagentCount} ${isSingular ? "Task" : "Tasks"}` : "Agents"}
         </span>
       );
     }
