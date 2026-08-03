@@ -98,6 +98,7 @@ func classifyGHResponse(resp *http.Response, notFoundMsg string, sentinels bool)
 		return fmt.Errorf("GitHub API: unauthorized (401): %s", strings.TrimSpace(string(body)))
 	case http.StatusNotFound:
 		if notFoundMsg != "" {
+			_, _ = io.Copy(io.Discard, resp.Body)
 			return fmt.Errorf("%w: %s", ErrGitHubRefNotFound, notFoundMsg)
 		}
 		body, _ := io.ReadAll(resp.Body)
