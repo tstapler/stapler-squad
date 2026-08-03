@@ -2,6 +2,7 @@
 
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
+import { getAvailableActions } from "@/lib/backlog/itemActions";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
 
@@ -52,15 +53,21 @@ export function ActionsSection({
   onManualReviewCancel,
   terminalState,
 }: ActionsSectionProps) {
-  // Pure derivations of `item`, moved in from BacklogItemDetail.tsx (code
-  // review follow-up) — nothing outside this component consumed them, so
-  // there was no reason to compute them in the parent and thread them
-  // through as props.
-  const canSpawnSession =
-    item.status === "ready" &&
-    (item.skipPlanning || item.planApproved);
-  // Autonomous mode does its own planning — no plan-approval gate needed.
-  const canRunAutonomously = item.status === "ready";
+  // getAvailableActions (web-app/src/lib/backlog/itemActions.ts) is the single
+  // source of truth for which actions this item's current status + gate flags
+  // expose — see its doc comment for why this replaced a scattered set of
+  // per-status JSX conditionals, some of which (approve_plan) used to key off
+  // incidental data (planArtifactsPath) instead of the real gate condition
+  // (docs/tasks/backlog-feature-improvement.md's 2026-08-03 entry, item
+  // be676dab). Everything below this line is transient per-click UI state
+  // (actionLoading, AC-criteria-empty tooltips, etc.) that stays local.
+  const { actions } = getAvailableActions(item);
+
+  // Autonomous mode does its own planning — no plan-approval gate needed,
+  // just the ready-status check `actions.has("spawn_session_autonomous")`
+  // already encodes.
+  const canRunAutonomously = actions.has("spawn_session_autonomous");
+  const canSpawnSession = actions.has("spawn_session") && (item.skipPlanning || item.planApproved);
 
   // Self-service "Ship PR" action: only makes sense for an item sitting in
   // review with no PR yet — the exact gap this closes (see
@@ -70,7 +77,6 @@ export function ActionsSection({
   // human-override philosophy as the existing "Override → Done" action.
   const acAllComplete =
     item.acCriteria.length > 0 && item.acCriteria.every((c) => c.status === "done");
-  const canShipPR = item.status === "review" && !item.prUrl;
 
   return (
     <div className={styles.section}>
@@ -87,185 +93,183 @@ export function ActionsSection({
           />
         ) : (
           <>
-        {item.status === "idea" && (
-          <>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("mark_ready")}
-              disabled={actionLoading !== null || item.acCriteria.length === 0}
-              aria-disabled={item.acCriteria.length === 0}
-              aria-busy={actionLoading === "mark_ready"}
-              title={item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined}
-              data-testid="backlog-action-mark-ready"
-            >
-              <ActionButtonLabel pending={actionLoading === "mark_ready"} label="Mark Ready" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("trigger_triage")}
-              disabled={actionLoading !== null || !item.repoPath}
-              aria-disabled={!item.repoPath}
-              aria-busy={actionLoading === "trigger_triage"}
-              title={!item.repoPath ? "Set repository path first" : undefined}
-              data-testid="backlog-action-trigger-triage"
-            >
-              <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-            </button>
-          </>
+        {actions.has("mark_ready") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("mark_ready")}
+            disabled={actionLoading !== null || item.acCriteria.length === 0}
+            aria-disabled={item.acCriteria.length === 0}
+            aria-busy={actionLoading === "mark_ready"}
+            title={item.acCriteria.length === 0 ? "Add at least one AC criterion first" : undefined}
+            data-testid="backlog-action-mark-ready"
+          >
+            <ActionButtonLabel pending={actionLoading === "mark_ready"} label="Mark Ready" />
+          </button>
         )}
 
-        {item.status === "ready" && (
-          <>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("trigger_triage")}
-              disabled={actionLoading !== null || !item.repoPath}
-              aria-disabled={!item.repoPath}
-              aria-busy={actionLoading === "trigger_triage"}
-              title={!item.repoPath ? "Set repository path first" : undefined}
-              data-testid="backlog-action-trigger-triage"
-            >
-              <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("spawn_session")}
-              disabled={actionLoading !== null || !canSpawnSession}
-              aria-disabled={!canSpawnSession}
-              aria-busy={actionLoading === "spawn_session"}
-              title={
-                !canSpawnSession
-                  ? "Approve the plan or enable skip_planning to spawn a session"
-                  : undefined
-              }
-              data-testid="backlog-action-spawn-session"
-            >
-              <ActionButtonLabel pending={actionLoading === "spawn_session"} label="Spawn Session" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("spawn_session_autonomous")}
-              disabled={actionLoading !== null || !canRunAutonomously}
-              aria-disabled={!canRunAutonomously}
-              aria-busy={actionLoading === "spawn_session_autonomous"}
-              title={
-                !canRunAutonomously
-                  ? "Item must be in Ready status to run autonomously"
-                  : "Run the agent without human approval for tool calls"
-              }
-              data-testid="backlog-action-run-autonomously"
-            >
-              <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
-            </button>
-            {item.planArtifactsPath && (
-              <button
-                className={styles.actionButton}
-                onClick={() => onAction("approve_plan")}
-                disabled={actionLoading !== null}
-                aria-busy={actionLoading === "approve_plan"}
-                data-testid="backlog-action-approve-plan"
-              >
-                <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
-              </button>
-            )}
-          </>
+        {actions.has("trigger_triage") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("trigger_triage")}
+            disabled={actionLoading !== null || !item.repoPath}
+            aria-disabled={!item.repoPath}
+            aria-busy={actionLoading === "trigger_triage"}
+            title={!item.repoPath ? "Set repository path first" : undefined}
+            data-testid="backlog-action-trigger-triage"
+          >
+            <ActionButtonLabel pending={actionLoading === "trigger_triage"} label="Trigger Triage" />
+          </button>
         )}
 
-        {item.status === "queued" && (
-          <>
-            {item.planArtifactsPath && !item.planApproved && (
-              <button
-                className={styles.actionButton}
-                onClick={() => onAction("approve_plan")}
-                disabled={actionLoading !== null}
-                aria-busy={actionLoading === "approve_plan"}
-                title="Queued items can't be dequeued until their plan is approved (or skip_planning is set)."
-                data-testid="backlog-action-approve-plan"
-              >
-                <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
-              </button>
-            )}
-          </>
+        {actions.has("spawn_session") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("spawn_session")}
+            disabled={actionLoading !== null || !canSpawnSession}
+            aria-disabled={!canSpawnSession}
+            aria-busy={actionLoading === "spawn_session"}
+            title={
+              !canSpawnSession
+                ? "Approve the plan or enable skip_planning to spawn a session"
+                : undefined
+            }
+            data-testid="backlog-action-spawn-session"
+          >
+            <ActionButtonLabel pending={actionLoading === "spawn_session"} label="Spawn Session" />
+          </button>
         )}
 
-        {item.status === "in_progress" && item.linkedSessions.length > 0 && (
-          <>
-            <a
-              className={styles.actionButton}
-              href={`/?session=${(latestWorkSession ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
-              data-testid="backlog-action-view-session"
-            >
-              View Session
-            </a>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("restart_session")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "restart_session"}
-              title="Stop the current session and re-spawn it in a fresh git worktree"
-              data-testid="backlog-action-restart-session"
-            >
-              <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-            </button>
-          </>
+        {actions.has("spawn_session_autonomous") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("spawn_session_autonomous")}
+            disabled={actionLoading !== null || !canRunAutonomously}
+            aria-disabled={!canRunAutonomously}
+            aria-busy={actionLoading === "spawn_session_autonomous"}
+            title={
+              !canRunAutonomously
+                ? "Item must be in Ready status to run autonomously"
+                : "Run the agent without human approval for tool calls"
+            }
+            data-testid="backlog-action-run-autonomously"
+          >
+            <ActionButtonLabel pending={actionLoading === "spawn_session_autonomous"} label="Run Autonomously" />
+          </button>
         )}
 
-        {item.status === "review" && (
-          <>
-            {canShipPR && (
-              <button
-                className={styles.actionButton}
-                onClick={() => onAction("ship_pr")}
-                disabled={actionLoading !== null || !acAllComplete}
-                aria-disabled={!acAllComplete}
-                aria-busy={actionLoading === "ship_pr"}
-                title={
-                  !acAllComplete
-                    ? "All acceptance criteria must be complete before shipping a PR."
-                    : "Ask the agent to push the branch and open a pull request for this item."
-                }
-                data-testid="backlog-action-ship-pr"
-              >
-                <ActionButtonLabel pending={actionLoading === "ship_pr"} label="🚀 Ship PR" />
-              </button>
-            )}
-            <button
-              className={`${styles.actionButton} ${styles.actionButtonDanger}`}
-              onClick={() => onAction("override_done")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "override_done"}
-              data-testid="backlog-action-override-done"
-            >
-              <ActionButtonLabel pending={actionLoading === "override_done"} label="Override → Done" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("re_review")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "re_review"}
-              data-testid="backlog-action-re-review"
-            >
-              <ActionButtonLabel pending={actionLoading === "re_review"} label="Re-review" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("manual_review")}
-              disabled={actionLoading !== null}
-              data-testid="backlog-action-manual-review"
-            >
-              Submit Review
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("restart_session")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "restart_session"}
-              title="Stop the review session and restart work from scratch in a fresh git worktree"
-              data-testid="backlog-action-restart-session"
-            >
-              <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
-            </button>
-          </>
+        {/* Approve Plan / Retry Triage: mutually exclusive, both driven by
+            getAvailableActions' isGatedOnPlanApproval + hasPlan derivation,
+            never by planArtifactsPath presence alone (see itemActions.ts —
+            docs/tasks/backlog-feature-improvement.md's 2026-08-03 entry). A
+            gated item with no usable plan gets an explicit retry affordance
+            instead of the Approve Plan button silently disappearing. */}
+        {actions.has("approve_plan") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("approve_plan")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "approve_plan"}
+            title={
+              item.status === "queued"
+                ? "Queued items can't be dequeued until their plan is approved (or skip_planning is set)."
+                : undefined
+            }
+            data-testid="backlog-action-approve-plan"
+          >
+            <ActionButtonLabel pending={actionLoading === "approve_plan"} label="Approve Plan" />
+          </button>
+        )}
+        {actions.has("retry_triage") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("retry_triage")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "retry_triage"}
+            title="This item's most recent triage session ended without producing a usable plan — retry to generate one."
+            data-testid="backlog-action-retry-triage"
+          >
+            <ActionButtonLabel pending={actionLoading === "retry_triage"} label="Retry Triage" />
+          </button>
+        )}
+
+        {actions.has("view_session") && (
+          <a
+            className={styles.actionButton}
+            href={`/?session=${(latestWorkSession ?? item.linkedSessions[item.linkedSessions.length - 1]).sessionId}`}
+            data-testid="backlog-action-view-session"
+          >
+            View Session
+          </a>
+        )}
+
+        {actions.has("ship_pr") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("ship_pr")}
+            disabled={actionLoading !== null || !acAllComplete}
+            aria-disabled={!acAllComplete}
+            aria-busy={actionLoading === "ship_pr"}
+            title={
+              !acAllComplete
+                ? "All acceptance criteria must be complete before shipping a PR."
+                : "Ask the agent to push the branch and open a pull request for this item."
+            }
+            data-testid="backlog-action-ship-pr"
+          >
+            <ActionButtonLabel pending={actionLoading === "ship_pr"} label="🚀 Ship PR" />
+          </button>
+        )}
+
+        {actions.has("override_done") && (
+          <button
+            className={`${styles.actionButton} ${styles.actionButtonDanger}`}
+            onClick={() => onAction("override_done")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "override_done"}
+            data-testid="backlog-action-override-done"
+          >
+            <ActionButtonLabel pending={actionLoading === "override_done"} label="Override → Done" />
+          </button>
+        )}
+
+        {actions.has("re_review") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("re_review")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "re_review"}
+            data-testid="backlog-action-re-review"
+          >
+            <ActionButtonLabel pending={actionLoading === "re_review"} label="Re-review" />
+          </button>
+        )}
+
+        {actions.has("manual_review") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("manual_review")}
+            disabled={actionLoading !== null}
+            data-testid="backlog-action-manual-review"
+          >
+            Submit Review
+          </button>
+        )}
+
+        {actions.has("restart_session") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("restart_session")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "restart_session"}
+            title={
+              item.status === "review"
+                ? "Stop the review session and restart work from scratch in a fresh git worktree"
+                : "Stop the current session and re-spawn it in a fresh git worktree"
+            }
+            data-testid="backlog-action-restart-session"
+          >
+            <ActionButtonLabel pending={actionLoading === "restart_session"} label="Restart" />
+          </button>
         )}
 
         {showManualReview && item.status === "review" && (
@@ -317,55 +321,53 @@ export function ActionsSection({
           </div>
         )}
 
-        {item.status === "done" && (
-          <>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("archive")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "archive"}
-              data-testid="backlog-action-archive"
-            >
-              <ActionButtonLabel pending={actionLoading === "archive"} label="Archive" />
-            </button>
-            <button
-              className={styles.actionButton}
-              onClick={() => onAction("reopen")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "reopen"}
-              data-testid="backlog-action-reopen"
-            >
-              <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
-            </button>
-          </>
+        {actions.has("archive") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("archive")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "archive"}
+            data-testid="backlog-action-archive"
+          >
+            <ActionButtonLabel pending={actionLoading === "archive"} label="Archive" />
+          </button>
+        )}
+        {actions.has("reopen") && (
+          <button
+            className={styles.actionButton}
+            onClick={() => onAction("reopen")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "reopen"}
+            data-testid="backlog-action-reopen"
+          >
+            <ActionButtonLabel pending={actionLoading === "reopen"} label="Re-open to Review" />
+          </button>
         )}
 
         {/* Backward transitions — visible whenever there's an earlier stage to return to */}
-        {["refining", "ready", "in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-          <>
-            <button
-              className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-              onClick={() => onAction("send_back_idea")}
-              disabled={actionLoading !== null}
-              aria-busy={actionLoading === "send_back_idea"}
-              title="Reset to Idea and clear plan approval so triage can re-run"
-              data-testid="backlog-action-send-back-idea"
-            >
-              <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
-            </button>
-            {["in_progress", "review", "pr_pending", "done"].includes(item.status) && (
-              <button
-                className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-                onClick={() => onAction("send_back_ready")}
-                disabled={actionLoading !== null}
-                aria-busy={actionLoading === "send_back_ready"}
-                title="Move back to Ready to re-spawn without full re-triage"
-                data-testid="backlog-action-send-back-ready"
-              >
-                <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
-              </button>
-            )}
-          </>
+        {actions.has("send_back_idea") && (
+          <button
+            className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
+            onClick={() => onAction("send_back_idea")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "send_back_idea"}
+            title="Reset to Idea and clear plan approval so triage can re-run"
+            data-testid="backlog-action-send-back-idea"
+          >
+            <ActionButtonLabel pending={actionLoading === "send_back_idea"} label="↩ Return to Triage" />
+          </button>
+        )}
+        {actions.has("send_back_ready") && (
+          <button
+            className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
+            onClick={() => onAction("send_back_ready")}
+            disabled={actionLoading !== null}
+            aria-busy={actionLoading === "send_back_ready"}
+            title="Move back to Ready to re-spawn without full re-triage"
+            data-testid="backlog-action-send-back-ready"
+          >
+            <ActionButtonLabel pending={actionLoading === "send_back_ready"} label="↩ Back to Ready" />
+          </button>
         )}
 
         <button
