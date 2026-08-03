@@ -1496,6 +1496,229 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 	}
 }
 
+// newQueuedNoTriageResultTestItem creates a queued, plan-approval-gated item
+// (no SkipPlanning, no PlanApproved) whose only triage-role ItemSession ended
+// without ever persisting a usable TriageResult — the exact shape of item
+// be676dab (docs/tasks/backlog-feature-improvement.md's 2026-08-03 entry): a
+// triage session that ran, ended, but left nothing behind, after the item had
+// already advanced past idea (here, straight to queued, standing in for the
+// WIP-cap-driven idea->ready->queued path the live incident took).
+func newQueuedNoTriageResultTestItem(t *testing.T, storage *Storage) *BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with no usable triage result",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	return item
+}
+
+// TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnusable
+// is the direct regression test for the 2026-08-03 live incident (item be676dab):
+// a queued item, gated on plan approval, whose most recent triage session ended
+// with no usable result must now be flagged under the same orphaned_triage
+// reason and notified — previously this detector's Statuses filter was
+// idea-only, so a queued item in this shape fell outside its scope entirely and
+// only reconcilePlanNotApprovedItems flagged it, indistinguishably from the
+// normal "plan generated, awaiting review" case.
+func TestReconcileOrphanedTriageItems_should_flagQueuedItem_When_TriageResultUnusable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "a queued item whose latest triage session left no usable result must be flagged")
+	assert.Equal(t, item.ID, open[0].ItemID)
+	assert.Equal(t, domain.StuckReasonOrphanedTriage, open[0].Reason)
+	assert.Equal(t, BacklogStatusQueued, open[0].ItemStatus)
+	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
+
+	// Repeat tick must not re-notify (DB-backed notify-once dedup), same as the
+	// pre-existing idea-status shapes.
+	listener.reconcileOrphanedTriageItems(ctx, er)
+	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResultUsable
+// is the over-triggering guard: a queued item that legitimately has a real plan
+// behind it (the normal "awaiting human review" wait reconcilePlanNotApprovedItems
+// owns) must NOT be flagged by this detector — only "ended with nothing usable"
+// is the generalized shape's signal, not "ended" alone.
+func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResultUsable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with a real plan",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionTriageResult(ctx, is.ID, `{"summary":"a real plan"}`))
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a queued item with a usable triage result is a normal plan-approval wait, not orphaned triage")
+}
+
+// TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanningOrPlanApproved
+// verifies the generalized shape respects the same escape hatches
+// reconcilePlanNotApprovedItems already does — an item that bypasses planning
+// entirely, or already has an approved plan, is never "gated" regardless of
+// what its triage session did or didn't produce.
+func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanningOrPlanApproved(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	for _, tc := range []struct {
+		name         string
+		skipPlanning bool
+		planApproved bool
+	}{
+		{"skip_planning", true, false},
+		{"plan_approved", false, true},
+	} {
+		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+			Title:              "Queued gate-bypass item " + tc.name,
+			AcceptanceCriteria: `[]`,
+			Priority:           1,
+			Status:             string(BacklogStatusQueued),
+			SkipPlanning:       tc.skipPlanning,
+			PlanApproved:       tc.planApproved,
+		})
+		require.NoError(t, err)
+
+		is, err := storage.CreateItemSession(ctx, ItemSessionData{
+			ItemID:      item.ID,
+			SessionUUID: "headless-triage-" + uuid.New().String(),
+			SessionRole: SessionRoleTriage,
+		})
+		require.NoError(t, err)
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item with skip_planning or plan_approved set must never be flagged, regardless of triage result")
+}
+
+// TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due verifies
+// the generalized queued shape is retried through the exact same backoff-gated
+// AutoRespawnTriage path as the pre-existing idea-status shapes — closing the
+// "detected but nothing ever acts on it" gap for be676dab's shape the same way
+// PR #274/07-30 closed it for the idea-status shape.
+func TestReconcileOrphanedTriageRemediation_should_retryQueuedRow_When_Due(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetNotifier(&fakeNotifier{})
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageRemediation(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched for a due, queued orphaned_triage row")
+	}
+}
+
+// TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesReady verifies
+// the generalized resolve condition correctly recognizes success: a retry that
+// resets queued->idea then succeeds lands the item on "ready" — outside both
+// anchor statuses (idea, queued) — which must resolve the row. This is the case
+// the naive "resolve once status != queued" condition would get wrong, since a
+// retry in flight passes through "idea" (still an anchor status) before
+// reaching "ready".
+func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesReady(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusQueued, "no usable triage result")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// Simulate a successful automated retry: queued -> idea (reset) -> ready
+	// (fresh triage succeeded).
+	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, precondition, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.selfHealStuck(ctx, er)
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, open, 1, "row must stay open while the retry is in flight (item reset to idea, still an anchor status)")
+
+	precondition = &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)}
+	_, err = storage.TransitionBacklogItemStatus(ctx, item.ID, BacklogStatusReady, precondition, TriggeredBySystem)
+	require.NoError(t, err)
+
+	listener.selfHealStuck(ctx, er)
+	open, err = er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "row must resolve once the retried triage succeeds and the item reaches ready")
+}
+
 // TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_CalledRepeatedly
 // verifies the backoff gate itself: 10 back-to-back calls against the same open row
 // must consume exactly one attempt, mirroring
@@ -3466,6 +3689,35 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue(t *t
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, open, "an item with skip_planning=true is never blocked by this gate and must not be flagged")
+}
+
+// TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnusable
+// verifies the 2026-08-03 delegation fix: an item whose most recent triage
+// session ended with no usable result is NOT "awaiting human review of a real
+// plan" (this detector's normal case) — it's reconcileOrphanedTriageItems'
+// generalized shape now. Without this delegation, item be676dab's shape would
+// get flagged under two different, differently-worded stuck reasons
+// simultaneously.
+func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnusable(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item := newQueuedNoTriageResultTestItem(t, storage)
+	queuedAt := time.Now().Add(-10 * time.Minute)
+	_, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{QueuedAt: &queuedAt}, nil)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcilePlanNotApprovedItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "an item with no usable triage result must be left to reconcileOrphanedTriageItems, not double-flagged as plan_not_approved")
 }
 
 // TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued verifies
