@@ -1777,6 +1777,12 @@ UI. Also worth a small frontend fix in `BacklogItemDetail.tsx` so a null `triage
 an explicit "triage produced no usable result — retry" affordance instead of silently rendering
 nothing.
 
+## Update — 2026-08-03 (later still): PR #321's own review surfaces the next instance of the recurring shape one status further down the pipeline
+
+While independently reviewing PR #321 (the `queued`-status orphaned-triage generalization above) before merge, the reviewer traced `TriggerTriage`'s actual commit logic (`server/services/backlog_service_triage.go:2121-2141`) and found the `idea→ready` transition is gated only on a successful *parse* of the triage result, not on the separate `UpdateItemSessionTriageResult` persist call also succeeding — they're independent DB writes. A transient failure of just the persist call leaves a `ready`-status item whose latest triage session has `TriageResult == ""`, structurally identical to the `idea`/`queued` "no usable result" shape PR #321 just made detectable — but for `ready` specifically, it's invisible: the only signal is a one-shot `notifyTriagePersistFailure` notification event, not a durable `BacklogStuckState` row, and no detector in `backlog_lifecycle.go` looks at `BacklogStatusReady` at all.
+
+**Not routed as a fix this pass** — explicitly out of scope for #321 (a pre-existing gap, not a regression it introduces), and no live instance is currently known. Recorded here per this doc's own mandate to name a recurring shape the moment it's spotted, even mid-review, rather than waiting for it to surface as a fresh "new" bug in some future audit pass: this is the same "status-transition generalization leaves the next status still exposed" shape #321 itself exists to fix (for `idea`→`queued`), now visible one status further down (`ready`). If it ever surfaces live, the fix is the same shape as #321's: extend the detector's covered-status set again, ideally by generalizing to "any status gated on plan-approval with no usable result," ­not by special-casing `ready` on top of `idea`+`queued`.
+
 ## Update — 2026-08-02: light verification pass — 1 new root-caused bug (archived work sessions never leave the Review Queue), everything else confirmed working as designed
 
 Not a full 4-agent re-run (last full pass 07-18, light passes trending well since — same rationale
