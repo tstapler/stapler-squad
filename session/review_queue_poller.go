@@ -58,6 +58,13 @@ type ApprovalMetadata struct {
 	ToolInput  map[string]interface{}
 	Cwd        string
 	Orphaned   bool
+
+	// EscalationReason and EscalationCategory explain why this request was
+	// escalated for manual review (no-match/explicit-rule/domain-age/
+	// unclassifiable/unexpected). Copied from PendingApproval via
+	// ApprovalStore.GetApprovalMetadataBySession.
+	EscalationReason   string
+	EscalationCategory string
 }
 
 // ApprovalMetadataProvider provides approval metadata for enriching review queue items.
@@ -811,8 +818,21 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 
 		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).
-		if reason == ReasonApprovalPending && rqp.approvalProvider != nil {
-			if approvals := rqp.approvalProvider.GetApprovalMetadataBySession(snap.Title); len(approvals) > 0 {
+		//
+		// ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the
+		// session's stable ID (UUID when present, Title only as a fallback) so the
+		// live notification UI can match on it — but ReviewItem is keyed by Title.
+		// Look up by UUID first since that's what most approvals are indexed under,
+		// then fall back to Title for the rare case a session has no UUID.
+		rqp.mu.RLock()
+		provider := rqp.approvalProvider
+		rqp.mu.RUnlock()
+		if reason == ReasonApprovalPending && provider != nil {
+			approvals := provider.GetApprovalMetadataBySession(snap.UUID)
+			if len(approvals) == 0 && snap.UUID != snap.Title {
+				approvals = provider.GetApprovalMetadataBySession(snap.Title)
+			}
+			if len(approvals) > 0 {
 				a := approvals[0] // Use the most recent/first approval
 				if item.Metadata == nil {
 					item.Metadata = make(map[string]string)
@@ -831,7 +851,13 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.Orphaned {
 					item.Metadata["orphaned"] = "true"
 				}
-				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
+				if a.EscalationReason != "" {
+					item.Metadata["escalation_reason"] = a.EscalationReason
+				}
+				if a.EscalationCategory != "" {
+					item.Metadata["escalation_reason_category"] = a.EscalationCategory
+				}
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"])
 			}
 		}
 

@@ -194,15 +194,15 @@ func init() {
 	// backlogitem.DefaultShippedChangesReqCount holds the default value on creation for the shipped_changes_req_count field.
 	backlogitem.DefaultShippedChangesReqCount = backlogitemDescShippedChangesReqCount.Default.(int)
 	// backlogitemDescShippedSnapshotCaptureFailed is the schema descriptor for shipped_snapshot_capture_failed field.
-	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[30].Descriptor()
+	backlogitemDescShippedSnapshotCaptureFailed := backlogitemFields[31].Descriptor()
 	// backlogitem.DefaultShippedSnapshotCaptureFailed holds the default value on creation for the shipped_snapshot_capture_failed field.
 	backlogitem.DefaultShippedSnapshotCaptureFailed = backlogitemDescShippedSnapshotCaptureFailed.Default.(bool)
 	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
-	backlogitemDescCreatedAt := backlogitemFields[32].Descriptor()
+	backlogitemDescCreatedAt := backlogitemFields[33].Descriptor()
 	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
 	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
 	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
-	backlogitemDescUpdatedAt := backlogitemFields[33].Descriptor()
+	backlogitemDescUpdatedAt := backlogitemFields[34].Descriptor()
 	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
 	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

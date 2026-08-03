@@ -178,7 +178,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		startupTimeout = 60 * time.Second
 	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, startupTimeout)
-	if !waitForIdle(startupCtx, statusCh, d.controller) {
+	// No settle window here: startup only needs to observe the session's
+	// first idle signal after launch, not debounce against a background
+	// fork — nothing has been injected yet, so there's no premature-nudge
+	// risk to guard against.
+	if !waitForIdle(startupCtx, statusCh, d.controller, 0) {
 		startupCancel()
 		log.Warn("AutonomousDriver: timed out waiting for initial idle state", "session", sessionName)
 		d.fireCompletion(sessionName, AutonomousDriverOutcome{Stuck: true, Reason: "startup timeout"})
@@ -260,7 +264,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		idleReached := waitForIdle(turnCtx, statusCh, d.controller)
+		idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
 		turnCancel()
 		if !idleReached {
 			log.Warn("AutonomousDriver: session did not become idle after turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
@@ -366,27 +370,100 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 	}
 }
 
-// waitForIdle blocks until the controller is idle or ctx is cancelled.
-// Returns true if idle was detected, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController) bool {
-	// Fast path: already idle.
-	if cc.IsIdle() {
-		return true
+// idleSettlePollInterval and idleSettleWindow are vars (not consts) so tests
+// can shrink them instead of waiting out real timers, matching the
+// waitForPaneSettle pattern above.
+var (
+	idleSettlePollInterval = 500 * time.Millisecond
+	idleSettleWindow       = 60 * time.Second
+)
+
+// waitForIdle blocks until the session needs a new orchestrator turn, or ctx
+// is cancelled. Two paths satisfy it:
+//   - An explicit status arrives (approval pending, input required, error,
+//     tests failing) — these already mean "needs redirection now", no debounce.
+//   - A routine Idle/Ready/Success status persists, with no intervening
+//     StatusExecuting/StatusProcessing/StatusWaitingForAgent in between, for
+//     settleWindow. A settleWindow of 0 restores immediate first-idle-signal
+//     behavior (used for the startup wait, where nothing has been injected
+//     yet, so there's no premature-nudge risk to guard against).
+//
+// Without the settle window, a single transient idle blip — e.g. Claude
+// finishes printing a short reply while a background subagent/fork it just
+// launched is still running — was enough to fire a new orchestrator turn
+// immediately, injecting a nudge (and a paired notification, see
+// buildTurnCallback in server/services/autonomous_orchestration_service.go)
+// every few seconds instead of only when the session genuinely needed
+// redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
+//
+// Returns true if a turn is warranted, false if ctx expired first.
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow time.Duration) bool {
+	if settleWindow <= 0 {
+		if cc.IsIdle() {
+			return true
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case status := <-statusCh:
+				if isIdleStatus(status) || isImmediateStatus(status) {
+					return true
+				}
+			}
+		}
 	}
+
+	var idleSince time.Time
+	if cc.IsIdle() {
+		idleSince = time.Now()
+	}
+
 	for {
+		if !idleSince.IsZero() && time.Since(idleSince) >= settleWindow {
+			return true
+		}
+
+		wait := idleSettlePollInterval
+		if !idleSince.IsZero() {
+			if remaining := settleWindow - time.Since(idleSince); remaining < wait {
+				wait = remaining
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			return false
 		case status := <-statusCh:
-			if isIdleStatus(status) {
+			switch {
+			case isImmediateStatus(status):
 				return true
+			case isIdleStatus(status):
+				if idleSince.IsZero() {
+					idleSince = time.Now()
+				}
+			default:
+				idleSince = time.Time{}
 			}
+		case <-time.After(wait):
+			// Loop back around to re-check the settle window above.
 		}
 	}
 }
 
 func isIdleStatus(s detection.DetectedStatus) bool {
 	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
+}
+
+// isImmediateStatus reports whether s already represents an explicit signal
+// that the session needs redirection right now, bypassing idleSettleWindow.
+func isImmediateStatus(s detection.DetectedStatus) bool {
+	switch s {
+	case detection.StatusNeedsApproval, detection.StatusInputRequired, detection.StatusError, detection.StatusTestsFailing:
+		return true
+	default:
+		return false
+	}
 }
 
 // autonomousSystemPrompt is the stable system prompt for orchestrator LLM calls.

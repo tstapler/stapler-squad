@@ -1,0 +1,15 @@
+{
+  "id": "approval-analytics-reason-breakdown",
+  "type": "frontend",
+  "name": "Escalation reasons breakdown table in the approval analytics panel",
+  "component": "ApprovalAnalyticsPanel",
+  "path": "web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx",
+  "filePath": "web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "Escalation Reasons > renders Escalation Reasons table with mapped labels and counts",
+    "Escalation Reasons > renders empty-state message when all escalation categories are zero"
+  ],
+  "lastModified": "2026-08-02T00:00:00Z"
+}

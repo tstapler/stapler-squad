@@ -231,3 +231,46 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 	assert.Equal(t, fileStats, fetched.ShippedFileStats)
 	assert.False(t, fetched.ShippedSnapshotCaptureFailed)
 }
+
+// TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip mirrors
+// ShippedSnapshotAt's round-trip test above: create an item, assert
+// PrFeedbackAddressedAt is nil, update it with a timestamp, re-fetch, assert
+// it round-trips exactly — also incidentally exercises the ent auto-migration
+// path for the new nullable pr_feedback_addressed_at column (fresh schema
+// creation includes it).
+func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+		Title: "item for pr-feedback-watermark round-trip",
+	})
+	require.NoError(t, err)
+
+	fetchedPre, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedPre.PrFeedbackAddressedAt)
+
+	watermark := time.Now().UTC().Truncate(time.Second)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		PrFeedbackAddressedAt: &watermark,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterUpdate, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetchedAfterUpdate.PrFeedbackAddressedAt)
+	assert.True(t, watermark.Equal(*fetchedAfterUpdate.PrFeedbackAddressedAt))
+
+	// Clearing must be explicit via ClearPrFeedbackAddressedAt, not achievable
+	// by passing a nil pointer (which means "leave untouched").
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		ClearPrFeedbackAddressedAt: true,
+	}, nil)
+	require.NoError(t, err)
+
+	fetchedAfterClear, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, fetchedAfterClear.PrFeedbackAddressedAt)
+}

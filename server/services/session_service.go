@@ -961,6 +961,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 	s.wireClaudeSessionIDCallback(inst)
 	s.wireAutoArchiveCallback(inst)
 	s.wireSessionExitedPublisher(inst)
+	// Register with the HistoryLinker so its poll/fsnotify correlation loop
+	// detects this session's Claude JSONL file and persists claude_session_id.
+	// Without this, only sessions loaded at server boot (server/dependencies.go)
+	// were ever registered — every session created afterward (regular sessions
+	// via CreateSession, and every backlog/autonomous session via
+	// CreateWorktreeSession/CreateDirectorySession) never got a conversation
+	// UUID captured, so HasClaudeSession() stayed false and a session whose
+	// tmux pane died (restart, hibernation, crash) started a fresh Claude
+	// conversation on recovery instead of resuming — confirmed live
+	// 2026-08-02 on backlog work sessions failing to resume post-restart.
+	if s.historyLinker != nil {
+		s.historyLinker.AddInstance(inst)
+	}
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.

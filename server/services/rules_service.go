@@ -567,6 +567,10 @@ func summaryToProto(s AnalyticsSummary) *sessionv1.AnalyticsSummaryProto {
 			Count:       int32(s.Count),
 		})
 	}
+	p.EscalationReasonCounts = make(map[string]int32, len(s.EscalationReasonCounts))
+	for k, v := range s.EscalationReasonCounts {
+		p.EscalationReasonCounts[k] = int32(v)
+	}
 	if !s.WindowStart.IsZero() {
 		p.WindowStart = timestamppb.New(s.WindowStart)
 	}
