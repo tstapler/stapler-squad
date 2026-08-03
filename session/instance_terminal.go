@@ -298,7 +298,10 @@ func (i *Instance) GetPRDisplayInfo() string { return i.GitHub().PRDisplayInfo()
 func (i *Instance) IsGitHubSession() bool { return i.GitHub().IsGitHubSession() }
 
 // prUpdateResult is returned by UpdatePRStatus.
-type prUpdateResult struct{ PriorityChanged bool }
+type prUpdateResult struct {
+	PriorityChanged        bool
+	CheckConclusionChanged bool
+}
 
 // CurrentBranch returns the branch the session is currently on.
 // For worktree sessions, it returns the stored Branch field (set at creation and on worktree
@@ -332,6 +335,7 @@ func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, appro
 		// outside the actor — see runActor's doc comment in actor.go.
 		inst.mu.Lock()
 		result.PriorityChanged = priority != inst.GitHubPRPriority
+		result.CheckConclusionChanged = checkConclusion != inst.GitHubCheckConclusion
 		inst.GitHubPRState = state
 		inst.GitHubPRPriority = priority
 		inst.GitHubPRIsDraft = isDraft
