@@ -1722,6 +1722,61 @@ pass started. Carried forward, unchanged priority:
    skipped-respawn branch, now cheaper than 07-31 since the table/dedupe logic already exists.
 3. `be676dab` needs a human plan-approval/reject decision — surfaced for visibility, not a fix.
 
+## Update — 2026-08-03 (later same day): user-reported mobile screenshot led to a real bug — `PLAN_NOT_APPROVED` items with an empty `triageResult` are a UI dead end
+
+The stuck item flagged earlier this pass (`be676dab`) turned out not to be the routine
+"working as designed" checkpoint it resembled. Root-caused via the item's own session history
+rather than trusting the stuck-reason label:
+
+**Finding**: the item's only triage session (`headless-triage-b601011a...`, `pipelineMode: sdd`)
+ran **8h52m** (18:00:34 → 02:52:54) — versus the ~20-30min normal for this pipeline mode — and
+ended with `triageResult: null`. Only `requirements.md` was ever committed to
+`project_plans/backlog-github-two-way-sync/`; `research/`, `decisions/`, `implementation/` are
+all empty — no plan was ever produced. Server logs covering the session's actual end time
+(02:52) had already rotated out by the time this was investigated (~7h later), so the original
+in-session failure mode can't be forensically reconstructed — but the structural gap is
+confirmed from code + data alone regardless of that specific cause.
+
+**Why this is worse than a normal `PLAN_NOT_APPROVED` wait**: `BacklogItemDetail.tsx:1102`
+only renders the plan-review UI (`TriageReviewPanel`) when `item.triageResult` is truthy —
+`item.triageResult && (<TriageReviewPanel .../>)`. With a null `triageResult`, the panel is
+silently omitted: the item detail page shows the stuck badge and zero actionable content (no
+summary, no suggestions, no retry affordance — the "Actions" section had only "Delete").
+`reconcilePlanNotApprovedItems` treats this identically to the normal "plan generated,
+awaiting your review" case it was designed for (correctly, per the 08-02 entry, for items that
+*do* have a triageResult) — nothing distinguishes "waiting for a human to review a real plan"
+from "waiting for a plan that was never generated." The existing orphaned-triage
+detection/retry machinery (extended 07-30 for a related but distinct failure — see that day's
+entries) only watches `idea`-status items whose latest triage session ended without a
+transition; this item had already moved past `idea` (to `ready`, then `queued` via WIP cap), so
+it fell outside that detector's scope entirely, with no automated path back.
+
+**Immediate action taken** (user confirmed via AskUserQuestion): transitioned the item
+`queued→idea` (the same "Return to Triage" manual escape hatch used for item `04089969` on
+07-30) via `TransitionBacklogItemStatus`, then called `TriggerTriage` to spawn a fresh triage
+session (`headless-triage-ff194010...`, started 16:44:50 UTC). Not yet confirmed complete as of
+this writing.
+
+**Recurring-shape classification**: sibling of the `orphaned_triage`/notify-once gap family
+this doc has tracked since 07-27/07-30 — a detector was taught to cover one specific shape
+("triage session ended, item still in idea") but a structurally identical shape one status
+transition further downstream ("triage session ended with nothing usable, item already
+progressed past idea via a manual/WIP-cap transition, no plan exists to approve") was never
+covered. Same underlying lesson as the audit's standing mandate: the earlier fix closed its
+exact instance, not the class — "any status where an item is gated on plan-approval but has no
+underlying plan" is the actual invariant that needs a detector, not "idea-status items with a
+stale/ended triage session" specifically.
+
+### Recommended Next Action
+
+`sdd:fix-bug` — extend the orphaned/failed-triage detection to cover `PLAN_NOT_APPROVED`-gated
+items (any status) whose most recent triage session has `triageResult == nil`/unparseable,
+using the same `RemediationDue`-gated retry machinery PR #274/07-30 already built, so this
+resolves automatically instead of requiring a human to notice a mobile screenshot's dead-end
+UI. Also worth a small frontend fix in `BacklogItemDetail.tsx` so a null `triageResult` renders
+an explicit "triage produced no usable result — retry" affordance instead of silently rendering
+nothing.
+
 ## Update — 2026-08-02: light verification pass — 1 new root-caused bug (archived work sessions never leave the Review Queue), everything else confirmed working as designed
 
 Not a full 4-agent re-run (last full pass 07-18, light passes trending well since — same rationale
