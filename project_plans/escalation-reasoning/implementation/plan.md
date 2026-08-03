@@ -107,11 +107,21 @@ verified free of migration steps:
 
 ## Unresolved Questions
 
-None. The one open question flagged in `research/architecture.md` (Create Rule button gating —
-no-match-only vs. keep current `tool_input_command`-only gating) is resolved in this plan: gated to
-`escalation_reason_category === "no-match"` only (see Pattern Decisions and Story 3.2.1), per the
-UX research rationale (explicit-rule and domain-age escalations have no "prevent this next time"
-story a pattern rule can express).
+No open questions block the *start* of implementation — all listed below have a plan-level answer.
+One decision needs explicit human sign-off before merge, flagged per the adversarial review:
+
+- [x] Create Rule button gating (`research/architecture.md`'s open question: no-match-only vs. keep
+  current `tool_input_command`-only gating) — resolved in this plan: gated to
+  `escalation_reason_category === "no-match"` only (see Pattern Decisions and Story 3.2.1), per the
+  UX research rationale (explicit-rule and domain-age escalations have no "prevent this next time"
+  story a pattern rule can express). **Adversarial review flag**: this backlog item went through
+  the no-interactive-ideation SDD pipeline (no user available to confirm intent), and the practical
+  effect is real — the button currently shows for *any* escalation with `tool_input_command`
+  (explicit-rule/domain-age/unclassifiable included); after this change it's hidden for 3 of 4
+  categories. The reasoning is sound and research-backed, not a guess, but the PR description
+  (Phase 6/7 completion) must call this out explicitly as a behavior change so a human reviewer can
+  veto before merge if the original filer's intent differs — do not let this land silently as an
+  implementation detail.
 
 ## Dependency Visualization
 
@@ -202,15 +212,22 @@ secret-scan/unclassifiable taxonomy is defined exactly once and every consumer (
 
 **Files**: `pkg/classifier/escalation.go` (new), `pkg/classifier/escalation_test.go` (new)
 
-##### Task 1.1.1a: Create `EscalationCategory` type + 5 constants (~3 min)
+##### Task 1.1.1a: Create `EscalationCategory` type + 5 constants + shared sentinel RuleID constants (~4 min)
 - New file `pkg/classifier/escalation.go`. Package `classifier`.
 - `type EscalationCategory string`
 - `const (EscalationNoMatch EscalationCategory = "no-match"; EscalationExplicitRule EscalationCategory = "explicit-rule"; EscalationDomainAge EscalationCategory = "domain-age"; EscalationSecretScan EscalationCategory = "secret-scan"; EscalationUnclassifiable EscalationCategory = "unclassifiable")`
-- Files: `pkg/classifier/escalation.go`
+- **Architecture review concern (Task 1.1.1b)**: also declare shared sentinel `RuleID` constants here —
+  `const (RuleIDNewDomainCheck = "new-domain-check"; RuleIDSecretScan = "secret-scan"; RuleIDShellExpansionProgram = "shell-expansion-program")`
+  — and update the 3 existing emitting sites to reference them instead of inline string literals:
+  `approval_handler.go:225` (secret-scan `RuleID:` literal), `approval_handler.go:254` (domain-age
+  `RuleID:` literal), `pkg/classifier/classifier.go:491,542` (shell-expansion `RuleID:` literals).
+  This closes the "4th independent copy of the same literal" gap the review flagged — a future
+  rename becomes a single edit instead of a silent categorization drift.
+- Files: `pkg/classifier/escalation.go`, `server/services/approval_handler.go`, `pkg/classifier/classifier.go`
 
 ##### Task 1.1.1b: Implement `CategorizeEscalationRuleID` (~3 min)
 - In `pkg/classifier/escalation.go`: `func CategorizeEscalationRuleID(ruleID string) EscalationCategory`
-- Body: `switch ruleID { case "": return EscalationNoMatch; case "new-domain-check": return EscalationDomainAge; case "secret-scan": return EscalationSecretScan; case "shell-expansion-program": return EscalationUnclassifiable; default: return EscalationExplicitRule }`
+- Body: `switch ruleID { case "": return EscalationNoMatch; case RuleIDNewDomainCheck: return EscalationDomainAge; case RuleIDSecretScan: return EscalationSecretScan; case RuleIDShellExpansionProgram: return EscalationUnclassifiable; default: return EscalationExplicitRule }`
 - Files: `pkg/classifier/escalation.go`
 
 ##### Task 1.1.1c: Implement `EscalationReasonText` (~2 min)
@@ -278,6 +295,13 @@ captured in a function-scoped variable instead of thrown away, **so that** it re
   escalation = domainEscalation
   goto createApproval
   ```
+- Adversarial review concern: the pre-existing `continue`-past-error behavior 3 lines above this
+  block (`approval_handler.go:241-245`, when `IsNewlyRegistered` errors on a domain) is left
+  unchanged by this task, but its consequence is new once the reason becomes screen-visible — if
+  that was the only domain in the command, the reviewer sees a plain no-match/explicit-rule reason
+  with no indication a domain check was attempted and came back inconclusive. Add a one-line comment
+  at that `continue` noting the interaction, so a future reader doesn't have to re-derive it. No new
+  test required (low blast radius, pre-existing behavior).
 - Files: `server/services/approval_handler.go`
 
 #### Story 2.1.2: Add explicit `Escalate` case to the classifier switch
@@ -291,14 +315,24 @@ captured in a function-scoped variable instead of thrown away, **so that** it re
 
 **Files**: `server/services/approval_handler.go`
 
-##### Task 2.1.2a: Add `case classifier.Escalate: escalation = result` (~2 min)
-- In `approval_handler.go`, inside the `switch result.Decision {` block (currently `case classifier.AutoAllow:` / `case classifier.AutoDeny:` at lines 291/299, then a comment `// Escalate: fall through to manual review queue` at line 311), replace the trailing comment-only fallthrough with an explicit case:
+##### Task 2.1.2a: Add `case classifier.Escalate: escalation = result` + a `default` arm (~3 min)
+- In `approval_handler.go`, inside the `switch result.Decision {` block (currently `case classifier.AutoAllow:` / `case classifier.AutoDeny:` at lines 291/299, then a comment `// Escalate: fall through to manual review queue` at line 311), replace the trailing comment-only fallthrough with an explicit case, plus a `default` arm:
   ```go
   case classifier.Escalate:
       escalation = result
       // Fall through to manual review queue (createApproval label below).
+  default:
+      // Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
+      // toward manual review rather than silently falling through with escalation unset —
+      // this switch's missing-case behavior is exactly the bug this feature fixes; guard
+      // against it recurring for any future decision value.
+      log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
+      escalation = result
   }
   ```
+- Architecture review concern: `ClassificationDecision` is a plain `int`-backed const block, not a
+  sealed sum type — this `default` arm is the guard against a future 4th value silently bypassing
+  `escalation` the same way `Escalate` did before this fix.
 - Files: `server/services/approval_handler.go`
 
 #### Story 2.1.3: Set `EscalationReason`/`EscalationCategory` at `PendingApproval` construction
@@ -491,7 +525,13 @@ follows.
   </p>
   ```
 - Do not modify the unrelated suppression guard at line 718 (`queueItem.context && !queueItem.metadata?.["pending_approval_id"] && (...)`) — that governs a different field (`queueItem.context`).
-- Files: `web-app/src/components/sessions/ReviewQueuePanel.tsx`
+- UX design gap (`design/ux.md`): unlike its sibling `commandPreview` (which bounds long content via
+  `maxHeight`/`overflowY`/`wordBreak` in `ReviewQueuePanel.css.ts:202-223`), `itemContext` has no
+  such bound — an explicit-rule's free-text `Reason` (rule-author-authored, unbounded length) could
+  grow the card unboundedly. Add `maxHeight`/`overflowY: auto`/`wordBreak: break-word` to the
+  `itemContext` class in `ReviewQueuePanel.css.ts` (or a scoped variant) to match `commandPreview`'s
+  existing bounding pattern.
+- Files: `web-app/src/components/sessions/ReviewQueuePanel.tsx`, `web-app/src/components/sessions/ReviewQueuePanel.css.ts`
 
 ##### Task 3.1.1c: Wire `aria-describedby` on the card's `role="button"` wrapper (~2 min)
 - In `ReviewQueuePanel.tsx`, on the `<div className={\`${itemClickable} ...\`} role="button" ...>` wrapper (line 690), add:
@@ -667,8 +707,16 @@ backend unit test alone):
   ```
 - Files: `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx`
 
-##### Task 4.2.1b: Add the table section (~5 min)
+##### Task 4.2.1b: Add the table section (~6 min)
 - In `ApprovalAnalyticsPanel.tsx`, modeled directly on the "Top Triggered Rules" table (lines 276-301), add a new section reading from `summary.escalationReasonCounts`, rendering one row per key with `count > 0`, sorted descending by count, using the existing `table`/`th`/`td`/`row`/`tableSection`/`sectionTitle`/`Bar` styling primitives already imported in this file.
+- Label lookup: use `ESCALATION_CATEGORY_LABELS[category] ?? category` (architecture review
+  concern: without a fallback, an unmapped category key renders the literal string `undefined`,
+  unlike `ESCALATION_REASON_EMOJI`'s already-specified `?? ""` fallback in Task 3.1.1a).
+- Empty state (UX design gap flagged in `design/ux.md`): when every category count is 0 (or
+  `summary.escalationReasonCounts` is empty/nil), render this section's existing panel-wide
+  `empty`/`emptyHint` pattern (see the Daily Breakdown section, `ApprovalAnalyticsPanel.tsx:189-194`)
+  instead of an empty table — e.g. `empty` text "No escalations in this window" — rather than
+  omitting the section silently.
 - Files: `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx`
 
 ##### Task 4.2.1c: Jest test for the new section (~4 min)
@@ -762,9 +810,17 @@ pre-existing gap per features.md #5, closed here rather than perpetuated).
 - Edit `docs/registry/features/backend/approval/get-analytics.json` and `docs/registry/features/backend/review-queue/get.json` — update `lastModified` to the implementation date, and (for `get-analytics.json`) add the new test IDs from Task 4.1.2e/4.2.1c to `testIds`, setting `tested: true`.
 - Files: `docs/registry/features/backend/approval/get-analytics.json`, `docs/registry/features/backend/review-queue/get.json`
 
-##### Task 7.1.1b: Add new frontend registry entry (~2 min)
+##### Task 7.1.1b: Add new frontend registry entries — both new UI surfaces (~4 min)
 - Create `docs/registry/features/frontend/escalation-reasoning-display.json` per the schema in `docs/registry/schema.json`, `filePath: "web-app/src/components/sessions/ReviewQueuePanel.tsx"`, `testIds` populated from Task 3.2.2a.
-- Files: `docs/registry/features/frontend/escalation-reasoning-display.json`
+- Adversarial review concern: Epic 4.2's "Escalation Reasons" table (`ApprovalAnalyticsPanel.tsx`,
+  Story 4.2.1) is a second, independent new UI feature with its own Jest test (Task 4.2.1c) — also
+  create `docs/registry/features/frontend/approval-analytics-reason-breakdown.json`,
+  `filePath: "web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx"`, `testIds` populated from
+  Task 4.2.1c. Omitting this second entry would violate `.claude/rules/feature-registry.md`'s "New
+  UI feature → create a registry entry" rule, and `ApprovalAnalyticsPanel.tsx` has zero existing
+  registry entries today so the coverage-gaps check in Task 7.1.1c won't catch the omission on its
+  own.
+- Files: `docs/registry/features/frontend/escalation-reasoning-display.json`, `docs/registry/features/frontend/approval-analytics-reason-breakdown.json`
 
 ##### Task 7.1.1c: Regenerate aggregated registry (~1 min)
 - Run `make registry-generate`; confirm `docs/registry/coverage-gaps.json` count does not grow.
