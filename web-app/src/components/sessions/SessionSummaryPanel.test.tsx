@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { SessionSummaryPanel } from "./SessionSummaryPanel";
+import { isGenerating } from "@/lib/hooks/useSessionSummary";
 import { SessionSummaryStatus } from "@/gen/session/v1/types_pb";
 import type { SessionSummaryProto } from "@/gen/session/v1/session_summary_pb";
 
@@ -9,10 +10,15 @@ import type { SessionSummaryProto } from "@/gen/session/v1/session_summary_pb";
 // ---------------------------------------------------------------------------
 
 const mockRegenerate = jest.fn();
+const mockRefetch = jest.fn();
 const mockCopy = jest.fn();
 const mockUseSessionSummary = jest.fn();
 
 jest.mock("@/lib/hooks/useSessionSummary", () => ({
+  // Keep the real `isGenerating` export (requireActual) — only the hook
+  // itself is mocked — so the "one canonical isGenerating" test below can
+  // exercise the panel's actual imported implementation, not a stub.
+  ...jest.requireActual("@/lib/hooks/useSessionSummary"),
   useSessionSummary: (sessionId: string) => mockUseSessionSummary(sessionId),
 }));
 
@@ -52,6 +58,7 @@ function mockHookReturn(overrides: Partial<Record<string, unknown>> = {}) {
     error: null,
     neverResolved: false,
     regenerate: mockRegenerate,
+    refetch: mockRefetch,
     copy: mockCopy,
     ...overrides,
   });
@@ -276,6 +283,163 @@ describe("SessionSummaryPanel", () => {
       expect(screen.getByTestId("summary-copy-failure")).toHaveTextContent(
         "Copy failed — select the text below and copy manually.",
       );
+    });
+  });
+
+  describe("SessionSummaryPanel_should_renderTransportErrorWithRetry_When_InitialFetchErrors", () => {
+    it("renders an error message and a retry action instead of hanging on the loading skeleton", () => {
+      mockHookReturn({ data: null, error: new Error("Network request failed") });
+
+      render(<SessionSummaryPanel sessionId="session-1" />);
+
+      expect(screen.getByTestId("summary-transport-error")).toBeInTheDocument();
+      expect(screen.getByText("Network request failed")).toBeInTheDocument();
+      expect(screen.queryByTestId("summary-skeleton-block")).not.toBeInTheDocument();
+
+      const retryButton = screen.getByTestId("summary-transport-error-retry");
+      expect(retryButton).toBeEnabled();
+      expect(retryButton).toHaveTextContent("Retry");
+    });
+
+    it("calls refetch when the retry button is clicked", async () => {
+      mockRefetch.mockResolvedValue(undefined);
+      mockHookReturn({ data: null, error: new Error("boom") });
+
+      render(<SessionSummaryPanel sessionId="session-1" />);
+
+      fireEvent.click(screen.getByTestId("summary-transport-error-retry"));
+
+      await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1));
+    });
+
+    it("announces the transport error via the shared aria-live region", async () => {
+      mockHookReturn({ data: null, error: new Error("Network request failed") });
+
+      render(<SessionSummaryPanel sessionId="session-1" />);
+
+      await waitFor(() => {
+        expect(getLiveRegion().textContent).toBe(
+          "Couldn't load this summary: Network request failed",
+        );
+      });
+    });
+  });
+
+  describe("SessionSummaryPanel_should_reenableRegenerateButton_When_RegenerateCallFails", () => {
+    it("re-enables the button after a failed regenerate() call, instead of staying stuck on 'Regenerating…'", async () => {
+      // useSessionSummary's regenerate() catches its own network/RPC errors
+      // internally (records them in `error` state) rather than rejecting —
+      // so a failure looks like a *resolved* promise that left `data`
+      // unchanged, meaning `phase` never changes either. Bug 2: relying
+      // solely on the phase-transition effect to clear `regenerating` would
+      // leave the button stuck disabled forever in exactly this case.
+      let resolveRegenerate: () => void = () => {};
+      mockRegenerate.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveRegenerate = resolve;
+          }),
+      );
+      const errorSummary = makeSummary({
+        status: SessionSummaryStatus.ERROR,
+        markdown: "",
+        errorStage: "decisions",
+      });
+      mockHookReturn({ data: errorSummary });
+
+      render(<SessionSummaryPanel sessionId="session-1" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "↻ Regenerate" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /Regenerating…/ })).toBeDisabled();
+      });
+
+      // Simulate the failure resolving with `data` unchanged (phase stays
+      // "error") — the phase-transition effect's early-return means it
+      // never fires again, so only the click handler's own finally can
+      // clear the flag.
+      resolveRegenerate();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: "↻ Regenerate" })).toBeEnabled();
+      });
+    });
+  });
+
+  describe("SessionSummaryPanel_should_renderExactlyOneStatusRegion_regardlessOfPhase", () => {
+    it("has exactly one role=status live region in the loading phase", () => {
+      mockHookReturn({ data: null });
+      const { unmount } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      unmount();
+    });
+
+    it("has exactly one role=status live region in the ready phase", () => {
+      mockHookReturn({ data: makeSummary() });
+      const { unmount } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      unmount();
+    });
+
+    it("has exactly one role=status live region in the empty (never-resolved) phase", () => {
+      mockHookReturn({ data: null, neverResolved: true });
+      const { unmount } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      unmount();
+    });
+
+    it("has exactly one role=status live region in the transport-error phase", () => {
+      mockHookReturn({ data: null, error: new Error("boom") });
+      const { unmount } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      unmount();
+    });
+
+    it("has exactly one role=status live region in the bare-error phase", () => {
+      mockHookReturn({
+        data: makeSummary({ status: SessionSummaryStatus.ERROR, markdown: "", errorStage: "decisions" }),
+      });
+      const { unmount } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+      unmount();
+    });
+
+    it("keeps a single status region across a rerender that changes phase (loading -> ready)", () => {
+      mockHookReturn({ data: null });
+      const { rerender } = render(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+
+      mockHookReturn({ data: makeSummary() });
+      rerender(<SessionSummaryPanel sessionId="session-1" />);
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+    });
+  });
+
+  describe("SessionSummaryPanel_should_useCanonicalIsGenerating_When_ImportedFromHook", () => {
+    it("imports isGenerating from the hook module rather than defining its own copy", () => {
+      // Guards Bug 3: a duplicated, divergent local definition previously
+      // treated UNSPECIFIED differently than the hook's own polling logic,
+      // which could make the hook stop polling on a row the panel was still
+      // rendering as generating. Asserting on the re-exported function's
+      // actual behavior (not just its presence) proves the panel is using
+      // the shared, canonical implementation.
+      expect(typeof isGenerating).toBe("function");
+      expect(isGenerating(SessionSummaryStatus.UNSPECIFIED)).toBe(true);
+      expect(isGenerating(SessionSummaryStatus.PENDING)).toBe(true);
+      expect(isGenerating(SessionSummaryStatus.GENERATING)).toBe(true);
+      expect(isGenerating(SessionSummaryStatus.READY)).toBe(false);
+      expect(isGenerating(SessionSummaryStatus.ERROR)).toBe(false);
+    });
+
+    it("renders the loading skeleton for an UNSPECIFIED-status summary (not stuck disagreeing with the hook)", () => {
+      mockHookReturn({
+        data: { status: SessionSummaryStatus.UNSPECIFIED } as unknown as SessionSummaryProto,
+      });
+
+      render(<SessionSummaryPanel sessionId="session-1" />);
+
+      expect(screen.getAllByTestId("summary-skeleton-block")).toHaveLength(17);
     });
   });
 });

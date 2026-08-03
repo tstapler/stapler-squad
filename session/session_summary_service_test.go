@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // fakePoolClient is a minimal headless.PoolClient test double for
@@ -87,7 +89,7 @@ func TestGenerateAndPersist_should_SkipRegeneration_When_ReadyRowAndDiffCountsUn
 	sessionUUID := "sess-dup"
 
 	diffStats := &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	row := getRow(t, client, sessionUUID)
 	if row.Status != string(SessionSummaryStatusReady) {
 		t.Fatalf("expected READY after first call, got %s", row.Status)
@@ -95,7 +97,7 @@ func TestGenerateAndPersist_should_SkipRegeneration_When_ReadyRowAndDiffCountsUn
 	firstCalls := pool.calls
 
 	// Second call with the exact same diff counts, non-manual reason: must short-circuit.
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	if pool.calls != firstCalls {
 		t.Fatalf("expected no additional LLM call, got %d (was %d)", pool.calls, firstCalls)
@@ -108,12 +110,12 @@ func TestGenerateAndPersist_should_ProceedWithRegeneration_When_ReadyRowButDiffC
 	sessionUUID := "sess-resume"
 
 	first := &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), first, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(first), first.Content, nil, "pty-eof")
 	firstCalls := pool.calls
 
 	// Resumed session did substantially more work — larger diff, same non-manual reason.
 	second := &git.DiffStats{Added: 90, Removed: 12, Content: strings.Repeat("diff --git a/x.go b/x.go\n", 5)}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), second, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(second), second.Content, nil, "pty-eof")
 
 	if pool.calls != firstCalls+1 {
 		t.Fatalf("expected regeneration to call the LLM again, calls=%d (was %d)", pool.calls, firstCalls)
@@ -130,7 +132,7 @@ func TestGenerateAndPersist_should_ProceedRegardlessOfDiffChange_When_ReasonIsMa
 	sessionUUID := "sess-manual"
 
 	diffStats := &git.DiffStats{Added: 5, Removed: 1}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	row := getRow(t, client, sessionUUID)
 	// Push generated_at back beyond the cooldown so the manual-regenerate call proceeds.
 	_, err := client.SessionSummary.UpdateOne(row).SetGeneratedAt(time.Now().Add(-time.Hour)).Save(ctx)
@@ -140,7 +142,7 @@ func TestGenerateAndPersist_should_ProceedRegardlessOfDiffChange_When_ReasonIsMa
 	firstCalls := pool.calls
 
 	// Same diff counts, but reason=manual-regenerate must still proceed (no short-circuit).
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, reasonManualRegenerate)
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, reasonManualRegenerate)
 
 	if pool.calls != firstCalls+1 {
 		t.Fatalf("expected manual-regenerate to always call the LLM, calls=%d (was %d)", pool.calls, firstCalls)
@@ -153,12 +155,12 @@ func TestGenerateAndPersist_should_SkipWrite_When_ManualRegenerateWithinCooldown
 	sessionUUID := "sess-cooldown"
 
 	diffStats := &git.DiffStats{Added: 5, Removed: 1}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	firstCalls := pool.calls
 	beforeRow := getRow(t, client, sessionUUID)
 
 	// Immediately click regenerate again — within regenerateCooldown of generated_at.
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, reasonManualRegenerate)
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, reasonManualRegenerate)
 
 	if pool.calls != firstCalls {
 		t.Fatalf("expected no LLM call within the cooldown window, calls=%d (was %d)", pool.calls, firstCalls)
@@ -186,7 +188,7 @@ func TestGenerateAndPersist_should_RecoverFromPanicAndReleaseGuard_When_BuilderP
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		gen.GenerateAndPersist(context.Background(), sessionUUID, "title", time.Now(), &git.DiffStats{Added: 1}, nil, "pty-eof")
+		gen.GenerateAndPersist(context.Background(), sessionUUID, "title", time.Now(), BuildDiffSnapshot(&git.DiffStats{Added: 1}), "", nil, "pty-eof")
 	}()
 
 	select {
@@ -217,7 +219,7 @@ func TestGenerateAndPersist_should_ReachReadyWithFallbackNarrative_When_TrivialS
 	sessionUUID := "sess-trivial"
 
 	createdAt := time.Now()
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", createdAt, nil, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", createdAt, DiffSnapshot{}, "", nil, "pty-eof")
 
 	if pool.calls != 0 {
 		t.Fatalf("expected no LLM call for a trivial session, got %d calls", pool.calls)
@@ -242,7 +244,7 @@ func TestGenerateAndPersist_should_SetStatusErrorWithDecisionsStage_When_Decisio
 	// Seed a prior successful generation so we can assert its narrative/markdown
 	// are left untouched by the error-path upsert.
 	diffStats := &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	priorRow := getRow(t, client, sessionUUID)
 	if priorRow.Status != string(SessionSummaryStatusReady) {
 		t.Fatalf("expected prior generation to succeed, got %s", priorRow.Status)
@@ -251,7 +253,7 @@ func TestGenerateAndPersist_should_SetStatusErrorWithDecisionsStage_When_Decisio
 	// Force the review-queue lookup to fail on the next call.
 	gen.reviewLookup = &fakeReviewQueueLookup{err: context.DeadlineExceeded}
 	newDiff := &git.DiffStats{Added: 90, Removed: 12, Content: strings.Repeat("diff --git a/x.go b/x.go\n", 5)}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), newDiff, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(newDiff), newDiff.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.Status != string(SessionSummaryStatusError) {
@@ -281,7 +283,7 @@ func TestGenerateAndPersist_should_UseFallbackNarrative_When_LLMCallFails(t *tes
 
 	// Non-trivial: needs a diff so isTrivialSession is false and the LLM path is taken.
 	diffStats := &git.DiffStats{Added: 5, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.Status != string(SessionSummaryStatusReady) {
@@ -306,7 +308,7 @@ func TestGenerateAndPersist_should_TimeoutNarrativeCall_When_PoolBlocksLongerTha
 	sessionUUID := "sess-llm-timeout"
 
 	diffStats := &git.DiffStats{Added: 5, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.Status != string(SessionSummaryStatusReady) {
@@ -327,7 +329,7 @@ func TestGenerateAndPersist_should_PersistDiffFieldsFromCapturedGitDiffStats_Whe
 		Removed: 7,
 		Content: "diff --git a/foo.go b/foo.go\ndiff --git a/bar.go b/bar.go\n",
 	}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.DiffAdded != 42 || row.DiffRemoved != 7 || row.DiffFilesChanged != 2 {
@@ -345,7 +347,7 @@ func TestGenerateAndPersist_should_PersistTimelineFromInstanceCreatedAtAndDispat
 
 	createdAt := time.Now().Add(-10 * time.Minute)
 	diffStats := &git.DiffStats{Added: 1, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", createdAt, diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", createdAt, BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.SessionStartedAt == nil || !row.SessionStartedAt.Equal(createdAt) {
@@ -369,10 +371,91 @@ func TestGenerateAndPersist_should_UpsertBySessionIDNotEdge_When_HappyPath(t *te
 	// is a plain unique string field (session/ent/schema/session_summary.go has
 	// no Edges() method).
 	diffStats := &git.DiffStats{Added: 1, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	row := getRow(t, client, sessionUUID)
 	if row.Status != string(SessionSummaryStatusReady) {
 		t.Fatalf("expected READY, got %s", row.Status)
+	}
+}
+
+// TestSetNotificationListerAndSetTokenStore_should_NotRace_When_CalledConcurrentlyWithGenerateAndPersist
+// reproduces the production ordering from server/dependencies.go: WireSessionSummaryListener
+// runs at construction time (so a lifecycle event can dispatch GenerateAndPersist as a
+// goroutine at any point afterwards), while SetNotificationLister/SetTokenStore are called
+// later during server startup — a lifecycle event firing in that window races the bare
+// field writes without lateBindMu. Run with `-race` to verify the guard closes that race;
+// without it, `go test -race` flags a data race on notifLister/tokenStore.
+func TestSetNotificationListerAndSetTokenStore_should_NotRace_When_CalledConcurrentlyWithGenerateAndPersist(t *testing.T) {
+	gen, _, _ := newTestSessionSummaryGenerator(t)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		gen.SetNotificationLister(&fakeNotificationDecisionLister{})
+	}()
+	go func() {
+		defer wg.Done()
+		gen.SetTokenStore(nil)
+	}()
+	go func() {
+		defer wg.Done()
+		diffStats := &git.DiffStats{Added: 1, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
+		gen.GenerateAndPersist(ctx, "sess-race", "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
+	}()
+
+	wg.Wait()
+}
+
+// TestGenerateAndPersist_should_ClearStaleTokenAndCostFields_When_SubsequentGenerationHasCostDataUnavailable
+// covers the bonus fix: a generation N with real token-store data persists
+// total_tokens/estimated_cost_usd, then generation N+1 (cost_data_unavailable=true,
+// e.g. the token store has no data for this session anymore) must clear those two
+// columns rather than leaving generation N's stale values in place alongside
+// cost_data_unavailable=true.
+func TestGenerateAndPersist_should_ClearStaleTokenAndCostFields_When_SubsequentGenerationHasCostDataUnavailable(t *testing.T) {
+	gen, client, _ := newTestSessionSummaryGenerator(t)
+	ctx := context.Background()
+	sessionUUID := "sess-stale-cost"
+
+	gen.tokenStore = &fakeTokenStoreReader{byUUID: map[string]*tokens.ParseResult{
+		sessionUUID: {SessionUUID: sessionUUID, PrimaryModel: "claude-sonnet-4-5", TotalInput: 1000, TotalOutput: 200},
+	}}
+	diffStats := &git.DiffStats{Added: 1, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
+
+	priorRow := getRow(t, client, sessionUUID)
+	if priorRow.CostDataUnavailable {
+		t.Fatal("expected first generation to have cost data available")
+	}
+	if priorRow.TotalTokens == nil || *priorRow.TotalTokens == 0 {
+		t.Fatalf("expected first generation to persist non-zero total_tokens, got %v", priorRow.TotalTokens)
+	}
+	if priorRow.EstimatedCostUsd == nil {
+		t.Fatal("expected first generation to persist a non-nil estimated_cost_usd")
+	}
+
+	// Second generation: token store no longer has data for this session (e.g. the
+	// underlying JSONL was rotated/cleared) — cost becomes unavailable. Uses a
+	// different (larger) diff so the sequential-duplicate short-circuit for a READY
+	// row doesn't skip this generation (reason stays "pty-eof", not
+	// reasonManualRegenerate, to avoid the independent cooldown check rejecting a
+	// same-second second call).
+	gen.tokenStore = &fakeTokenStoreReader{}
+	newDiff := &git.DiffStats{Added: 2, Removed: 2, Content: "diff --git a/bar.go b/bar.go\ndiff --git a/baz.go b/baz.go\n"}
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(newDiff), newDiff.Content, nil, "pty-eof")
+
+	row := getRow(t, client, sessionUUID)
+	if !row.CostDataUnavailable {
+		t.Fatal("expected second generation to have cost_data_unavailable=true")
+	}
+	if row.TotalTokens != nil {
+		t.Fatalf("expected total_tokens to be cleared (nil) when cost data is unavailable, got %v", *row.TotalTokens)
+	}
+	if row.EstimatedCostUsd != nil {
+		t.Fatalf("expected estimated_cost_usd to be cleared (nil) when cost data is unavailable, got %v", *row.EstimatedCostUsd)
 	}
 }

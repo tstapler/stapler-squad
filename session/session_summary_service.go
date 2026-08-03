@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
-	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
@@ -55,9 +54,19 @@ const reasonManualRegenerate = "manual-regenerate"
 type SessionSummaryGenerator struct {
 	entClient    *ent.Client
 	pool         headless.PoolClient
-	notifLister  NotificationDecisionLister
-	tokenStore   tokens.TokenStoreReader
 	reviewLookup ReviewQueueLookup
+
+	// lateBindMu guards notifLister/tokenStore, mirroring
+	// BacklogLifecycleListener's poolMu/sessionCreatorMu convention
+	// (session/backlog_lifecycle.go) for fields wired post-construction.
+	// server/dependencies.go calls WireSessionSummaryListener on every existing
+	// Instance at construction time, but SetNotificationLister/SetTokenStore
+	// aren't called until later during server startup — a lifecycle event
+	// firing in that window dispatches GenerateAndPersist as a goroutine that
+	// races the field writes without this lock.
+	lateBindMu  sync.RWMutex
+	notifLister NotificationDecisionLister
+	tokenStore  tokens.TokenStoreReader
 
 	// inFlight is a sync.Map[string]*sync.Mutex keyed by session_id, mirroring
 	// UnfinishedWorkService.aiMu (server/services/unfinished_work_service.go).
@@ -106,17 +115,41 @@ func (g *SessionSummaryGenerator) FindRowBySessionID(ctx context.Context, sessio
 // backlogLifecycleListener) but the NotificationHistoryStore it needs isn't built
 // until later, in server.go's RunServer — the same "Set* called long after
 // construction" ordering constraint documented on SessionService.SetHeadlessPool.
-// Safe to call with nil; BuildDecisionsSnapshot nil-checks notifLister.
+// Safe to call with nil; BuildDecisionsSnapshot nil-checks notifLister. Guarded by
+// lateBindMu because GenerateAndPersist (always dispatched via a goroutine) reads
+// notifLister concurrently with this call.
 func (g *SessionSummaryGenerator) SetNotificationLister(l NotificationDecisionLister) {
+	g.lateBindMu.Lock()
+	defer g.lateBindMu.Unlock()
 	g.notifLister = l
 }
 
 // SetTokenStore wires tokenStore after construction, for the same reason and
 // timing as SetNotificationLister — the token store is also constructed after
 // SessionSummaryGenerator during server startup. Safe to call with nil;
-// BuildCostSnapshot nil-checks tokenStore.
+// BuildCostSnapshot nil-checks tokenStore. Guarded by lateBindMu because
+// GenerateAndPersist (always dispatched via a goroutine) reads tokenStore
+// concurrently with this call.
 func (g *SessionSummaryGenerator) SetTokenStore(t tokens.TokenStoreReader) {
+	g.lateBindMu.Lock()
+	defer g.lateBindMu.Unlock()
 	g.tokenStore = t
+}
+
+// notificationLister returns the currently-wired notifLister under lateBindMu's
+// read lock, for use inside GenerateAndPersist.
+func (g *SessionSummaryGenerator) notificationLister() NotificationDecisionLister {
+	g.lateBindMu.RLock()
+	defer g.lateBindMu.RUnlock()
+	return g.notifLister
+}
+
+// currentTokenStore returns the currently-wired tokenStore under lateBindMu's read
+// lock, for use inside GenerateAndPersist.
+func (g *SessionSummaryGenerator) currentTokenStore() tokens.TokenStoreReader {
+	g.lateBindMu.RLock()
+	defer g.lateBindMu.RUnlock()
+	return g.tokenStore
 }
 
 // tryAcquire attempts to acquire the in-process per-session guard for sessionUUID.
@@ -187,9 +220,15 @@ func (g *SessionSummaryGenerator) ReconcileStaleness(ctx context.Context, row *e
 // detached goroutine (`go g.GenerateAndPersist(...)`) by sessionSummaryListener or
 // (Phase 2) RegenerateSessionSummary — never call this synchronously.
 //
-// diffStats/sessionGoal are synchronous, in-memory-only reads captured by the caller
-// at dispatch time (no I/O) — see sessionSummaryListener.OnLifecycleEvent.
-func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diffStats *git.DiffStats, sessionGoal *SessionGoalData, reason string) {
+// diff/diffContent/sessionGoal are synchronous, in-memory-only reads captured by the
+// caller at dispatch time (no I/O) — see sessionSummaryListener.OnLifecycleEvent.
+// diff is the already-derived DiffSnapshot (callers that have a live *git.DiffStats
+// build it via BuildDiffSnapshot; RegenerateSessionSummary's no-live-instance
+// fallback builds it directly from the persisted row's diff_* columns, since
+// BuildDiffSnapshot's FilesChanged derivation depends on diff Content, which isn't
+// persisted). diffContent is the raw diff text forwarded into the LLM narrative
+// prompt — empty when unavailable (e.g. the no-live-instance fallback).
+func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *SessionGoalData, reason string) {
 	release, ok := g.tryAcquire(sessionUUID)
 	if !ok {
 		return
@@ -210,7 +249,7 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 	}()
 
 	dispatchTime := time.Now()
-	incomingDiff := BuildDiffSnapshot(diffStats)
+	incomingDiff := diff
 
 	existingRow, err := g.entClient.SessionSummary.Query().Where(sessionsummary.SessionID(sessionUUID)).Only(ctx)
 	if err != nil {
@@ -272,7 +311,7 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 
 	timeline := BuildTimelineSnapshot(createdAt, dispatchTime)
 
-	decisions, err := BuildDecisionsSnapshot(ctx, sessionUUID, g.notifLister, g.reviewLookup)
+	decisions, err := BuildDecisionsSnapshot(ctx, sessionUUID, g.notificationLister(), g.reviewLookup)
 	if err != nil {
 		if upsertErr := g.entClient.SessionSummary.Create().
 			SetID(uuid.New().String()).
@@ -300,7 +339,7 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 		return
 	}
 
-	cost := BuildCostSnapshot(sessionUUID, g.tokenStore)
+	cost := BuildCostSnapshot(sessionUUID, g.currentTokenStore())
 
 	var narrative string
 	var fallbackUsed bool
@@ -312,10 +351,6 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 		goalText := ""
 		if sessionGoal != nil {
 			goalText = sessionGoal.Goal
-		}
-		diffContent := ""
-		if diffStats != nil {
-			diffContent = diffStats.Content
 		}
 		narrCtx, cancel := context.WithTimeout(ctx, llmNarrativeTimeout)
 		text, narrErr := headless.GenerateSessionCompletionNarrative(narrCtx, g.pool, sessionTitle, goalText, diffContent, formatDecisionsSummary(decisions))
@@ -359,10 +394,20 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 		create = create.SetTotalTokens(cost.TotalTokens).SetEstimatedCostUsd(cost.EstimatedCostUSD)
 	}
 
-	if err := create.
-		OnConflictColumns(sessionsummary.FieldSessionID).
-		UpdateNewValues().
-		Exec(ctx); err != nil {
+	upsert := create.OnConflictColumns(sessionsummary.FieldSessionID).UpdateNewValues()
+	if cost.DataUnavailable {
+		// UpdateNewValues() only sets columns explicitly Set() on the create
+		// mutation — total_tokens/estimated_cost_usd are skipped above when cost
+		// data is unavailable, which otherwise leaves a prior generation's stale
+		// values in place alongside cost_data_unavailable=true. Explicitly clear
+		// them so the two columns stay consistent with the unavailable flag.
+		upsert = upsert.Update(func(u *ent.SessionSummaryUpsert) {
+			u.ClearTotalTokens()
+			u.ClearEstimatedCostUsd()
+		})
+	}
+
+	if err := upsert.Exec(ctx); err != nil {
 		// LLM cost already spent, row still says GENERATING — attempt a
 		// best-effort fallback write rather than silently leaving it stuck
 		// (research/pitfalls.md's concern about a misleading "possibly due to

@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/git"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -103,7 +102,8 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 	var (
 		sessionTitle string
 		createdAt    time.Time
-		diffStats    *git.DiffStats
+		diffSnapshot session.DiffSnapshot
+		diffContent  string
 		sessionGoal  *session.SessionGoalData
 	)
 
@@ -118,19 +118,32 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 		// same way sessionSummaryListener.OnLifecycleEvent does.
 		sessionTitle = liveInst.Title
 		createdAt = liveInst.CreatedAt
-		diffStats = liveInst.GetDiffStats()
+		diffStats := liveInst.GetDiffStats()
+		diffSnapshot = session.BuildDiffSnapshot(diffStats)
+		if diffStats != nil {
+			diffContent = diffStats.Content
+		}
 		sessionGoal = liveInst.GetSessionGoal()
 	case row != nil:
 		// No live instance — fall back to the previously-persisted fields. No live
 		// instance to read the goal from, so it stays nil (the persisted row doesn't
 		// store the goal itself, only its effect on a prior narrative).
+		//
+		// diffSnapshot is built directly from the row's three persisted diff
+		// columns rather than via session.BuildDiffSnapshot(&git.DiffStats{...}):
+		// the raw diff Content isn't persisted (and shouldn't be re-fetched from a
+		// possibly-gone worktree), so deriving FilesChanged from an empty Content
+		// string would silently zero it even though DiffAdded/DiffRemoved are
+		// correct. diffContent stays "" — there is no diff text to forward into
+		// the LLM narrative prompt on this path.
 		sessionTitle = row.SessionTitle
 		if row.SessionStartedAt != nil {
 			createdAt = *row.SessionStartedAt
 		}
-		diffStats = &git.DiffStats{
-			Added:   row.DiffAdded,
-			Removed: row.DiffRemoved,
+		diffSnapshot = session.DiffSnapshot{
+			FilesChanged: row.DiffFilesChanged,
+			Added:        row.DiffAdded,
+			Removed:      row.DiffRemoved,
 		}
 	default:
 		// Neither a live instance nor a persisted row — nothing to regenerate from.
@@ -141,7 +154,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 	// request-scoped ctx — ConnectRPC cancels ctx the moment this handler returns,
 	// but the pipeline (including its own LLM-call timeout) must keep running after
 	// that. See session/session_summary_listener.go's identical dispatch shape.
-	go s.generator.GenerateAndPersist(context.Background(), sessionID, sessionTitle, createdAt, diffStats, sessionGoal, "manual-regenerate")
+	go s.generator.GenerateAndPersist(context.Background(), sessionID, sessionTitle, createdAt, diffSnapshot, diffContent, sessionGoal, "manual-regenerate")
 
 	if row == nil {
 		// Nothing persisted yet — synthesize a minimal PENDING summary so the client

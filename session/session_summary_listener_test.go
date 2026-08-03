@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // fakeSummaryGenerator is a test double satisfying the summaryGenerator interface.
@@ -19,7 +17,7 @@ func newFakeSummaryGenerator() *fakeSummaryGenerator {
 	return &fakeSummaryGenerator{calls: make(chan string, 4)}
 }
 
-func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ *git.DiffStats, _ *SessionGoalData, _ string) {
+func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ DiffSnapshot, _ string, _ *SessionGoalData, _ string) {
 	f.calls <- sessionUUID
 }
 

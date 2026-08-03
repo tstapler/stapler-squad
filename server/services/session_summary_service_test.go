@@ -173,7 +173,7 @@ func TestGetSessionSummary_should_ReturnRow_When_Found(t *testing.T) {
 
 	sessionID := "sess-found"
 	diffStats := &git.DiffStats{Added: 5, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(context.Background(), sessionID, "my title", time.Now(), diffStats, nil, "pty-eof")
+	gen.GenerateAndPersist(context.Background(), sessionID, "my title", time.Now(), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	resp, err := svc.GetSessionSummary(context.Background(), connect.NewRequest(&sessionv1.GetSessionSummaryRequest{SessionId: sessionID}))
 	require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHel
 		// Non-trivial + non-empty diff so the LLM (blocking) path is taken, and an
 		// old CreatedAt so isTrivialSession's duration check doesn't skip the LLM call.
 		diffStats := &git.DiffStats{Added: 1, Removed: 0, Content: "diff --git a/foo.go b/foo.go\n"}
-		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), diffStats, nil, "pty-eof")
+		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	}()
 
 	select {
@@ -280,7 +280,7 @@ func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGe
 	go func() {
 		defer close(firstDone)
 		diffStats := &git.DiffStats{Added: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), diffStats, nil, "pty-eof")
+		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	}()
 
 	select {
@@ -311,7 +311,8 @@ func TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When
 
 	sessionID := "sess-live"
 	// Seed a prior generation with a different title, well past the regenerate cooldown.
-	gen.GenerateAndPersist(context.Background(), sessionID, "stale persisted title", time.Now(), &git.DiffStats{Added: 42, Removed: 7}, nil, "pty-eof")
+	priorDiffStats := &git.DiffStats{Added: 42, Removed: 7}
+	gen.GenerateAndPersist(context.Background(), sessionID, "stale persisted title", time.Now(), session.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
 	priorRow := getRow(t, entClient, sessionID)
 	_, err := entClient.SessionSummary.UpdateOne(priorRow).SetGeneratedAt(time.Now().Add(-time.Hour)).Save(context.Background())
 	require.NoError(t, err)
@@ -341,9 +342,15 @@ func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_Wh
 	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 
 	sessionID := "sess-no-live"
-	gen.GenerateAndPersist(context.Background(), sessionID, "persisted title", time.Now(), &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\n"}, nil, "pty-eof")
+	// Two "diff --git" header lines so DiffFilesChanged is unambiguously non-zero
+	// (and distinguishable from Added/Removed) — regression coverage for the bug
+	// where the no-live-instance fallback re-derived FilesChanged from an empty
+	// Content string instead of carrying over the persisted row's count.
+	priorDiffStats := &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\ndiff --git a/bar.go b/bar.go\n"}
+	gen.GenerateAndPersist(context.Background(), sessionID, "persisted title", time.Now(), session.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
 	priorRow := getRow(t, entClient, sessionID)
 	require.Equal(t, 1, pool.callCount())
+	require.Equal(t, 2, priorRow.DiffFilesChanged, "sanity check: prior generation persisted a non-zero files-changed count")
 	_, err := entClient.SessionSummary.UpdateOne(priorRow).SetGeneratedAt(time.Now().Add(-time.Hour)).Save(context.Background())
 	require.NoError(t, err)
 
@@ -358,6 +365,7 @@ func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_Wh
 	require.Equal(t, "persisted title", finalRow.SessionTitle)
 	require.Equal(t, 42, finalRow.DiffAdded)
 	require.Equal(t, 7, finalRow.DiffRemoved)
+	require.Equal(t, 2, finalRow.DiffFilesChanged, "expected the no-live-instance fallback to carry over the persisted row's diff_files_changed rather than re-deriving it from an empty diff Content and zeroing it")
 	require.Equal(t, 2, pool.callCount(), "expected regeneration to call the LLM again")
 	require.False(t, strings.Contains(pool.lastUserPrompt(), "Session goal:"), "expected no session goal line when no live instance is available")
 }

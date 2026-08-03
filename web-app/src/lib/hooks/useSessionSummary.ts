@@ -24,11 +24,28 @@ interface UseSessionSummaryResult {
   error: Error | null;
   neverResolved: boolean;
   regenerate: () => Promise<void>;
+  /** Re-runs the initial fetch — for retrying after a transport/RPC error. */
+  refetch: () => Promise<void>;
   copy: () => Promise<boolean>;
 }
 
-function isGenerating(status: SessionSummaryStatus): boolean {
-  return status === SessionSummaryStatus.PENDING || status === SessionSummaryStatus.GENERATING;
+/**
+ * Single canonical definition of "still generating," shared by the hook's own
+ * polling logic and by SessionSummaryPanel's UI branching — a prior copy
+ * diverged between the two (panel treated UNSPECIFIED as generating, hook
+ * didn't), which could make the hook stop polling on a row the panel was
+ * still rendering as a loading skeleton, so it would never resolve. proto3's
+ * zero value (`UNSPECIFIED`) is not a state the backend intentionally sets;
+ * it only appears when a row is read before its terminal status has ever
+ * been assigned, which is not a terminal state either — treat it as
+ * generating so both layers keep polling until a real READY/ERROR arrives.
+ */
+export function isGenerating(status: SessionSummaryStatus): boolean {
+  return (
+    status === SessionSummaryStatus.UNSPECIFIED ||
+    status === SessionSummaryStatus.PENDING ||
+    status === SessionSummaryStatus.GENERATING
+  );
 }
 
 /**
@@ -153,5 +170,5 @@ export function useSessionSummary(sessionId: string): UseSessionSummaryResult {
     return copyToClipboard(data?.markdown ?? "");
   }, [data]);
 
-  return { data, loading, error, neverResolved, regenerate, copy };
+  return { data, loading, error, neverResolved, regenerate, refetch: fetchSummary, copy };
 }

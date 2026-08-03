@@ -1,10 +1,10 @@
 "use client";
 // +feature: session-summary-tab
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useSessionSummary } from "@/lib/hooks/useSessionSummary";
+import { isGenerating, useSessionSummary } from "@/lib/hooks/useSessionSummary";
 import { SessionSummaryStatus } from "@/gen/session/v1/types_pb";
 import type { SessionSummaryProto } from "@/gen/session/v1/session_summary_pb";
 import { formatDate } from "@/lib/utils/timestamp";
@@ -29,18 +29,19 @@ function stageSentence(stage: string): string {
   return ERROR_STAGE_COPY[stage] ?? "Something went wrong while generating this summary.";
 }
 
-function isGenerating(status: SessionSummaryStatus): boolean {
-  return (
-    status === SessionSummaryStatus.PENDING ||
-    status === SessionSummaryStatus.GENERATING ||
-    status === SessionSummaryStatus.UNSPECIFIED
-  );
-}
+type Phase = "loading" | "empty" | "ready" | "error" | "error-stale" | "transport-error";
 
-type Phase = "loading" | "empty" | "ready" | "error" | "error-stale";
-
-function computePhase(data: SessionSummaryProto | null, neverResolved: boolean): Phase {
+// `error !== null` only reflects a failed *initial* fetch (data is still
+// null) — a poll-tick failure after data has already loaded once leaves the
+// prior data in place and is not surfaced as this phase, since polling
+// continues to retry on the next tick.
+function computePhase(
+  data: SessionSummaryProto | null,
+  neverResolved: boolean,
+  error: Error | null,
+): Phase {
   if (neverResolved) return "empty";
+  if (data === null && error !== null) return "transport-error";
   if (data === null) return "loading";
   if (isGenerating(data.status)) return "loading";
   if (data.status === SessionSummaryStatus.ERROR) {
@@ -194,13 +195,14 @@ function DecisionsGlanceCard({ decisions }: { decisions?: SessionSummaryProto["d
 // ---------------------------------------------------------------------------
 
 export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
-  const { data, neverResolved, regenerate, copy } = useSessionSummary(sessionId);
+  const { data, error, neverResolved, regenerate, refetch, copy } = useSessionSummary(sessionId);
 
-  const phase = computePhase(data, neverResolved);
+  const phase = computePhase(data, neverResolved, error);
 
   const [liveMessage, setLiveMessage] = useState("");
   const [regenerating, setRegenerating] = useState(false);
   const regeneratingRef = useRef(false);
+  const [retrying, setRetrying] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "success" | "failure">("idle");
   const copyRevertTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPhaseRef = useRef<Phase | null>(null);
@@ -237,9 +239,13 @@ export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
       case "empty":
         setLiveMessage("No summary available for this session.");
         break;
+      case "transport-error":
+        setLiveMessage(`Couldn't load this summary: ${error?.message ?? "unknown error"}`);
+        break;
     }
-    // data is read for its current-render value only when phase transitions to
-    // "error" — intentionally not a dependency so we don't re-run per poll tick.
+    // data/error are read for their current-render value only within the
+    // specific phase-transition branches above — intentionally not
+    // dependencies so we don't re-run this effect on every poll tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, setRegeneratingBoth]);
 
@@ -265,31 +271,61 @@ export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
   const handleRegenerate = useCallback(async () => {
     setRegeneratingBoth(true);
     setLiveMessage("Regenerating summary…");
-    await regenerate();
+    try {
+      await regenerate();
+    } finally {
+      // Only clears the button's in-flight state here — regeneratingRef
+      // itself stays true until the phase-transition effect above observes
+      // a real terminal phase, so "Summary regenerated." vs "Summary
+      // ready." still resolves correctly once polling reaches READY. This
+      // finally is what prevents the button getting stuck disabled forever
+      // when regenerate() fails (data/phase never change in that case, so
+      // the phase-transition effect's early-return never fires).
+      setRegenerating(false);
+    }
   }, [regenerate, setRegeneratingBoth]);
 
+  const handleRetry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await refetch();
+    } finally {
+      setRetrying(false);
+    }
+  }, [refetch]);
+
+  let body: ReactNode;
+
   if (phase === "empty") {
-    return (
-      <div className={styles.container} data-testid="session-summary-panel">
-        <div className={styles.emptyState} data-testid="summary-empty-state">
-          <div className={styles.emptyStateHeading}>No summary available for this session.</div>
-        </div>
-        <div role="status" aria-live="polite" aria-atomic="true" className={srOnly}>
-          {liveMessage}
-        </div>
+    body = (
+      <div className={styles.emptyState} data-testid="summary-empty-state">
+        <div className={styles.emptyStateHeading}>No summary available for this session.</div>
       </div>
     );
-  }
-
-  if (phase === "loading") {
-    return (
-      <div
-        className={styles.container}
-        data-testid="session-summary-panel"
-        role="region"
-        aria-busy="true"
-        aria-label="Session summary"
-      >
+  } else if (phase === "transport-error") {
+    body = (
+      <div className={styles.errorCard} data-testid="summary-transport-error">
+        <div className={styles.errorLead}>
+          <span aria-hidden="true">⚠</span>
+          <span>Couldn&apos;t load this summary.</span>
+        </div>
+        <div className={styles.errorStageText}>
+          {error?.message ?? "Something went wrong while loading this summary."}
+        </div>
+        <button
+          type="button"
+          className={styles.primaryButton}
+          onClick={handleRetry}
+          disabled={retrying}
+          data-testid="summary-transport-error-retry"
+        >
+          {retrying ? "⟳ Retrying…" : "↻ Retry"}
+        </button>
+      </div>
+    );
+  } else if (phase === "loading") {
+    body = (
+      <>
         <div className={styles.header}>
           <div className={styles.titleGroup}>
             <span className={styles.title}>Session Summary</span>
@@ -309,93 +345,66 @@ export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
           </div>
         </div>
         <SummarySkeleton />
-        <div role="status" aria-live="polite" aria-atomic="true" className={srOnly}>
-          {liveMessage}
-        </div>
-      </div>
+      </>
     );
-  }
+  } else {
+    // phase is "ready" | "error" | "error-stale" here — data is guaranteed non-null.
+    const summary = data as SessionSummaryProto;
+    const isStale = phase === "error-stale";
+    const isBareError = phase === "error";
 
-  // phase is "ready" | "error" | "error-stale" here — data is guaranteed non-null.
-  const summary = data as SessionSummaryProto;
-  const isStale = phase === "error-stale";
-  const isBareError = phase === "error";
-
-  return (
-    <div className={styles.container} data-testid="session-summary-panel" role="region" aria-label="Session summary">
-      <div className={styles.header}>
-        <div className={styles.titleGroup}>
-          <span className={styles.title}>
-            Session Summary{summary.sessionTitle ? `: ${summary.sessionTitle}` : ""}
-          </span>
-          {!isBareError && (
-            <span className={styles.statusText}>
-              {isStale ? "⚠ Regeneration failed" : `✓ Ready · generated ${formatDate(summary.generatedAt)}`}
+    body = (
+      <>
+        <div className={styles.header}>
+          <div className={styles.titleGroup}>
+            <span className={styles.title}>
+              Session Summary{summary.sessionTitle ? `: ${summary.sessionTitle}` : ""}
             </span>
+            {!isBareError && (
+              <span className={styles.statusText}>
+                {isStale
+                  ? "⚠ Regeneration failed"
+                  : `✓ Ready · generated ${formatDate(summary.generatedAt)}`}
+              </span>
+            )}
+          </div>
+          {!isBareError && (
+            <div className={styles.toolbar}>
+              <button
+                type="button"
+                className={styles.copyButton}
+                aria-label="Copy summary as Markdown"
+                onClick={handleCopy}
+              >
+                {copyState === "success" ? "✓ Copied" : "📋 Copy as Markdown"}
+              </button>
+            </div>
           )}
         </div>
-        {!isBareError && (
-          <div className={styles.toolbar}>
-            <button
-              type="button"
-              className={styles.copyButton}
-              aria-label="Copy summary as Markdown"
-              onClick={handleCopy}
-            >
-              {copyState === "success" ? "✓ Copied" : "📋 Copy as Markdown"}
-            </button>
+
+        {copyState === "failure" && (
+          <div className={styles.copyFailureText} data-testid="summary-copy-failure">
+            Copy failed — select the text below and copy manually.
           </div>
         )}
-      </div>
 
-      {copyState === "failure" && (
-        <div className={styles.copyFailureText} data-testid="summary-copy-failure">
-          Copy failed — select the text below and copy manually.
-        </div>
-      )}
-
-      {isBareError && (
-        <div className={styles.errorCard} data-testid="summary-error-card">
-          <div className={styles.errorLead}>
-            <span aria-hidden="true">⚠</span>
-            <span>Couldn&apos;t finish generating this summary.</span>
-          </div>
-          <div className={styles.errorStageText}>{stageSentence(summary.errorStage)}</div>
-          <div className={styles.errorTimestamp}>
-            Last attempt: {formatDate(summary.generatedAt)}
-          </div>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            onClick={handleRegenerate}
-            disabled={regenerating}
-          >
-            {regenerating ? "⟳ Regenerating…" : "↻ Regenerate"}
-          </button>
-          {summary.errorMessage && (
-            <details className={styles.errorDetails}>
-              <summary>Details</summary>
-              <div className={styles.errorDetailsBody}>{summary.errorMessage}</div>
-            </details>
-          )}
-        </div>
-      )}
-
-      {isStale && (
-        <div className={styles.staleBanner} data-testid="summary-stale-banner">
-          <div className={styles.staleBannerText}>
-            Showing the summary from the last successful generation, dated{" "}
-            {formatDate(summary.generatedAt)} — regeneration failed, see error above.
-          </div>
-          <div className={styles.staleBannerActions}>
+        {isBareError && (
+          <div className={styles.errorCard} data-testid="summary-error-card">
+            <div className={styles.errorLead}>
+              <span aria-hidden="true">⚠</span>
+              <span>Couldn&apos;t finish generating this summary.</span>
+            </div>
+            <div className={styles.errorStageText}>{stageSentence(summary.errorStage)}</div>
+            <div className={styles.errorTimestamp}>
+              Last attempt: {formatDate(summary.generatedAt)}
+            </div>
             <button
               type="button"
               className={styles.primaryButton}
               onClick={handleRegenerate}
               disabled={regenerating}
-              data-testid="summary-try-again"
             >
-              {regenerating ? "⟳ Regenerating…" : "↻ Try again"}
+              {regenerating ? "⟳ Regenerating…" : "↻ Regenerate"}
             </button>
             {summary.errorMessage && (
               <details className={styles.errorDetails}>
@@ -404,18 +413,64 @@ export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
               </details>
             )}
           </div>
-        </div>
-      )}
+        )}
 
-      {(phase === "ready" || isStale) && (
-        <>
-          <DecisionsGlanceCard decisions={summary.decisions} />
-          <div className={markdownStyles.markdownBody} data-testid="summary-markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary.markdown}</ReactMarkdown>
+        {isStale && (
+          <div className={styles.staleBanner} data-testid="summary-stale-banner">
+            <div className={styles.staleBannerText}>
+              Showing the summary from the last successful generation, dated{" "}
+              {formatDate(summary.generatedAt)} — regeneration failed, see error above.
+            </div>
+            <div className={styles.staleBannerActions}>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={handleRegenerate}
+                disabled={regenerating}
+                data-testid="summary-try-again"
+              >
+                {regenerating ? "⟳ Regenerating…" : "↻ Try again"}
+              </button>
+              {summary.errorMessage && (
+                <details className={styles.errorDetails}>
+                  <summary>Details</summary>
+                  <div className={styles.errorDetailsBody}>{summary.errorMessage}</div>
+                </details>
+              )}
+            </div>
           </div>
-        </>
-      )}
+        )}
 
+        {(phase === "ready" || isStale) && (
+          <>
+            <DecisionsGlanceCard decisions={summary.decisions} />
+            <div className={markdownStyles.markdownBody} data-testid="summary-markdown-body">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary.markdown}</ReactMarkdown>
+            </div>
+          </>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div
+      className={styles.container}
+      data-testid="session-summary-panel"
+      role={phase === "empty" ? undefined : "region"}
+      aria-label={phase === "empty" ? undefined : "Session summary"}
+      aria-busy={phase === "loading" ? "true" : undefined}
+    >
+      {body}
+      {/*
+        Single shared aria-live region, rendered exactly once in a fixed
+        position of a single return statement (not duplicated per
+        early-return branch) so it is the same DOM node across phase
+        transitions — screen readers reliably announce content changes on an
+        aria-live region only when the node itself persists across the
+        update, not when React replaces it with a freshly-mounted node that
+        already has the text set.
+      */}
       <div role="status" aria-live="polite" aria-atomic="true" className={srOnly}>
         {liveMessage}
       </div>

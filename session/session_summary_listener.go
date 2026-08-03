@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"time"
-
-	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // summaryGenerator is the narrow consumer-side interface sessionSummaryListener needs
@@ -13,7 +11,7 @@ import (
 // consumed" — *SessionSummaryGenerator (session/session_summary_service.go) satisfies
 // this structurally, with no explicit "implements" declaration.
 type summaryGenerator interface {
-	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diffStats *git.DiffStats, sessionGoal *SessionGoalData, reason string)
+	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *SessionGoalData, reason string)
 }
 
 // reasonReconcileSessionMissing is the lifecycle-event reason used by the reconciler
@@ -49,10 +47,15 @@ func (l *sessionSummaryListener) OnLifecycleEvent(event LifecycleEvent, reason s
 	// Synchronous, in-memory-only reads — no I/O, safe to do inline before dispatch.
 	diffStats := l.instance.GetDiffStats()
 	sessionGoal := l.instance.GetSessionGoal()
+	diffSnapshot := BuildDiffSnapshot(diffStats)
+	diffContent := ""
+	if diffStats != nil {
+		diffContent = diffStats.Content
+	}
 
 	// Panic recovery for this goroutine lives inside GenerateAndPersist itself
 	// (see Task 1.5.2b), so it protects this dispatch automatically.
-	go l.generator.GenerateAndPersist(context.Background(), l.instance.UUID, l.instance.Title, l.instance.CreatedAt, diffStats, sessionGoal, reason)
+	go l.generator.GenerateAndPersist(context.Background(), l.instance.UUID, l.instance.Title, l.instance.CreatedAt, diffSnapshot, diffContent, sessionGoal, reason)
 }
 
 // WireSessionSummaryListener registers a per-instance sessionSummaryListener on inst,

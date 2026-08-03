@@ -30,7 +30,7 @@ jest.mock("@/lib/clipboard", () => ({
   copyToClipboard: (...args: unknown[]) => mockCopyToClipboard(...args),
 }));
 
-import { useSessionSummary } from "@/lib/hooks/useSessionSummary";
+import { isGenerating, useSessionSummary } from "@/lib/hooks/useSessionSummary";
 
 function makeSummary(
   status: SessionSummaryStatus,
@@ -267,5 +267,67 @@ describe("useSessionSummary", () => {
       await Promise.resolve();
     });
     expect(result.current.neverResolved).toBe(true);
+  });
+
+  it("useSessionSummary_should_setErrorAndStopLoading_When_initialFetchThrows", async () => {
+    mockGetSessionSummary.mockRejectedValue(new Error("Network request failed"));
+
+    const { result } = renderHook(() => useSessionSummary("sess-123"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.error).toBeInstanceOf(Error);
+    expect(result.current.error?.message).toBe("Network request failed");
+    expect(result.current.data).toBeNull();
+  });
+
+  it("useSessionSummary_should_recoverViaRefetch_When_retryingAfterAFailedInitialFetch", async () => {
+    mockGetSessionSummary.mockRejectedValueOnce(new Error("Network request failed"));
+
+    const { result } = renderHook(() => useSessionSummary("sess-123"));
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.data).toBeNull();
+
+    mockGetSessionSummary.mockResolvedValueOnce({ summary: makeSummary(SessionSummaryStatus.READY) });
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.data?.status).toBe(SessionSummaryStatus.READY);
+    expect(mockGetSessionSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("useSessionSummary_should_treatUnspecifiedStatusAsGenerating_When_polling", async () => {
+    // Bug 3 regression guard: UNSPECIFIED is proto3's zero value, not a
+    // terminal state — a summary row read back with this status before
+    // isGenerating() is set for the first time must keep polling rather
+    // than being (wrongly) treated as "done."
+    mockGetSessionSummary
+      .mockResolvedValueOnce({ summary: makeSummary(SessionSummaryStatus.UNSPECIFIED) })
+      .mockResolvedValueOnce({ summary: makeSummary(SessionSummaryStatus.READY) });
+
+    const { result } = renderHook(() => useSessionSummary("sess-123"));
+
+    await waitFor(() => expect(result.current.data?.status).toBe(SessionSummaryStatus.UNSPECIFIED));
+    expect(mockGetSessionSummary).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+
+    expect(mockGetSessionSummary).toHaveBeenCalledTimes(2);
+    expect(result.current.data?.status).toBe(SessionSummaryStatus.READY);
+  });
+
+  it("isGenerating_should_beExportedAsCanonicalDefinition_treatingUnspecifiedPendingAndGeneratingAsInFlight", () => {
+    expect(isGenerating(SessionSummaryStatus.UNSPECIFIED)).toBe(true);
+    expect(isGenerating(SessionSummaryStatus.PENDING)).toBe(true);
+    expect(isGenerating(SessionSummaryStatus.GENERATING)).toBe(true);
+    expect(isGenerating(SessionSummaryStatus.READY)).toBe(false);
+    expect(isGenerating(SessionSummaryStatus.ERROR)).toBe(false);
   });
 });
