@@ -13,7 +13,8 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { BacklogSourcesSettings } from "./BacklogSourcesSettings";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
@@ -32,6 +33,7 @@ const mockUpdateItemSource = jest.fn();
 const mockDeleteItemSource = jest.fn();
 const mockTriggerSync = jest.fn();
 const mockGetSyncHistory = jest.fn();
+const mockPreviewBackwardSyncImpact = jest.fn();
 
 const sampleSource = {
   id: "src-1",
@@ -52,6 +54,7 @@ beforeEach(() => {
   mockUpdateItemSource.mockResolvedValue({ source: { ...sampleSource, enabled: false } });
   mockDeleteItemSource.mockResolvedValue({});
   mockTriggerSync.mockResolvedValue({});
+  mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 0, sampleTitles: [] });
   mockGetSyncHistory.mockResolvedValue({
     events: [
       {
@@ -74,6 +77,7 @@ beforeEach(() => {
     deleteItemSource: mockDeleteItemSource,
     triggerSync: mockTriggerSync,
     getSyncHistory: mockGetSyncHistory,
+    previewBackwardSyncImpact: mockPreviewBackwardSyncImpact,
   });
   (createConnectTransport as jest.Mock).mockReturnValue({});
 });
@@ -346,6 +350,148 @@ describe("BacklogSourcesSettings — Epic 4.3 (backlog-github-two-way-sync): syn
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
 
     expect(screen.queryByText(/Both directions are enabled/)).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogSourcesSettings — Epic 4.4: first-enable-of-backward-sync confirmation", () => {
+  it("TestBacklogSourcesSettings_ShowsConfirmDialogWithPreviewCount_WhenEnablingBackwardSync", async () => {
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 3, sampleTitles: ["Bug A", "Bug B", "Bug C"] });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /reflecting GitHub status back/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/archive 3 already-imported items/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Bug A, Bug B, Bug C/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/can't be undone by disabling this toggle again/)).toBeInTheDocument();
+    expect(mockUpdateItemSource).not.toHaveBeenCalled();
+  });
+
+  it("TestBacklogSourcesSettings_SkipsDialogWhenPreviewCountIsZero", async () => {
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 0, sampleTitles: [] });
+    mockUpdateItemSource.mockResolvedValue({ source: { ...sampleSource, backwardSyncEnabled: true } });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /reflecting GitHub status back/ }));
+
+    await waitFor(() => {
+      expect(mockUpdateItemSource).toHaveBeenCalledWith({
+        sourceId: "src-1",
+        displayName: "Acme Issues",
+        enabled: true,
+        token: "",
+        forwardSyncEnabled: false,
+        backwardSyncEnabled: true,
+        forwardSyncCloseLabel: "",
+      });
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("TestBacklogSourcesSettings_CancelLeavesToggleOffAndMakesNoRPCCall", async () => {
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 2, sampleTitles: ["A", "B"] });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: /reflecting GitHub status back/ });
+    fireEvent.click(toggle);
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByTestId("backward-sync-confirm-cancel"));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(mockUpdateItemSource).not.toHaveBeenCalled();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("TestBacklogSourcesSettings_ConfirmFlipsToggleAndCallsSetBackwardSyncEnabled", async () => {
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 1, sampleTitles: ["Only Item"] });
+    mockUpdateItemSource.mockResolvedValue({ source: { ...sampleSource, backwardSyncEnabled: true } });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /reflecting GitHub status back/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByTestId("backward-sync-confirm-confirm"));
+
+    await waitFor(() => {
+      expect(mockUpdateItemSource).toHaveBeenCalledWith({
+        sourceId: "src-1",
+        displayName: "Acme Issues",
+        enabled: true,
+        token: "",
+        forwardSyncEnabled: false,
+        backwardSyncEnabled: true,
+        forwardSyncCloseLabel: "",
+      });
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("TestBacklogSourcesSettings_TogglePendingWhilePreviewInFlight", async () => {
+    let resolvePreview: (value: { itemCount: number; sampleTitles: string[] }) => void = () => {};
+    mockPreviewBackwardSyncImpact.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      })
+    );
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: /reflecting GitHub status back/ });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeDisabled());
+    expect(toggle).toHaveAttribute("aria-busy", "true");
+
+    resolvePreview({ itemCount: 0, sampleTitles: [] });
+
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+  });
+
+  it("TestBacklogSourcesSettings_ShowsInlineErrorWhenPreviewFails_NoDialog", async () => {
+    mockPreviewBackwardSyncImpact.mockRejectedValue(new Error("boom"));
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: /reflecting GitHub status back/ });
+    fireEvent.click(toggle);
+
+    expect(await screen.findByText("Couldn't check impact — try again")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(mockUpdateItemSource).not.toHaveBeenCalled();
+  });
+
+  it("TestBacklogSourcesSettings_ConfirmDialogTrapsFocusAndReturnsFocusOnClose", async () => {
+    const user = userEvent.setup();
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 2, sampleTitles: ["Item A", "Item B"] });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    const toggle = screen.getByRole("switch", { name: /reflecting GitHub status back/ });
+    await user.click(toggle);
+
+    const dialog = await screen.findByRole("dialog");
+    const confirmButton = within(dialog).getByTestId("backward-sync-confirm-confirm");
+    const cancelButton = within(dialog).getByTestId("backward-sync-confirm-cancel");
+
+    await waitFor(() => expect(confirmButton).toHaveFocus());
+
+    // Tab from the last focusable element wraps to the first (focus trap).
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(cancelButton).toHaveFocus();
+
+    // Escape is treated as Cancel: closes the dialog, makes no RPC call, and
+    // returns focus to the toggle that triggered it.
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(mockUpdateItemSource).not.toHaveBeenCalled();
+    await waitFor(() => expect(toggle).toHaveFocus());
   });
 });
 

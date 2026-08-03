@@ -77,6 +77,14 @@ export const toggleOn = style({
   background: vars.color.primary,
 });
 
+// Pending/disabled visual state while PreviewBackwardSyncImpact is in flight
+// (Epic 4.4, UX round 2: visibility of system status) — matches the existing
+// toggle's disabled cursor convention rather than inventing a new one.
+export const togglePending = style({
+  opacity: 0.5,
+  cursor: "not-allowed",
+});
+
 export const actionRow = style({
   display: "flex",
   gap: vars.space["2"],
@@ -238,6 +246,25 @@ export const bothDirectionsWarning = style({
   color: vars.color.warningText,
   background: vars.color.warningBg,
   border: `1px solid ${vars.color.warning}`,
+  borderRadius: vars.radii.sm,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+});
+
+// Epic 4.4: "Checking impact…" label shown next to the backward-sync toggle
+// while PreviewBackwardSyncImpact is in flight.
+export const previewPendingLabel = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  fontStyle: "italic",
+});
+
+// Epic 4.4: inline error when PreviewBackwardSyncImpact itself fails — same
+// visual weight as the top-level errorMessage banner, scoped to the row.
+export const previewError = style({
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
   borderRadius: vars.radii.sm,
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   fontSize: vars.fontSize.xs,

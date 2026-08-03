@@ -37,6 +37,11 @@ export interface SyncHistoryResult {
   truncated: boolean;
 }
 
+export interface BackwardSyncImpactPreview {
+  itemCount: number;
+  sampleTitles: string[];
+}
+
 function tsToIso(ts?: { seconds: bigint }): string | undefined {
   return ts ? new Date(Number(ts.seconds) * 1000).toISOString() : undefined;
 }
@@ -85,6 +90,7 @@ interface UseBacklogSourcesServiceReturn {
   deleteItemSource: (id: string) => Promise<boolean>;
   triggerSync: (id: string) => Promise<boolean>;
   getSyncHistory: (id: string) => Promise<SyncHistoryResult>;
+  previewBackwardSyncImpact: (sourceId: string) => Promise<BackwardSyncImpactPreview | null>;
   lastError: Error | null;
   clearError: () => void;
 }
@@ -265,6 +271,27 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     }
   }, []);
 
+  // previewBackwardSyncImpact returns null on any RPC failure (network,
+  // upstream Fetch/rate-limit, etc.) rather than swallowing it into a
+  // misleading itemCount: 0 — the caller (BacklogSourcesSettings) must be
+  // able to tell "nothing to warn about" apart from "couldn't check" and
+  // show a distinct inline error for the latter (Epic 4.4, Story 4.4.2).
+  const previewBackwardSyncImpact = useCallback(
+    async (sourceId: string): Promise<BackwardSyncImpactPreview | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.previewBackwardSyncImpact({ sourceId });
+        setLastError(null);
+        return { itemCount: resp.itemCount, sampleTitles: resp.sampleTitles ?? [] };
+      } catch (err) {
+        console.error("[useBacklogSourcesService] previewBackwardSyncImpact:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
   const getSyncHistory = useCallback(async (id: string): Promise<SyncHistoryResult> => {
     if (!clientRef.current) return { events: [], truncated: false };
     try {
@@ -289,6 +316,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
       deleteItemSource,
       triggerSync,
       getSyncHistory,
+      previewBackwardSyncImpact,
       lastError,
       clearError,
     }),
@@ -302,6 +330,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
       deleteItemSource,
       triggerSync,
       getSyncHistory,
+      previewBackwardSyncImpact,
       lastError,
       clearError,
     ]

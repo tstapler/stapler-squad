@@ -153,6 +153,7 @@ var methodToID = map[string]string{
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	"PreviewBackwardSyncImpact":   "backlog:preview-backward-sync-impact",
 	"GetBacklogItemDiff":          "backlog:get-item-diff",
 	"GetBacklogItemCost":          "backlog:get-item-cost",
 	"GetBacklogItemShipStatus":    "backlog:get-item-ship-status",

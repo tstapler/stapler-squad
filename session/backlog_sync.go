@@ -203,6 +203,85 @@ func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
 	return sl.SyncOne(ctx, entSrc)
 }
 
+// maxBackwardSyncPreviewSamples bounds the sample titles PreviewBackwardSyncImpact
+// returns for display in the Settings confirmation dialog (Epic 4.4, Story 4.4.1).
+const maxBackwardSyncPreviewSamples = 5
+
+// PreviewBackwardSyncImpactByID looks up an ItemSource by ID and previews the
+// impact of enabling backward sync for it — see PreviewBackwardSyncImpact.
+func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID string) (itemCount int, sampleTitles []string, err error) {
+	er, ok := sl.storage.repo.(*EntRepository)
+	if !ok {
+		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpactByID: storage backend does not support ent operations")
+	}
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpactByID: %w", err)
+	}
+	return sl.PreviewBackwardSyncImpact(ctx, entSrc)
+}
+
+// PreviewBackwardSyncImpact reports how many already-imported items for
+// source would immediately transition — per determineBackwardSyncTarget,
+// ADR-002 — if backward sync were enabled for it right now. Used to gate the
+// Settings UI's first-enable confirmation dialog (Epic 4.4, resolving
+// Unresolved Question #3) so a user can see the blast radius of already-closed
+// linked issues before opting in, rather than a silent bulk-archive on the
+// same tick the toggle flips.
+//
+// Read-only: reuses the same decrypted-token/plugin-Fetch path SyncOne uses,
+// but does not advance source.SyncCursor, does not record a SourceSyncEvent,
+// and does not itself gate on source.BackwardSyncEnabled — the entire point
+// is to preview what WOULD happen if it were enabled. Deliberately fetches
+// with an empty cursor rather than source.SyncCursor: the preview needs the
+// full current state of already-imported items' issues (a source may have
+// been forward-syncing for a while before backward sync is ever considered,
+// advancing the cursor well past issues that are now closed but haven't
+// changed since).
+func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.ItemSource) (itemCount int, sampleTitles []string, err error) {
+	er, ok := sl.storage.repo.(*EntRepository)
+	if !ok {
+		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpact: storage backend does not support ent operations")
+	}
+
+	plugin, ok := sl.registry.Get(source.PluginID)
+	if !ok {
+		return 0, nil, fmt.Errorf("no plugin registered for plugin_id %q", source.PluginID)
+	}
+
+	decryptedConfig, err := sl.DecryptConfigToken(source.Config)
+	if err != nil {
+		return 0, nil, fmt.Errorf("decrypt config: %w", err)
+	}
+
+	cfg := PluginConfig{Raw: decryptedConfig}
+	items, _, fetchErr := plugin.Fetch(ctx, cfg, "")
+	if fetchErr != nil {
+		return 0, nil, fmt.Errorf("fetch: %w", fetchErr)
+	}
+
+	for _, extItem := range items {
+		if extItem.State != "closed" {
+			continue
+		}
+		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
+		if lookupErr != nil {
+			// Not a locally-imported item (or a lookup error) — either way it's
+			// not an "already-imported item" this preview is about, so it's
+			// excluded rather than counted or treated as fatal to the whole call.
+			continue
+		}
+		if _, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
+			itemCount++
+			if len(sampleTitles) < maxBackwardSyncPreviewSamples {
+				sampleTitles = append(sampleTitles, existing.Title)
+			}
+		}
+	}
+
+	return itemCount, sampleTitles, nil
+}
+
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
 // for the same source (e.g. a manual TriggerSync racing the periodic tick)
 // are serialized via a per-source lock — see syncSourceLocks.

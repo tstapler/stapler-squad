@@ -102,6 +102,9 @@ const (
 	// BacklogServiceGetSyncHistoryProcedure is the fully-qualified name of the BacklogService's
 	// GetSyncHistory RPC.
 	BacklogServiceGetSyncHistoryProcedure = "/session.v1.BacklogService/GetSyncHistory"
+	// BacklogServicePreviewBackwardSyncImpactProcedure is the fully-qualified name of the
+	// BacklogService's PreviewBackwardSyncImpact RPC.
+	BacklogServicePreviewBackwardSyncImpactProcedure = "/session.v1.BacklogService/PreviewBackwardSyncImpact"
 	// BacklogServiceCreatePipelineModeProcedure is the fully-qualified name of the BacklogService's
 	// CreatePipelineMode RPC.
 	BacklogServiceCreatePipelineModeProcedure = "/session.v1.BacklogService/CreatePipelineMode"
@@ -212,6 +215,12 @@ type BacklogServiceClient interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// PreviewBackwardSyncImpact reports how many already-imported items for a
+	// source would immediately transition (per ADR-002's determineBackwardSyncTarget)
+	// if backward sync were enabled right now — used to gate the Settings UI's
+	// first-enable confirmation dialog (Epic 4.4) so a user can see the blast
+	// radius of already-closed linked issues before opting in.
+	PreviewBackwardSyncImpact(context.Context, *connect.Request[v1.PreviewBackwardSyncImpactRequest]) (*connect.Response[v1.PreviewBackwardSyncImpactResponse], error)
 	// CreatePipelineMode registers a new runtime-definable pipeline mode.
 	CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error)
 	// UpdatePipelineMode modifies an existing pipeline mode's fields.
@@ -422,6 +431,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 			connect.WithClientOptions(opts...),
 		),
+		previewBackwardSyncImpact: connect.NewClient[v1.PreviewBackwardSyncImpactRequest, v1.PreviewBackwardSyncImpactResponse](
+			httpClient,
+			baseURL+BacklogServicePreviewBackwardSyncImpactProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("PreviewBackwardSyncImpact")),
+			connect.WithClientOptions(opts...),
+		),
 		createPipelineMode: connect.NewClient[v1.CreatePipelineModeRequest, v1.CreatePipelineModeResponse](
 			httpClient,
 			baseURL+BacklogServiceCreatePipelineModeProcedure,
@@ -558,6 +573,7 @@ type backlogServiceClient struct {
 	updateItemSource            *connect.Client[v1.UpdateItemSourceRequest, v1.UpdateItemSourceResponse]
 	deleteItemSource            *connect.Client[v1.DeleteItemSourceRequest, v1.DeleteItemSourceResponse]
 	getSyncHistory              *connect.Client[v1.GetSyncHistoryRequest, v1.GetSyncHistoryResponse]
+	previewBackwardSyncImpact   *connect.Client[v1.PreviewBackwardSyncImpactRequest, v1.PreviewBackwardSyncImpactResponse]
 	createPipelineMode          *connect.Client[v1.CreatePipelineModeRequest, v1.CreatePipelineModeResponse]
 	updatePipelineMode          *connect.Client[v1.UpdatePipelineModeRequest, v1.UpdatePipelineModeResponse]
 	deletePipelineMode          *connect.Client[v1.DeletePipelineModeRequest, v1.DeletePipelineModeResponse]
@@ -691,6 +707,11 @@ func (c *backlogServiceClient) DeleteItemSource(ctx context.Context, req *connec
 // GetSyncHistory calls session.v1.BacklogService.GetSyncHistory.
 func (c *backlogServiceClient) GetSyncHistory(ctx context.Context, req *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error) {
 	return c.getSyncHistory.CallUnary(ctx, req)
+}
+
+// PreviewBackwardSyncImpact calls session.v1.BacklogService.PreviewBackwardSyncImpact.
+func (c *backlogServiceClient) PreviewBackwardSyncImpact(ctx context.Context, req *connect.Request[v1.PreviewBackwardSyncImpactRequest]) (*connect.Response[v1.PreviewBackwardSyncImpactResponse], error) {
+	return c.previewBackwardSyncImpact.CallUnary(ctx, req)
 }
 
 // CreatePipelineMode calls session.v1.BacklogService.CreatePipelineMode.
@@ -837,6 +858,12 @@ type BacklogServiceHandler interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// PreviewBackwardSyncImpact reports how many already-imported items for a
+	// source would immediately transition (per ADR-002's determineBackwardSyncTarget)
+	// if backward sync were enabled right now — used to gate the Settings UI's
+	// first-enable confirmation dialog (Epic 4.4) so a user can see the blast
+	// radius of already-closed linked issues before opting in.
+	PreviewBackwardSyncImpact(context.Context, *connect.Request[v1.PreviewBackwardSyncImpactRequest]) (*connect.Response[v1.PreviewBackwardSyncImpactResponse], error)
 	// CreatePipelineMode registers a new runtime-definable pipeline mode.
 	CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error)
 	// UpdatePipelineMode modifies an existing pipeline mode's fields.
@@ -1043,6 +1070,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServicePreviewBackwardSyncImpactHandler := connect.NewUnaryHandler(
+		BacklogServicePreviewBackwardSyncImpactProcedure,
+		svc.PreviewBackwardSyncImpact,
+		connect.WithSchema(backlogServiceMethods.ByName("PreviewBackwardSyncImpact")),
+		connect.WithHandlerOptions(opts...),
+	)
 	backlogServiceCreatePipelineModeHandler := connect.NewUnaryHandler(
 		BacklogServiceCreatePipelineModeProcedure,
 		svc.CreatePipelineMode,
@@ -1199,6 +1232,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceDeleteItemSourceHandler.ServeHTTP(w, r)
 		case BacklogServiceGetSyncHistoryProcedure:
 			backlogServiceGetSyncHistoryHandler.ServeHTTP(w, r)
+		case BacklogServicePreviewBackwardSyncImpactProcedure:
+			backlogServicePreviewBackwardSyncImpactHandler.ServeHTTP(w, r)
 		case BacklogServiceCreatePipelineModeProcedure:
 			backlogServiceCreatePipelineModeHandler.ServeHTTP(w, r)
 		case BacklogServiceUpdatePipelineModeProcedure:
@@ -1334,6 +1369,10 @@ func (UnimplementedBacklogServiceHandler) DeleteItemSource(context.Context, *con
 
 func (UnimplementedBacklogServiceHandler) GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetSyncHistory is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) PreviewBackwardSyncImpact(context.Context, *connect.Request[v1.PreviewBackwardSyncImpactRequest]) (*connect.Response[v1.PreviewBackwardSyncImpactResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.PreviewBackwardSyncImpact is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) CreatePipelineMode(context.Context, *connect.Request[v1.CreatePipelineModeRequest]) (*connect.Response[v1.CreatePipelineModeResponse], error) {

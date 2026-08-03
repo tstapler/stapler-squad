@@ -7,6 +7,7 @@ import {
   type SyncHistoryResult,
 } from "@/lib/hooks/useBacklogSourcesService";
 import { PLUGIN_SCHEMAS } from "./backlogSourceSchemas";
+import { BackwardSyncConfirmDialog } from "./BackwardSyncConfirmDialog";
 import * as styles from "./BacklogSourcesSettings.css";
 
 function formatDate(iso?: string): string {
@@ -37,6 +38,7 @@ export function BacklogSourcesSettings() {
     deleteItemSource,
     triggerSync,
     getSyncHistory,
+    previewBackwardSyncImpact,
     lastError,
     clearError,
   } = useBacklogSourcesService();
@@ -49,6 +51,24 @@ export function BacklogSourcesSettings() {
   // Local in-progress edits to the close-label input, keyed by source id —
   // committed to the backend on blur rather than per keystroke.
   const [closeLabelDrafts, setCloseLabelDrafts] = useState<Record<string, string>>({});
+
+  // Epic 4.4: first-enable-of-backward-sync confirmation. sourceId of the
+  // toggle currently awaiting PreviewBackwardSyncImpact — shows a
+  // pending/disabled toggle state while true (UX round 2: visibility of
+  // system status).
+  const [backwardSyncPreviewPendingId, setBackwardSyncPreviewPendingId] = useState<string | null>(null);
+  // Distinct, per-row inline error when the preview RPC itself fails — kept
+  // separate from the shared top-level `lastError` banner so it's directly
+  // testable and scoped to the row that triggered it.
+  const [backwardSyncPreviewErrors, setBackwardSyncPreviewErrors] = useState<Record<string, string>>({});
+  // Pending confirmation dialog state: set once a preview returns a nonzero
+  // itemCount; the toggle only actually flips (setBackwardSyncEnabled) on
+  // Confirm — never as a side effect of the preview call itself.
+  const [backwardSyncConfirm, setBackwardSyncConfirm] = useState<{
+    source: ItemSource;
+    itemCount: number;
+    sampleTitles: string[];
+  } | null>(null);
 
   const [pluginId, setPluginId] = useState(PLUGIN_SCHEMAS[0].id);
   const [displayName, setDisplayName] = useState("");
@@ -129,13 +149,54 @@ export function BacklogSourcesSettings() {
     if (updated) await refresh();
   };
 
-  // Turning backward sync OFF is unaffected — only turning it ON goes
-  // through a confirmation-with-preview step (Epic 4.4, implemented later —
-  // deliberately not wired here yet since it depends on Epic 2.1's
-  // determineBackwardSyncTarget, in flight concurrently elsewhere).
+  // Turning backward sync OFF still flips directly on click — only turning
+  // it ON routes through PreviewBackwardSyncImpact + a confirmation dialog
+  // (Epic 4.4), since only enabling can immediately bulk-archive items.
   const handleToggleBackwardSync = async (source: ItemSource) => {
-    const updated = await setBackwardSyncEnabled(source, !source.backwardSyncEnabled);
+    if (source.backwardSyncEnabled) {
+      const updated = await setBackwardSyncEnabled(source, false);
+      if (updated) await refresh();
+      return;
+    }
+
+    setBackwardSyncPreviewErrors((prev) => {
+      const next = { ...prev };
+      delete next[source.id];
+      return next;
+    });
+    setBackwardSyncPreviewPendingId(source.id);
+    const preview = await previewBackwardSyncImpact(source.id);
+    setBackwardSyncPreviewPendingId(null);
+
+    if (preview === null) {
+      setBackwardSyncPreviewErrors((prev) => ({
+        ...prev,
+        [source.id]: "Couldn't check impact — try again",
+      }));
+      return;
+    }
+
+    if (preview.itemCount === 0) {
+      // No impact to preview — flip immediately, no dialog (don't add
+      // friction where there's nothing to warn about).
+      const updated = await setBackwardSyncEnabled(source, true);
+      if (updated) await refresh();
+      return;
+    }
+
+    setBackwardSyncConfirm({ source, itemCount: preview.itemCount, sampleTitles: preview.sampleTitles });
+  };
+
+  const handleConfirmBackwardSync = async () => {
+    if (!backwardSyncConfirm) return;
+    const { source } = backwardSyncConfirm;
+    setBackwardSyncConfirm(null);
+    const updated = await setBackwardSyncEnabled(source, true);
     if (updated) await refresh();
+  };
+
+  const handleCancelBackwardSync = () => {
+    setBackwardSyncConfirm(null);
   };
 
   const handleCloseLabelChange = async (source: ItemSource, closeLabel: string) => {
@@ -252,12 +313,28 @@ export function BacklogSourcesSettings() {
                     <button
                       role="switch"
                       aria-checked={source.backwardSyncEnabled}
-                      className={`${styles.toggle} ${source.backwardSyncEnabled ? styles.toggleOn : ""}`}
+                      aria-busy={backwardSyncPreviewPendingId === source.id}
+                      disabled={backwardSyncPreviewPendingId === source.id}
+                      className={`${styles.toggle} ${source.backwardSyncEnabled ? styles.toggleOn : ""} ${
+                        backwardSyncPreviewPendingId === source.id ? styles.togglePending : ""
+                      }`}
                       onClick={() => handleToggleBackwardSync(source)}
                       aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`}
                     />
                     <span>Reflect GitHub status back here</span>
+                    {backwardSyncPreviewPendingId === source.id && (
+                      <span className={styles.previewPendingLabel}>Checking impact…</span>
+                    )}
                   </div>
+                  {backwardSyncPreviewErrors[source.id] && (
+                    <div
+                      className={styles.previewError}
+                      role="alert"
+                      data-testid={`source-row-${source.id}-preview-error`}
+                    >
+                      {backwardSyncPreviewErrors[source.id]}
+                    </div>
+                  )}
                   {source.forwardSyncEnabled && source.backwardSyncEnabled && (
                     <div className={styles.bothDirectionsWarning}>
                       Both directions are enabled — closing this item&apos;s issue may be observed and
@@ -355,6 +432,16 @@ export function BacklogSourcesSettings() {
           </button>
         </div>
       </section>
+
+      {backwardSyncConfirm && (
+        <BackwardSyncConfirmDialog
+          sourceDisplayName={backwardSyncConfirm.source.displayName}
+          itemCount={backwardSyncConfirm.itemCount}
+          sampleTitles={backwardSyncConfirm.sampleTitles}
+          onConfirm={handleConfirmBackwardSync}
+          onCancel={handleCancelBackwardSync}
+        />
+      )}
     </div>
   );
 }
