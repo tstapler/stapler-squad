@@ -745,6 +745,7 @@ export function ReviewQueuePanel({
               <p
                 className={`${escalationReasonText}`}
                 id={`escalation-reason-${queueItem.sessionId}`}
+                data-testid={`escalation-reason-${queueItem.sessionId}`}
               >
                 {queueItem.metadata["escalation_reason"]
                   ? `${ESCALATION_REASON_EMOJI[queueItem.metadata["escalation_reason_category"] ?? ""] ?? ""} ${queueItem.metadata["escalation_reason"]}`.trim()

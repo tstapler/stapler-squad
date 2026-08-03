@@ -946,3 +946,48 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
 	}
 }
+
+// TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback covers the second half of
+// checkSession's UUID-then-Title lookup: when a session has no UUID (or the UUID lookup
+// misses), the provider must still be queried by Title so approvals keyed the old/fallback
+// way are found. Seeds the stub ONLY under the Title key — pre-fix (or if this fallback were
+// ever removed) the UUID-only lookup would miss and no metadata would be attached.
+func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "session-with-no-uuid",
+		UUID:   "", // no stable UUID — resolveSessionID would have fallen back to Title too
+		Status: Running,
+	}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.Title: {{
+				ApprovalID:         "approval-title-fallback",
+				EscalationReason:   "No matching rule; escalated for manual review.",
+				EscalationCategory: "no-match",
+			}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
+		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
+	}
+}

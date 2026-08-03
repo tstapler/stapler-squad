@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -306,5 +308,67 @@ func TestTruncateEscalationReason(t *testing.T) {
 				t.Errorf("truncateEscalationReason() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// fakeUnrecognizedDecisionClassifier returns a ClassificationDecision outside the known
+// AutoAllow/AutoDeny/Escalate enum, simulating a future 4th decision value or an internal
+// classifier bug — the exact scenario approval_handler.go's default: branch exists to guard
+// against (Pre-mortem P3).
+type fakeUnrecognizedDecisionClassifier struct{}
+
+func (fakeUnrecognizedDecisionClassifier) Classify(_ classifier.PermissionRequestPayload, _ classifier.ClassificationContext) classifier.ClassificationResult {
+	return classifier.ClassificationResult{Decision: classifier.ClassificationDecision(99)}
+}
+
+func (fakeUnrecognizedDecisionClassifier) BuildContext(_ string) classifier.ClassificationContext {
+	return classifier.ClassificationContext{}
+}
+
+// TestHandlePermissionRequest_EscalationReason_UnexpectedDecision covers the default: branch
+// in HandlePermissionRequest's decision switch: an unrecognized ClassificationDecision must
+// fail safe to manual review, categorized "unexpected" (not "no-match", even though
+// result.RuleID is "" — no rule lookup occurred), and — critically — the analytics record for
+// the same event must agree with that category. Regression test for a bug caught during code
+// review: analytics recorded the raw pre-normalization result.RuleID, so this exact edge case
+// bucketed as "no-match" in the Escalation Reasons table while the review-queue card correctly
+// showed "unexpected" for the same request.
+func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.T) {
+	storage := createTestStorage(t)
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+
+	store := NewApprovalStore("")
+	bus := events.NewEventBus(10)
+	h := NewApprovalHandler(store, nil, bus)
+	h.timeout = 5 * time.Second
+	h.SetAnalyticsStore(analyticsStore)
+	h.SetClassifier(fakeUnrecognizedDecisionClassifier{})
+
+	var captured PendingApproval
+	go waitForFirstApprovalThenResolve(t, store, &captured)
+
+	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
+
+	if captured.EscalationCategory != "unexpected" {
+		t.Errorf("EscalationCategory = %q, want %q", captured.EscalationCategory, "unexpected")
+	}
+	if captured.EscalationReason != "An internal classification error occurred — review manually." {
+		t.Errorf("EscalationReason = %q, want the internal-error sentence", captured.EscalationReason)
+	}
+
+	var entries []AnalyticsEntry
+	require.Eventually(t, func() bool {
+		var err error
+		entries, err = analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		return err == nil && len(entries) >= 1
+	}, 2*time.Second, 10*time.Millisecond, "analytics entry must persist within 2s")
+
+	summary := ComputeSummary(entries)
+	if got := summary.EscalationReasonCounts["unexpected"]; got != 1 {
+		t.Errorf("EscalationReasonCounts[\"unexpected\"] = %d, want 1 (got full map: %v)", got, summary.EscalationReasonCounts)
+	}
+	if got := summary.EscalationReasonCounts["no-match"]; got != 0 {
+		t.Errorf("EscalationReasonCounts[\"no-match\"] = %d, want 0 — analytics must not disagree with the review-queue card's \"unexpected\" category", got)
 	}
 }

@@ -293,7 +293,15 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		durationMs := time.Since(start).Milliseconds()
 
 		if h.analyticsStore != nil {
-			h.analyticsStore.RecordFromResult(payload, result, sessionID, "", durationMs)
+			// Normalize RuleID the same way the default: branch below does before recording,
+			// so the analytics breakdown and the review-queue card agree on category for an
+			// unrecognized decision — result.RuleID is "" here (no rule lookup occurred), which
+			// would otherwise bucket as EscalationNoMatch instead of EscalationUnexpected.
+			recordResult := result
+			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
+				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
+			}
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
 		}
 
 		switch result.Decision {

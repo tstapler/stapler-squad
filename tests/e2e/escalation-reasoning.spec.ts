@@ -189,7 +189,7 @@ test.describe('escalation-reasoning', () => {
       const card = page.getByTestId(`review-item-${title}`);
       await expect(card).toBeVisible({ timeout: 10000 });
 
-      const reason = page.locator(`#escalation-reason-${title}`);
+      const reason = page.getByTestId(`escalation-reason-${title}`);
       await expect(reason).toBeVisible({ timeout: 10000 });
       // Verbatim backend copy (pkg/classifier/classifier.go's no-match fallback),
       // prefixed by the "no-match" ❓ emoji (ESCALATION_REASON_EMOJI in
