@@ -52,6 +52,16 @@ const (
 	SessionRoleReview = "review"
 )
 
+// RespawnEvent reason constants — identify which respawn/remediation call
+// site in server/services/backlog_service_triage.go produced a given
+// RespawnEventData row.
+const (
+	RespawnReasonAutonomousTurn  = "autonomous_turn_respawn"
+	RespawnReasonStaleWork       = "stale_work_remediation"
+	RespawnReasonReviewAbandoned = "review_respawn"
+	RespawnReasonTriageOrphaned  = "triage_respawn"
+)
+
 // IsTmuxBackedSessionRole reports whether role identifies a session that runs as a
 // persistent, live tmux-attached claude process — one that must be explicitly
 // archived AND have its tmux pane killed once its backlog item goes terminal, or it

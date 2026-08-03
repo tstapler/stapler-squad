@@ -5,6 +5,17 @@
 **Complexity**: 3 — system design (multiple widgets + one new backend table)
 **Backlog item**: `0a366262-145d-4eb8-81fc-965cf563d7f7` — "Improve the ux of the backlog item workflow and sessions list"
 
+## AC10 Decision Record (2026-08-02)
+
+**Decision**: This backlog item (`0a366262-145d-4eb8-81fc-965cf563d7f7`) is the **canonical delivery vehicle** for `project_plans/backlog-session-lifecycle-ux`'s already-planned work. No independent second plan is produced; this item's implementation session executes `project_plans/backlog-session-lifecycle-ux/implementation/plan.md` directly, carrying forward the two P1 corrections this file's Scope section already flagged (idempotency dedupe, two-counter caption) plus AC7/AC8's fail-open/queued-vs-failed requirements.
+
+**Rationale**:
+- No PR exists yet for `backlog-session-lifecycle-ux`, `backlog-status-visibility`, or any respawn-audit-trail work (`gh pr list --search "lifecycle-ux OR respawn OR status-visibility"` on 2026-08-02: zero matches among open/merged/closed PRs). Executing this item against the existing plan produces exactly one PR, satisfying this AC's actual goal ("so two divergent PRs touching the same files are not produced in parallel") — there is nothing to reconcile against because nothing has shipped from the other plan.
+- The Phase 0 pre-implementation gate (`project_plans/backlog-session-lifecycle-ux/implementation/plan.md` Story 0.1.1/Task 0.1.1a — merge-base check on commits `0ac676001`/`f7ab0c9ad`) was re-run on 2026-08-02: both commits are now ancestors of `origin/main` (confirmed via `git merge-base --is-ancestor 0ac676001 origin/main` and same for `f7ab0c9ad`; both exit 0). `origin/main` is the relevant target per this repo's PR workflow (backlog PRs are opened against `tstapler/stapler-squad`, i.e. `origin`, not `upstream-fanatics`). The gate is cleared for this branch.
+- No operator was reachable to make this call synchronously (autonomous backlog session); this session made the call itself, in auto mode, per the standing instruction to make the reasonable call and proceed rather than block indefinitely, and is recording the decision here rather than acting silently on it.
+
+This decision does not require re-deriving `research/summary.md` or `implementation/plan.md`/`validation.md` above — they already state "adopt the existing plan verbatim" and are left as-is; this section only resolves the one open item they both deferred to "an operator decision."
+
 ## ⚠ Duplicate-work finding (read first)
 
 This item's description is, near-verbatim, the problem statement of an **already fully-planned** project sitting in this working tree right now: `project_plans/backlog-session-lifecycle-ux/`. That directory already contains a complete SDD pipeline — `requirements.md`, `research/{stack,features,pitfalls,ux,build-vs-buy}.md`, `implementation/plan.md` (5 phases, 20 stories, full task breakdown), `implementation/architecture-review.md`, `implementation/adversarial-review.md` (verdict: CONCERNS, with P1 items flagged and one already resolved), `implementation/pre-mortem.md` (5 failure modes, 2 P1), and `implementation/validation.md` (full requirement→test mapping + UX acceptance tests) — all dated 2026-08-01 (today), currently **uncommitted** in this checkout.

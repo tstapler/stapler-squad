@@ -54,6 +54,9 @@ type PipelineMode func(*sql.Selector)
 // Project is the predicate function for project builders.
 type Project func(*sql.Selector)
 
+// RespawnEvent is the predicate function for respawnevent builders.
+type RespawnEvent func(*sql.Selector)
+
 // ReviewVerdict is the predicate function for reviewverdict builders.
 type ReviewVerdict func(*sql.Selector)
 

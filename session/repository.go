@@ -329,6 +329,22 @@ type ProgressNoteData struct {
 	CreatedAt      time.Time
 }
 
+// RespawnEventData is the domain DTO replacing *ent.RespawnEvent in Storage returns.
+// Append-only audit row for one automated respawn/remediation attempt — see
+// RespawnReasonAutonomousTurn/RespawnReasonStaleWork/RespawnReasonReviewAbandoned/
+// RespawnReasonTriageOrphaned in backlog.go for the reason vocabulary.
+type RespawnEventData struct {
+	ID                    string
+	Reason                string
+	TriggeringSessionUUID *string
+	ResultingSessionUUID  *string
+	// Queued is true when the spawn attempt hit the concurrency cap and was
+	// queued instead of spawning a session, distinguishing "queued" from
+	// "spawn attempt failed" when ResultingSessionUUID is empty.
+	Queued    bool
+	CreatedAt time.Time
+}
+
 // SourceSyncEventData is the domain DTO replacing *ent.SourceSyncEvent in Storage returns.
 type SourceSyncEventData struct {
 	ID           string
@@ -438,6 +454,11 @@ type BacklogItemData struct {
 	// implementer's decision history). Only populated when explicitly loaded by
 	// the caller (e.g. GetBacklogItem) — see StatusEvents for the same pattern.
 	ProgressNotes []ProgressNoteData
+	// RespawnEvents holds the eagerly-loaded automated-respawn audit trail
+	// (all-time, append-only), capped to the 50 most recent rows. Only
+	// populated when explicitly loaded by the caller (e.g. GetBacklogItem) —
+	// see StatusEvents for the same pattern.
+	RespawnEvents []RespawnEventData
 }
 
 // BacklogItemSummary is a lightweight projection of BacklogItemData for list views.

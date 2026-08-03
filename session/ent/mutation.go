@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/respawnevent"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
@@ -64,6 +65,7 @@ const (
 	TypeItemSource              = "ItemSource"
 	TypePipelineMode            = "PipelineMode"
 	TypeProject                 = "Project"
+	TypeRespawnEvent            = "RespawnEvent"
 	TypeReviewVerdict           = "ReviewVerdict"
 	TypeSession                 = "Session"
 	TypeSessionGoal             = "SessionGoal"
@@ -3037,6 +3039,9 @@ type BacklogItemMutation struct {
 	progress_notes                  map[uuid.UUID]struct{}
 	removedprogress_notes           map[uuid.UUID]struct{}
 	clearedprogress_notes           bool
+	respawn_events                  map[uuid.UUID]struct{}
+	removedrespawn_events           map[uuid.UUID]struct{}
+	clearedrespawn_events           bool
 	source                          *uuid.UUID
 	clearedsource                   bool
 	done                            bool
@@ -4970,6 +4975,60 @@ func (m *BacklogItemMutation) ResetProgressNotes() {
 	m.removedprogress_notes = nil
 }
 
+// AddRespawnEventIDs adds the "respawn_events" edge to the RespawnEvent entity by ids.
+func (m *BacklogItemMutation) AddRespawnEventIDs(ids ...uuid.UUID) {
+	if m.respawn_events == nil {
+		m.respawn_events = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.respawn_events[ids[i]] = struct{}{}
+	}
+}
+
+// ClearRespawnEvents clears the "respawn_events" edge to the RespawnEvent entity.
+func (m *BacklogItemMutation) ClearRespawnEvents() {
+	m.clearedrespawn_events = true
+}
+
+// RespawnEventsCleared reports if the "respawn_events" edge to the RespawnEvent entity was cleared.
+func (m *BacklogItemMutation) RespawnEventsCleared() bool {
+	return m.clearedrespawn_events
+}
+
+// RemoveRespawnEventIDs removes the "respawn_events" edge to the RespawnEvent entity by IDs.
+func (m *BacklogItemMutation) RemoveRespawnEventIDs(ids ...uuid.UUID) {
+	if m.removedrespawn_events == nil {
+		m.removedrespawn_events = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.respawn_events, ids[i])
+		m.removedrespawn_events[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedRespawnEvents returns the removed IDs of the "respawn_events" edge to the RespawnEvent entity.
+func (m *BacklogItemMutation) RemovedRespawnEventsIDs() (ids []uuid.UUID) {
+	for id := range m.removedrespawn_events {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// RespawnEventsIDs returns the "respawn_events" edge IDs in the mutation.
+func (m *BacklogItemMutation) RespawnEventsIDs() (ids []uuid.UUID) {
+	for id := range m.respawn_events {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetRespawnEvents resets all changes to the "respawn_events" edge.
+func (m *BacklogItemMutation) ResetRespawnEvents() {
+	m.respawn_events = nil
+	m.clearedrespawn_events = false
+	m.removedrespawn_events = nil
+}
+
 // SetSourceID sets the "source" edge to the ItemSource entity by id.
 func (m *BacklogItemMutation) SetSourceID(id uuid.UUID) {
 	m.source = &id
@@ -5872,7 +5931,7 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *BacklogItemMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.item_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -5887,6 +5946,9 @@ func (m *BacklogItemMutation) AddedEdges() []string {
 	}
 	if m.progress_notes != nil {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.respawn_events != nil {
+		edges = append(edges, backlogitem.EdgeRespawnEvents)
 	}
 	if m.source != nil {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -5928,6 +5990,12 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeRespawnEvents:
+		ids := make([]ent.Value, 0, len(m.respawn_events))
+		for id := range m.respawn_events {
+			ids = append(ids, id)
+		}
+		return ids
 	case backlogitem.EdgeSource:
 		if id := m.source; id != nil {
 			return []ent.Value{*id}
@@ -5938,7 +6006,7 @@ func (m *BacklogItemMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *BacklogItemMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.removeditem_sessions != nil {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -5953,6 +6021,9 @@ func (m *BacklogItemMutation) RemovedEdges() []string {
 	}
 	if m.removedprogress_notes != nil {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.removedrespawn_events != nil {
+		edges = append(edges, backlogitem.EdgeRespawnEvents)
 	}
 	return edges
 }
@@ -5991,13 +6062,19 @@ func (m *BacklogItemMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case backlogitem.EdgeRespawnEvents:
+		ids := make([]ent.Value, 0, len(m.removedrespawn_events))
+		for id := range m.removedrespawn_events {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *BacklogItemMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.cleareditem_sessions {
 		edges = append(edges, backlogitem.EdgeItemSessions)
 	}
@@ -6012,6 +6089,9 @@ func (m *BacklogItemMutation) ClearedEdges() []string {
 	}
 	if m.clearedprogress_notes {
 		edges = append(edges, backlogitem.EdgeProgressNotes)
+	}
+	if m.clearedrespawn_events {
+		edges = append(edges, backlogitem.EdgeRespawnEvents)
 	}
 	if m.clearedsource {
 		edges = append(edges, backlogitem.EdgeSource)
@@ -6033,6 +6113,8 @@ func (m *BacklogItemMutation) EdgeCleared(name string) bool {
 		return m.clearedstuck_states
 	case backlogitem.EdgeProgressNotes:
 		return m.clearedprogress_notes
+	case backlogitem.EdgeRespawnEvents:
+		return m.clearedrespawn_events
 	case backlogitem.EdgeSource:
 		return m.clearedsource
 	}
@@ -6068,6 +6150,9 @@ func (m *BacklogItemMutation) ResetEdge(name string) error {
 		return nil
 	case backlogitem.EdgeProgressNotes:
 		m.ResetProgressNotes()
+		return nil
+	case backlogitem.EdgeRespawnEvents:
+		m.ResetRespawnEvents()
 		return nil
 	case backlogitem.EdgeSource:
 		m.ResetSource()
@@ -18328,6 +18413,703 @@ func (m *ProjectMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown Project edge %s", name)
+}
+
+// RespawnEventMutation represents an operation that mutates the RespawnEvent nodes in the graph.
+type RespawnEventMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *uuid.UUID
+	reason                  *string
+	triggering_session_uuid *string
+	resulting_session_uuid  *string
+	queued                  *bool
+	created_at              *time.Time
+	clearedFields           map[string]struct{}
+	item                    *uuid.UUID
+	cleareditem             bool
+	done                    bool
+	oldValue                func(context.Context) (*RespawnEvent, error)
+	predicates              []predicate.RespawnEvent
+}
+
+var _ ent.Mutation = (*RespawnEventMutation)(nil)
+
+// respawneventOption allows management of the mutation configuration using functional options.
+type respawneventOption func(*RespawnEventMutation)
+
+// newRespawnEventMutation creates new mutation for the RespawnEvent entity.
+func newRespawnEventMutation(c config, op Op, opts ...respawneventOption) *RespawnEventMutation {
+	m := &RespawnEventMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeRespawnEvent,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withRespawnEventID sets the ID field of the mutation.
+func withRespawnEventID(id uuid.UUID) respawneventOption {
+	return func(m *RespawnEventMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *RespawnEvent
+		)
+		m.oldValue = func(ctx context.Context) (*RespawnEvent, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().RespawnEvent.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withRespawnEvent sets the old RespawnEvent of the mutation.
+func withRespawnEvent(node *RespawnEvent) respawneventOption {
+	return func(m *RespawnEventMutation) {
+		m.oldValue = func(context.Context) (*RespawnEvent, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m RespawnEventMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m RespawnEventMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of RespawnEvent entities.
+func (m *RespawnEventMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *RespawnEventMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *RespawnEventMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().RespawnEvent.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetItemID sets the "item_id" field.
+func (m *RespawnEventMutation) SetItemID(u uuid.UUID) {
+	m.item = &u
+}
+
+// ItemID returns the value of the "item_id" field in the mutation.
+func (m *RespawnEventMutation) ItemID() (r uuid.UUID, exists bool) {
+	v := m.item
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldItemID returns the old "item_id" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldItemID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldItemID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldItemID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldItemID: %w", err)
+	}
+	return oldValue.ItemID, nil
+}
+
+// ResetItemID resets all changes to the "item_id" field.
+func (m *RespawnEventMutation) ResetItemID() {
+	m.item = nil
+}
+
+// SetReason sets the "reason" field.
+func (m *RespawnEventMutation) SetReason(s string) {
+	m.reason = &s
+}
+
+// Reason returns the value of the "reason" field in the mutation.
+func (m *RespawnEventMutation) Reason() (r string, exists bool) {
+	v := m.reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReason returns the old "reason" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReason: %w", err)
+	}
+	return oldValue.Reason, nil
+}
+
+// ResetReason resets all changes to the "reason" field.
+func (m *RespawnEventMutation) ResetReason() {
+	m.reason = nil
+}
+
+// SetTriggeringSessionUUID sets the "triggering_session_uuid" field.
+func (m *RespawnEventMutation) SetTriggeringSessionUUID(s string) {
+	m.triggering_session_uuid = &s
+}
+
+// TriggeringSessionUUID returns the value of the "triggering_session_uuid" field in the mutation.
+func (m *RespawnEventMutation) TriggeringSessionUUID() (r string, exists bool) {
+	v := m.triggering_session_uuid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTriggeringSessionUUID returns the old "triggering_session_uuid" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldTriggeringSessionUUID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTriggeringSessionUUID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTriggeringSessionUUID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTriggeringSessionUUID: %w", err)
+	}
+	return oldValue.TriggeringSessionUUID, nil
+}
+
+// ClearTriggeringSessionUUID clears the value of the "triggering_session_uuid" field.
+func (m *RespawnEventMutation) ClearTriggeringSessionUUID() {
+	m.triggering_session_uuid = nil
+	m.clearedFields[respawnevent.FieldTriggeringSessionUUID] = struct{}{}
+}
+
+// TriggeringSessionUUIDCleared returns if the "triggering_session_uuid" field was cleared in this mutation.
+func (m *RespawnEventMutation) TriggeringSessionUUIDCleared() bool {
+	_, ok := m.clearedFields[respawnevent.FieldTriggeringSessionUUID]
+	return ok
+}
+
+// ResetTriggeringSessionUUID resets all changes to the "triggering_session_uuid" field.
+func (m *RespawnEventMutation) ResetTriggeringSessionUUID() {
+	m.triggering_session_uuid = nil
+	delete(m.clearedFields, respawnevent.FieldTriggeringSessionUUID)
+}
+
+// SetResultingSessionUUID sets the "resulting_session_uuid" field.
+func (m *RespawnEventMutation) SetResultingSessionUUID(s string) {
+	m.resulting_session_uuid = &s
+}
+
+// ResultingSessionUUID returns the value of the "resulting_session_uuid" field in the mutation.
+func (m *RespawnEventMutation) ResultingSessionUUID() (r string, exists bool) {
+	v := m.resulting_session_uuid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResultingSessionUUID returns the old "resulting_session_uuid" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldResultingSessionUUID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResultingSessionUUID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResultingSessionUUID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResultingSessionUUID: %w", err)
+	}
+	return oldValue.ResultingSessionUUID, nil
+}
+
+// ClearResultingSessionUUID clears the value of the "resulting_session_uuid" field.
+func (m *RespawnEventMutation) ClearResultingSessionUUID() {
+	m.resulting_session_uuid = nil
+	m.clearedFields[respawnevent.FieldResultingSessionUUID] = struct{}{}
+}
+
+// ResultingSessionUUIDCleared returns if the "resulting_session_uuid" field was cleared in this mutation.
+func (m *RespawnEventMutation) ResultingSessionUUIDCleared() bool {
+	_, ok := m.clearedFields[respawnevent.FieldResultingSessionUUID]
+	return ok
+}
+
+// ResetResultingSessionUUID resets all changes to the "resulting_session_uuid" field.
+func (m *RespawnEventMutation) ResetResultingSessionUUID() {
+	m.resulting_session_uuid = nil
+	delete(m.clearedFields, respawnevent.FieldResultingSessionUUID)
+}
+
+// SetQueued sets the "queued" field.
+func (m *RespawnEventMutation) SetQueued(b bool) {
+	m.queued = &b
+}
+
+// Queued returns the value of the "queued" field in the mutation.
+func (m *RespawnEventMutation) Queued() (r bool, exists bool) {
+	v := m.queued
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldQueued returns the old "queued" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldQueued(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldQueued is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldQueued requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldQueued: %w", err)
+	}
+	return oldValue.Queued, nil
+}
+
+// ResetQueued resets all changes to the "queued" field.
+func (m *RespawnEventMutation) ResetQueued() {
+	m.queued = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *RespawnEventMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *RespawnEventMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the RespawnEvent entity.
+// If the RespawnEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RespawnEventMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *RespawnEventMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// ClearItem clears the "item" edge to the BacklogItem entity.
+func (m *RespawnEventMutation) ClearItem() {
+	m.cleareditem = true
+	m.clearedFields[respawnevent.FieldItemID] = struct{}{}
+}
+
+// ItemCleared reports if the "item" edge to the BacklogItem entity was cleared.
+func (m *RespawnEventMutation) ItemCleared() bool {
+	return m.cleareditem
+}
+
+// ItemIDs returns the "item" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ItemID instead. It exists only for internal usage by the builders.
+func (m *RespawnEventMutation) ItemIDs() (ids []uuid.UUID) {
+	if id := m.item; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetItem resets all changes to the "item" edge.
+func (m *RespawnEventMutation) ResetItem() {
+	m.item = nil
+	m.cleareditem = false
+}
+
+// Where appends a list predicates to the RespawnEventMutation builder.
+func (m *RespawnEventMutation) Where(ps ...predicate.RespawnEvent) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the RespawnEventMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *RespawnEventMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.RespawnEvent, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *RespawnEventMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *RespawnEventMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (RespawnEvent).
+func (m *RespawnEventMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *RespawnEventMutation) Fields() []string {
+	fields := make([]string, 0, 6)
+	if m.item != nil {
+		fields = append(fields, respawnevent.FieldItemID)
+	}
+	if m.reason != nil {
+		fields = append(fields, respawnevent.FieldReason)
+	}
+	if m.triggering_session_uuid != nil {
+		fields = append(fields, respawnevent.FieldTriggeringSessionUUID)
+	}
+	if m.resulting_session_uuid != nil {
+		fields = append(fields, respawnevent.FieldResultingSessionUUID)
+	}
+	if m.queued != nil {
+		fields = append(fields, respawnevent.FieldQueued)
+	}
+	if m.created_at != nil {
+		fields = append(fields, respawnevent.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *RespawnEventMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case respawnevent.FieldItemID:
+		return m.ItemID()
+	case respawnevent.FieldReason:
+		return m.Reason()
+	case respawnevent.FieldTriggeringSessionUUID:
+		return m.TriggeringSessionUUID()
+	case respawnevent.FieldResultingSessionUUID:
+		return m.ResultingSessionUUID()
+	case respawnevent.FieldQueued:
+		return m.Queued()
+	case respawnevent.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *RespawnEventMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case respawnevent.FieldItemID:
+		return m.OldItemID(ctx)
+	case respawnevent.FieldReason:
+		return m.OldReason(ctx)
+	case respawnevent.FieldTriggeringSessionUUID:
+		return m.OldTriggeringSessionUUID(ctx)
+	case respawnevent.FieldResultingSessionUUID:
+		return m.OldResultingSessionUUID(ctx)
+	case respawnevent.FieldQueued:
+		return m.OldQueued(ctx)
+	case respawnevent.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown RespawnEvent field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *RespawnEventMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case respawnevent.FieldItemID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetItemID(v)
+		return nil
+	case respawnevent.FieldReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReason(v)
+		return nil
+	case respawnevent.FieldTriggeringSessionUUID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTriggeringSessionUUID(v)
+		return nil
+	case respawnevent.FieldResultingSessionUUID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResultingSessionUUID(v)
+		return nil
+	case respawnevent.FieldQueued:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetQueued(v)
+		return nil
+	case respawnevent.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown RespawnEvent field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *RespawnEventMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *RespawnEventMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *RespawnEventMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown RespawnEvent numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *RespawnEventMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(respawnevent.FieldTriggeringSessionUUID) {
+		fields = append(fields, respawnevent.FieldTriggeringSessionUUID)
+	}
+	if m.FieldCleared(respawnevent.FieldResultingSessionUUID) {
+		fields = append(fields, respawnevent.FieldResultingSessionUUID)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *RespawnEventMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *RespawnEventMutation) ClearField(name string) error {
+	switch name {
+	case respawnevent.FieldTriggeringSessionUUID:
+		m.ClearTriggeringSessionUUID()
+		return nil
+	case respawnevent.FieldResultingSessionUUID:
+		m.ClearResultingSessionUUID()
+		return nil
+	}
+	return fmt.Errorf("unknown RespawnEvent nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *RespawnEventMutation) ResetField(name string) error {
+	switch name {
+	case respawnevent.FieldItemID:
+		m.ResetItemID()
+		return nil
+	case respawnevent.FieldReason:
+		m.ResetReason()
+		return nil
+	case respawnevent.FieldTriggeringSessionUUID:
+		m.ResetTriggeringSessionUUID()
+		return nil
+	case respawnevent.FieldResultingSessionUUID:
+		m.ResetResultingSessionUUID()
+		return nil
+	case respawnevent.FieldQueued:
+		m.ResetQueued()
+		return nil
+	case respawnevent.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown RespawnEvent field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *RespawnEventMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.item != nil {
+		edges = append(edges, respawnevent.EdgeItem)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *RespawnEventMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case respawnevent.EdgeItem:
+		if id := m.item; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *RespawnEventMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *RespawnEventMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *RespawnEventMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.cleareditem {
+		edges = append(edges, respawnevent.EdgeItem)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *RespawnEventMutation) EdgeCleared(name string) bool {
+	switch name {
+	case respawnevent.EdgeItem:
+		return m.cleareditem
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *RespawnEventMutation) ClearEdge(name string) error {
+	switch name {
+	case respawnevent.EdgeItem:
+		m.ClearItem()
+		return nil
+	}
+	return fmt.Errorf("unknown RespawnEvent unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *RespawnEventMutation) ResetEdge(name string) error {
+	switch name {
+	case respawnevent.EdgeItem:
+		m.ResetItem()
+		return nil
+	}
+	return fmt.Errorf("unknown RespawnEvent edge %s", name)
 }
 
 // ReviewVerdictMutation represents an operation that mutates the ReviewVerdict nodes in the graph.

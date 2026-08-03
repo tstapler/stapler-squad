@@ -201,6 +201,18 @@ func (f ProjectFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProjectMutation", m)
 }
 
+// The RespawnEventFunc type is an adapter to allow the use of ordinary
+// function as RespawnEvent mutator.
+type RespawnEventFunc func(context.Context, *ent.RespawnEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f RespawnEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.RespawnEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.RespawnEventMutation", m)
+}
+
 // The ReviewVerdictFunc type is an adapter to allow the use of ordinary
 // function as ReviewVerdict mutator.
 type ReviewVerdictFunc func(context.Context, *ent.ReviewVerdictMutation) (ent.Value, error)

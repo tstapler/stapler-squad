@@ -487,6 +487,7 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 		CreatedAt:                timestamppb.New(is.CreatedAt),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
+		EndReason:                is.EndReason,
 	}
 	if is.StartedAt != nil {
 		p.StartedAt = timestamppb.New(*is.StartedAt)
@@ -727,6 +728,28 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 			}
 		}
 		p.ProgressNotes = protoNotes
+	}
+
+	// Populate respawn events (the automated-respawn audit trail) when they
+	// were eagerly loaded.
+	if len(item.RespawnEvents) > 0 {
+		protoRespawns := make([]*sessionv1.RespawnEvent, len(item.RespawnEvents))
+		for i, ev := range item.RespawnEvents {
+			re := &sessionv1.RespawnEvent{
+				Id:        ev.ID,
+				Reason:    ev.Reason,
+				CreatedAt: timestamppb.New(ev.CreatedAt),
+				Queued:    ev.Queued,
+			}
+			if ev.TriggeringSessionUUID != nil {
+				re.TriggeringSessionUuid = *ev.TriggeringSessionUUID
+			}
+			if ev.ResultingSessionUUID != nil {
+				re.ResultingSessionUuid = *ev.ResultingSessionUUID
+			}
+			protoRespawns[i] = re
+		}
+		p.RespawnEvents = protoRespawns
 	}
 
 	return p

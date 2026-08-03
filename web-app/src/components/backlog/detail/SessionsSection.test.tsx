@@ -145,6 +145,38 @@ describe("SessionsSection", () => {
     expect(screen.getByRole("link", { name: /a1b2c3d4/ })).toHaveAttribute("href", "/?session=a1b2c3d4");
   });
 
+  it("SessionsSection_should_RenderEndReasonChip_When_SessionHasNonEmptyEndReason", () => {
+    const item = makeItem([makeSession({ sessionId: "err-session-1", role: "work", endReason: "process_error" })]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText(/Headless call failed \(process error\)/)).toBeInTheDocument();
+  });
+
+  it("SessionsSection_should_RenderNoChip_When_SessionEndReasonIsEmpty", () => {
+    const item = makeItem([makeSession({ sessionId: "clean-session-1", role: "work", endReason: "" })]);
+    render(
+      <SessionsSection
+        item={item}
+        pipelineModes={[]}
+        latestWorkSession={undefined}
+        deletingSessionId={null}
+        defaultExpanded={true}
+        onDeleteSession={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("SessionsSection_should_RenderCollapsibleNotDeadAnchor_When_ClassifySessionKindReturnsBlockedGuardrail", () => {
     const item = makeItem([
       makeSession({

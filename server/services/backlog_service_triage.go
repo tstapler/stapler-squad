@@ -1396,6 +1396,16 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 // already in_progress — so this mirrors AutoReopenAfterFailedReview's guard
 // and cap checks without the review→in_progress transition step.
 func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID string) error {
+	return s.autoRespawnAutonomousWork(ctx, itemID, session.RespawnReasonAutonomousTurn, "")
+}
+
+// autoRespawnAutonomousWork is AutoRespawnAutonomousWork's shared implementation,
+// parameterized by the RespawnEvent reason/triggering-session-uuid so
+// RemediateStaleWorkSession can delegate here (it does the actual respawn) while
+// still recording its own distinct reason (RespawnReasonStaleWork) rather than
+// inheriting AutoRespawnAutonomousWork's reason — see RespawnEvent reason
+// constants in session/backlog.go.
+func (s *BacklogService) autoRespawnAutonomousWork(ctx context.Context, itemID, respawnReason, triggeringSessionUUID string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
 	}
@@ -1437,12 +1447,15 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 		return nil
 	}
 
-	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+	spawnResp, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 		ItemId:     itemID,
 		Autonomous: true,
 	}))
 	if spawnErr != nil {
 		return fmt.Errorf("spawn session: %w", spawnErr)
+	}
+	if recErr := s.storage.CreateRespawnEvent(ctx, itemID, respawnReason, triggeringSessionUUID, spawnResp.Msg.SessionUuid, spawnResp.Msg.Queued); recErr != nil {
+		log.ErrorLog.Printf("[autoRespawnAutonomousWork] failed to record respawn event for item %s: %v", itemID, recErr)
 	}
 	log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s respawned with a fresh turn budget", itemID)
 	return nil
@@ -1500,10 +1513,12 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	if active == nil {
 		// The stale session already ended between when the sweep queued this
 		// remediation and now (a concurrent respawn, or the agent finally
-		// wrapped up on its own) — AutoRespawnAutonomousWork's own
+		// wrapped up on its own) — autoRespawnAutonomousWork's own
 		// hasActiveWorkSession/rework-cap guards decide whether a fresh
-		// session is still warranted.
-		return s.AutoRespawnAutonomousWork(ctx, itemID)
+		// session is still warranted. Still record this as a stale-work
+		// remediation, not an autonomous-turn respawn — that's how this call
+		// site got invoked, even though the session itself is already gone.
+		return s.autoRespawnAutonomousWork(ctx, itemID, session.RespawnReasonStaleWork, "")
 	}
 
 	// Kill the stale tmux pane only (Instance.KillSession, NOT Instance.Kill),
@@ -1524,7 +1539,7 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	}
 	log.InfoLog.Printf("[RemediateStaleWorkSession] item=%s ended stale work session=%s (session_uuid=%s), respawning", itemID, active.ID, active.SessionUUID)
 
-	return s.AutoRespawnAutonomousWork(ctx, itemID)
+	return s.autoRespawnAutonomousWork(ctx, itemID, session.RespawnReasonStaleWork, active.SessionUUID)
 }
 
 // AutoReopenForPRFix implements session.PRFixSpawner. It transitions the item
@@ -1720,8 +1735,16 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		return nil
 	}
 
-	if _, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID})); reviewErr != nil {
+	reviewResp, reviewErr := s.TriggerReReview(ctx, connect.NewRequest(&sessionv1.TriggerReReviewRequest{ItemId: itemID}))
+	if reviewErr != nil {
 		return fmt.Errorf("trigger re-review: %w", reviewErr)
+	}
+	var resultingSessionUUID string
+	if reviewResp.Msg.ItemSession != nil {
+		resultingSessionUUID = reviewResp.Msg.ItemSession.SessionUuid
+	}
+	if recErr := s.storage.CreateRespawnEvent(ctx, itemID, session.RespawnReasonReviewAbandoned, "", resultingSessionUUID, false); recErr != nil {
+		log.ErrorLog.Printf("[AutoRespawnReview] failed to record respawn event for item %s: %v", itemID, recErr)
 	}
 	log.InfoLog.Printf("[AutoRespawnReview] item %s re-review triggered", itemID)
 	return nil
@@ -1758,8 +1781,16 @@ func (s *BacklogService) AutoRespawnTriage(ctx context.Context, itemID string) e
 		return nil
 	}
 
-	if _, triageErr := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID})); triageErr != nil {
+	triageResp, triageErr := s.TriggerTriage(ctx, connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
+	if triageErr != nil {
 		return fmt.Errorf("trigger triage: %w", triageErr)
+	}
+	var resultingSessionUUID string
+	if triageResp.Msg.ItemSession != nil {
+		resultingSessionUUID = triageResp.Msg.ItemSession.SessionUuid
+	}
+	if recErr := s.storage.CreateRespawnEvent(ctx, itemID, session.RespawnReasonTriageOrphaned, "", resultingSessionUUID, false); recErr != nil {
+		log.ErrorLog.Printf("[AutoRespawnTriage] failed to record respawn event for item %s: %v", itemID, recErr)
 	}
 	log.InfoLog.Printf("[AutoRespawnTriage] item %s triage re-triggered", itemID)
 	return nil

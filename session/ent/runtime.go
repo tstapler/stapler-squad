@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/respawnevent"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -455,6 +456,20 @@ func init() {
 	project.DefaultUpdatedAt = projectDescUpdatedAt.Default.(func() time.Time)
 	// project.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	project.UpdateDefaultUpdatedAt = projectDescUpdatedAt.UpdateDefault.(func() time.Time)
+	respawneventFields := schema.RespawnEvent{}.Fields()
+	_ = respawneventFields
+	// respawneventDescQueued is the schema descriptor for queued field.
+	respawneventDescQueued := respawneventFields[5].Descriptor()
+	// respawnevent.DefaultQueued holds the default value on creation for the queued field.
+	respawnevent.DefaultQueued = respawneventDescQueued.Default.(bool)
+	// respawneventDescCreatedAt is the schema descriptor for created_at field.
+	respawneventDescCreatedAt := respawneventFields[6].Descriptor()
+	// respawnevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	respawnevent.DefaultCreatedAt = respawneventDescCreatedAt.Default.(func() time.Time)
+	// respawneventDescID is the schema descriptor for id field.
+	respawneventDescID := respawneventFields[0].Descriptor()
+	// respawnevent.DefaultID holds the default value on creation for the id field.
+	respawnevent.DefaultID = respawneventDescID.Default.(func() uuid.UUID)
 	reviewverdictFields := schema.ReviewVerdict{}.Fields()
 	_ = reviewverdictFields
 	// reviewverdictDescDiffTruncated is the schema descriptor for diff_truncated field.

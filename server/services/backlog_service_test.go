@@ -1515,6 +1515,15 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	}
 	assert.True(t, staleEnded, "the stale session must be tombstoned (EndedAt set)")
 	assert.True(t, newOpen, "the newly-spawned work session must be open")
+
+	updated, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, updated.RespawnEvents, 1, "expected exactly one RespawnEvent row")
+	ev := updated.RespawnEvents[0]
+	assert.Equal(t, session.RespawnReasonStaleWork, ev.Reason, "RemediateStaleWorkSession must record its own reason, not delegate to AutoRespawnAutonomousWork's")
+	require.NotNil(t, ev.TriggeringSessionUUID)
+	assert.Equal(t, "stale-work-session-uuid", *ev.TriggeringSessionUUID)
+	assert.NotNil(t, ev.ResultingSessionUUID)
 }
 
 // TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress verifies
@@ -1548,6 +1557,34 @@ func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *te
 
 	assert.Empty(t, stopper.killedPaneUUIDs, "must not kill anything once the item is no longer in_progress")
 	assert.Empty(t, creator.calls, "must not spawn a new session once the item is no longer in_progress")
+}
+
+// TestAutoRespawnAutonomousWork_should_RecordRespawnEventWithReasonAutonomousTurn_When_Respawned
+// verifies AutoRespawnAutonomousWork's own direct call path (not via RemediateStaleWorkSession)
+// records reason=autonomous_turn_respawn with no triggering session, distinct from
+// RemediateStaleWorkSession's reason=stale_work_remediation for the same underlying spawn logic.
+func TestAutoRespawnAutonomousWork_should_RecordRespawnEventWithReasonAutonomousTurn_When_Respawned(t *testing.T) {
+	storage := createTestStorage(t)
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	initGitRepoWithCommit(t, repoPath)
+
+	itemID := createReadyItemForSpawn(t, svc, repoPath, "item for direct autonomous respawn")
+	_, err := storage.TransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnAutonomousWork(t.Context(), itemID))
+	require.Len(t, creator.calls, 1, "a fresh work session must be spawned")
+
+	updated, err := storage.GetBacklogItem(t.Context(), itemID)
+	require.NoError(t, err)
+	require.Len(t, updated.RespawnEvents, 1, "expected exactly one RespawnEvent row")
+	ev := updated.RespawnEvents[0]
+	assert.Equal(t, session.RespawnReasonAutonomousTurn, ev.Reason)
+	assert.Nil(t, ev.TriggeringSessionUUID)
+	assert.NotNil(t, ev.ResultingSessionUUID)
 }
 
 // TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn verifies

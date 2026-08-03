@@ -46,6 +46,7 @@ import { VersionControlSection } from "./detail/VersionControlSection";
 import { SessionsSection } from "./detail/SessionsSection";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
+import { RespawnHistorySection } from "./detail/RespawnHistorySection";
 import { NotesSection } from "./detail/NotesSection";
 import * as styles from "./BacklogItemDetail.css";
 
@@ -319,6 +320,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [sessionsExpanded, setSessionsExpanded] = useSectionExpandState(itemId, "sessions", true);
   const [workflowExpanded, setWorkflowExpanded] = useSectionExpandState(itemId, "workflow", false);
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
+  const [respawnHistoryExpanded, setRespawnHistoryExpanded] = useSectionExpandState(itemId, "respawn-history", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
 
@@ -377,6 +379,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["sessions", sessionsExpanded, setSessionsExpanded],
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
+    ["respawn-history", respawnHistoryExpanded, setRespawnHistoryExpanded],
     ["notes", notesExpanded, setNotesExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
@@ -1240,6 +1243,8 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           <WorkflowHistorySection item={item} defaultExpanded={workflowExpanded} />
 
           <ProgressHistorySection item={item} defaultExpanded={progressHistoryExpanded} />
+
+          <RespawnHistorySection item={item} defaultExpanded={respawnHistoryExpanded} />
 
           <NotesSection
             item={item}

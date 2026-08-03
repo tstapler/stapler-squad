@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/respawnevent"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
@@ -112,6 +113,7 @@ func checkColumn(t, c string) error {
 			itemsource.Table:              itemsource.ValidColumn,
 			pipelinemode.Table:            pipelinemode.ValidColumn,
 			project.Table:                 project.ValidColumn,
+			respawnevent.Table:            respawnevent.ValidColumn,
 			reviewverdict.Table:           reviewverdict.ValidColumn,
 			session.Table:                 session.ValidColumn,
 			sessiongoal.Table:             sessiongoal.ValidColumn,

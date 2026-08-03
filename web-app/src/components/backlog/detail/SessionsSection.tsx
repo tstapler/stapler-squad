@@ -6,10 +6,23 @@ import { classifySessionKind, type SessionKind } from "@/lib/backlog/sessionKind
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
+import { formatEndReason } from "@/lib/backlog/formatEndReason";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
 import * as styles from "../BacklogItemDetail.css";
 import * as sectionStyles from "./SessionsSection.css";
+import * as endReasonStyles from "@/lib/backlog/formatEndReason.css";
+
+function EndReasonChip({ endReason }: { endReason?: string }) {
+  const { label, severity } = formatEndReason(endReason ?? "");
+  if (severity === "none") return null;
+  const cls = severity === "error" ? endReasonStyles.chipError : endReasonStyles.chipWarning;
+  return (
+    <span className={cls} role="status" aria-label={label}>
+      {severity === "error" ? "⛔" : "⚠️"} {label}
+    </span>
+  );
+}
 
 // Partial (not a full Record<SessionKind, ...>) because "work"/"review" are
 // Real Sessions rendered via the plain <a> branch below and never look this
@@ -137,6 +150,7 @@ export function SessionsSection({
                                   ${s.estimatedCostUsd.toFixed(4)}
                                 </span>
                               )}
+                              <EndReasonChip endReason={s.endReason} />
                             </span>
                           }
                         >
@@ -161,6 +175,7 @@ export function SessionsSection({
                           </span>
                         )}
                         {isOrphan && <span className={styles.sessionEndedBadge}>ended</span>}
+                        <EndReasonChip endReason={s.endReason} />
                       </a>
                     )}
                     <button

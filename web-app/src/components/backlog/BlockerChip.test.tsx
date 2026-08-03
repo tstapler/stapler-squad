@@ -70,4 +70,33 @@ describe("BlockerChip", () => {
     render(<BlockerChip item={makeItem()} variant="full" />);
     expect(screen.getByTestId("blocker-chip")).toHaveAttribute("aria-label", "Rework cap hit");
   });
+
+  it("BlockerChip_should_RenderRemediationCountSuffix_When_AttemptsGreaterThanZero", () => {
+    render(
+      <BlockerChip
+        item={makeItem({
+          remediationAttempts: 3,
+          nextRemediationAt: timestampFromDate(new Date(Date.now() + 10 * 60 * 1000)),
+        })}
+        variant="compact"
+      />
+    );
+    expect(screen.getByTestId("blocker-chip-attempts")).toHaveTextContent("×3");
+    expect(screen.getByTestId("blocker-chip-attempts")).toHaveTextContent("retrying in 10m");
+  });
+
+  it("BlockerChip_should_RenderNoSuffix_When_AttemptsIsZero", () => {
+    render(<BlockerChip item={makeItem({ remediationAttempts: 0 })} variant="compact" />);
+    expect(screen.queryByTestId("blocker-chip-attempts")).not.toBeInTheDocument();
+  });
+
+  it("BlockerChip_should_IncludeExhaustedWording_When_AttemptsHitMax", () => {
+    render(<BlockerChip item={makeItem({ remediationAttempts: 5 })} variant="compact" />);
+    expect(screen.getByTestId("blocker-chip-attempts")).toHaveTextContent("×5");
+    expect(screen.getByTestId("blocker-chip-attempts")).toHaveTextContent("(parked)");
+    expect(screen.getByTestId("blocker-chip")).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("parked")
+    );
+  });
 });

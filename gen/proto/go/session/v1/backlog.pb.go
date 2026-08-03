@@ -579,8 +579,12 @@ type ItemSession struct {
 	WorktreePath             string                 `protobuf:"bytes,15,opt,name=worktree_path,json=worktreePath,proto3" json:"worktree_path,omitempty"`
 	PipelineModeSnapshot     string                 `protobuf:"bytes,16,opt,name=pipeline_mode_snapshot,json=pipelineModeSnapshot,proto3" json:"pipeline_mode_snapshot,omitempty"`
 	PipelineModeSnapshotHash string                 `protobuf:"bytes,17,opt,name=pipeline_mode_snapshot_hash,json=pipelineModeSnapshotHash,proto3" json:"pipeline_mode_snapshot_hash,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// end_reason classifies how a headless (triage/review) call ended:
+	// "" (clean/unclassified), "shutdown", "timeout", "process_error",
+	// "claude_not_found", "other". Empty for interactive work sessions.
+	EndReason     string `protobuf:"bytes,18,opt,name=end_reason,json=endReason,proto3" json:"end_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ItemSession) Reset() {
@@ -732,6 +736,111 @@ func (x *ItemSession) GetPipelineModeSnapshotHash() string {
 	return ""
 }
 
+func (x *ItemSession) GetEndReason() string {
+	if x != nil {
+		return x.EndReason
+	}
+	return ""
+}
+
+// RespawnEvent is an append-only audit row for one automated respawn/
+// remediation attempt against a backlog item (see AutoRespawnReview,
+// AutoRespawnAutonomousWork, AutoRespawnTriage, RemediateStaleWorkSession).
+type RespawnEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// reason identifies which respawn/remediation call site produced this row:
+	// "autonomous_turn_respawn", "stale_work_remediation", "review_respawn",
+	// "triage_respawn".
+	Reason string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// triggering_session_uuid is the session (if any) whose end/staleness
+	// triggered this respawn. Empty when there was no prior active session.
+	TriggeringSessionUuid string `protobuf:"bytes,3,opt,name=triggering_session_uuid,json=triggeringSessionUuid,proto3" json:"triggering_session_uuid,omitempty"`
+	// resulting_session_uuid is the newly spawned session's UUID. Empty when
+	// the spawn attempt was queued (see queued) or failed outright.
+	ResultingSessionUuid string                 `protobuf:"bytes,4,opt,name=resulting_session_uuid,json=resultingSessionUuid,proto3" json:"resulting_session_uuid,omitempty"`
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// queued is true when the spawn attempt hit the concurrency cap and the
+	// item was queued instead of spawning a session (resulting_session_uuid is
+	// empty in that case, not a failure). False and an empty
+	// resulting_session_uuid together mean the spawn attempt itself failed.
+	Queued        bool `protobuf:"varint,6,opt,name=queued,proto3" json:"queued,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RespawnEvent) Reset() {
+	*x = RespawnEvent{}
+	mi := &file_session_v1_backlog_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RespawnEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RespawnEvent) ProtoMessage() {}
+
+func (x *RespawnEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_backlog_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RespawnEvent.ProtoReflect.Descriptor instead.
+func (*RespawnEvent) Descriptor() ([]byte, []int) {
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RespawnEvent) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *RespawnEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *RespawnEvent) GetTriggeringSessionUuid() string {
+	if x != nil {
+		return x.TriggeringSessionUuid
+	}
+	return ""
+}
+
+func (x *RespawnEvent) GetResultingSessionUuid() string {
+	if x != nil {
+		return x.ResultingSessionUuid
+	}
+	return ""
+}
+
+func (x *RespawnEvent) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *RespawnEvent) GetQueued() bool {
+	if x != nil {
+		return x.Queued
+	}
+	return false
+}
+
 // BacklogStatusEvent records a single status transition for a backlog item.
 type BacklogStatusEvent struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -751,7 +860,7 @@ type BacklogStatusEvent struct {
 
 func (x *BacklogStatusEvent) Reset() {
 	*x = BacklogStatusEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[7]
+	mi := &file_session_v1_backlog_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +872,7 @@ func (x *BacklogStatusEvent) String() string {
 func (*BacklogStatusEvent) ProtoMessage() {}
 
 func (x *BacklogStatusEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[7]
+	mi := &file_session_v1_backlog_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +885,7 @@ func (x *BacklogStatusEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogStatusEvent.ProtoReflect.Descriptor instead.
 func (*BacklogStatusEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{7}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *BacklogStatusEvent) GetId() string {
@@ -838,7 +947,7 @@ type BacklogProgressNote struct {
 
 func (x *BacklogProgressNote) Reset() {
 	*x = BacklogProgressNote{}
-	mi := &file_session_v1_backlog_proto_msgTypes[8]
+	mi := &file_session_v1_backlog_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -850,7 +959,7 @@ func (x *BacklogProgressNote) String() string {
 func (*BacklogProgressNote) ProtoMessage() {}
 
 func (x *BacklogProgressNote) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[8]
+	mi := &file_session_v1_backlog_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,7 +972,7 @@ func (x *BacklogProgressNote) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogProgressNote.ProtoReflect.Descriptor instead.
 func (*BacklogProgressNote) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{8}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *BacklogProgressNote) GetId() string {
@@ -940,14 +1049,18 @@ type BacklogItem struct {
 	// category is a coarse classification (bugfix/feature/chore/refactor) the
 	// frontend uses to pre-fill sane automation-toggle defaults at creation
 	// time. Unset/empty means uncategorized.
-	Category      *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	Category *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	// respawn_events is the append-only automated-respawn audit trail —
+	// eagerly loaded alongside status_events/progress_notes (see
+	// GetBacklogItem), capped to the 50 most recent rows.
+	RespawnEvents []*RespawnEvent `protobuf:"bytes,30,rep,name=respawn_events,json=respawnEvents,proto3" json:"respawn_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BacklogItem) Reset() {
 	*x = BacklogItem{}
-	mi := &file_session_v1_backlog_proto_msgTypes[9]
+	mi := &file_session_v1_backlog_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -959,7 +1072,7 @@ func (x *BacklogItem) String() string {
 func (*BacklogItem) ProtoMessage() {}
 
 func (x *BacklogItem) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[9]
+	mi := &file_session_v1_backlog_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -972,7 +1085,7 @@ func (x *BacklogItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItem.ProtoReflect.Descriptor instead.
 func (*BacklogItem) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{9}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BacklogItem) GetId() string {
@@ -1178,6 +1291,13 @@ func (x *BacklogItem) GetCategory() string {
 	return ""
 }
 
+func (x *BacklogItem) GetRespawnEvents() []*RespawnEvent {
+	if x != nil {
+		return x.RespawnEvents
+	}
+	return nil
+}
+
 // ItemSource represents an external plugin source that syncs items into the
 // backlog.
 type ItemSource struct {
@@ -1196,7 +1316,7 @@ type ItemSource struct {
 
 func (x *ItemSource) Reset() {
 	*x = ItemSource{}
-	mi := &file_session_v1_backlog_proto_msgTypes[10]
+	mi := &file_session_v1_backlog_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1328,7 @@ func (x *ItemSource) String() string {
 func (*ItemSource) ProtoMessage() {}
 
 func (x *ItemSource) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[10]
+	mi := &file_session_v1_backlog_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1341,7 @@ func (x *ItemSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ItemSource.ProtoReflect.Descriptor instead.
 func (*ItemSource) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{10}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ItemSource) GetId() string {
@@ -1312,7 +1432,7 @@ type PipelineMode struct {
 
 func (x *PipelineMode) Reset() {
 	*x = PipelineMode{}
-	mi := &file_session_v1_backlog_proto_msgTypes[11]
+	mi := &file_session_v1_backlog_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1324,7 +1444,7 @@ func (x *PipelineMode) String() string {
 func (*PipelineMode) ProtoMessage() {}
 
 func (x *PipelineMode) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[11]
+	mi := &file_session_v1_backlog_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1337,7 +1457,7 @@ func (x *PipelineMode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PipelineMode.ProtoReflect.Descriptor instead.
 func (*PipelineMode) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{11}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *PipelineMode) GetId() string {
@@ -1476,7 +1596,7 @@ type SourceSyncEvent struct {
 
 func (x *SourceSyncEvent) Reset() {
 	*x = SourceSyncEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[12]
+	mi := &file_session_v1_backlog_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1488,7 +1608,7 @@ func (x *SourceSyncEvent) String() string {
 func (*SourceSyncEvent) ProtoMessage() {}
 
 func (x *SourceSyncEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[12]
+	mi := &file_session_v1_backlog_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1501,7 +1621,7 @@ func (x *SourceSyncEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SourceSyncEvent.ProtoReflect.Descriptor instead.
 func (*SourceSyncEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{12}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SourceSyncEvent) GetId() string {
@@ -1583,7 +1703,7 @@ type CreateBacklogItemRequest struct {
 
 func (x *CreateBacklogItemRequest) Reset() {
 	*x = CreateBacklogItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[13]
+	mi := &file_session_v1_backlog_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1595,7 +1715,7 @@ func (x *CreateBacklogItemRequest) String() string {
 func (*CreateBacklogItemRequest) ProtoMessage() {}
 
 func (x *CreateBacklogItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[13]
+	mi := &file_session_v1_backlog_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1728,7 @@ func (x *CreateBacklogItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBacklogItemRequest.ProtoReflect.Descriptor instead.
 func (*CreateBacklogItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{13}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreateBacklogItemRequest) GetTitle() string {
@@ -1712,7 +1832,7 @@ type CreateBacklogItemResponse struct {
 
 func (x *CreateBacklogItemResponse) Reset() {
 	*x = CreateBacklogItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[14]
+	mi := &file_session_v1_backlog_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +1844,7 @@ func (x *CreateBacklogItemResponse) String() string {
 func (*CreateBacklogItemResponse) ProtoMessage() {}
 
 func (x *CreateBacklogItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[14]
+	mi := &file_session_v1_backlog_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1857,7 @@ func (x *CreateBacklogItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBacklogItemResponse.ProtoReflect.Descriptor instead.
 func (*CreateBacklogItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{14}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateBacklogItemResponse) GetItem() *BacklogItem {
@@ -1763,7 +1883,7 @@ type GetBacklogItemRequest struct {
 
 func (x *GetBacklogItemRequest) Reset() {
 	*x = GetBacklogItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[15]
+	mi := &file_session_v1_backlog_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1775,7 +1895,7 @@ func (x *GetBacklogItemRequest) String() string {
 func (*GetBacklogItemRequest) ProtoMessage() {}
 
 func (x *GetBacklogItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[15]
+	mi := &file_session_v1_backlog_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1788,7 +1908,7 @@ func (x *GetBacklogItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemRequest.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{15}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetBacklogItemRequest) GetItemId() string {
@@ -1807,7 +1927,7 @@ type GetBacklogItemResponse struct {
 
 func (x *GetBacklogItemResponse) Reset() {
 	*x = GetBacklogItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[16]
+	mi := &file_session_v1_backlog_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +1939,7 @@ func (x *GetBacklogItemResponse) String() string {
 func (*GetBacklogItemResponse) ProtoMessage() {}
 
 func (x *GetBacklogItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[16]
+	mi := &file_session_v1_backlog_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +1952,7 @@ func (x *GetBacklogItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemResponse.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{16}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetBacklogItemResponse) GetItem() *BacklogItem {
@@ -1905,7 +2025,7 @@ type BacklogItemShipStatus struct {
 
 func (x *BacklogItemShipStatus) Reset() {
 	*x = BacklogItemShipStatus{}
-	mi := &file_session_v1_backlog_proto_msgTypes[17]
+	mi := &file_session_v1_backlog_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1917,7 +2037,7 @@ func (x *BacklogItemShipStatus) String() string {
 func (*BacklogItemShipStatus) ProtoMessage() {}
 
 func (x *BacklogItemShipStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[17]
+	mi := &file_session_v1_backlog_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1930,7 +2050,7 @@ func (x *BacklogItemShipStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemShipStatus.ProtoReflect.Descriptor instead.
 func (*BacklogItemShipStatus) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{17}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *BacklogItemShipStatus) GetShipped() bool {
@@ -2072,7 +2192,7 @@ type ShippedCommit struct {
 
 func (x *ShippedCommit) Reset() {
 	*x = ShippedCommit{}
-	mi := &file_session_v1_backlog_proto_msgTypes[18]
+	mi := &file_session_v1_backlog_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2084,7 +2204,7 @@ func (x *ShippedCommit) String() string {
 func (*ShippedCommit) ProtoMessage() {}
 
 func (x *ShippedCommit) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[18]
+	mi := &file_session_v1_backlog_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2097,7 +2217,7 @@ func (x *ShippedCommit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShippedCommit.ProtoReflect.Descriptor instead.
 func (*ShippedCommit) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{18}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ShippedCommit) GetSha() string {
@@ -2143,7 +2263,7 @@ type ShippedFileStat struct {
 
 func (x *ShippedFileStat) Reset() {
 	*x = ShippedFileStat{}
-	mi := &file_session_v1_backlog_proto_msgTypes[19]
+	mi := &file_session_v1_backlog_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2155,7 +2275,7 @@ func (x *ShippedFileStat) String() string {
 func (*ShippedFileStat) ProtoMessage() {}
 
 func (x *ShippedFileStat) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[19]
+	mi := &file_session_v1_backlog_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2168,7 +2288,7 @@ func (x *ShippedFileStat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShippedFileStat.ProtoReflect.Descriptor instead.
 func (*ShippedFileStat) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{19}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ShippedFileStat) GetPath() string {
@@ -2208,7 +2328,7 @@ type GetBacklogItemShipStatusRequest struct {
 
 func (x *GetBacklogItemShipStatusRequest) Reset() {
 	*x = GetBacklogItemShipStatusRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[20]
+	mi := &file_session_v1_backlog_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2220,7 +2340,7 @@ func (x *GetBacklogItemShipStatusRequest) String() string {
 func (*GetBacklogItemShipStatusRequest) ProtoMessage() {}
 
 func (x *GetBacklogItemShipStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[20]
+	mi := &file_session_v1_backlog_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2233,7 +2353,7 @@ func (x *GetBacklogItemShipStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemShipStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemShipStatusRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{20}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetBacklogItemShipStatusRequest) GetItemId() string {
@@ -2252,7 +2372,7 @@ type GetBacklogItemShipStatusResponse struct {
 
 func (x *GetBacklogItemShipStatusResponse) Reset() {
 	*x = GetBacklogItemShipStatusResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[21]
+	mi := &file_session_v1_backlog_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2264,7 +2384,7 @@ func (x *GetBacklogItemShipStatusResponse) String() string {
 func (*GetBacklogItemShipStatusResponse) ProtoMessage() {}
 
 func (x *GetBacklogItemShipStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[21]
+	mi := &file_session_v1_backlog_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2277,7 +2397,7 @@ func (x *GetBacklogItemShipStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemShipStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemShipStatusResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{21}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetBacklogItemShipStatusResponse) GetStatus() *BacklogItemShipStatus {
@@ -2311,7 +2431,7 @@ type ListBacklogItemsRequest struct {
 
 func (x *ListBacklogItemsRequest) Reset() {
 	*x = ListBacklogItemsRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[22]
+	mi := &file_session_v1_backlog_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2323,7 +2443,7 @@ func (x *ListBacklogItemsRequest) String() string {
 func (*ListBacklogItemsRequest) ProtoMessage() {}
 
 func (x *ListBacklogItemsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[22]
+	mi := &file_session_v1_backlog_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2336,7 +2456,7 @@ func (x *ListBacklogItemsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBacklogItemsRequest.ProtoReflect.Descriptor instead.
 func (*ListBacklogItemsRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{22}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListBacklogItemsRequest) GetStatus() []string {
@@ -2383,7 +2503,7 @@ type ListBacklogItemsResponse struct {
 
 func (x *ListBacklogItemsResponse) Reset() {
 	*x = ListBacklogItemsResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[23]
+	mi := &file_session_v1_backlog_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2395,7 +2515,7 @@ func (x *ListBacklogItemsResponse) String() string {
 func (*ListBacklogItemsResponse) ProtoMessage() {}
 
 func (x *ListBacklogItemsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[23]
+	mi := &file_session_v1_backlog_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2408,7 +2528,7 @@ func (x *ListBacklogItemsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBacklogItemsResponse.ProtoReflect.Descriptor instead.
 func (*ListBacklogItemsResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{23}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListBacklogItemsResponse) GetItems() []*BacklogItem {
@@ -2448,7 +2568,7 @@ type UpdateBacklogItemRequest struct {
 
 func (x *UpdateBacklogItemRequest) Reset() {
 	*x = UpdateBacklogItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[24]
+	mi := &file_session_v1_backlog_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2460,7 +2580,7 @@ func (x *UpdateBacklogItemRequest) String() string {
 func (*UpdateBacklogItemRequest) ProtoMessage() {}
 
 func (x *UpdateBacklogItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[24]
+	mi := &file_session_v1_backlog_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2473,7 +2593,7 @@ func (x *UpdateBacklogItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBacklogItemRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBacklogItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{24}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UpdateBacklogItemRequest) GetItemId() string {
@@ -2597,7 +2717,7 @@ type UpdateBacklogItemResponse struct {
 
 func (x *UpdateBacklogItemResponse) Reset() {
 	*x = UpdateBacklogItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[25]
+	mi := &file_session_v1_backlog_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2609,7 +2729,7 @@ func (x *UpdateBacklogItemResponse) String() string {
 func (*UpdateBacklogItemResponse) ProtoMessage() {}
 
 func (x *UpdateBacklogItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[25]
+	mi := &file_session_v1_backlog_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2622,7 +2742,7 @@ func (x *UpdateBacklogItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBacklogItemResponse.ProtoReflect.Descriptor instead.
 func (*UpdateBacklogItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{25}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *UpdateBacklogItemResponse) GetItem() *BacklogItem {
@@ -2641,7 +2761,7 @@ type ArchiveBacklogItemRequest struct {
 
 func (x *ArchiveBacklogItemRequest) Reset() {
 	*x = ArchiveBacklogItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[26]
+	mi := &file_session_v1_backlog_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2653,7 +2773,7 @@ func (x *ArchiveBacklogItemRequest) String() string {
 func (*ArchiveBacklogItemRequest) ProtoMessage() {}
 
 func (x *ArchiveBacklogItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[26]
+	mi := &file_session_v1_backlog_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2666,7 +2786,7 @@ func (x *ArchiveBacklogItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveBacklogItemRequest.ProtoReflect.Descriptor instead.
 func (*ArchiveBacklogItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{26}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ArchiveBacklogItemRequest) GetItemId() string {
@@ -2685,7 +2805,7 @@ type ArchiveBacklogItemResponse struct {
 
 func (x *ArchiveBacklogItemResponse) Reset() {
 	*x = ArchiveBacklogItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[27]
+	mi := &file_session_v1_backlog_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2697,7 +2817,7 @@ func (x *ArchiveBacklogItemResponse) String() string {
 func (*ArchiveBacklogItemResponse) ProtoMessage() {}
 
 func (x *ArchiveBacklogItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[27]
+	mi := &file_session_v1_backlog_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2710,7 +2830,7 @@ func (x *ArchiveBacklogItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveBacklogItemResponse.ProtoReflect.Descriptor instead.
 func (*ArchiveBacklogItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{27}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ArchiveBacklogItemResponse) GetItem() *BacklogItem {
@@ -2729,7 +2849,7 @@ type DeleteBacklogItemRequest struct {
 
 func (x *DeleteBacklogItemRequest) Reset() {
 	*x = DeleteBacklogItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[28]
+	mi := &file_session_v1_backlog_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2741,7 +2861,7 @@ func (x *DeleteBacklogItemRequest) String() string {
 func (*DeleteBacklogItemRequest) ProtoMessage() {}
 
 func (x *DeleteBacklogItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[28]
+	mi := &file_session_v1_backlog_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2754,7 +2874,7 @@ func (x *DeleteBacklogItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBacklogItemRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBacklogItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{28}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *DeleteBacklogItemRequest) GetItemId() string {
@@ -2772,7 +2892,7 @@ type DeleteBacklogItemResponse struct {
 
 func (x *DeleteBacklogItemResponse) Reset() {
 	*x = DeleteBacklogItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[29]
+	mi := &file_session_v1_backlog_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2784,7 +2904,7 @@ func (x *DeleteBacklogItemResponse) String() string {
 func (*DeleteBacklogItemResponse) ProtoMessage() {}
 
 func (x *DeleteBacklogItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[29]
+	mi := &file_session_v1_backlog_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2797,7 +2917,7 @@ func (x *DeleteBacklogItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBacklogItemResponse.ProtoReflect.Descriptor instead.
 func (*DeleteBacklogItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{29}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{30}
 }
 
 type TransitionBacklogItemStatusRequest struct {
@@ -2813,7 +2933,7 @@ type TransitionBacklogItemStatusRequest struct {
 
 func (x *TransitionBacklogItemStatusRequest) Reset() {
 	*x = TransitionBacklogItemStatusRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[30]
+	mi := &file_session_v1_backlog_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2825,7 +2945,7 @@ func (x *TransitionBacklogItemStatusRequest) String() string {
 func (*TransitionBacklogItemStatusRequest) ProtoMessage() {}
 
 func (x *TransitionBacklogItemStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[30]
+	mi := &file_session_v1_backlog_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2838,7 +2958,7 @@ func (x *TransitionBacklogItemStatusRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use TransitionBacklogItemStatusRequest.ProtoReflect.Descriptor instead.
 func (*TransitionBacklogItemStatusRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{30}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *TransitionBacklogItemStatusRequest) GetItemId() string {
@@ -2885,7 +3005,7 @@ type TransitionBacklogItemStatusResponse struct {
 
 func (x *TransitionBacklogItemStatusResponse) Reset() {
 	*x = TransitionBacklogItemStatusResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[31]
+	mi := &file_session_v1_backlog_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2897,7 +3017,7 @@ func (x *TransitionBacklogItemStatusResponse) String() string {
 func (*TransitionBacklogItemStatusResponse) ProtoMessage() {}
 
 func (x *TransitionBacklogItemStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[31]
+	mi := &file_session_v1_backlog_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2910,7 +3030,7 @@ func (x *TransitionBacklogItemStatusResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use TransitionBacklogItemStatusResponse.ProtoReflect.Descriptor instead.
 func (*TransitionBacklogItemStatusResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{31}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TransitionBacklogItemStatusResponse) GetItem() *BacklogItem {
@@ -2935,7 +3055,7 @@ type SpawnSessionFromItemRequest struct {
 
 func (x *SpawnSessionFromItemRequest) Reset() {
 	*x = SpawnSessionFromItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[32]
+	mi := &file_session_v1_backlog_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2947,7 +3067,7 @@ func (x *SpawnSessionFromItemRequest) String() string {
 func (*SpawnSessionFromItemRequest) ProtoMessage() {}
 
 func (x *SpawnSessionFromItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[32]
+	mi := &file_session_v1_backlog_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2960,7 +3080,7 @@ func (x *SpawnSessionFromItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpawnSessionFromItemRequest.ProtoReflect.Descriptor instead.
 func (*SpawnSessionFromItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{32}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SpawnSessionFromItemRequest) GetItemId() string {
@@ -2998,7 +3118,7 @@ type SpawnSessionFromItemResponse struct {
 
 func (x *SpawnSessionFromItemResponse) Reset() {
 	*x = SpawnSessionFromItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[33]
+	mi := &file_session_v1_backlog_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3010,7 +3130,7 @@ func (x *SpawnSessionFromItemResponse) String() string {
 func (*SpawnSessionFromItemResponse) ProtoMessage() {}
 
 func (x *SpawnSessionFromItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[33]
+	mi := &file_session_v1_backlog_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3023,7 +3143,7 @@ func (x *SpawnSessionFromItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpawnSessionFromItemResponse.ProtoReflect.Descriptor instead.
 func (*SpawnSessionFromItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{33}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *SpawnSessionFromItemResponse) GetSessionUuid() string {
@@ -3057,7 +3177,7 @@ type AttachSessionToItemRequest struct {
 
 func (x *AttachSessionToItemRequest) Reset() {
 	*x = AttachSessionToItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[34]
+	mi := &file_session_v1_backlog_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3069,7 +3189,7 @@ func (x *AttachSessionToItemRequest) String() string {
 func (*AttachSessionToItemRequest) ProtoMessage() {}
 
 func (x *AttachSessionToItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[34]
+	mi := &file_session_v1_backlog_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3082,7 +3202,7 @@ func (x *AttachSessionToItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachSessionToItemRequest.ProtoReflect.Descriptor instead.
 func (*AttachSessionToItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{34}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *AttachSessionToItemRequest) GetItemId() string {
@@ -3108,7 +3228,7 @@ type AttachSessionToItemResponse struct {
 
 func (x *AttachSessionToItemResponse) Reset() {
 	*x = AttachSessionToItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[35]
+	mi := &file_session_v1_backlog_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3120,7 +3240,7 @@ func (x *AttachSessionToItemResponse) String() string {
 func (*AttachSessionToItemResponse) ProtoMessage() {}
 
 func (x *AttachSessionToItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[35]
+	mi := &file_session_v1_backlog_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3133,7 +3253,7 @@ func (x *AttachSessionToItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachSessionToItemResponse.ProtoReflect.Descriptor instead.
 func (*AttachSessionToItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{35}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *AttachSessionToItemResponse) GetItemSession() *ItemSession {
@@ -3156,7 +3276,7 @@ type TriggerTriageRequest struct {
 
 func (x *TriggerTriageRequest) Reset() {
 	*x = TriggerTriageRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[36]
+	mi := &file_session_v1_backlog_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3168,7 +3288,7 @@ func (x *TriggerTriageRequest) String() string {
 func (*TriggerTriageRequest) ProtoMessage() {}
 
 func (x *TriggerTriageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[36]
+	mi := &file_session_v1_backlog_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3181,7 +3301,7 @@ func (x *TriggerTriageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerTriageRequest.ProtoReflect.Descriptor instead.
 func (*TriggerTriageRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{36}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TriggerTriageRequest) GetItemId() string {
@@ -3207,7 +3327,7 @@ type TriggerTriageResponse struct {
 
 func (x *TriggerTriageResponse) Reset() {
 	*x = TriggerTriageResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[37]
+	mi := &file_session_v1_backlog_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3219,7 +3339,7 @@ func (x *TriggerTriageResponse) String() string {
 func (*TriggerTriageResponse) ProtoMessage() {}
 
 func (x *TriggerTriageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[37]
+	mi := &file_session_v1_backlog_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3232,7 +3352,7 @@ func (x *TriggerTriageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerTriageResponse.ProtoReflect.Descriptor instead.
 func (*TriggerTriageResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{37}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *TriggerTriageResponse) GetItemSession() *ItemSession {
@@ -3251,7 +3371,7 @@ type ApprovePlanRequest struct {
 
 func (x *ApprovePlanRequest) Reset() {
 	*x = ApprovePlanRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[38]
+	mi := &file_session_v1_backlog_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3263,7 +3383,7 @@ func (x *ApprovePlanRequest) String() string {
 func (*ApprovePlanRequest) ProtoMessage() {}
 
 func (x *ApprovePlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[38]
+	mi := &file_session_v1_backlog_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3276,7 +3396,7 @@ func (x *ApprovePlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovePlanRequest.ProtoReflect.Descriptor instead.
 func (*ApprovePlanRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{38}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ApprovePlanRequest) GetItemId() string {
@@ -3295,7 +3415,7 @@ type ApprovePlanResponse struct {
 
 func (x *ApprovePlanResponse) Reset() {
 	*x = ApprovePlanResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[39]
+	mi := &file_session_v1_backlog_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3307,7 +3427,7 @@ func (x *ApprovePlanResponse) String() string {
 func (*ApprovePlanResponse) ProtoMessage() {}
 
 func (x *ApprovePlanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[39]
+	mi := &file_session_v1_backlog_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3320,7 +3440,7 @@ func (x *ApprovePlanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovePlanResponse.ProtoReflect.Descriptor instead.
 func (*ApprovePlanResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{39}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ApprovePlanResponse) GetItem() *BacklogItem {
@@ -3338,7 +3458,7 @@ type SuggestNextItemRequest struct {
 
 func (x *SuggestNextItemRequest) Reset() {
 	*x = SuggestNextItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[40]
+	mi := &file_session_v1_backlog_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3350,7 +3470,7 @@ func (x *SuggestNextItemRequest) String() string {
 func (*SuggestNextItemRequest) ProtoMessage() {}
 
 func (x *SuggestNextItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[40]
+	mi := &file_session_v1_backlog_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3363,7 +3483,7 @@ func (x *SuggestNextItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuggestNextItemRequest.ProtoReflect.Descriptor instead.
 func (*SuggestNextItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{40}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{41}
 }
 
 type SuggestNextItemResponse struct {
@@ -3377,7 +3497,7 @@ type SuggestNextItemResponse struct {
 
 func (x *SuggestNextItemResponse) Reset() {
 	*x = SuggestNextItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[41]
+	mi := &file_session_v1_backlog_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3389,7 +3509,7 @@ func (x *SuggestNextItemResponse) String() string {
 func (*SuggestNextItemResponse) ProtoMessage() {}
 
 func (x *SuggestNextItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[41]
+	mi := &file_session_v1_backlog_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3402,7 +3522,7 @@ func (x *SuggestNextItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuggestNextItemResponse.ProtoReflect.Descriptor instead.
 func (*SuggestNextItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{41}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *SuggestNextItemResponse) GetItemSession() *ItemSession {
@@ -3430,7 +3550,7 @@ type OverrideVerdictRequest struct {
 
 func (x *OverrideVerdictRequest) Reset() {
 	*x = OverrideVerdictRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[42]
+	mi := &file_session_v1_backlog_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3442,7 +3562,7 @@ func (x *OverrideVerdictRequest) String() string {
 func (*OverrideVerdictRequest) ProtoMessage() {}
 
 func (x *OverrideVerdictRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[42]
+	mi := &file_session_v1_backlog_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3455,7 +3575,7 @@ func (x *OverrideVerdictRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OverrideVerdictRequest.ProtoReflect.Descriptor instead.
 func (*OverrideVerdictRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{42}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *OverrideVerdictRequest) GetItemSessionId() string {
@@ -3488,7 +3608,7 @@ type OverrideVerdictResponse struct {
 
 func (x *OverrideVerdictResponse) Reset() {
 	*x = OverrideVerdictResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[43]
+	mi := &file_session_v1_backlog_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3500,7 +3620,7 @@ func (x *OverrideVerdictResponse) String() string {
 func (*OverrideVerdictResponse) ProtoMessage() {}
 
 func (x *OverrideVerdictResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[43]
+	mi := &file_session_v1_backlog_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3513,7 +3633,7 @@ func (x *OverrideVerdictResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OverrideVerdictResponse.ProtoReflect.Descriptor instead.
 func (*OverrideVerdictResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{43}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *OverrideVerdictResponse) GetItem() *BacklogItem {
@@ -3532,7 +3652,7 @@ type TriggerReReviewRequest struct {
 
 func (x *TriggerReReviewRequest) Reset() {
 	*x = TriggerReReviewRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[44]
+	mi := &file_session_v1_backlog_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3544,7 +3664,7 @@ func (x *TriggerReReviewRequest) String() string {
 func (*TriggerReReviewRequest) ProtoMessage() {}
 
 func (x *TriggerReReviewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[44]
+	mi := &file_session_v1_backlog_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3557,7 +3677,7 @@ func (x *TriggerReReviewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerReReviewRequest.ProtoReflect.Descriptor instead.
 func (*TriggerReReviewRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{44}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *TriggerReReviewRequest) GetItemId() string {
@@ -3576,7 +3696,7 @@ type TriggerReReviewResponse struct {
 
 func (x *TriggerReReviewResponse) Reset() {
 	*x = TriggerReReviewResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[45]
+	mi := &file_session_v1_backlog_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3588,7 +3708,7 @@ func (x *TriggerReReviewResponse) String() string {
 func (*TriggerReReviewResponse) ProtoMessage() {}
 
 func (x *TriggerReReviewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[45]
+	mi := &file_session_v1_backlog_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3601,7 +3721,7 @@ func (x *TriggerReReviewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerReReviewResponse.ProtoReflect.Descriptor instead.
 func (*TriggerReReviewResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{45}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *TriggerReReviewResponse) GetItemSession() *ItemSession {
@@ -3620,7 +3740,7 @@ type TriggerShipPRRequest struct {
 
 func (x *TriggerShipPRRequest) Reset() {
 	*x = TriggerShipPRRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[46]
+	mi := &file_session_v1_backlog_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3632,7 +3752,7 @@ func (x *TriggerShipPRRequest) String() string {
 func (*TriggerShipPRRequest) ProtoMessage() {}
 
 func (x *TriggerShipPRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[46]
+	mi := &file_session_v1_backlog_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3645,7 +3765,7 @@ func (x *TriggerShipPRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerShipPRRequest.ProtoReflect.Descriptor instead.
 func (*TriggerShipPRRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{46}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *TriggerShipPRRequest) GetItemId() string {
@@ -3666,7 +3786,7 @@ type TriggerShipPRResponse struct {
 
 func (x *TriggerShipPRResponse) Reset() {
 	*x = TriggerShipPRResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[47]
+	mi := &file_session_v1_backlog_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3678,7 +3798,7 @@ func (x *TriggerShipPRResponse) String() string {
 func (*TriggerShipPRResponse) ProtoMessage() {}
 
 func (x *TriggerShipPRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[47]
+	mi := &file_session_v1_backlog_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3691,7 +3811,7 @@ func (x *TriggerShipPRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerShipPRResponse.ProtoReflect.Descriptor instead.
 func (*TriggerShipPRResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{47}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *TriggerShipPRResponse) GetPrUrl() string {
@@ -3710,7 +3830,7 @@ type TriggerSyncRequest struct {
 
 func (x *TriggerSyncRequest) Reset() {
 	*x = TriggerSyncRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[48]
+	mi := &file_session_v1_backlog_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3722,7 +3842,7 @@ func (x *TriggerSyncRequest) String() string {
 func (*TriggerSyncRequest) ProtoMessage() {}
 
 func (x *TriggerSyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[48]
+	mi := &file_session_v1_backlog_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3735,7 +3855,7 @@ func (x *TriggerSyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerSyncRequest.ProtoReflect.Descriptor instead.
 func (*TriggerSyncRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{48}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *TriggerSyncRequest) GetSourceId() string {
@@ -3753,7 +3873,7 @@ type TriggerSyncResponse struct {
 
 func (x *TriggerSyncResponse) Reset() {
 	*x = TriggerSyncResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[49]
+	mi := &file_session_v1_backlog_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3765,7 +3885,7 @@ func (x *TriggerSyncResponse) String() string {
 func (*TriggerSyncResponse) ProtoMessage() {}
 
 func (x *TriggerSyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[49]
+	mi := &file_session_v1_backlog_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3778,7 +3898,7 @@ func (x *TriggerSyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerSyncResponse.ProtoReflect.Descriptor instead.
 func (*TriggerSyncResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{49}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{50}
 }
 
 type CreateItemSourceRequest struct {
@@ -3793,7 +3913,7 @@ type CreateItemSourceRequest struct {
 
 func (x *CreateItemSourceRequest) Reset() {
 	*x = CreateItemSourceRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[50]
+	mi := &file_session_v1_backlog_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3805,7 +3925,7 @@ func (x *CreateItemSourceRequest) String() string {
 func (*CreateItemSourceRequest) ProtoMessage() {}
 
 func (x *CreateItemSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[50]
+	mi := &file_session_v1_backlog_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3818,7 +3938,7 @@ func (x *CreateItemSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateItemSourceRequest.ProtoReflect.Descriptor instead.
 func (*CreateItemSourceRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{50}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *CreateItemSourceRequest) GetPluginId() string {
@@ -3858,7 +3978,7 @@ type CreateItemSourceResponse struct {
 
 func (x *CreateItemSourceResponse) Reset() {
 	*x = CreateItemSourceResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[51]
+	mi := &file_session_v1_backlog_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3870,7 +3990,7 @@ func (x *CreateItemSourceResponse) String() string {
 func (*CreateItemSourceResponse) ProtoMessage() {}
 
 func (x *CreateItemSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[51]
+	mi := &file_session_v1_backlog_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3883,7 +4003,7 @@ func (x *CreateItemSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateItemSourceResponse.ProtoReflect.Descriptor instead.
 func (*CreateItemSourceResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{51}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *CreateItemSourceResponse) GetSource() *ItemSource {
@@ -3901,7 +4021,7 @@ type ListItemSourcesRequest struct {
 
 func (x *ListItemSourcesRequest) Reset() {
 	*x = ListItemSourcesRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[52]
+	mi := &file_session_v1_backlog_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3913,7 +4033,7 @@ func (x *ListItemSourcesRequest) String() string {
 func (*ListItemSourcesRequest) ProtoMessage() {}
 
 func (x *ListItemSourcesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[52]
+	mi := &file_session_v1_backlog_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3926,7 +4046,7 @@ func (x *ListItemSourcesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListItemSourcesRequest.ProtoReflect.Descriptor instead.
 func (*ListItemSourcesRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{52}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{53}
 }
 
 type ListItemSourcesResponse struct {
@@ -3938,7 +4058,7 @@ type ListItemSourcesResponse struct {
 
 func (x *ListItemSourcesResponse) Reset() {
 	*x = ListItemSourcesResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[53]
+	mi := &file_session_v1_backlog_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3950,7 +4070,7 @@ func (x *ListItemSourcesResponse) String() string {
 func (*ListItemSourcesResponse) ProtoMessage() {}
 
 func (x *ListItemSourcesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[53]
+	mi := &file_session_v1_backlog_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3963,7 +4083,7 @@ func (x *ListItemSourcesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListItemSourcesResponse.ProtoReflect.Descriptor instead.
 func (*ListItemSourcesResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{53}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ListItemSourcesResponse) GetSources() []*ItemSource {
@@ -3985,7 +4105,7 @@ type UpdateItemSourceRequest struct {
 
 func (x *UpdateItemSourceRequest) Reset() {
 	*x = UpdateItemSourceRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[54]
+	mi := &file_session_v1_backlog_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3997,7 +4117,7 @@ func (x *UpdateItemSourceRequest) String() string {
 func (*UpdateItemSourceRequest) ProtoMessage() {}
 
 func (x *UpdateItemSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[54]
+	mi := &file_session_v1_backlog_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4010,7 +4130,7 @@ func (x *UpdateItemSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateItemSourceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateItemSourceRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{54}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *UpdateItemSourceRequest) GetSourceId() string {
@@ -4050,7 +4170,7 @@ type UpdateItemSourceResponse struct {
 
 func (x *UpdateItemSourceResponse) Reset() {
 	*x = UpdateItemSourceResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[55]
+	mi := &file_session_v1_backlog_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4062,7 +4182,7 @@ func (x *UpdateItemSourceResponse) String() string {
 func (*UpdateItemSourceResponse) ProtoMessage() {}
 
 func (x *UpdateItemSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[55]
+	mi := &file_session_v1_backlog_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4075,7 +4195,7 @@ func (x *UpdateItemSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateItemSourceResponse.ProtoReflect.Descriptor instead.
 func (*UpdateItemSourceResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{55}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *UpdateItemSourceResponse) GetSource() *ItemSource {
@@ -4094,7 +4214,7 @@ type DeleteItemSourceRequest struct {
 
 func (x *DeleteItemSourceRequest) Reset() {
 	*x = DeleteItemSourceRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[56]
+	mi := &file_session_v1_backlog_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4106,7 +4226,7 @@ func (x *DeleteItemSourceRequest) String() string {
 func (*DeleteItemSourceRequest) ProtoMessage() {}
 
 func (x *DeleteItemSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[56]
+	mi := &file_session_v1_backlog_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4119,7 +4239,7 @@ func (x *DeleteItemSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteItemSourceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteItemSourceRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{56}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *DeleteItemSourceRequest) GetSourceId() string {
@@ -4137,7 +4257,7 @@ type DeleteItemSourceResponse struct {
 
 func (x *DeleteItemSourceResponse) Reset() {
 	*x = DeleteItemSourceResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[57]
+	mi := &file_session_v1_backlog_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4149,7 +4269,7 @@ func (x *DeleteItemSourceResponse) String() string {
 func (*DeleteItemSourceResponse) ProtoMessage() {}
 
 func (x *DeleteItemSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[57]
+	mi := &file_session_v1_backlog_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4162,7 +4282,7 @@ func (x *DeleteItemSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteItemSourceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteItemSourceResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{57}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{58}
 }
 
 type GetSyncHistoryRequest struct {
@@ -4174,7 +4294,7 @@ type GetSyncHistoryRequest struct {
 
 func (x *GetSyncHistoryRequest) Reset() {
 	*x = GetSyncHistoryRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[58]
+	mi := &file_session_v1_backlog_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4186,7 +4306,7 @@ func (x *GetSyncHistoryRequest) String() string {
 func (*GetSyncHistoryRequest) ProtoMessage() {}
 
 func (x *GetSyncHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[58]
+	mi := &file_session_v1_backlog_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4199,7 +4319,7 @@ func (x *GetSyncHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSyncHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetSyncHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{58}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetSyncHistoryRequest) GetSourceId() string {
@@ -4221,7 +4341,7 @@ type GetSyncHistoryResponse struct {
 
 func (x *GetSyncHistoryResponse) Reset() {
 	*x = GetSyncHistoryResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[59]
+	mi := &file_session_v1_backlog_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4233,7 +4353,7 @@ func (x *GetSyncHistoryResponse) String() string {
 func (*GetSyncHistoryResponse) ProtoMessage() {}
 
 func (x *GetSyncHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[59]
+	mi := &file_session_v1_backlog_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4246,7 +4366,7 @@ func (x *GetSyncHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSyncHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetSyncHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{59}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *GetSyncHistoryResponse) GetEvents() []*SourceSyncEvent {
@@ -4284,7 +4404,7 @@ type CreatePipelineModeRequest struct {
 
 func (x *CreatePipelineModeRequest) Reset() {
 	*x = CreatePipelineModeRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[60]
+	mi := &file_session_v1_backlog_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4296,7 +4416,7 @@ func (x *CreatePipelineModeRequest) String() string {
 func (*CreatePipelineModeRequest) ProtoMessage() {}
 
 func (x *CreatePipelineModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[60]
+	mi := &file_session_v1_backlog_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4309,7 +4429,7 @@ func (x *CreatePipelineModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePipelineModeRequest.ProtoReflect.Descriptor instead.
 func (*CreatePipelineModeRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{60}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *CreatePipelineModeRequest) GetSlug() string {
@@ -4412,7 +4532,7 @@ type CreatePipelineModeResponse struct {
 
 func (x *CreatePipelineModeResponse) Reset() {
 	*x = CreatePipelineModeResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[61]
+	mi := &file_session_v1_backlog_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4424,7 +4544,7 @@ func (x *CreatePipelineModeResponse) String() string {
 func (*CreatePipelineModeResponse) ProtoMessage() {}
 
 func (x *CreatePipelineModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[61]
+	mi := &file_session_v1_backlog_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4437,7 +4557,7 @@ func (x *CreatePipelineModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePipelineModeResponse.ProtoReflect.Descriptor instead.
 func (*CreatePipelineModeResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{61}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *CreatePipelineModeResponse) GetItem() *PipelineMode {
@@ -4468,7 +4588,7 @@ type UpdatePipelineModeRequest struct {
 
 func (x *UpdatePipelineModeRequest) Reset() {
 	*x = UpdatePipelineModeRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[62]
+	mi := &file_session_v1_backlog_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4480,7 +4600,7 @@ func (x *UpdatePipelineModeRequest) String() string {
 func (*UpdatePipelineModeRequest) ProtoMessage() {}
 
 func (x *UpdatePipelineModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[62]
+	mi := &file_session_v1_backlog_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4493,7 +4613,7 @@ func (x *UpdatePipelineModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePipelineModeRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePipelineModeRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{62}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *UpdatePipelineModeRequest) GetId() string {
@@ -4596,7 +4716,7 @@ type UpdatePipelineModeResponse struct {
 
 func (x *UpdatePipelineModeResponse) Reset() {
 	*x = UpdatePipelineModeResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[63]
+	mi := &file_session_v1_backlog_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4608,7 +4728,7 @@ func (x *UpdatePipelineModeResponse) String() string {
 func (*UpdatePipelineModeResponse) ProtoMessage() {}
 
 func (x *UpdatePipelineModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[63]
+	mi := &file_session_v1_backlog_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4621,7 +4741,7 @@ func (x *UpdatePipelineModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePipelineModeResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePipelineModeResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{63}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *UpdatePipelineModeResponse) GetItem() *PipelineMode {
@@ -4640,7 +4760,7 @@ type DeletePipelineModeRequest struct {
 
 func (x *DeletePipelineModeRequest) Reset() {
 	*x = DeletePipelineModeRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[64]
+	mi := &file_session_v1_backlog_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4652,7 +4772,7 @@ func (x *DeletePipelineModeRequest) String() string {
 func (*DeletePipelineModeRequest) ProtoMessage() {}
 
 func (x *DeletePipelineModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[64]
+	mi := &file_session_v1_backlog_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4665,7 +4785,7 @@ func (x *DeletePipelineModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePipelineModeRequest.ProtoReflect.Descriptor instead.
 func (*DeletePipelineModeRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{64}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DeletePipelineModeRequest) GetId() string {
@@ -4683,7 +4803,7 @@ type DeletePipelineModeResponse struct {
 
 func (x *DeletePipelineModeResponse) Reset() {
 	*x = DeletePipelineModeResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[65]
+	mi := &file_session_v1_backlog_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4695,7 +4815,7 @@ func (x *DeletePipelineModeResponse) String() string {
 func (*DeletePipelineModeResponse) ProtoMessage() {}
 
 func (x *DeletePipelineModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[65]
+	mi := &file_session_v1_backlog_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4708,7 +4828,7 @@ func (x *DeletePipelineModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePipelineModeResponse.ProtoReflect.Descriptor instead.
 func (*DeletePipelineModeResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{65}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{66}
 }
 
 type GetPipelineModeRequest struct {
@@ -4720,7 +4840,7 @@ type GetPipelineModeRequest struct {
 
 func (x *GetPipelineModeRequest) Reset() {
 	*x = GetPipelineModeRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[66]
+	mi := &file_session_v1_backlog_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4732,7 +4852,7 @@ func (x *GetPipelineModeRequest) String() string {
 func (*GetPipelineModeRequest) ProtoMessage() {}
 
 func (x *GetPipelineModeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[66]
+	mi := &file_session_v1_backlog_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4745,7 +4865,7 @@ func (x *GetPipelineModeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPipelineModeRequest.ProtoReflect.Descriptor instead.
 func (*GetPipelineModeRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{66}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetPipelineModeRequest) GetSlug() string {
@@ -4764,7 +4884,7 @@ type GetPipelineModeResponse struct {
 
 func (x *GetPipelineModeResponse) Reset() {
 	*x = GetPipelineModeResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[67]
+	mi := &file_session_v1_backlog_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4776,7 +4896,7 @@ func (x *GetPipelineModeResponse) String() string {
 func (*GetPipelineModeResponse) ProtoMessage() {}
 
 func (x *GetPipelineModeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[67]
+	mi := &file_session_v1_backlog_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4789,7 +4909,7 @@ func (x *GetPipelineModeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPipelineModeResponse.ProtoReflect.Descriptor instead.
 func (*GetPipelineModeResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{67}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetPipelineModeResponse) GetItem() *PipelineMode {
@@ -4807,7 +4927,7 @@ type ListPipelineModesRequest struct {
 
 func (x *ListPipelineModesRequest) Reset() {
 	*x = ListPipelineModesRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[68]
+	mi := &file_session_v1_backlog_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4819,7 +4939,7 @@ func (x *ListPipelineModesRequest) String() string {
 func (*ListPipelineModesRequest) ProtoMessage() {}
 
 func (x *ListPipelineModesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[68]
+	mi := &file_session_v1_backlog_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4832,7 +4952,7 @@ func (x *ListPipelineModesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPipelineModesRequest.ProtoReflect.Descriptor instead.
 func (*ListPipelineModesRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{68}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{69}
 }
 
 type ListPipelineModesResponse struct {
@@ -4844,7 +4964,7 @@ type ListPipelineModesResponse struct {
 
 func (x *ListPipelineModesResponse) Reset() {
 	*x = ListPipelineModesResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[69]
+	mi := &file_session_v1_backlog_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4856,7 +4976,7 @@ func (x *ListPipelineModesResponse) String() string {
 func (*ListPipelineModesResponse) ProtoMessage() {}
 
 func (x *ListPipelineModesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[69]
+	mi := &file_session_v1_backlog_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4869,7 +4989,7 @@ func (x *ListPipelineModesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPipelineModesResponse.ProtoReflect.Descriptor instead.
 func (*ListPipelineModesResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{69}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ListPipelineModesResponse) GetItems() []*PipelineMode {
@@ -4910,7 +5030,7 @@ type BacklogItemEvent struct {
 
 func (x *BacklogItemEvent) Reset() {
 	*x = BacklogItemEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[70]
+	mi := &file_session_v1_backlog_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4922,7 +5042,7 @@ func (x *BacklogItemEvent) String() string {
 func (*BacklogItemEvent) ProtoMessage() {}
 
 func (x *BacklogItemEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[70]
+	mi := &file_session_v1_backlog_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4935,7 +5055,7 @@ func (x *BacklogItemEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{70}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *BacklogItemEvent) GetTimestamp() *timestamppb.Timestamp {
@@ -5096,7 +5216,7 @@ type BacklogItemStatusChangedEvent struct {
 
 func (x *BacklogItemStatusChangedEvent) Reset() {
 	*x = BacklogItemStatusChangedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[71]
+	mi := &file_session_v1_backlog_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5108,7 +5228,7 @@ func (x *BacklogItemStatusChangedEvent) String() string {
 func (*BacklogItemStatusChangedEvent) ProtoMessage() {}
 
 func (x *BacklogItemStatusChangedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[71]
+	mi := &file_session_v1_backlog_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5121,7 +5241,7 @@ func (x *BacklogItemStatusChangedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemStatusChangedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemStatusChangedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{71}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *BacklogItemStatusChangedEvent) GetItemId() string {
@@ -5173,7 +5293,7 @@ type BacklogItemVerdictRecordedEvent struct {
 
 func (x *BacklogItemVerdictRecordedEvent) Reset() {
 	*x = BacklogItemVerdictRecordedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[72]
+	mi := &file_session_v1_backlog_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5185,7 +5305,7 @@ func (x *BacklogItemVerdictRecordedEvent) String() string {
 func (*BacklogItemVerdictRecordedEvent) ProtoMessage() {}
 
 func (x *BacklogItemVerdictRecordedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[72]
+	mi := &file_session_v1_backlog_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5198,7 +5318,7 @@ func (x *BacklogItemVerdictRecordedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemVerdictRecordedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemVerdictRecordedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{72}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *BacklogItemVerdictRecordedEvent) GetItemId() string {
@@ -5243,7 +5363,7 @@ type BacklogItemSessionAttachedEvent struct {
 
 func (x *BacklogItemSessionAttachedEvent) Reset() {
 	*x = BacklogItemSessionAttachedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[73]
+	mi := &file_session_v1_backlog_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5255,7 +5375,7 @@ func (x *BacklogItemSessionAttachedEvent) String() string {
 func (*BacklogItemSessionAttachedEvent) ProtoMessage() {}
 
 func (x *BacklogItemSessionAttachedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[73]
+	mi := &file_session_v1_backlog_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5268,7 +5388,7 @@ func (x *BacklogItemSessionAttachedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemSessionAttachedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemSessionAttachedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{73}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *BacklogItemSessionAttachedEvent) GetItemId() string {
@@ -5313,7 +5433,7 @@ type BacklogItemUpdatedEvent struct {
 
 func (x *BacklogItemUpdatedEvent) Reset() {
 	*x = BacklogItemUpdatedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[74]
+	mi := &file_session_v1_backlog_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5325,7 +5445,7 @@ func (x *BacklogItemUpdatedEvent) String() string {
 func (*BacklogItemUpdatedEvent) ProtoMessage() {}
 
 func (x *BacklogItemUpdatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[74]
+	mi := &file_session_v1_backlog_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5338,7 +5458,7 @@ func (x *BacklogItemUpdatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemUpdatedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemUpdatedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{74}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *BacklogItemUpdatedEvent) GetItemId() string {
@@ -5382,7 +5502,7 @@ type BacklogItemArchivedEvent struct {
 
 func (x *BacklogItemArchivedEvent) Reset() {
 	*x = BacklogItemArchivedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[75]
+	mi := &file_session_v1_backlog_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5394,7 +5514,7 @@ func (x *BacklogItemArchivedEvent) String() string {
 func (*BacklogItemArchivedEvent) ProtoMessage() {}
 
 func (x *BacklogItemArchivedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[75]
+	mi := &file_session_v1_backlog_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5407,7 +5527,7 @@ func (x *BacklogItemArchivedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemArchivedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemArchivedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{75}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *BacklogItemArchivedEvent) GetItemId() string {
@@ -5444,7 +5564,7 @@ type BacklogItemRemovedEvent struct {
 
 func (x *BacklogItemRemovedEvent) Reset() {
 	*x = BacklogItemRemovedEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[76]
+	mi := &file_session_v1_backlog_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5456,7 +5576,7 @@ func (x *BacklogItemRemovedEvent) String() string {
 func (*BacklogItemRemovedEvent) ProtoMessage() {}
 
 func (x *BacklogItemRemovedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[76]
+	mi := &file_session_v1_backlog_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5469,7 +5589,7 @@ func (x *BacklogItemRemovedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogItemRemovedEvent.ProtoReflect.Descriptor instead.
 func (*BacklogItemRemovedEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{76}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *BacklogItemRemovedEvent) GetItemId() string {
@@ -5498,7 +5618,7 @@ type BacklogSnapshotCompleteEvent struct {
 
 func (x *BacklogSnapshotCompleteEvent) Reset() {
 	*x = BacklogSnapshotCompleteEvent{}
-	mi := &file_session_v1_backlog_proto_msgTypes[77]
+	mi := &file_session_v1_backlog_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5510,7 +5630,7 @@ func (x *BacklogSnapshotCompleteEvent) String() string {
 func (*BacklogSnapshotCompleteEvent) ProtoMessage() {}
 
 func (x *BacklogSnapshotCompleteEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[77]
+	mi := &file_session_v1_backlog_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5523,7 +5643,7 @@ func (x *BacklogSnapshotCompleteEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogSnapshotCompleteEvent.ProtoReflect.Descriptor instead.
 func (*BacklogSnapshotCompleteEvent) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{77}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{78}
 }
 
 // WatchBacklogItemsRequest configures the WatchBacklogItems streaming RPC.
@@ -5542,7 +5662,7 @@ type WatchBacklogItemsRequest struct {
 
 func (x *WatchBacklogItemsRequest) Reset() {
 	*x = WatchBacklogItemsRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[78]
+	mi := &file_session_v1_backlog_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5554,7 +5674,7 @@ func (x *WatchBacklogItemsRequest) String() string {
 func (*WatchBacklogItemsRequest) ProtoMessage() {}
 
 func (x *WatchBacklogItemsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[78]
+	mi := &file_session_v1_backlog_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5567,7 +5687,7 @@ func (x *WatchBacklogItemsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchBacklogItemsRequest.ProtoReflect.Descriptor instead.
 func (*WatchBacklogItemsRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{78}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *WatchBacklogItemsRequest) GetStatusFilter() []string {
@@ -5605,7 +5725,7 @@ type ImportGitHubIssueRequest struct {
 
 func (x *ImportGitHubIssueRequest) Reset() {
 	*x = ImportGitHubIssueRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[79]
+	mi := &file_session_v1_backlog_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5617,7 +5737,7 @@ func (x *ImportGitHubIssueRequest) String() string {
 func (*ImportGitHubIssueRequest) ProtoMessage() {}
 
 func (x *ImportGitHubIssueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[79]
+	mi := &file_session_v1_backlog_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5630,7 +5750,7 @@ func (x *ImportGitHubIssueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportGitHubIssueRequest.ProtoReflect.Descriptor instead.
 func (*ImportGitHubIssueRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{79}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ImportGitHubIssueRequest) GetIssueUrl() string {
@@ -5664,7 +5784,7 @@ type ImportGitHubIssueResponse struct {
 
 func (x *ImportGitHubIssueResponse) Reset() {
 	*x = ImportGitHubIssueResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[80]
+	mi := &file_session_v1_backlog_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5676,7 +5796,7 @@ func (x *ImportGitHubIssueResponse) String() string {
 func (*ImportGitHubIssueResponse) ProtoMessage() {}
 
 func (x *ImportGitHubIssueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[80]
+	mi := &file_session_v1_backlog_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5689,7 +5809,7 @@ func (x *ImportGitHubIssueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportGitHubIssueResponse.ProtoReflect.Descriptor instead.
 func (*ImportGitHubIssueResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{80}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ImportGitHubIssueResponse) GetItem() *BacklogItem {
@@ -5715,7 +5835,7 @@ type CancelTriageRequest struct {
 
 func (x *CancelTriageRequest) Reset() {
 	*x = CancelTriageRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[81]
+	mi := &file_session_v1_backlog_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5727,7 +5847,7 @@ func (x *CancelTriageRequest) String() string {
 func (*CancelTriageRequest) ProtoMessage() {}
 
 func (x *CancelTriageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[81]
+	mi := &file_session_v1_backlog_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5740,7 +5860,7 @@ func (x *CancelTriageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTriageRequest.ProtoReflect.Descriptor instead.
 func (*CancelTriageRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{81}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *CancelTriageRequest) GetItemId() string {
@@ -5759,7 +5879,7 @@ type CancelTriageResponse struct {
 
 func (x *CancelTriageResponse) Reset() {
 	*x = CancelTriageResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[82]
+	mi := &file_session_v1_backlog_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5771,7 +5891,7 @@ func (x *CancelTriageResponse) String() string {
 func (*CancelTriageResponse) ProtoMessage() {}
 
 func (x *CancelTriageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[82]
+	mi := &file_session_v1_backlog_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5784,7 +5904,7 @@ func (x *CancelTriageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTriageResponse.ProtoReflect.Descriptor instead.
 func (*CancelTriageResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{82}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *CancelTriageResponse) GetCancelled() bool {
@@ -5807,7 +5927,7 @@ type GitHubRepoEntry struct {
 
 func (x *GitHubRepoEntry) Reset() {
 	*x = GitHubRepoEntry{}
-	mi := &file_session_v1_backlog_proto_msgTypes[83]
+	mi := &file_session_v1_backlog_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5819,7 +5939,7 @@ func (x *GitHubRepoEntry) String() string {
 func (*GitHubRepoEntry) ProtoMessage() {}
 
 func (x *GitHubRepoEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[83]
+	mi := &file_session_v1_backlog_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5832,7 +5952,7 @@ func (x *GitHubRepoEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GitHubRepoEntry.ProtoReflect.Descriptor instead.
 func (*GitHubRepoEntry) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{83}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *GitHubRepoEntry) GetOwner() string {
@@ -5889,7 +6009,7 @@ type GitHubIssueEntry struct {
 
 func (x *GitHubIssueEntry) Reset() {
 	*x = GitHubIssueEntry{}
-	mi := &file_session_v1_backlog_proto_msgTypes[84]
+	mi := &file_session_v1_backlog_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5901,7 +6021,7 @@ func (x *GitHubIssueEntry) String() string {
 func (*GitHubIssueEntry) ProtoMessage() {}
 
 func (x *GitHubIssueEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[84]
+	mi := &file_session_v1_backlog_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5914,7 +6034,7 @@ func (x *GitHubIssueEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GitHubIssueEntry.ProtoReflect.Descriptor instead.
 func (*GitHubIssueEntry) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{84}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *GitHubIssueEntry) GetNumber() int32 {
@@ -5997,7 +6117,7 @@ type SearchGitHubReposRequest struct {
 
 func (x *SearchGitHubReposRequest) Reset() {
 	*x = SearchGitHubReposRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[85]
+	mi := &file_session_v1_backlog_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6009,7 +6129,7 @@ func (x *SearchGitHubReposRequest) String() string {
 func (*SearchGitHubReposRequest) ProtoMessage() {}
 
 func (x *SearchGitHubReposRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[85]
+	mi := &file_session_v1_backlog_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6022,7 +6142,7 @@ func (x *SearchGitHubReposRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchGitHubReposRequest.ProtoReflect.Descriptor instead.
 func (*SearchGitHubReposRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{85}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *SearchGitHubReposRequest) GetQuery() string {
@@ -6048,7 +6168,7 @@ type SearchGitHubReposResponse struct {
 
 func (x *SearchGitHubReposResponse) Reset() {
 	*x = SearchGitHubReposResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[86]
+	mi := &file_session_v1_backlog_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6060,7 +6180,7 @@ func (x *SearchGitHubReposResponse) String() string {
 func (*SearchGitHubReposResponse) ProtoMessage() {}
 
 func (x *SearchGitHubReposResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[86]
+	mi := &file_session_v1_backlog_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6073,7 +6193,7 @@ func (x *SearchGitHubReposResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchGitHubReposResponse.ProtoReflect.Descriptor instead.
 func (*SearchGitHubReposResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{86}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *SearchGitHubReposResponse) GetRepos() []*GitHubRepoEntry {
@@ -6096,7 +6216,7 @@ type ListGitHubIssuesRequest struct {
 
 func (x *ListGitHubIssuesRequest) Reset() {
 	*x = ListGitHubIssuesRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[87]
+	mi := &file_session_v1_backlog_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6108,7 +6228,7 @@ func (x *ListGitHubIssuesRequest) String() string {
 func (*ListGitHubIssuesRequest) ProtoMessage() {}
 
 func (x *ListGitHubIssuesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[87]
+	mi := &file_session_v1_backlog_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6121,7 +6241,7 @@ func (x *ListGitHubIssuesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGitHubIssuesRequest.ProtoReflect.Descriptor instead.
 func (*ListGitHubIssuesRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{87}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ListGitHubIssuesRequest) GetOwner() string {
@@ -6168,7 +6288,7 @@ type ListGitHubIssuesResponse struct {
 
 func (x *ListGitHubIssuesResponse) Reset() {
 	*x = ListGitHubIssuesResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[88]
+	mi := &file_session_v1_backlog_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6180,7 +6300,7 @@ func (x *ListGitHubIssuesResponse) String() string {
 func (*ListGitHubIssuesResponse) ProtoMessage() {}
 
 func (x *ListGitHubIssuesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[88]
+	mi := &file_session_v1_backlog_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6193,7 +6313,7 @@ func (x *ListGitHubIssuesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGitHubIssuesResponse.ProtoReflect.Descriptor instead.
 func (*ListGitHubIssuesResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{88}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *ListGitHubIssuesResponse) GetIssues() []*GitHubIssueEntry {
@@ -6212,7 +6332,7 @@ type GetBacklogItemDiffRequest struct {
 
 func (x *GetBacklogItemDiffRequest) Reset() {
 	*x = GetBacklogItemDiffRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[89]
+	mi := &file_session_v1_backlog_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6224,7 +6344,7 @@ func (x *GetBacklogItemDiffRequest) String() string {
 func (*GetBacklogItemDiffRequest) ProtoMessage() {}
 
 func (x *GetBacklogItemDiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[89]
+	mi := &file_session_v1_backlog_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6237,7 +6357,7 @@ func (x *GetBacklogItemDiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemDiffRequest.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemDiffRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{89}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *GetBacklogItemDiffRequest) GetItemId() string {
@@ -6258,7 +6378,7 @@ type GetBacklogItemDiffResponse struct {
 
 func (x *GetBacklogItemDiffResponse) Reset() {
 	*x = GetBacklogItemDiffResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[90]
+	mi := &file_session_v1_backlog_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6270,7 +6390,7 @@ func (x *GetBacklogItemDiffResponse) String() string {
 func (*GetBacklogItemDiffResponse) ProtoMessage() {}
 
 func (x *GetBacklogItemDiffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[90]
+	mi := &file_session_v1_backlog_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6283,7 +6403,7 @@ func (x *GetBacklogItemDiffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemDiffResponse.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemDiffResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{90}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *GetBacklogItemDiffResponse) GetDiff() string {
@@ -6320,7 +6440,7 @@ type SessionCostEntry struct {
 
 func (x *SessionCostEntry) Reset() {
 	*x = SessionCostEntry{}
-	mi := &file_session_v1_backlog_proto_msgTypes[91]
+	mi := &file_session_v1_backlog_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6332,7 +6452,7 @@ func (x *SessionCostEntry) String() string {
 func (*SessionCostEntry) ProtoMessage() {}
 
 func (x *SessionCostEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[91]
+	mi := &file_session_v1_backlog_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6345,7 +6465,7 @@ func (x *SessionCostEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionCostEntry.ProtoReflect.Descriptor instead.
 func (*SessionCostEntry) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{91}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *SessionCostEntry) GetSessionId() string {
@@ -6392,7 +6512,7 @@ type GetBacklogItemCostRequest struct {
 
 func (x *GetBacklogItemCostRequest) Reset() {
 	*x = GetBacklogItemCostRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[92]
+	mi := &file_session_v1_backlog_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6404,7 +6524,7 @@ func (x *GetBacklogItemCostRequest) String() string {
 func (*GetBacklogItemCostRequest) ProtoMessage() {}
 
 func (x *GetBacklogItemCostRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[92]
+	mi := &file_session_v1_backlog_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6417,7 +6537,7 @@ func (x *GetBacklogItemCostRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemCostRequest.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemCostRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{92}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *GetBacklogItemCostRequest) GetItemId() string {
@@ -6437,7 +6557,7 @@ type GetBacklogItemCostResponse struct {
 
 func (x *GetBacklogItemCostResponse) Reset() {
 	*x = GetBacklogItemCostResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[93]
+	mi := &file_session_v1_backlog_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6449,7 +6569,7 @@ func (x *GetBacklogItemCostResponse) String() string {
 func (*GetBacklogItemCostResponse) ProtoMessage() {}
 
 func (x *GetBacklogItemCostResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[93]
+	mi := &file_session_v1_backlog_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6462,7 +6582,7 @@ func (x *GetBacklogItemCostResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBacklogItemCostResponse.ProtoReflect.Descriptor instead.
 func (*GetBacklogItemCostResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{93}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *GetBacklogItemCostResponse) GetTotalCostUsd() float64 {
@@ -6493,7 +6613,7 @@ type BacklogSessionEntry struct {
 
 func (x *BacklogSessionEntry) Reset() {
 	*x = BacklogSessionEntry{}
-	mi := &file_session_v1_backlog_proto_msgTypes[94]
+	mi := &file_session_v1_backlog_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6505,7 +6625,7 @@ func (x *BacklogSessionEntry) String() string {
 func (*BacklogSessionEntry) ProtoMessage() {}
 
 func (x *BacklogSessionEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[94]
+	mi := &file_session_v1_backlog_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6518,7 +6638,7 @@ func (x *BacklogSessionEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BacklogSessionEntry.ProtoReflect.Descriptor instead.
 func (*BacklogSessionEntry) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{94}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *BacklogSessionEntry) GetSessionUuid() string {
@@ -6564,7 +6684,7 @@ type GetSessionBacklogIndexRequest struct {
 
 func (x *GetSessionBacklogIndexRequest) Reset() {
 	*x = GetSessionBacklogIndexRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[95]
+	mi := &file_session_v1_backlog_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6576,7 +6696,7 @@ func (x *GetSessionBacklogIndexRequest) String() string {
 func (*GetSessionBacklogIndexRequest) ProtoMessage() {}
 
 func (x *GetSessionBacklogIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[95]
+	mi := &file_session_v1_backlog_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6589,7 +6709,7 @@ func (x *GetSessionBacklogIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionBacklogIndexRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionBacklogIndexRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{95}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{96}
 }
 
 type GetSessionBacklogIndexResponse struct {
@@ -6601,7 +6721,7 @@ type GetSessionBacklogIndexResponse struct {
 
 func (x *GetSessionBacklogIndexResponse) Reset() {
 	*x = GetSessionBacklogIndexResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[96]
+	mi := &file_session_v1_backlog_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6613,7 +6733,7 @@ func (x *GetSessionBacklogIndexResponse) String() string {
 func (*GetSessionBacklogIndexResponse) ProtoMessage() {}
 
 func (x *GetSessionBacklogIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[96]
+	mi := &file_session_v1_backlog_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6626,7 +6746,7 @@ func (x *GetSessionBacklogIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionBacklogIndexResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionBacklogIndexResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{96}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *GetSessionBacklogIndexResponse) GetEntries() []*BacklogSessionEntry {
@@ -6651,7 +6771,7 @@ type SubmitManualReviewRequest struct {
 
 func (x *SubmitManualReviewRequest) Reset() {
 	*x = SubmitManualReviewRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[97]
+	mi := &file_session_v1_backlog_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6663,7 +6783,7 @@ func (x *SubmitManualReviewRequest) String() string {
 func (*SubmitManualReviewRequest) ProtoMessage() {}
 
 func (x *SubmitManualReviewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[97]
+	mi := &file_session_v1_backlog_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6676,7 +6796,7 @@ func (x *SubmitManualReviewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitManualReviewRequest.ProtoReflect.Descriptor instead.
 func (*SubmitManualReviewRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{97}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *SubmitManualReviewRequest) GetItemId() string {
@@ -6716,7 +6836,7 @@ type SubmitManualReviewResponse struct {
 
 func (x *SubmitManualReviewResponse) Reset() {
 	*x = SubmitManualReviewResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[98]
+	mi := &file_session_v1_backlog_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6728,7 +6848,7 @@ func (x *SubmitManualReviewResponse) String() string {
 func (*SubmitManualReviewResponse) ProtoMessage() {}
 
 func (x *SubmitManualReviewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[98]
+	mi := &file_session_v1_backlog_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6741,7 +6861,7 @@ func (x *SubmitManualReviewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitManualReviewResponse.ProtoReflect.Descriptor instead.
 func (*SubmitManualReviewResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{98}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *SubmitManualReviewResponse) GetItem() *BacklogItem {
@@ -6793,7 +6913,7 @@ type StuckBacklogItem struct {
 
 func (x *StuckBacklogItem) Reset() {
 	*x = StuckBacklogItem{}
-	mi := &file_session_v1_backlog_proto_msgTypes[99]
+	mi := &file_session_v1_backlog_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6805,7 +6925,7 @@ func (x *StuckBacklogItem) String() string {
 func (*StuckBacklogItem) ProtoMessage() {}
 
 func (x *StuckBacklogItem) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[99]
+	mi := &file_session_v1_backlog_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6818,7 +6938,7 @@ func (x *StuckBacklogItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StuckBacklogItem.ProtoReflect.Descriptor instead.
 func (*StuckBacklogItem) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{99}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *StuckBacklogItem) GetItemId() string {
@@ -6920,7 +7040,7 @@ type ListStuckBacklogItemsRequest struct {
 
 func (x *ListStuckBacklogItemsRequest) Reset() {
 	*x = ListStuckBacklogItemsRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[100]
+	mi := &file_session_v1_backlog_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6932,7 +7052,7 @@ func (x *ListStuckBacklogItemsRequest) String() string {
 func (*ListStuckBacklogItemsRequest) ProtoMessage() {}
 
 func (x *ListStuckBacklogItemsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[100]
+	mi := &file_session_v1_backlog_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6945,7 +7065,7 @@ func (x *ListStuckBacklogItemsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStuckBacklogItemsRequest.ProtoReflect.Descriptor instead.
 func (*ListStuckBacklogItemsRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{100}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{101}
 }
 
 type ListStuckBacklogItemsResponse struct {
@@ -6957,7 +7077,7 @@ type ListStuckBacklogItemsResponse struct {
 
 func (x *ListStuckBacklogItemsResponse) Reset() {
 	*x = ListStuckBacklogItemsResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[101]
+	mi := &file_session_v1_backlog_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6969,7 +7089,7 @@ func (x *ListStuckBacklogItemsResponse) String() string {
 func (*ListStuckBacklogItemsResponse) ProtoMessage() {}
 
 func (x *ListStuckBacklogItemsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[101]
+	mi := &file_session_v1_backlog_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6982,7 +7102,7 @@ func (x *ListStuckBacklogItemsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStuckBacklogItemsResponse.ProtoReflect.Descriptor instead.
 func (*ListStuckBacklogItemsResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{101}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ListStuckBacklogItemsResponse) GetItems() []*StuckBacklogItem {
@@ -7003,7 +7123,7 @@ type SnoozeStuckItemRequest struct {
 
 func (x *SnoozeStuckItemRequest) Reset() {
 	*x = SnoozeStuckItemRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[102]
+	mi := &file_session_v1_backlog_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7015,7 +7135,7 @@ func (x *SnoozeStuckItemRequest) String() string {
 func (*SnoozeStuckItemRequest) ProtoMessage() {}
 
 func (x *SnoozeStuckItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[102]
+	mi := &file_session_v1_backlog_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7028,7 +7148,7 @@ func (x *SnoozeStuckItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnoozeStuckItemRequest.ProtoReflect.Descriptor instead.
 func (*SnoozeStuckItemRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{102}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *SnoozeStuckItemRequest) GetItemId() string {
@@ -7063,7 +7183,7 @@ type SnoozeStuckItemResponse struct {
 
 func (x *SnoozeStuckItemResponse) Reset() {
 	*x = SnoozeStuckItemResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[103]
+	mi := &file_session_v1_backlog_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7075,7 +7195,7 @@ func (x *SnoozeStuckItemResponse) String() string {
 func (*SnoozeStuckItemResponse) ProtoMessage() {}
 
 func (x *SnoozeStuckItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[103]
+	mi := &file_session_v1_backlog_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7088,7 +7208,7 @@ func (x *SnoozeStuckItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnoozeStuckItemResponse.ProtoReflect.Descriptor instead.
 func (*SnoozeStuckItemResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{103}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *SnoozeStuckItemResponse) GetApplied() bool {
@@ -7108,7 +7228,7 @@ type ResetStuckRemediationRequest struct {
 
 func (x *ResetStuckRemediationRequest) Reset() {
 	*x = ResetStuckRemediationRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[104]
+	mi := &file_session_v1_backlog_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7120,7 +7240,7 @@ func (x *ResetStuckRemediationRequest) String() string {
 func (*ResetStuckRemediationRequest) ProtoMessage() {}
 
 func (x *ResetStuckRemediationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[104]
+	mi := &file_session_v1_backlog_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7133,7 +7253,7 @@ func (x *ResetStuckRemediationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetStuckRemediationRequest.ProtoReflect.Descriptor instead.
 func (*ResetStuckRemediationRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{104}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *ResetStuckRemediationRequest) GetItemId() string {
@@ -7161,7 +7281,7 @@ type ResetStuckRemediationResponse struct {
 
 func (x *ResetStuckRemediationResponse) Reset() {
 	*x = ResetStuckRemediationResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[105]
+	mi := &file_session_v1_backlog_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7173,7 +7293,7 @@ func (x *ResetStuckRemediationResponse) String() string {
 func (*ResetStuckRemediationResponse) ProtoMessage() {}
 
 func (x *ResetStuckRemediationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[105]
+	mi := &file_session_v1_backlog_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7186,7 +7306,7 @@ func (x *ResetStuckRemediationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResetStuckRemediationResponse.ProtoReflect.Descriptor instead.
 func (*ResetStuckRemediationResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{105}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *ResetStuckRemediationResponse) GetApplied() bool {
@@ -7217,7 +7337,7 @@ type BulkResetStuckRemediationRequest struct {
 
 func (x *BulkResetStuckRemediationRequest) Reset() {
 	*x = BulkResetStuckRemediationRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[106]
+	mi := &file_session_v1_backlog_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7229,7 +7349,7 @@ func (x *BulkResetStuckRemediationRequest) String() string {
 func (*BulkResetStuckRemediationRequest) ProtoMessage() {}
 
 func (x *BulkResetStuckRemediationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[106]
+	mi := &file_session_v1_backlog_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7242,7 +7362,7 @@ func (x *BulkResetStuckRemediationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BulkResetStuckRemediationRequest.ProtoReflect.Descriptor instead.
 func (*BulkResetStuckRemediationRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{106}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *BulkResetStuckRemediationRequest) GetReason() StuckReason {
@@ -7276,7 +7396,7 @@ type BulkResetStuckRemediationResponse struct {
 
 func (x *BulkResetStuckRemediationResponse) Reset() {
 	*x = BulkResetStuckRemediationResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[107]
+	mi := &file_session_v1_backlog_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7288,7 +7408,7 @@ func (x *BulkResetStuckRemediationResponse) String() string {
 func (*BulkResetStuckRemediationResponse) ProtoMessage() {}
 
 func (x *BulkResetStuckRemediationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[107]
+	mi := &file_session_v1_backlog_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7301,7 +7421,7 @@ func (x *BulkResetStuckRemediationResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use BulkResetStuckRemediationResponse.ProtoReflect.Descriptor instead.
 func (*BulkResetStuckRemediationResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{107}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *BulkResetStuckRemediationResponse) GetResetCount() int32 {
@@ -7321,7 +7441,7 @@ type TriggerRemediationNowRequest struct {
 
 func (x *TriggerRemediationNowRequest) Reset() {
 	*x = TriggerRemediationNowRequest{}
-	mi := &file_session_v1_backlog_proto_msgTypes[108]
+	mi := &file_session_v1_backlog_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7333,7 +7453,7 @@ func (x *TriggerRemediationNowRequest) String() string {
 func (*TriggerRemediationNowRequest) ProtoMessage() {}
 
 func (x *TriggerRemediationNowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[108]
+	mi := &file_session_v1_backlog_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7346,7 +7466,7 @@ func (x *TriggerRemediationNowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerRemediationNowRequest.ProtoReflect.Descriptor instead.
 func (*TriggerRemediationNowRequest) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{108}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *TriggerRemediationNowRequest) GetItemId() string {
@@ -7377,7 +7497,7 @@ type TriggerRemediationNowResponse struct {
 
 func (x *TriggerRemediationNowResponse) Reset() {
 	*x = TriggerRemediationNowResponse{}
-	mi := &file_session_v1_backlog_proto_msgTypes[109]
+	mi := &file_session_v1_backlog_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7389,7 +7509,7 @@ func (x *TriggerRemediationNowResponse) String() string {
 func (*TriggerRemediationNowResponse) ProtoMessage() {}
 
 func (x *TriggerRemediationNowResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_backlog_proto_msgTypes[109]
+	mi := &file_session_v1_backlog_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7402,7 +7522,7 @@ func (x *TriggerRemediationNowResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TriggerRemediationNowResponse.ProtoReflect.Descriptor instead.
 func (*TriggerRemediationNowResponse) Descriptor() ([]byte, []int) {
-	return file_session_v1_backlog_proto_rawDescGZIP(), []int{109}
+	return file_session_v1_backlog_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *TriggerRemediationNowResponse) GetTriggered() bool {
@@ -7456,7 +7576,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x14clarifying_questions\x18\x03 \x03(\tR\x13clarifyingQuestions\x12,\n" +
 	"\x05tasks\x18\x04 \x03(\v2\x16.session.v1.TriageTaskR\x05tasks\x12\x1c\n" +
 	"\titeration\x18\x05 \x01(\x05R\titeration\x12\x1a\n" +
-	"\bfeedback\x18\x06 \x01(\tR\bfeedback\"\xf6\x06\n" +
+	"\bfeedback\x18\x06 \x01(\tR\bfeedback\"\x95\a\n" +
 	"\vItemSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fsession_uuid\x18\x02 \x01(\tR\vsessionUuid\x12!\n" +
@@ -7477,7 +7597,17 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x0fworktree_branch\x18\x0e \x01(\tR\x0eworktreeBranch\x12#\n" +
 	"\rworktree_path\x18\x0f \x01(\tR\fworktreePath\x124\n" +
 	"\x16pipeline_mode_snapshot\x18\x10 \x01(\tR\x14pipelineModeSnapshot\x12=\n" +
-	"\x1bpipeline_mode_snapshot_hash\x18\x11 \x01(\tR\x18pipelineModeSnapshotHash\"\xe2\x01\n" +
+	"\x1bpipeline_mode_snapshot_hash\x18\x11 \x01(\tR\x18pipelineModeSnapshotHash\x12\x1d\n" +
+	"\n" +
+	"end_reason\x18\x12 \x01(\tR\tendReason\"\xf7\x01\n" +
+	"\fRespawnEvent\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x126\n" +
+	"\x17triggering_session_uuid\x18\x03 \x01(\tR\x15triggeringSessionUuid\x124\n" +
+	"\x16resulting_session_uuid\x18\x04 \x01(\tR\x14resultingSessionUuid\x129\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x16\n" +
+	"\x06queued\x18\x06 \x01(\bR\x06queued\"\xe2\x01\n" +
 	"\x12BacklogStatusEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vfrom_status\x18\x02 \x01(\tR\n" +
@@ -7494,7 +7624,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa4\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xe5\n" +
 	"\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
@@ -7530,7 +7660,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePr\x12F\n" +
 	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotes\x123\n" +
 	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
-	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
+	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01\x12?\n" +
+	"\x0erespawn_events\x18\x1e \x03(\v2\x18.session.v1.RespawnEventR\rrespawnEventsB\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
 	"\t_category\"\xd9\x02\n" +
@@ -8071,7 +8202,7 @@ func file_session_v1_backlog_proto_rawDescGZIP() []byte {
 }
 
 var file_session_v1_backlog_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_session_v1_backlog_proto_msgTypes = make([]protoimpl.MessageInfo, 110)
+var file_session_v1_backlog_proto_msgTypes = make([]protoimpl.MessageInfo, 111)
 var file_session_v1_backlog_proto_goTypes = []any{
 	(StuckReason)(0),                            // 0: session.v1.StuckReason
 	(*AcCriterion)(nil),                         // 1: session.v1.AcCriterion
@@ -8081,296 +8212,299 @@ var file_session_v1_backlog_proto_goTypes = []any{
 	(*TriageTask)(nil),                          // 5: session.v1.TriageTask
 	(*TriageResult)(nil),                        // 6: session.v1.TriageResult
 	(*ItemSession)(nil),                         // 7: session.v1.ItemSession
-	(*BacklogStatusEvent)(nil),                  // 8: session.v1.BacklogStatusEvent
-	(*BacklogProgressNote)(nil),                 // 9: session.v1.BacklogProgressNote
-	(*BacklogItem)(nil),                         // 10: session.v1.BacklogItem
-	(*ItemSource)(nil),                          // 11: session.v1.ItemSource
-	(*PipelineMode)(nil),                        // 12: session.v1.PipelineMode
-	(*SourceSyncEvent)(nil),                     // 13: session.v1.SourceSyncEvent
-	(*CreateBacklogItemRequest)(nil),            // 14: session.v1.CreateBacklogItemRequest
-	(*CreateBacklogItemResponse)(nil),           // 15: session.v1.CreateBacklogItemResponse
-	(*GetBacklogItemRequest)(nil),               // 16: session.v1.GetBacklogItemRequest
-	(*GetBacklogItemResponse)(nil),              // 17: session.v1.GetBacklogItemResponse
-	(*BacklogItemShipStatus)(nil),               // 18: session.v1.BacklogItemShipStatus
-	(*ShippedCommit)(nil),                       // 19: session.v1.ShippedCommit
-	(*ShippedFileStat)(nil),                     // 20: session.v1.ShippedFileStat
-	(*GetBacklogItemShipStatusRequest)(nil),     // 21: session.v1.GetBacklogItemShipStatusRequest
-	(*GetBacklogItemShipStatusResponse)(nil),    // 22: session.v1.GetBacklogItemShipStatusResponse
-	(*ListBacklogItemsRequest)(nil),             // 23: session.v1.ListBacklogItemsRequest
-	(*ListBacklogItemsResponse)(nil),            // 24: session.v1.ListBacklogItemsResponse
-	(*UpdateBacklogItemRequest)(nil),            // 25: session.v1.UpdateBacklogItemRequest
-	(*UpdateBacklogItemResponse)(nil),           // 26: session.v1.UpdateBacklogItemResponse
-	(*ArchiveBacklogItemRequest)(nil),           // 27: session.v1.ArchiveBacklogItemRequest
-	(*ArchiveBacklogItemResponse)(nil),          // 28: session.v1.ArchiveBacklogItemResponse
-	(*DeleteBacklogItemRequest)(nil),            // 29: session.v1.DeleteBacklogItemRequest
-	(*DeleteBacklogItemResponse)(nil),           // 30: session.v1.DeleteBacklogItemResponse
-	(*TransitionBacklogItemStatusRequest)(nil),  // 31: session.v1.TransitionBacklogItemStatusRequest
-	(*TransitionBacklogItemStatusResponse)(nil), // 32: session.v1.TransitionBacklogItemStatusResponse
-	(*SpawnSessionFromItemRequest)(nil),         // 33: session.v1.SpawnSessionFromItemRequest
-	(*SpawnSessionFromItemResponse)(nil),        // 34: session.v1.SpawnSessionFromItemResponse
-	(*AttachSessionToItemRequest)(nil),          // 35: session.v1.AttachSessionToItemRequest
-	(*AttachSessionToItemResponse)(nil),         // 36: session.v1.AttachSessionToItemResponse
-	(*TriggerTriageRequest)(nil),                // 37: session.v1.TriggerTriageRequest
-	(*TriggerTriageResponse)(nil),               // 38: session.v1.TriggerTriageResponse
-	(*ApprovePlanRequest)(nil),                  // 39: session.v1.ApprovePlanRequest
-	(*ApprovePlanResponse)(nil),                 // 40: session.v1.ApprovePlanResponse
-	(*SuggestNextItemRequest)(nil),              // 41: session.v1.SuggestNextItemRequest
-	(*SuggestNextItemResponse)(nil),             // 42: session.v1.SuggestNextItemResponse
-	(*OverrideVerdictRequest)(nil),              // 43: session.v1.OverrideVerdictRequest
-	(*OverrideVerdictResponse)(nil),             // 44: session.v1.OverrideVerdictResponse
-	(*TriggerReReviewRequest)(nil),              // 45: session.v1.TriggerReReviewRequest
-	(*TriggerReReviewResponse)(nil),             // 46: session.v1.TriggerReReviewResponse
-	(*TriggerShipPRRequest)(nil),                // 47: session.v1.TriggerShipPRRequest
-	(*TriggerShipPRResponse)(nil),               // 48: session.v1.TriggerShipPRResponse
-	(*TriggerSyncRequest)(nil),                  // 49: session.v1.TriggerSyncRequest
-	(*TriggerSyncResponse)(nil),                 // 50: session.v1.TriggerSyncResponse
-	(*CreateItemSourceRequest)(nil),             // 51: session.v1.CreateItemSourceRequest
-	(*CreateItemSourceResponse)(nil),            // 52: session.v1.CreateItemSourceResponse
-	(*ListItemSourcesRequest)(nil),              // 53: session.v1.ListItemSourcesRequest
-	(*ListItemSourcesResponse)(nil),             // 54: session.v1.ListItemSourcesResponse
-	(*UpdateItemSourceRequest)(nil),             // 55: session.v1.UpdateItemSourceRequest
-	(*UpdateItemSourceResponse)(nil),            // 56: session.v1.UpdateItemSourceResponse
-	(*DeleteItemSourceRequest)(nil),             // 57: session.v1.DeleteItemSourceRequest
-	(*DeleteItemSourceResponse)(nil),            // 58: session.v1.DeleteItemSourceResponse
-	(*GetSyncHistoryRequest)(nil),               // 59: session.v1.GetSyncHistoryRequest
-	(*GetSyncHistoryResponse)(nil),              // 60: session.v1.GetSyncHistoryResponse
-	(*CreatePipelineModeRequest)(nil),           // 61: session.v1.CreatePipelineModeRequest
-	(*CreatePipelineModeResponse)(nil),          // 62: session.v1.CreatePipelineModeResponse
-	(*UpdatePipelineModeRequest)(nil),           // 63: session.v1.UpdatePipelineModeRequest
-	(*UpdatePipelineModeResponse)(nil),          // 64: session.v1.UpdatePipelineModeResponse
-	(*DeletePipelineModeRequest)(nil),           // 65: session.v1.DeletePipelineModeRequest
-	(*DeletePipelineModeResponse)(nil),          // 66: session.v1.DeletePipelineModeResponse
-	(*GetPipelineModeRequest)(nil),              // 67: session.v1.GetPipelineModeRequest
-	(*GetPipelineModeResponse)(nil),             // 68: session.v1.GetPipelineModeResponse
-	(*ListPipelineModesRequest)(nil),            // 69: session.v1.ListPipelineModesRequest
-	(*ListPipelineModesResponse)(nil),           // 70: session.v1.ListPipelineModesResponse
-	(*BacklogItemEvent)(nil),                    // 71: session.v1.BacklogItemEvent
-	(*BacklogItemStatusChangedEvent)(nil),       // 72: session.v1.BacklogItemStatusChangedEvent
-	(*BacklogItemVerdictRecordedEvent)(nil),     // 73: session.v1.BacklogItemVerdictRecordedEvent
-	(*BacklogItemSessionAttachedEvent)(nil),     // 74: session.v1.BacklogItemSessionAttachedEvent
-	(*BacklogItemUpdatedEvent)(nil),             // 75: session.v1.BacklogItemUpdatedEvent
-	(*BacklogItemArchivedEvent)(nil),            // 76: session.v1.BacklogItemArchivedEvent
-	(*BacklogItemRemovedEvent)(nil),             // 77: session.v1.BacklogItemRemovedEvent
-	(*BacklogSnapshotCompleteEvent)(nil),        // 78: session.v1.BacklogSnapshotCompleteEvent
-	(*WatchBacklogItemsRequest)(nil),            // 79: session.v1.WatchBacklogItemsRequest
-	(*ImportGitHubIssueRequest)(nil),            // 80: session.v1.ImportGitHubIssueRequest
-	(*ImportGitHubIssueResponse)(nil),           // 81: session.v1.ImportGitHubIssueResponse
-	(*CancelTriageRequest)(nil),                 // 82: session.v1.CancelTriageRequest
-	(*CancelTriageResponse)(nil),                // 83: session.v1.CancelTriageResponse
-	(*GitHubRepoEntry)(nil),                     // 84: session.v1.GitHubRepoEntry
-	(*GitHubIssueEntry)(nil),                    // 85: session.v1.GitHubIssueEntry
-	(*SearchGitHubReposRequest)(nil),            // 86: session.v1.SearchGitHubReposRequest
-	(*SearchGitHubReposResponse)(nil),           // 87: session.v1.SearchGitHubReposResponse
-	(*ListGitHubIssuesRequest)(nil),             // 88: session.v1.ListGitHubIssuesRequest
-	(*ListGitHubIssuesResponse)(nil),            // 89: session.v1.ListGitHubIssuesResponse
-	(*GetBacklogItemDiffRequest)(nil),           // 90: session.v1.GetBacklogItemDiffRequest
-	(*GetBacklogItemDiffResponse)(nil),          // 91: session.v1.GetBacklogItemDiffResponse
-	(*SessionCostEntry)(nil),                    // 92: session.v1.SessionCostEntry
-	(*GetBacklogItemCostRequest)(nil),           // 93: session.v1.GetBacklogItemCostRequest
-	(*GetBacklogItemCostResponse)(nil),          // 94: session.v1.GetBacklogItemCostResponse
-	(*BacklogSessionEntry)(nil),                 // 95: session.v1.BacklogSessionEntry
-	(*GetSessionBacklogIndexRequest)(nil),       // 96: session.v1.GetSessionBacklogIndexRequest
-	(*GetSessionBacklogIndexResponse)(nil),      // 97: session.v1.GetSessionBacklogIndexResponse
-	(*SubmitManualReviewRequest)(nil),           // 98: session.v1.SubmitManualReviewRequest
-	(*SubmitManualReviewResponse)(nil),          // 99: session.v1.SubmitManualReviewResponse
-	(*StuckBacklogItem)(nil),                    // 100: session.v1.StuckBacklogItem
-	(*ListStuckBacklogItemsRequest)(nil),        // 101: session.v1.ListStuckBacklogItemsRequest
-	(*ListStuckBacklogItemsResponse)(nil),       // 102: session.v1.ListStuckBacklogItemsResponse
-	(*SnoozeStuckItemRequest)(nil),              // 103: session.v1.SnoozeStuckItemRequest
-	(*SnoozeStuckItemResponse)(nil),             // 104: session.v1.SnoozeStuckItemResponse
-	(*ResetStuckRemediationRequest)(nil),        // 105: session.v1.ResetStuckRemediationRequest
-	(*ResetStuckRemediationResponse)(nil),       // 106: session.v1.ResetStuckRemediationResponse
-	(*BulkResetStuckRemediationRequest)(nil),    // 107: session.v1.BulkResetStuckRemediationRequest
-	(*BulkResetStuckRemediationResponse)(nil),   // 108: session.v1.BulkResetStuckRemediationResponse
-	(*TriggerRemediationNowRequest)(nil),        // 109: session.v1.TriggerRemediationNowRequest
-	(*TriggerRemediationNowResponse)(nil),       // 110: session.v1.TriggerRemediationNowResponse
-	(*timestamppb.Timestamp)(nil),               // 111: google.protobuf.Timestamp
-	(FileStatus)(0),                             // 112: session.v1.FileStatus
+	(*RespawnEvent)(nil),                        // 8: session.v1.RespawnEvent
+	(*BacklogStatusEvent)(nil),                  // 9: session.v1.BacklogStatusEvent
+	(*BacklogProgressNote)(nil),                 // 10: session.v1.BacklogProgressNote
+	(*BacklogItem)(nil),                         // 11: session.v1.BacklogItem
+	(*ItemSource)(nil),                          // 12: session.v1.ItemSource
+	(*PipelineMode)(nil),                        // 13: session.v1.PipelineMode
+	(*SourceSyncEvent)(nil),                     // 14: session.v1.SourceSyncEvent
+	(*CreateBacklogItemRequest)(nil),            // 15: session.v1.CreateBacklogItemRequest
+	(*CreateBacklogItemResponse)(nil),           // 16: session.v1.CreateBacklogItemResponse
+	(*GetBacklogItemRequest)(nil),               // 17: session.v1.GetBacklogItemRequest
+	(*GetBacklogItemResponse)(nil),              // 18: session.v1.GetBacklogItemResponse
+	(*BacklogItemShipStatus)(nil),               // 19: session.v1.BacklogItemShipStatus
+	(*ShippedCommit)(nil),                       // 20: session.v1.ShippedCommit
+	(*ShippedFileStat)(nil),                     // 21: session.v1.ShippedFileStat
+	(*GetBacklogItemShipStatusRequest)(nil),     // 22: session.v1.GetBacklogItemShipStatusRequest
+	(*GetBacklogItemShipStatusResponse)(nil),    // 23: session.v1.GetBacklogItemShipStatusResponse
+	(*ListBacklogItemsRequest)(nil),             // 24: session.v1.ListBacklogItemsRequest
+	(*ListBacklogItemsResponse)(nil),            // 25: session.v1.ListBacklogItemsResponse
+	(*UpdateBacklogItemRequest)(nil),            // 26: session.v1.UpdateBacklogItemRequest
+	(*UpdateBacklogItemResponse)(nil),           // 27: session.v1.UpdateBacklogItemResponse
+	(*ArchiveBacklogItemRequest)(nil),           // 28: session.v1.ArchiveBacklogItemRequest
+	(*ArchiveBacklogItemResponse)(nil),          // 29: session.v1.ArchiveBacklogItemResponse
+	(*DeleteBacklogItemRequest)(nil),            // 30: session.v1.DeleteBacklogItemRequest
+	(*DeleteBacklogItemResponse)(nil),           // 31: session.v1.DeleteBacklogItemResponse
+	(*TransitionBacklogItemStatusRequest)(nil),  // 32: session.v1.TransitionBacklogItemStatusRequest
+	(*TransitionBacklogItemStatusResponse)(nil), // 33: session.v1.TransitionBacklogItemStatusResponse
+	(*SpawnSessionFromItemRequest)(nil),         // 34: session.v1.SpawnSessionFromItemRequest
+	(*SpawnSessionFromItemResponse)(nil),        // 35: session.v1.SpawnSessionFromItemResponse
+	(*AttachSessionToItemRequest)(nil),          // 36: session.v1.AttachSessionToItemRequest
+	(*AttachSessionToItemResponse)(nil),         // 37: session.v1.AttachSessionToItemResponse
+	(*TriggerTriageRequest)(nil),                // 38: session.v1.TriggerTriageRequest
+	(*TriggerTriageResponse)(nil),               // 39: session.v1.TriggerTriageResponse
+	(*ApprovePlanRequest)(nil),                  // 40: session.v1.ApprovePlanRequest
+	(*ApprovePlanResponse)(nil),                 // 41: session.v1.ApprovePlanResponse
+	(*SuggestNextItemRequest)(nil),              // 42: session.v1.SuggestNextItemRequest
+	(*SuggestNextItemResponse)(nil),             // 43: session.v1.SuggestNextItemResponse
+	(*OverrideVerdictRequest)(nil),              // 44: session.v1.OverrideVerdictRequest
+	(*OverrideVerdictResponse)(nil),             // 45: session.v1.OverrideVerdictResponse
+	(*TriggerReReviewRequest)(nil),              // 46: session.v1.TriggerReReviewRequest
+	(*TriggerReReviewResponse)(nil),             // 47: session.v1.TriggerReReviewResponse
+	(*TriggerShipPRRequest)(nil),                // 48: session.v1.TriggerShipPRRequest
+	(*TriggerShipPRResponse)(nil),               // 49: session.v1.TriggerShipPRResponse
+	(*TriggerSyncRequest)(nil),                  // 50: session.v1.TriggerSyncRequest
+	(*TriggerSyncResponse)(nil),                 // 51: session.v1.TriggerSyncResponse
+	(*CreateItemSourceRequest)(nil),             // 52: session.v1.CreateItemSourceRequest
+	(*CreateItemSourceResponse)(nil),            // 53: session.v1.CreateItemSourceResponse
+	(*ListItemSourcesRequest)(nil),              // 54: session.v1.ListItemSourcesRequest
+	(*ListItemSourcesResponse)(nil),             // 55: session.v1.ListItemSourcesResponse
+	(*UpdateItemSourceRequest)(nil),             // 56: session.v1.UpdateItemSourceRequest
+	(*UpdateItemSourceResponse)(nil),            // 57: session.v1.UpdateItemSourceResponse
+	(*DeleteItemSourceRequest)(nil),             // 58: session.v1.DeleteItemSourceRequest
+	(*DeleteItemSourceResponse)(nil),            // 59: session.v1.DeleteItemSourceResponse
+	(*GetSyncHistoryRequest)(nil),               // 60: session.v1.GetSyncHistoryRequest
+	(*GetSyncHistoryResponse)(nil),              // 61: session.v1.GetSyncHistoryResponse
+	(*CreatePipelineModeRequest)(nil),           // 62: session.v1.CreatePipelineModeRequest
+	(*CreatePipelineModeResponse)(nil),          // 63: session.v1.CreatePipelineModeResponse
+	(*UpdatePipelineModeRequest)(nil),           // 64: session.v1.UpdatePipelineModeRequest
+	(*UpdatePipelineModeResponse)(nil),          // 65: session.v1.UpdatePipelineModeResponse
+	(*DeletePipelineModeRequest)(nil),           // 66: session.v1.DeletePipelineModeRequest
+	(*DeletePipelineModeResponse)(nil),          // 67: session.v1.DeletePipelineModeResponse
+	(*GetPipelineModeRequest)(nil),              // 68: session.v1.GetPipelineModeRequest
+	(*GetPipelineModeResponse)(nil),             // 69: session.v1.GetPipelineModeResponse
+	(*ListPipelineModesRequest)(nil),            // 70: session.v1.ListPipelineModesRequest
+	(*ListPipelineModesResponse)(nil),           // 71: session.v1.ListPipelineModesResponse
+	(*BacklogItemEvent)(nil),                    // 72: session.v1.BacklogItemEvent
+	(*BacklogItemStatusChangedEvent)(nil),       // 73: session.v1.BacklogItemStatusChangedEvent
+	(*BacklogItemVerdictRecordedEvent)(nil),     // 74: session.v1.BacklogItemVerdictRecordedEvent
+	(*BacklogItemSessionAttachedEvent)(nil),     // 75: session.v1.BacklogItemSessionAttachedEvent
+	(*BacklogItemUpdatedEvent)(nil),             // 76: session.v1.BacklogItemUpdatedEvent
+	(*BacklogItemArchivedEvent)(nil),            // 77: session.v1.BacklogItemArchivedEvent
+	(*BacklogItemRemovedEvent)(nil),             // 78: session.v1.BacklogItemRemovedEvent
+	(*BacklogSnapshotCompleteEvent)(nil),        // 79: session.v1.BacklogSnapshotCompleteEvent
+	(*WatchBacklogItemsRequest)(nil),            // 80: session.v1.WatchBacklogItemsRequest
+	(*ImportGitHubIssueRequest)(nil),            // 81: session.v1.ImportGitHubIssueRequest
+	(*ImportGitHubIssueResponse)(nil),           // 82: session.v1.ImportGitHubIssueResponse
+	(*CancelTriageRequest)(nil),                 // 83: session.v1.CancelTriageRequest
+	(*CancelTriageResponse)(nil),                // 84: session.v1.CancelTriageResponse
+	(*GitHubRepoEntry)(nil),                     // 85: session.v1.GitHubRepoEntry
+	(*GitHubIssueEntry)(nil),                    // 86: session.v1.GitHubIssueEntry
+	(*SearchGitHubReposRequest)(nil),            // 87: session.v1.SearchGitHubReposRequest
+	(*SearchGitHubReposResponse)(nil),           // 88: session.v1.SearchGitHubReposResponse
+	(*ListGitHubIssuesRequest)(nil),             // 89: session.v1.ListGitHubIssuesRequest
+	(*ListGitHubIssuesResponse)(nil),            // 90: session.v1.ListGitHubIssuesResponse
+	(*GetBacklogItemDiffRequest)(nil),           // 91: session.v1.GetBacklogItemDiffRequest
+	(*GetBacklogItemDiffResponse)(nil),          // 92: session.v1.GetBacklogItemDiffResponse
+	(*SessionCostEntry)(nil),                    // 93: session.v1.SessionCostEntry
+	(*GetBacklogItemCostRequest)(nil),           // 94: session.v1.GetBacklogItemCostRequest
+	(*GetBacklogItemCostResponse)(nil),          // 95: session.v1.GetBacklogItemCostResponse
+	(*BacklogSessionEntry)(nil),                 // 96: session.v1.BacklogSessionEntry
+	(*GetSessionBacklogIndexRequest)(nil),       // 97: session.v1.GetSessionBacklogIndexRequest
+	(*GetSessionBacklogIndexResponse)(nil),      // 98: session.v1.GetSessionBacklogIndexResponse
+	(*SubmitManualReviewRequest)(nil),           // 99: session.v1.SubmitManualReviewRequest
+	(*SubmitManualReviewResponse)(nil),          // 100: session.v1.SubmitManualReviewResponse
+	(*StuckBacklogItem)(nil),                    // 101: session.v1.StuckBacklogItem
+	(*ListStuckBacklogItemsRequest)(nil),        // 102: session.v1.ListStuckBacklogItemsRequest
+	(*ListStuckBacklogItemsResponse)(nil),       // 103: session.v1.ListStuckBacklogItemsResponse
+	(*SnoozeStuckItemRequest)(nil),              // 104: session.v1.SnoozeStuckItemRequest
+	(*SnoozeStuckItemResponse)(nil),             // 105: session.v1.SnoozeStuckItemResponse
+	(*ResetStuckRemediationRequest)(nil),        // 106: session.v1.ResetStuckRemediationRequest
+	(*ResetStuckRemediationResponse)(nil),       // 107: session.v1.ResetStuckRemediationResponse
+	(*BulkResetStuckRemediationRequest)(nil),    // 108: session.v1.BulkResetStuckRemediationRequest
+	(*BulkResetStuckRemediationResponse)(nil),   // 109: session.v1.BulkResetStuckRemediationResponse
+	(*TriggerRemediationNowRequest)(nil),        // 110: session.v1.TriggerRemediationNowRequest
+	(*TriggerRemediationNowResponse)(nil),       // 111: session.v1.TriggerRemediationNowResponse
+	(*timestamppb.Timestamp)(nil),               // 112: google.protobuf.Timestamp
+	(FileStatus)(0),                             // 113: session.v1.FileStatus
 }
 var file_session_v1_backlog_proto_depIdxs = []int32{
 	2,   // 0: session.v1.ReviewVerdict.per_criterion:type_name -> session.v1.CriterionVerdict
-	111, // 1: session.v1.ReviewVerdict.override_at:type_name -> google.protobuf.Timestamp
-	111, // 2: session.v1.ReviewVerdict.created_at:type_name -> google.protobuf.Timestamp
+	112, // 1: session.v1.ReviewVerdict.override_at:type_name -> google.protobuf.Timestamp
+	112, // 2: session.v1.ReviewVerdict.created_at:type_name -> google.protobuf.Timestamp
 	4,   // 3: session.v1.TriageResult.suggestions:type_name -> session.v1.TriageSuggestion
 	5,   // 4: session.v1.TriageResult.tasks:type_name -> session.v1.TriageTask
-	111, // 5: session.v1.ItemSession.started_at:type_name -> google.protobuf.Timestamp
-	111, // 6: session.v1.ItemSession.ended_at:type_name -> google.protobuf.Timestamp
-	111, // 7: session.v1.ItemSession.last_commit_at:type_name -> google.protobuf.Timestamp
-	111, // 8: session.v1.ItemSession.last_file_touch_at:type_name -> google.protobuf.Timestamp
-	111, // 9: session.v1.ItemSession.created_at:type_name -> google.protobuf.Timestamp
+	112, // 5: session.v1.ItemSession.started_at:type_name -> google.protobuf.Timestamp
+	112, // 6: session.v1.ItemSession.ended_at:type_name -> google.protobuf.Timestamp
+	112, // 7: session.v1.ItemSession.last_commit_at:type_name -> google.protobuf.Timestamp
+	112, // 8: session.v1.ItemSession.last_file_touch_at:type_name -> google.protobuf.Timestamp
+	112, // 9: session.v1.ItemSession.created_at:type_name -> google.protobuf.Timestamp
 	3,   // 10: session.v1.ItemSession.review_verdict:type_name -> session.v1.ReviewVerdict
 	6,   // 11: session.v1.ItemSession.triage_result:type_name -> session.v1.TriageResult
-	111, // 12: session.v1.BacklogStatusEvent.created_at:type_name -> google.protobuf.Timestamp
-	111, // 13: session.v1.BacklogProgressNote.created_at:type_name -> google.protobuf.Timestamp
-	1,   // 14: session.v1.BacklogItem.acceptance_criteria:type_name -> session.v1.AcCriterion
-	111, // 15: session.v1.BacklogItem.plan_approved_at:type_name -> google.protobuf.Timestamp
-	111, // 16: session.v1.BacklogItem.archived_at:type_name -> google.protobuf.Timestamp
-	111, // 17: session.v1.BacklogItem.created_at:type_name -> google.protobuf.Timestamp
-	111, // 18: session.v1.BacklogItem.updated_at:type_name -> google.protobuf.Timestamp
-	7,   // 19: session.v1.BacklogItem.item_sessions:type_name -> session.v1.ItemSession
-	8,   // 20: session.v1.BacklogItem.status_events:type_name -> session.v1.BacklogStatusEvent
-	9,   // 21: session.v1.BacklogItem.progress_notes:type_name -> session.v1.BacklogProgressNote
-	111, // 22: session.v1.ItemSource.last_synced_at:type_name -> google.protobuf.Timestamp
-	111, // 23: session.v1.ItemSource.created_at:type_name -> google.protobuf.Timestamp
-	111, // 24: session.v1.ItemSource.updated_at:type_name -> google.protobuf.Timestamp
-	111, // 25: session.v1.PipelineMode.created_at:type_name -> google.protobuf.Timestamp
-	111, // 26: session.v1.PipelineMode.updated_at:type_name -> google.protobuf.Timestamp
-	111, // 27: session.v1.SourceSyncEvent.started_at:type_name -> google.protobuf.Timestamp
-	111, // 28: session.v1.SourceSyncEvent.finished_at:type_name -> google.protobuf.Timestamp
-	1,   // 29: session.v1.CreateBacklogItemRequest.acceptance_criteria:type_name -> session.v1.AcCriterion
-	10,  // 30: session.v1.CreateBacklogItemResponse.item:type_name -> session.v1.BacklogItem
-	10,  // 31: session.v1.GetBacklogItemResponse.item:type_name -> session.v1.BacklogItem
-	111, // 32: session.v1.BacklogItemShipStatus.last_commit_at:type_name -> google.protobuf.Timestamp
-	19,  // 33: session.v1.BacklogItemShipStatus.commits:type_name -> session.v1.ShippedCommit
-	20,  // 34: session.v1.BacklogItemShipStatus.file_stats:type_name -> session.v1.ShippedFileStat
-	111, // 35: session.v1.BacklogItemShipStatus.snapshot_at:type_name -> google.protobuf.Timestamp
-	111, // 36: session.v1.ShippedCommit.authored_at:type_name -> google.protobuf.Timestamp
-	112, // 37: session.v1.ShippedFileStat.status:type_name -> session.v1.FileStatus
-	18,  // 38: session.v1.GetBacklogItemShipStatusResponse.status:type_name -> session.v1.BacklogItemShipStatus
-	10,  // 39: session.v1.ListBacklogItemsResponse.items:type_name -> session.v1.BacklogItem
-	1,   // 40: session.v1.UpdateBacklogItemRequest.acceptance_criteria:type_name -> session.v1.AcCriterion
-	111, // 41: session.v1.UpdateBacklogItemRequest.expected_updated_at:type_name -> google.protobuf.Timestamp
-	10,  // 42: session.v1.UpdateBacklogItemResponse.item:type_name -> session.v1.BacklogItem
-	10,  // 43: session.v1.ArchiveBacklogItemResponse.item:type_name -> session.v1.BacklogItem
-	111, // 44: session.v1.TransitionBacklogItemStatusRequest.expected_updated_at:type_name -> google.protobuf.Timestamp
-	10,  // 45: session.v1.TransitionBacklogItemStatusResponse.item:type_name -> session.v1.BacklogItem
-	7,   // 46: session.v1.SpawnSessionFromItemResponse.item_session:type_name -> session.v1.ItemSession
-	7,   // 47: session.v1.AttachSessionToItemResponse.item_session:type_name -> session.v1.ItemSession
-	7,   // 48: session.v1.TriggerTriageResponse.item_session:type_name -> session.v1.ItemSession
-	10,  // 49: session.v1.ApprovePlanResponse.item:type_name -> session.v1.BacklogItem
-	7,   // 50: session.v1.SuggestNextItemResponse.item_session:type_name -> session.v1.ItemSession
-	10,  // 51: session.v1.SuggestNextItemResponse.item:type_name -> session.v1.BacklogItem
-	10,  // 52: session.v1.OverrideVerdictResponse.item:type_name -> session.v1.BacklogItem
-	7,   // 53: session.v1.TriggerReReviewResponse.item_session:type_name -> session.v1.ItemSession
-	11,  // 54: session.v1.CreateItemSourceResponse.source:type_name -> session.v1.ItemSource
-	11,  // 55: session.v1.ListItemSourcesResponse.sources:type_name -> session.v1.ItemSource
-	11,  // 56: session.v1.UpdateItemSourceResponse.source:type_name -> session.v1.ItemSource
-	13,  // 57: session.v1.GetSyncHistoryResponse.events:type_name -> session.v1.SourceSyncEvent
-	12,  // 58: session.v1.CreatePipelineModeResponse.item:type_name -> session.v1.PipelineMode
-	12,  // 59: session.v1.UpdatePipelineModeResponse.item:type_name -> session.v1.PipelineMode
-	12,  // 60: session.v1.GetPipelineModeResponse.item:type_name -> session.v1.PipelineMode
-	12,  // 61: session.v1.ListPipelineModesResponse.items:type_name -> session.v1.PipelineMode
-	111, // 62: session.v1.BacklogItemEvent.timestamp:type_name -> google.protobuf.Timestamp
-	72,  // 63: session.v1.BacklogItemEvent.status_changed:type_name -> session.v1.BacklogItemStatusChangedEvent
-	73,  // 64: session.v1.BacklogItemEvent.verdict_recorded:type_name -> session.v1.BacklogItemVerdictRecordedEvent
-	74,  // 65: session.v1.BacklogItemEvent.session_attached:type_name -> session.v1.BacklogItemSessionAttachedEvent
-	75,  // 66: session.v1.BacklogItemEvent.item_updated:type_name -> session.v1.BacklogItemUpdatedEvent
-	76,  // 67: session.v1.BacklogItemEvent.item_archived:type_name -> session.v1.BacklogItemArchivedEvent
-	77,  // 68: session.v1.BacklogItemEvent.item_removed:type_name -> session.v1.BacklogItemRemovedEvent
-	78,  // 69: session.v1.BacklogItemEvent.snapshot_complete:type_name -> session.v1.BacklogSnapshotCompleteEvent
-	10,  // 70: session.v1.BacklogItemStatusChangedEvent.item:type_name -> session.v1.BacklogItem
-	3,   // 71: session.v1.BacklogItemVerdictRecordedEvent.verdict:type_name -> session.v1.ReviewVerdict
-	10,  // 72: session.v1.BacklogItemVerdictRecordedEvent.item:type_name -> session.v1.BacklogItem
-	10,  // 73: session.v1.BacklogItemSessionAttachedEvent.item:type_name -> session.v1.BacklogItem
-	10,  // 74: session.v1.BacklogItemUpdatedEvent.item:type_name -> session.v1.BacklogItem
-	111, // 75: session.v1.BacklogItemArchivedEvent.archived_at:type_name -> google.protobuf.Timestamp
-	10,  // 76: session.v1.ImportGitHubIssueResponse.item:type_name -> session.v1.BacklogItem
-	111, // 77: session.v1.GitHubIssueEntry.created_at:type_name -> google.protobuf.Timestamp
-	111, // 78: session.v1.GitHubIssueEntry.updated_at:type_name -> google.protobuf.Timestamp
-	84,  // 79: session.v1.SearchGitHubReposResponse.repos:type_name -> session.v1.GitHubRepoEntry
-	85,  // 80: session.v1.ListGitHubIssuesResponse.issues:type_name -> session.v1.GitHubIssueEntry
-	92,  // 81: session.v1.GetBacklogItemCostResponse.sessions:type_name -> session.v1.SessionCostEntry
-	95,  // 82: session.v1.GetSessionBacklogIndexResponse.entries:type_name -> session.v1.BacklogSessionEntry
-	2,   // 83: session.v1.SubmitManualReviewRequest.per_criterion_verdicts:type_name -> session.v1.CriterionVerdict
-	10,  // 84: session.v1.SubmitManualReviewResponse.item:type_name -> session.v1.BacklogItem
-	0,   // 85: session.v1.StuckBacklogItem.reason:type_name -> session.v1.StuckReason
-	111, // 86: session.v1.StuckBacklogItem.first_detected_at:type_name -> google.protobuf.Timestamp
-	111, // 87: session.v1.StuckBacklogItem.last_checked_at:type_name -> google.protobuf.Timestamp
-	111, // 88: session.v1.StuckBacklogItem.snoozed_until:type_name -> google.protobuf.Timestamp
-	111, // 89: session.v1.StuckBacklogItem.next_remediation_at:type_name -> google.protobuf.Timestamp
-	100, // 90: session.v1.ListStuckBacklogItemsResponse.items:type_name -> session.v1.StuckBacklogItem
-	0,   // 91: session.v1.SnoozeStuckItemRequest.reason:type_name -> session.v1.StuckReason
-	111, // 92: session.v1.SnoozeStuckItemRequest.until:type_name -> google.protobuf.Timestamp
-	0,   // 93: session.v1.ResetStuckRemediationRequest.reason:type_name -> session.v1.StuckReason
-	0,   // 94: session.v1.BulkResetStuckRemediationRequest.reason:type_name -> session.v1.StuckReason
-	0,   // 95: session.v1.TriggerRemediationNowRequest.reason:type_name -> session.v1.StuckReason
-	14,  // 96: session.v1.BacklogService.CreateBacklogItem:input_type -> session.v1.CreateBacklogItemRequest
-	16,  // 97: session.v1.BacklogService.GetBacklogItem:input_type -> session.v1.GetBacklogItemRequest
-	21,  // 98: session.v1.BacklogService.GetBacklogItemShipStatus:input_type -> session.v1.GetBacklogItemShipStatusRequest
-	23,  // 99: session.v1.BacklogService.ListBacklogItems:input_type -> session.v1.ListBacklogItemsRequest
-	25,  // 100: session.v1.BacklogService.UpdateBacklogItem:input_type -> session.v1.UpdateBacklogItemRequest
-	27,  // 101: session.v1.BacklogService.ArchiveBacklogItem:input_type -> session.v1.ArchiveBacklogItemRequest
-	29,  // 102: session.v1.BacklogService.DeleteBacklogItem:input_type -> session.v1.DeleteBacklogItemRequest
-	31,  // 103: session.v1.BacklogService.TransitionBacklogItemStatus:input_type -> session.v1.TransitionBacklogItemStatusRequest
-	33,  // 104: session.v1.BacklogService.SpawnSessionFromItem:input_type -> session.v1.SpawnSessionFromItemRequest
-	35,  // 105: session.v1.BacklogService.AttachSessionToItem:input_type -> session.v1.AttachSessionToItemRequest
-	37,  // 106: session.v1.BacklogService.TriggerTriage:input_type -> session.v1.TriggerTriageRequest
-	82,  // 107: session.v1.BacklogService.CancelTriage:input_type -> session.v1.CancelTriageRequest
-	39,  // 108: session.v1.BacklogService.ApprovePlan:input_type -> session.v1.ApprovePlanRequest
-	41,  // 109: session.v1.BacklogService.SuggestNextItem:input_type -> session.v1.SuggestNextItemRequest
-	43,  // 110: session.v1.BacklogService.OverrideVerdict:input_type -> session.v1.OverrideVerdictRequest
-	45,  // 111: session.v1.BacklogService.TriggerReReview:input_type -> session.v1.TriggerReReviewRequest
-	47,  // 112: session.v1.BacklogService.TriggerShipPR:input_type -> session.v1.TriggerShipPRRequest
-	49,  // 113: session.v1.BacklogService.TriggerSync:input_type -> session.v1.TriggerSyncRequest
-	51,  // 114: session.v1.BacklogService.CreateItemSource:input_type -> session.v1.CreateItemSourceRequest
-	53,  // 115: session.v1.BacklogService.ListItemSources:input_type -> session.v1.ListItemSourcesRequest
-	55,  // 116: session.v1.BacklogService.UpdateItemSource:input_type -> session.v1.UpdateItemSourceRequest
-	57,  // 117: session.v1.BacklogService.DeleteItemSource:input_type -> session.v1.DeleteItemSourceRequest
-	59,  // 118: session.v1.BacklogService.GetSyncHistory:input_type -> session.v1.GetSyncHistoryRequest
-	61,  // 119: session.v1.BacklogService.CreatePipelineMode:input_type -> session.v1.CreatePipelineModeRequest
-	63,  // 120: session.v1.BacklogService.UpdatePipelineMode:input_type -> session.v1.UpdatePipelineModeRequest
-	65,  // 121: session.v1.BacklogService.DeletePipelineMode:input_type -> session.v1.DeletePipelineModeRequest
-	67,  // 122: session.v1.BacklogService.GetPipelineMode:input_type -> session.v1.GetPipelineModeRequest
-	69,  // 123: session.v1.BacklogService.ListPipelineModes:input_type -> session.v1.ListPipelineModesRequest
-	80,  // 124: session.v1.BacklogService.ImportGitHubIssue:input_type -> session.v1.ImportGitHubIssueRequest
-	86,  // 125: session.v1.BacklogService.SearchGitHubRepos:input_type -> session.v1.SearchGitHubReposRequest
-	88,  // 126: session.v1.BacklogService.ListGitHubIssues:input_type -> session.v1.ListGitHubIssuesRequest
-	90,  // 127: session.v1.BacklogService.GetBacklogItemDiff:input_type -> session.v1.GetBacklogItemDiffRequest
-	93,  // 128: session.v1.BacklogService.GetBacklogItemCost:input_type -> session.v1.GetBacklogItemCostRequest
-	96,  // 129: session.v1.BacklogService.GetSessionBacklogIndex:input_type -> session.v1.GetSessionBacklogIndexRequest
-	98,  // 130: session.v1.BacklogService.SubmitManualReview:input_type -> session.v1.SubmitManualReviewRequest
-	101, // 131: session.v1.BacklogService.ListStuckBacklogItems:input_type -> session.v1.ListStuckBacklogItemsRequest
-	103, // 132: session.v1.BacklogService.SnoozeStuckItem:input_type -> session.v1.SnoozeStuckItemRequest
-	105, // 133: session.v1.BacklogService.ResetStuckRemediation:input_type -> session.v1.ResetStuckRemediationRequest
-	107, // 134: session.v1.BacklogService.BulkResetStuckRemediation:input_type -> session.v1.BulkResetStuckRemediationRequest
-	109, // 135: session.v1.BacklogService.TriggerRemediationNow:input_type -> session.v1.TriggerRemediationNowRequest
-	79,  // 136: session.v1.BacklogService.WatchBacklogItems:input_type -> session.v1.WatchBacklogItemsRequest
-	15,  // 137: session.v1.BacklogService.CreateBacklogItem:output_type -> session.v1.CreateBacklogItemResponse
-	17,  // 138: session.v1.BacklogService.GetBacklogItem:output_type -> session.v1.GetBacklogItemResponse
-	22,  // 139: session.v1.BacklogService.GetBacklogItemShipStatus:output_type -> session.v1.GetBacklogItemShipStatusResponse
-	24,  // 140: session.v1.BacklogService.ListBacklogItems:output_type -> session.v1.ListBacklogItemsResponse
-	26,  // 141: session.v1.BacklogService.UpdateBacklogItem:output_type -> session.v1.UpdateBacklogItemResponse
-	28,  // 142: session.v1.BacklogService.ArchiveBacklogItem:output_type -> session.v1.ArchiveBacklogItemResponse
-	30,  // 143: session.v1.BacklogService.DeleteBacklogItem:output_type -> session.v1.DeleteBacklogItemResponse
-	32,  // 144: session.v1.BacklogService.TransitionBacklogItemStatus:output_type -> session.v1.TransitionBacklogItemStatusResponse
-	34,  // 145: session.v1.BacklogService.SpawnSessionFromItem:output_type -> session.v1.SpawnSessionFromItemResponse
-	36,  // 146: session.v1.BacklogService.AttachSessionToItem:output_type -> session.v1.AttachSessionToItemResponse
-	38,  // 147: session.v1.BacklogService.TriggerTriage:output_type -> session.v1.TriggerTriageResponse
-	83,  // 148: session.v1.BacklogService.CancelTriage:output_type -> session.v1.CancelTriageResponse
-	40,  // 149: session.v1.BacklogService.ApprovePlan:output_type -> session.v1.ApprovePlanResponse
-	42,  // 150: session.v1.BacklogService.SuggestNextItem:output_type -> session.v1.SuggestNextItemResponse
-	44,  // 151: session.v1.BacklogService.OverrideVerdict:output_type -> session.v1.OverrideVerdictResponse
-	46,  // 152: session.v1.BacklogService.TriggerReReview:output_type -> session.v1.TriggerReReviewResponse
-	48,  // 153: session.v1.BacklogService.TriggerShipPR:output_type -> session.v1.TriggerShipPRResponse
-	50,  // 154: session.v1.BacklogService.TriggerSync:output_type -> session.v1.TriggerSyncResponse
-	52,  // 155: session.v1.BacklogService.CreateItemSource:output_type -> session.v1.CreateItemSourceResponse
-	54,  // 156: session.v1.BacklogService.ListItemSources:output_type -> session.v1.ListItemSourcesResponse
-	56,  // 157: session.v1.BacklogService.UpdateItemSource:output_type -> session.v1.UpdateItemSourceResponse
-	58,  // 158: session.v1.BacklogService.DeleteItemSource:output_type -> session.v1.DeleteItemSourceResponse
-	60,  // 159: session.v1.BacklogService.GetSyncHistory:output_type -> session.v1.GetSyncHistoryResponse
-	62,  // 160: session.v1.BacklogService.CreatePipelineMode:output_type -> session.v1.CreatePipelineModeResponse
-	64,  // 161: session.v1.BacklogService.UpdatePipelineMode:output_type -> session.v1.UpdatePipelineModeResponse
-	66,  // 162: session.v1.BacklogService.DeletePipelineMode:output_type -> session.v1.DeletePipelineModeResponse
-	68,  // 163: session.v1.BacklogService.GetPipelineMode:output_type -> session.v1.GetPipelineModeResponse
-	70,  // 164: session.v1.BacklogService.ListPipelineModes:output_type -> session.v1.ListPipelineModesResponse
-	81,  // 165: session.v1.BacklogService.ImportGitHubIssue:output_type -> session.v1.ImportGitHubIssueResponse
-	87,  // 166: session.v1.BacklogService.SearchGitHubRepos:output_type -> session.v1.SearchGitHubReposResponse
-	89,  // 167: session.v1.BacklogService.ListGitHubIssues:output_type -> session.v1.ListGitHubIssuesResponse
-	91,  // 168: session.v1.BacklogService.GetBacklogItemDiff:output_type -> session.v1.GetBacklogItemDiffResponse
-	94,  // 169: session.v1.BacklogService.GetBacklogItemCost:output_type -> session.v1.GetBacklogItemCostResponse
-	97,  // 170: session.v1.BacklogService.GetSessionBacklogIndex:output_type -> session.v1.GetSessionBacklogIndexResponse
-	99,  // 171: session.v1.BacklogService.SubmitManualReview:output_type -> session.v1.SubmitManualReviewResponse
-	102, // 172: session.v1.BacklogService.ListStuckBacklogItems:output_type -> session.v1.ListStuckBacklogItemsResponse
-	104, // 173: session.v1.BacklogService.SnoozeStuckItem:output_type -> session.v1.SnoozeStuckItemResponse
-	106, // 174: session.v1.BacklogService.ResetStuckRemediation:output_type -> session.v1.ResetStuckRemediationResponse
-	108, // 175: session.v1.BacklogService.BulkResetStuckRemediation:output_type -> session.v1.BulkResetStuckRemediationResponse
-	110, // 176: session.v1.BacklogService.TriggerRemediationNow:output_type -> session.v1.TriggerRemediationNowResponse
-	71,  // 177: session.v1.BacklogService.WatchBacklogItems:output_type -> session.v1.BacklogItemEvent
-	137, // [137:178] is the sub-list for method output_type
-	96,  // [96:137] is the sub-list for method input_type
-	96,  // [96:96] is the sub-list for extension type_name
-	96,  // [96:96] is the sub-list for extension extendee
-	0,   // [0:96] is the sub-list for field type_name
+	112, // 12: session.v1.RespawnEvent.created_at:type_name -> google.protobuf.Timestamp
+	112, // 13: session.v1.BacklogStatusEvent.created_at:type_name -> google.protobuf.Timestamp
+	112, // 14: session.v1.BacklogProgressNote.created_at:type_name -> google.protobuf.Timestamp
+	1,   // 15: session.v1.BacklogItem.acceptance_criteria:type_name -> session.v1.AcCriterion
+	112, // 16: session.v1.BacklogItem.plan_approved_at:type_name -> google.protobuf.Timestamp
+	112, // 17: session.v1.BacklogItem.archived_at:type_name -> google.protobuf.Timestamp
+	112, // 18: session.v1.BacklogItem.created_at:type_name -> google.protobuf.Timestamp
+	112, // 19: session.v1.BacklogItem.updated_at:type_name -> google.protobuf.Timestamp
+	7,   // 20: session.v1.BacklogItem.item_sessions:type_name -> session.v1.ItemSession
+	9,   // 21: session.v1.BacklogItem.status_events:type_name -> session.v1.BacklogStatusEvent
+	10,  // 22: session.v1.BacklogItem.progress_notes:type_name -> session.v1.BacklogProgressNote
+	8,   // 23: session.v1.BacklogItem.respawn_events:type_name -> session.v1.RespawnEvent
+	112, // 24: session.v1.ItemSource.last_synced_at:type_name -> google.protobuf.Timestamp
+	112, // 25: session.v1.ItemSource.created_at:type_name -> google.protobuf.Timestamp
+	112, // 26: session.v1.ItemSource.updated_at:type_name -> google.protobuf.Timestamp
+	112, // 27: session.v1.PipelineMode.created_at:type_name -> google.protobuf.Timestamp
+	112, // 28: session.v1.PipelineMode.updated_at:type_name -> google.protobuf.Timestamp
+	112, // 29: session.v1.SourceSyncEvent.started_at:type_name -> google.protobuf.Timestamp
+	112, // 30: session.v1.SourceSyncEvent.finished_at:type_name -> google.protobuf.Timestamp
+	1,   // 31: session.v1.CreateBacklogItemRequest.acceptance_criteria:type_name -> session.v1.AcCriterion
+	11,  // 32: session.v1.CreateBacklogItemResponse.item:type_name -> session.v1.BacklogItem
+	11,  // 33: session.v1.GetBacklogItemResponse.item:type_name -> session.v1.BacklogItem
+	112, // 34: session.v1.BacklogItemShipStatus.last_commit_at:type_name -> google.protobuf.Timestamp
+	20,  // 35: session.v1.BacklogItemShipStatus.commits:type_name -> session.v1.ShippedCommit
+	21,  // 36: session.v1.BacklogItemShipStatus.file_stats:type_name -> session.v1.ShippedFileStat
+	112, // 37: session.v1.BacklogItemShipStatus.snapshot_at:type_name -> google.protobuf.Timestamp
+	112, // 38: session.v1.ShippedCommit.authored_at:type_name -> google.protobuf.Timestamp
+	113, // 39: session.v1.ShippedFileStat.status:type_name -> session.v1.FileStatus
+	19,  // 40: session.v1.GetBacklogItemShipStatusResponse.status:type_name -> session.v1.BacklogItemShipStatus
+	11,  // 41: session.v1.ListBacklogItemsResponse.items:type_name -> session.v1.BacklogItem
+	1,   // 42: session.v1.UpdateBacklogItemRequest.acceptance_criteria:type_name -> session.v1.AcCriterion
+	112, // 43: session.v1.UpdateBacklogItemRequest.expected_updated_at:type_name -> google.protobuf.Timestamp
+	11,  // 44: session.v1.UpdateBacklogItemResponse.item:type_name -> session.v1.BacklogItem
+	11,  // 45: session.v1.ArchiveBacklogItemResponse.item:type_name -> session.v1.BacklogItem
+	112, // 46: session.v1.TransitionBacklogItemStatusRequest.expected_updated_at:type_name -> google.protobuf.Timestamp
+	11,  // 47: session.v1.TransitionBacklogItemStatusResponse.item:type_name -> session.v1.BacklogItem
+	7,   // 48: session.v1.SpawnSessionFromItemResponse.item_session:type_name -> session.v1.ItemSession
+	7,   // 49: session.v1.AttachSessionToItemResponse.item_session:type_name -> session.v1.ItemSession
+	7,   // 50: session.v1.TriggerTriageResponse.item_session:type_name -> session.v1.ItemSession
+	11,  // 51: session.v1.ApprovePlanResponse.item:type_name -> session.v1.BacklogItem
+	7,   // 52: session.v1.SuggestNextItemResponse.item_session:type_name -> session.v1.ItemSession
+	11,  // 53: session.v1.SuggestNextItemResponse.item:type_name -> session.v1.BacklogItem
+	11,  // 54: session.v1.OverrideVerdictResponse.item:type_name -> session.v1.BacklogItem
+	7,   // 55: session.v1.TriggerReReviewResponse.item_session:type_name -> session.v1.ItemSession
+	12,  // 56: session.v1.CreateItemSourceResponse.source:type_name -> session.v1.ItemSource
+	12,  // 57: session.v1.ListItemSourcesResponse.sources:type_name -> session.v1.ItemSource
+	12,  // 58: session.v1.UpdateItemSourceResponse.source:type_name -> session.v1.ItemSource
+	14,  // 59: session.v1.GetSyncHistoryResponse.events:type_name -> session.v1.SourceSyncEvent
+	13,  // 60: session.v1.CreatePipelineModeResponse.item:type_name -> session.v1.PipelineMode
+	13,  // 61: session.v1.UpdatePipelineModeResponse.item:type_name -> session.v1.PipelineMode
+	13,  // 62: session.v1.GetPipelineModeResponse.item:type_name -> session.v1.PipelineMode
+	13,  // 63: session.v1.ListPipelineModesResponse.items:type_name -> session.v1.PipelineMode
+	112, // 64: session.v1.BacklogItemEvent.timestamp:type_name -> google.protobuf.Timestamp
+	73,  // 65: session.v1.BacklogItemEvent.status_changed:type_name -> session.v1.BacklogItemStatusChangedEvent
+	74,  // 66: session.v1.BacklogItemEvent.verdict_recorded:type_name -> session.v1.BacklogItemVerdictRecordedEvent
+	75,  // 67: session.v1.BacklogItemEvent.session_attached:type_name -> session.v1.BacklogItemSessionAttachedEvent
+	76,  // 68: session.v1.BacklogItemEvent.item_updated:type_name -> session.v1.BacklogItemUpdatedEvent
+	77,  // 69: session.v1.BacklogItemEvent.item_archived:type_name -> session.v1.BacklogItemArchivedEvent
+	78,  // 70: session.v1.BacklogItemEvent.item_removed:type_name -> session.v1.BacklogItemRemovedEvent
+	79,  // 71: session.v1.BacklogItemEvent.snapshot_complete:type_name -> session.v1.BacklogSnapshotCompleteEvent
+	11,  // 72: session.v1.BacklogItemStatusChangedEvent.item:type_name -> session.v1.BacklogItem
+	3,   // 73: session.v1.BacklogItemVerdictRecordedEvent.verdict:type_name -> session.v1.ReviewVerdict
+	11,  // 74: session.v1.BacklogItemVerdictRecordedEvent.item:type_name -> session.v1.BacklogItem
+	11,  // 75: session.v1.BacklogItemSessionAttachedEvent.item:type_name -> session.v1.BacklogItem
+	11,  // 76: session.v1.BacklogItemUpdatedEvent.item:type_name -> session.v1.BacklogItem
+	112, // 77: session.v1.BacklogItemArchivedEvent.archived_at:type_name -> google.protobuf.Timestamp
+	11,  // 78: session.v1.ImportGitHubIssueResponse.item:type_name -> session.v1.BacklogItem
+	112, // 79: session.v1.GitHubIssueEntry.created_at:type_name -> google.protobuf.Timestamp
+	112, // 80: session.v1.GitHubIssueEntry.updated_at:type_name -> google.protobuf.Timestamp
+	85,  // 81: session.v1.SearchGitHubReposResponse.repos:type_name -> session.v1.GitHubRepoEntry
+	86,  // 82: session.v1.ListGitHubIssuesResponse.issues:type_name -> session.v1.GitHubIssueEntry
+	93,  // 83: session.v1.GetBacklogItemCostResponse.sessions:type_name -> session.v1.SessionCostEntry
+	96,  // 84: session.v1.GetSessionBacklogIndexResponse.entries:type_name -> session.v1.BacklogSessionEntry
+	2,   // 85: session.v1.SubmitManualReviewRequest.per_criterion_verdicts:type_name -> session.v1.CriterionVerdict
+	11,  // 86: session.v1.SubmitManualReviewResponse.item:type_name -> session.v1.BacklogItem
+	0,   // 87: session.v1.StuckBacklogItem.reason:type_name -> session.v1.StuckReason
+	112, // 88: session.v1.StuckBacklogItem.first_detected_at:type_name -> google.protobuf.Timestamp
+	112, // 89: session.v1.StuckBacklogItem.last_checked_at:type_name -> google.protobuf.Timestamp
+	112, // 90: session.v1.StuckBacklogItem.snoozed_until:type_name -> google.protobuf.Timestamp
+	112, // 91: session.v1.StuckBacklogItem.next_remediation_at:type_name -> google.protobuf.Timestamp
+	101, // 92: session.v1.ListStuckBacklogItemsResponse.items:type_name -> session.v1.StuckBacklogItem
+	0,   // 93: session.v1.SnoozeStuckItemRequest.reason:type_name -> session.v1.StuckReason
+	112, // 94: session.v1.SnoozeStuckItemRequest.until:type_name -> google.protobuf.Timestamp
+	0,   // 95: session.v1.ResetStuckRemediationRequest.reason:type_name -> session.v1.StuckReason
+	0,   // 96: session.v1.BulkResetStuckRemediationRequest.reason:type_name -> session.v1.StuckReason
+	0,   // 97: session.v1.TriggerRemediationNowRequest.reason:type_name -> session.v1.StuckReason
+	15,  // 98: session.v1.BacklogService.CreateBacklogItem:input_type -> session.v1.CreateBacklogItemRequest
+	17,  // 99: session.v1.BacklogService.GetBacklogItem:input_type -> session.v1.GetBacklogItemRequest
+	22,  // 100: session.v1.BacklogService.GetBacklogItemShipStatus:input_type -> session.v1.GetBacklogItemShipStatusRequest
+	24,  // 101: session.v1.BacklogService.ListBacklogItems:input_type -> session.v1.ListBacklogItemsRequest
+	26,  // 102: session.v1.BacklogService.UpdateBacklogItem:input_type -> session.v1.UpdateBacklogItemRequest
+	28,  // 103: session.v1.BacklogService.ArchiveBacklogItem:input_type -> session.v1.ArchiveBacklogItemRequest
+	30,  // 104: session.v1.BacklogService.DeleteBacklogItem:input_type -> session.v1.DeleteBacklogItemRequest
+	32,  // 105: session.v1.BacklogService.TransitionBacklogItemStatus:input_type -> session.v1.TransitionBacklogItemStatusRequest
+	34,  // 106: session.v1.BacklogService.SpawnSessionFromItem:input_type -> session.v1.SpawnSessionFromItemRequest
+	36,  // 107: session.v1.BacklogService.AttachSessionToItem:input_type -> session.v1.AttachSessionToItemRequest
+	38,  // 108: session.v1.BacklogService.TriggerTriage:input_type -> session.v1.TriggerTriageRequest
+	83,  // 109: session.v1.BacklogService.CancelTriage:input_type -> session.v1.CancelTriageRequest
+	40,  // 110: session.v1.BacklogService.ApprovePlan:input_type -> session.v1.ApprovePlanRequest
+	42,  // 111: session.v1.BacklogService.SuggestNextItem:input_type -> session.v1.SuggestNextItemRequest
+	44,  // 112: session.v1.BacklogService.OverrideVerdict:input_type -> session.v1.OverrideVerdictRequest
+	46,  // 113: session.v1.BacklogService.TriggerReReview:input_type -> session.v1.TriggerReReviewRequest
+	48,  // 114: session.v1.BacklogService.TriggerShipPR:input_type -> session.v1.TriggerShipPRRequest
+	50,  // 115: session.v1.BacklogService.TriggerSync:input_type -> session.v1.TriggerSyncRequest
+	52,  // 116: session.v1.BacklogService.CreateItemSource:input_type -> session.v1.CreateItemSourceRequest
+	54,  // 117: session.v1.BacklogService.ListItemSources:input_type -> session.v1.ListItemSourcesRequest
+	56,  // 118: session.v1.BacklogService.UpdateItemSource:input_type -> session.v1.UpdateItemSourceRequest
+	58,  // 119: session.v1.BacklogService.DeleteItemSource:input_type -> session.v1.DeleteItemSourceRequest
+	60,  // 120: session.v1.BacklogService.GetSyncHistory:input_type -> session.v1.GetSyncHistoryRequest
+	62,  // 121: session.v1.BacklogService.CreatePipelineMode:input_type -> session.v1.CreatePipelineModeRequest
+	64,  // 122: session.v1.BacklogService.UpdatePipelineMode:input_type -> session.v1.UpdatePipelineModeRequest
+	66,  // 123: session.v1.BacklogService.DeletePipelineMode:input_type -> session.v1.DeletePipelineModeRequest
+	68,  // 124: session.v1.BacklogService.GetPipelineMode:input_type -> session.v1.GetPipelineModeRequest
+	70,  // 125: session.v1.BacklogService.ListPipelineModes:input_type -> session.v1.ListPipelineModesRequest
+	81,  // 126: session.v1.BacklogService.ImportGitHubIssue:input_type -> session.v1.ImportGitHubIssueRequest
+	87,  // 127: session.v1.BacklogService.SearchGitHubRepos:input_type -> session.v1.SearchGitHubReposRequest
+	89,  // 128: session.v1.BacklogService.ListGitHubIssues:input_type -> session.v1.ListGitHubIssuesRequest
+	91,  // 129: session.v1.BacklogService.GetBacklogItemDiff:input_type -> session.v1.GetBacklogItemDiffRequest
+	94,  // 130: session.v1.BacklogService.GetBacklogItemCost:input_type -> session.v1.GetBacklogItemCostRequest
+	97,  // 131: session.v1.BacklogService.GetSessionBacklogIndex:input_type -> session.v1.GetSessionBacklogIndexRequest
+	99,  // 132: session.v1.BacklogService.SubmitManualReview:input_type -> session.v1.SubmitManualReviewRequest
+	102, // 133: session.v1.BacklogService.ListStuckBacklogItems:input_type -> session.v1.ListStuckBacklogItemsRequest
+	104, // 134: session.v1.BacklogService.SnoozeStuckItem:input_type -> session.v1.SnoozeStuckItemRequest
+	106, // 135: session.v1.BacklogService.ResetStuckRemediation:input_type -> session.v1.ResetStuckRemediationRequest
+	108, // 136: session.v1.BacklogService.BulkResetStuckRemediation:input_type -> session.v1.BulkResetStuckRemediationRequest
+	110, // 137: session.v1.BacklogService.TriggerRemediationNow:input_type -> session.v1.TriggerRemediationNowRequest
+	80,  // 138: session.v1.BacklogService.WatchBacklogItems:input_type -> session.v1.WatchBacklogItemsRequest
+	16,  // 139: session.v1.BacklogService.CreateBacklogItem:output_type -> session.v1.CreateBacklogItemResponse
+	18,  // 140: session.v1.BacklogService.GetBacklogItem:output_type -> session.v1.GetBacklogItemResponse
+	23,  // 141: session.v1.BacklogService.GetBacklogItemShipStatus:output_type -> session.v1.GetBacklogItemShipStatusResponse
+	25,  // 142: session.v1.BacklogService.ListBacklogItems:output_type -> session.v1.ListBacklogItemsResponse
+	27,  // 143: session.v1.BacklogService.UpdateBacklogItem:output_type -> session.v1.UpdateBacklogItemResponse
+	29,  // 144: session.v1.BacklogService.ArchiveBacklogItem:output_type -> session.v1.ArchiveBacklogItemResponse
+	31,  // 145: session.v1.BacklogService.DeleteBacklogItem:output_type -> session.v1.DeleteBacklogItemResponse
+	33,  // 146: session.v1.BacklogService.TransitionBacklogItemStatus:output_type -> session.v1.TransitionBacklogItemStatusResponse
+	35,  // 147: session.v1.BacklogService.SpawnSessionFromItem:output_type -> session.v1.SpawnSessionFromItemResponse
+	37,  // 148: session.v1.BacklogService.AttachSessionToItem:output_type -> session.v1.AttachSessionToItemResponse
+	39,  // 149: session.v1.BacklogService.TriggerTriage:output_type -> session.v1.TriggerTriageResponse
+	84,  // 150: session.v1.BacklogService.CancelTriage:output_type -> session.v1.CancelTriageResponse
+	41,  // 151: session.v1.BacklogService.ApprovePlan:output_type -> session.v1.ApprovePlanResponse
+	43,  // 152: session.v1.BacklogService.SuggestNextItem:output_type -> session.v1.SuggestNextItemResponse
+	45,  // 153: session.v1.BacklogService.OverrideVerdict:output_type -> session.v1.OverrideVerdictResponse
+	47,  // 154: session.v1.BacklogService.TriggerReReview:output_type -> session.v1.TriggerReReviewResponse
+	49,  // 155: session.v1.BacklogService.TriggerShipPR:output_type -> session.v1.TriggerShipPRResponse
+	51,  // 156: session.v1.BacklogService.TriggerSync:output_type -> session.v1.TriggerSyncResponse
+	53,  // 157: session.v1.BacklogService.CreateItemSource:output_type -> session.v1.CreateItemSourceResponse
+	55,  // 158: session.v1.BacklogService.ListItemSources:output_type -> session.v1.ListItemSourcesResponse
+	57,  // 159: session.v1.BacklogService.UpdateItemSource:output_type -> session.v1.UpdateItemSourceResponse
+	59,  // 160: session.v1.BacklogService.DeleteItemSource:output_type -> session.v1.DeleteItemSourceResponse
+	61,  // 161: session.v1.BacklogService.GetSyncHistory:output_type -> session.v1.GetSyncHistoryResponse
+	63,  // 162: session.v1.BacklogService.CreatePipelineMode:output_type -> session.v1.CreatePipelineModeResponse
+	65,  // 163: session.v1.BacklogService.UpdatePipelineMode:output_type -> session.v1.UpdatePipelineModeResponse
+	67,  // 164: session.v1.BacklogService.DeletePipelineMode:output_type -> session.v1.DeletePipelineModeResponse
+	69,  // 165: session.v1.BacklogService.GetPipelineMode:output_type -> session.v1.GetPipelineModeResponse
+	71,  // 166: session.v1.BacklogService.ListPipelineModes:output_type -> session.v1.ListPipelineModesResponse
+	82,  // 167: session.v1.BacklogService.ImportGitHubIssue:output_type -> session.v1.ImportGitHubIssueResponse
+	88,  // 168: session.v1.BacklogService.SearchGitHubRepos:output_type -> session.v1.SearchGitHubReposResponse
+	90,  // 169: session.v1.BacklogService.ListGitHubIssues:output_type -> session.v1.ListGitHubIssuesResponse
+	92,  // 170: session.v1.BacklogService.GetBacklogItemDiff:output_type -> session.v1.GetBacklogItemDiffResponse
+	95,  // 171: session.v1.BacklogService.GetBacklogItemCost:output_type -> session.v1.GetBacklogItemCostResponse
+	98,  // 172: session.v1.BacklogService.GetSessionBacklogIndex:output_type -> session.v1.GetSessionBacklogIndexResponse
+	100, // 173: session.v1.BacklogService.SubmitManualReview:output_type -> session.v1.SubmitManualReviewResponse
+	103, // 174: session.v1.BacklogService.ListStuckBacklogItems:output_type -> session.v1.ListStuckBacklogItemsResponse
+	105, // 175: session.v1.BacklogService.SnoozeStuckItem:output_type -> session.v1.SnoozeStuckItemResponse
+	107, // 176: session.v1.BacklogService.ResetStuckRemediation:output_type -> session.v1.ResetStuckRemediationResponse
+	109, // 177: session.v1.BacklogService.BulkResetStuckRemediation:output_type -> session.v1.BulkResetStuckRemediationResponse
+	111, // 178: session.v1.BacklogService.TriggerRemediationNow:output_type -> session.v1.TriggerRemediationNowResponse
+	72,  // 179: session.v1.BacklogService.WatchBacklogItems:output_type -> session.v1.BacklogItemEvent
+	139, // [139:180] is the sub-list for method output_type
+	98,  // [98:139] is the sub-list for method input_type
+	98,  // [98:98] is the sub-list for extension type_name
+	98,  // [98:98] is the sub-list for extension extendee
+	0,   // [0:98] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_backlog_proto_init() }
@@ -8379,12 +8513,12 @@ func file_session_v1_backlog_proto_init() {
 		return
 	}
 	file_session_v1_types_proto_init()
-	file_session_v1_backlog_proto_msgTypes[7].OneofWrappers = []any{}
-	file_session_v1_backlog_proto_msgTypes[9].OneofWrappers = []any{}
-	file_session_v1_backlog_proto_msgTypes[13].OneofWrappers = []any{}
-	file_session_v1_backlog_proto_msgTypes[24].OneofWrappers = []any{}
-	file_session_v1_backlog_proto_msgTypes[62].OneofWrappers = []any{}
-	file_session_v1_backlog_proto_msgTypes[70].OneofWrappers = []any{
+	file_session_v1_backlog_proto_msgTypes[8].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[10].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[14].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[25].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[63].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[71].OneofWrappers = []any{
 		(*BacklogItemEvent_StatusChanged)(nil),
 		(*BacklogItemEvent_VerdictRecorded)(nil),
 		(*BacklogItemEvent_SessionAttached)(nil),
@@ -8393,14 +8527,14 @@ func file_session_v1_backlog_proto_init() {
 		(*BacklogItemEvent_ItemRemoved)(nil),
 		(*BacklogItemEvent_SnapshotComplete)(nil),
 	}
-	file_session_v1_backlog_proto_msgTypes[99].OneofWrappers = []any{}
+	file_session_v1_backlog_proto_msgTypes[100].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_backlog_proto_rawDesc), len(file_session_v1_backlog_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   110,
+			NumMessages:   111,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

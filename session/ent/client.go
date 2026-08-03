@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/respawnevent"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
@@ -79,6 +80,8 @@ type Client struct {
 	PipelineMode *PipelineModeClient
 	// Project is the client for interacting with the Project builders.
 	Project *ProjectClient
+	// RespawnEvent is the client for interacting with the RespawnEvent builders.
+	RespawnEvent *RespawnEventClient
 	// ReviewVerdict is the client for interacting with the ReviewVerdict builders.
 	ReviewVerdict *ReviewVerdictClient
 	// Session is the client for interacting with the Session builders.
@@ -122,6 +125,7 @@ func (c *Client) init() {
 	c.ItemSource = NewItemSourceClient(c.config)
 	c.PipelineMode = NewPipelineModeClient(c.config)
 	c.Project = NewProjectClient(c.config)
+	c.RespawnEvent = NewRespawnEventClient(c.config)
 	c.ReviewVerdict = NewReviewVerdictClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.SessionGoal = NewSessionGoalClient(c.config)
@@ -238,6 +242,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ItemSource:              NewItemSourceClient(cfg),
 		PipelineMode:            NewPipelineModeClient(cfg),
 		Project:                 NewProjectClient(cfg),
+		RespawnEvent:            NewRespawnEventClient(cfg),
 		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionGoal:             NewSessionGoalClient(cfg),
@@ -281,6 +286,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ItemSource:              NewItemSourceClient(cfg),
 		PipelineMode:            NewPipelineModeClient(cfg),
 		Project:                 NewProjectClient(cfg),
+		RespawnEvent:            NewRespawnEventClient(cfg),
 		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionGoal:             NewSessionGoalClient(cfg),
@@ -321,9 +327,9 @@ func (c *Client) Use(hooks ...Hook) {
 		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogProgressNote,
 		c.BacklogStatusEvent, c.BacklogStuckState, c.ClassificationAnalytics,
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
-		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
-		c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag, c.Workflow,
-		c.Worktree,
+		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.RespawnEvent,
+		c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.Workflow, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -336,9 +342,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.BacklogProgressNote,
 		c.BacklogStatusEvent, c.BacklogStuckState, c.ClassificationAnalytics,
 		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
-		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.ReviewVerdict,
-		c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag, c.Workflow,
-		c.Worktree,
+		c.ItemSession, c.ItemSource, c.PipelineMode, c.Project, c.RespawnEvent,
+		c.ReviewVerdict, c.Session, c.SessionGoal, c.Shell, c.SourceSyncEvent, c.Tag,
+		c.Workflow, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -379,6 +385,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.PipelineMode.mutate(ctx, m)
 	case *ProjectMutation:
 		return c.Project.mutate(ctx, m)
+	case *RespawnEventMutation:
+		return c.RespawnEvent.mutate(ctx, m)
 	case *ReviewVerdictMutation:
 		return c.ReviewVerdict.mutate(ctx, m)
 	case *SessionMutation:
@@ -847,6 +855,22 @@ func (c *BacklogItemClient) QueryProgressNotes(_m *BacklogItem) *BacklogProgress
 			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
 			sqlgraph.To(backlogprogressnote.Table, backlogprogressnote.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ProgressNotesTable, backlogitem.ProgressNotesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryRespawnEvents queries the respawn_events edge of a BacklogItem.
+func (c *BacklogItemClient) QueryRespawnEvents(_m *BacklogItem) *RespawnEventQuery {
+	query := (&RespawnEventClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(respawnevent.Table, respawnevent.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.RespawnEventsTable, backlogitem.RespawnEventsColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -2816,6 +2840,155 @@ func (c *ProjectClient) mutate(ctx context.Context, m *ProjectMutation) (Value, 
 	}
 }
 
+// RespawnEventClient is a client for the RespawnEvent schema.
+type RespawnEventClient struct {
+	config
+}
+
+// NewRespawnEventClient returns a client for the RespawnEvent from the given config.
+func NewRespawnEventClient(c config) *RespawnEventClient {
+	return &RespawnEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `respawnevent.Hooks(f(g(h())))`.
+func (c *RespawnEventClient) Use(hooks ...Hook) {
+	c.hooks.RespawnEvent = append(c.hooks.RespawnEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `respawnevent.Intercept(f(g(h())))`.
+func (c *RespawnEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.RespawnEvent = append(c.inters.RespawnEvent, interceptors...)
+}
+
+// Create returns a builder for creating a RespawnEvent entity.
+func (c *RespawnEventClient) Create() *RespawnEventCreate {
+	mutation := newRespawnEventMutation(c.config, OpCreate)
+	return &RespawnEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of RespawnEvent entities.
+func (c *RespawnEventClient) CreateBulk(builders ...*RespawnEventCreate) *RespawnEventCreateBulk {
+	return &RespawnEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *RespawnEventClient) MapCreateBulk(slice any, setFunc func(*RespawnEventCreate, int)) *RespawnEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &RespawnEventCreateBulk{err: fmt.Errorf("calling to RespawnEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*RespawnEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &RespawnEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for RespawnEvent.
+func (c *RespawnEventClient) Update() *RespawnEventUpdate {
+	mutation := newRespawnEventMutation(c.config, OpUpdate)
+	return &RespawnEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *RespawnEventClient) UpdateOne(_m *RespawnEvent) *RespawnEventUpdateOne {
+	mutation := newRespawnEventMutation(c.config, OpUpdateOne, withRespawnEvent(_m))
+	return &RespawnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *RespawnEventClient) UpdateOneID(id uuid.UUID) *RespawnEventUpdateOne {
+	mutation := newRespawnEventMutation(c.config, OpUpdateOne, withRespawnEventID(id))
+	return &RespawnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for RespawnEvent.
+func (c *RespawnEventClient) Delete() *RespawnEventDelete {
+	mutation := newRespawnEventMutation(c.config, OpDelete)
+	return &RespawnEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *RespawnEventClient) DeleteOne(_m *RespawnEvent) *RespawnEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *RespawnEventClient) DeleteOneID(id uuid.UUID) *RespawnEventDeleteOne {
+	builder := c.Delete().Where(respawnevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &RespawnEventDeleteOne{builder}
+}
+
+// Query returns a query builder for RespawnEvent.
+func (c *RespawnEventClient) Query() *RespawnEventQuery {
+	return &RespawnEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeRespawnEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a RespawnEvent entity by its id.
+func (c *RespawnEventClient) Get(ctx context.Context, id uuid.UUID) (*RespawnEvent, error) {
+	return c.Query().Where(respawnevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *RespawnEventClient) GetX(ctx context.Context, id uuid.UUID) *RespawnEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryItem queries the item edge of a RespawnEvent.
+func (c *RespawnEventClient) QueryItem(_m *RespawnEvent) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(respawnevent.Table, respawnevent.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, respawnevent.ItemTable, respawnevent.ItemColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *RespawnEventClient) Hooks() []Hook {
+	return c.hooks.RespawnEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *RespawnEventClient) Interceptors() []Interceptor {
+	return c.inters.RespawnEvent
+}
+
+func (c *RespawnEventClient) mutate(ctx context.Context, m *RespawnEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&RespawnEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&RespawnEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&RespawnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&RespawnEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown RespawnEvent mutation op: %q", m.Op())
+	}
+}
+
 // ReviewVerdictClient is a client for the ReviewVerdict schema.
 type ReviewVerdictClient struct {
 	config
@@ -4078,14 +4251,14 @@ type (
 		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
-		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, Shell,
-		SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
+		PipelineMode, Project, RespawnEvent, ReviewVerdict, Session, SessionGoal,
+		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Hook
 	}
 	inters struct {
 		AnalyticsEvent, ApprovalRule, BacklogItem, BacklogProgressNote,
 		BacklogStatusEvent, BacklogStuckState, ClassificationAnalytics, ClaudeMetadata,
 		ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession, ItemSource,
-		PipelineMode, Project, ReviewVerdict, Session, SessionGoal, Shell,
-		SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
+		PipelineMode, Project, RespawnEvent, ReviewVerdict, Session, SessionGoal,
+		Shell, SourceSyncEvent, Tag, Workflow, Worktree []ent.Interceptor
 	}
 )

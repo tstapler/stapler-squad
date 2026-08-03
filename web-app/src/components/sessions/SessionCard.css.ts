@@ -784,6 +784,16 @@ export const memoryBadge = style({
   fontVariantNumeric: "tabular-nums",
 });
 
+// Always-visible pause-reason text (not tooltip-only, so it reads on touch/
+// mobile too, where hover tooltips are unreachable).
+export const pauseReasonBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  fontSize: "0.6875rem",
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});
+
 // Applied over memoryBadge when RSS is 300–500 MB.
 export const memoryBadgeWarning = style({
   color: vars.color.warning,

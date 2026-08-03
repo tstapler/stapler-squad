@@ -91,6 +91,8 @@ const (
 	EdgeStuckStates = "stuck_states"
 	// EdgeProgressNotes holds the string denoting the progress_notes edge name in mutations.
 	EdgeProgressNotes = "progress_notes"
+	// EdgeRespawnEvents holds the string denoting the respawn_events edge name in mutations.
+	EdgeRespawnEvents = "respawn_events"
 	// EdgeSource holds the string denoting the source edge name in mutations.
 	EdgeSource = "source"
 	// Table holds the table name of the backlogitem in the database.
@@ -128,6 +130,13 @@ const (
 	ProgressNotesInverseTable = "backlog_progress_notes"
 	// ProgressNotesColumn is the table column denoting the progress_notes relation/edge.
 	ProgressNotesColumn = "item_id"
+	// RespawnEventsTable is the table that holds the respawn_events relation/edge.
+	RespawnEventsTable = "respawn_events"
+	// RespawnEventsInverseTable is the table name for the RespawnEvent entity.
+	// It exists in this package in order to avoid circular dependency with the "respawnevent" package.
+	RespawnEventsInverseTable = "respawn_events"
+	// RespawnEventsColumn is the table column denoting the respawn_events relation/edge.
+	RespawnEventsColumn = "item_id"
 	// SourceTable is the table that holds the source relation/edge.
 	SourceTable = "backlog_items"
 	// SourceInverseTable is the table name for the ItemSource entity.
@@ -488,6 +497,20 @@ func ByProgressNotes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByRespawnEventsCount orders the results by respawn_events count.
+func ByRespawnEventsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newRespawnEventsStep(), opts...)
+	}
+}
+
+// ByRespawnEvents orders the results by respawn_events terms.
+func ByRespawnEvents(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newRespawnEventsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // BySourceField orders the results by source field.
 func BySourceField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -527,6 +550,13 @@ func newProgressNotesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ProgressNotesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, ProgressNotesTable, ProgressNotesColumn),
+	)
+}
+func newRespawnEventsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(RespawnEventsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, RespawnEventsTable, RespawnEventsColumn),
 	)
 }
 func newSourceStep() *sqlgraph.Step {

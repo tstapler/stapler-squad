@@ -130,6 +130,8 @@ func (BacklogItem) Edges() []ent.Edge {
 			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("progress_notes", BacklogProgressNote.Type).
 			Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("respawn_events", RespawnEvent.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("source", ItemSource.Type).
 			Ref("backlog_items").
 			Unique(),

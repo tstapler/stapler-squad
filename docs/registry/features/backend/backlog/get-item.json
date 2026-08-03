@@ -6,7 +6,17 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service_query.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+  "tested": true,
+  "testIds": [
+    "TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithNonDefaultSlug",
+    "TestCreateRespawnEvent_should_PersistRowWithBothSessionUuids_When_Called",
+    "TestCreateRespawnEvent_should_DedupeWithinWindow_When_CalledTwiceForSameTrigger",
+    "TestCreateRespawnEvent_should_DedupeEmptyTriggeringUuidRows_When_CalledTwice",
+    "TestCreateRespawnEvent_should_RecordQueuedAttemptWithEmptyResultingUuid_When_SpawnWasQueued",
+    "TestAutoRespawnReview_NoActiveSession_TriggersReReview",
+    "TestAutoRespawnTriage_should_RecordRespawnEventWithReasonTriageOrphaned_When_ItemStillIdea",
+    "TestAutoRespawnAutonomousWork_should_RecordRespawnEventWithReasonAutonomousTurn_When_Respawned",
+    "TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWorkSessionIsStale"
+  ],
+  "lastModified": "2026-08-02T00:00:00Z"
 }

@@ -18,10 +18,65 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/respawnevent"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
+
+// respawnEventDedupeWindow bounds how far back CreateRespawnEvent looks for an
+// existing row with the same (item_id, triggering_session_uuid, reason) before
+// inserting a new one. Overlapping reconciliation sweeps can call the same
+// respawn/remediation call site for the same item within milliseconds of each
+// other; without this guard each sweep would append its own audit row for what
+// is really one respawn decision.
+const respawnEventDedupeWindow = 10 * time.Second
+
+// recordRespawnEvent appends an immutable RespawnEvent audit row, deduped
+// against any row with the same (item_id, triggering_session_uuid, reason)
+// created within respawnEventDedupeWindow. Query-before-insert rather than a
+// unique index: triggeringSessionUUID is empty for 2 of the 4 respawn call
+// sites (no prior active session), and a SQL unique index would treat those
+// NULLs as distinct, silently failing to dedupe exactly the sites most prone
+// to duplicate firing (repeated sweeps over the same idle item). A dedupe
+// query failure is logged and treated as "not a duplicate" (fail-open) rather
+// than blocking the write — a lost audit row is worse than an occasional
+// duplicate one. A write failure is logged, not returned, mirroring
+// recordStatusEvent: an audit-log gap must never block the respawn itself.
+func recordRespawnEvent(ctx context.Context, evClient *ent.RespawnEventClient, itemID uuid.UUID, reason, triggeringSessionUUID, resultingSessionUUID string, queued bool) {
+	dedupeQuery := evClient.Query().
+		Where(
+			respawnevent.ItemID(itemID),
+			respawnevent.Reason(reason),
+			respawnevent.CreatedAtGTE(time.Now().Add(-respawnEventDedupeWindow)),
+		)
+	if triggeringSessionUUID != "" {
+		dedupeQuery = dedupeQuery.Where(respawnevent.TriggeringSessionUUID(triggeringSessionUUID))
+	} else {
+		dedupeQuery = dedupeQuery.Where(respawnevent.TriggeringSessionUUIDIsNil())
+	}
+	exists, err := dedupeQuery.Exist(ctx)
+	if err != nil {
+		log.ErrorLog.Printf("[recordRespawnEvent] dedupe check failed for item=%s reason=%s, proceeding with insert: %v", itemID, reason, err)
+	} else if exists {
+		log.InfoLog.Printf("[recordRespawnEvent] skipped duplicate respawn event item=%s reason=%s triggeringSessionUuid=%s within %s window", itemID, reason, triggeringSessionUUID, respawnEventDedupeWindow)
+		return
+	}
+
+	evCreate := evClient.Create().
+		SetItemID(itemID).
+		SetReason(reason).
+		SetQueued(queued)
+	if triggeringSessionUUID != "" {
+		evCreate = evCreate.SetTriggeringSessionUUID(triggeringSessionUUID)
+	}
+	if resultingSessionUUID != "" {
+		evCreate = evCreate.SetResultingSessionUUID(resultingSessionUUID)
+	}
+	if _, err := evCreate.Save(ctx); err != nil {
+		log.ErrorLog.Printf("[recordRespawnEvent] failed to record item=%s reason=%s triggeringSessionUuid=%s: %v", itemID, reason, triggeringSessionUUID, err)
+	}
+}
 
 // SetItemChangePublisher wires an ItemChangePublisher into this repository so
 // its backlog mutation methods (TransitionBacklogItemStatus, UpdateBacklogItem,
@@ -153,6 +208,18 @@ func progressNoteToData(n *ent.BacklogProgressNote) ProgressNoteData {
 	}
 }
 
+// respawnEventToData maps an *ent.RespawnEvent to a RespawnEventData DTO.
+func respawnEventToData(e *ent.RespawnEvent) RespawnEventData {
+	return RespawnEventData{
+		ID:                    e.ID.String(),
+		Reason:                e.Reason,
+		TriggeringSessionUUID: e.TriggeringSessionUUID,
+		ResultingSessionUUID:  e.ResultingSessionUUID,
+		Queued:                e.Queued,
+		CreatedAt:             e.CreatedAt,
+	}
+}
+
 // sourceSyncEventToData maps an *ent.SourceSyncEvent to a SourceSyncEventData DTO.
 func sourceSyncEventToData(e *ent.SourceSyncEvent) SourceSyncEventData {
 	return SourceSyncEventData{
@@ -219,6 +286,13 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		data.ProgressNotes = make([]ProgressNoteData, len(item.Edges.ProgressNotes))
 		for i, n := range item.Edges.ProgressNotes {
 			data.ProgressNotes[i] = progressNoteToData(n)
+		}
+	}
+	// Propagate eagerly-loaded respawn events when present (see StatusEvents above).
+	if item.Edges.RespawnEvents != nil {
+		data.RespawnEvents = make([]RespawnEventData, len(item.Edges.RespawnEvents))
+		for i, ev := range item.Edges.RespawnEvents {
+			data.RespawnEvents[i] = respawnEventToData(ev)
 		}
 	}
 	// Propagate eagerly-loaded item sessions when present. Note: the
@@ -322,6 +396,13 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		}).
 		WithProgressNotes(func(q *ent.BacklogProgressNoteQuery) {
 			q.Order(ent.Asc(backlogprogressnote.FieldCreatedAt))
+		}).
+		WithRespawnEvents(func(q *ent.RespawnEventQuery) {
+			// Most-recent-first, capped: an item that cycles stuck->resolved->stuck
+			// repeatedly can accumulate an unbounded number of respawn rows over its
+			// lifetime (no retention/pruning by design, see ADR-001) — cap the payload
+			// GetBacklogItem returns rather than the table itself.
+			q.Order(ent.Desc(respawnevent.FieldCreatedAt)).Limit(50)
 		}).
 		Only(ctx)
 	if err != nil {
@@ -1300,6 +1381,25 @@ func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *d
 		return 0, fmt.Errorf("bulk reset stuck remediation: %w", err)
 	}
 	return n, nil
+}
+
+// --- Respawn event audit trail ---
+
+// CreateRespawnEvent records one automated respawn/remediation attempt as an
+// append-only audit row, deduped within respawnEventDedupeWindow (see
+// recordRespawnEvent). Best-effort by design: a respawn that already
+// succeeded (or failed) must not be reported as failed to the caller because
+// only the audit write failed — mirrors recordStatusEvent's log-and-continue
+// discipline. Callers should not treat a nil return as "a row was written";
+// they should treat a non-nil return as "the itemID was malformed", the only
+// error this can surface.
+func (r *EntRepository) CreateRespawnEvent(ctx context.Context, itemID, reason, triggeringSessionUUID, resultingSessionUUID string, queued bool) error {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+	recordRespawnEvent(ctx, r.client.RespawnEvent, parsedItemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+	return nil
 }
 
 // --- Progress note history ---

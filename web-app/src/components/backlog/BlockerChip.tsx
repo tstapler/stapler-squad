@@ -7,6 +7,9 @@ import {
 } from "@/components/backlog-stuck/stuckReason";
 import * as styles from "./BlockerChip.css";
 
+/** Mirrors session/backlog_remediation.go's MaxRemediationAttempts (also duplicated in StuckItem.tsx/StuckItemsSection.tsx — see those constants' doc comments). */
+const MAX_REMEDIATION_ATTEMPTS = 5;
+
 interface BlockerChipProps {
   item: StuckBacklogItem;
   /**
@@ -18,22 +21,59 @@ interface BlockerChipProps {
   variant: "full" | "compact";
 }
 
+/** Formats a next-retry timestamp as a short relative string, or "" if unset/past. */
+function formatNextRetry(nextRemediationAt: StuckBacklogItem["nextRemediationAt"]): string {
+  if (!nextRemediationAt) return "";
+  const ms = Number(nextRemediationAt.seconds) * 1000 - Date.now();
+  if (ms <= 0) return "retrying soon";
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return "retrying in <1m";
+  if (minutes < 60) return `retrying in ${minutes}m`;
+  return `retrying in ${Math.round(minutes / 60)}h`;
+}
+
 /**
  * Derived (never stored) "waiting on X" indicator, sourced from
  * useStuckBacklogItems()/StuckBacklogItem.reason. Reuses
  * stuckReason.ts's icon/label/duration formatting and color-class mapping
  * verbatim — one source of truth shared by the detail view and board card,
  * instead of two independent implementations drifting apart.
+ *
+ * Also surfaces remediation_attempts as a ×N suffix and next_remediation_at
+ * as a next-retry hint, so a user can tell "actively being auto-retried"
+ * from "parked after exhausting remediation attempts" without navigating
+ * away from the board/detail card.
  */
 export function BlockerChip({ item, variant }: BlockerChipProps) {
   const icon = getStuckReasonIcon(item.reason);
   const label = getStuckReasonLabel(item.reason);
   const chipClass = getStuckReasonClass(item.reason);
+  const attempts = item.remediationAttempts ?? 0;
+  const isParked = attempts >= MAX_REMEDIATION_ATTEMPTS;
+  const nextRetry = !isParked ? formatNextRetry(item.nextRemediationAt) : "";
+
+  // One full-sentence aria-label composed on the outer span — a second nested
+  // aria-label on the ×N suffix would be swallowed/overridden by this one in
+  // most screen readers, so the retry-count/status detail is folded in here
+  // instead of on a child element.
+  let ariaLabel = label;
+  if (attempts > 0) {
+    ariaLabel += isParked
+      ? `. Respawned ${attempts} times, now parked — automated remediation stopped.`
+      : `. Respawned ${attempts} times${nextRetry ? `, ${nextRetry}` : ""}.`;
+  }
 
   return (
-    <span className={chipClass} aria-label={label} data-testid="blocker-chip">
+    <span className={chipClass} aria-label={ariaLabel} data-testid="blocker-chip">
       <span aria-hidden="true">{icon}</span>
       <span>{label}</span>
+      {attempts > 0 && (
+        <span data-testid="blocker-chip-attempts">
+          {" "}
+          ×{attempts}
+          {isParked ? " (parked)" : nextRetry ? ` (${nextRetry})` : ""}
+        </span>
+      )}
       {variant === "full" && (
         <span className={styles.duration} data-testid="blocker-chip-duration">
           {formatStuckDuration(item.firstDetectedAt)}

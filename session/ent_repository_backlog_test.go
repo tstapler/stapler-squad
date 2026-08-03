@@ -231,3 +231,88 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 	assert.Equal(t, fileStats, fetched.ShippedFileStats)
 	assert.False(t, fetched.ShippedSnapshotCaptureFailed)
 }
+
+// TestCreateRespawnEvent_should_PersistRowWithBothSessionUuids_When_Called verifies
+// the happy path: a respawn event with both a triggering and resulting session UUID
+// round-trips through GetBacklogItem's eager-loaded RespawnEvents.
+func TestCreateRespawnEvent_should_PersistRowWithBothSessionUuids_When_Called(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for respawn event"})
+	require.NoError(t, err)
+
+	err = repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonStaleWork, "triggering-uuid", "resulting-uuid", false)
+	require.NoError(t, err)
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 1)
+	ev := fetched.RespawnEvents[0]
+	assert.Equal(t, RespawnReasonStaleWork, ev.Reason)
+	require.NotNil(t, ev.TriggeringSessionUUID)
+	assert.Equal(t, "triggering-uuid", *ev.TriggeringSessionUUID)
+	require.NotNil(t, ev.ResultingSessionUUID)
+	assert.Equal(t, "resulting-uuid", *ev.ResultingSessionUUID)
+	assert.False(t, ev.Queued)
+}
+
+// TestCreateRespawnEvent_should_DedupeWithinWindow_When_CalledTwiceForSameTrigger reproduces
+// the double-fire class pre-mortem #1 flags: two overlapping reconciliation sweeps calling
+// the same respawn call site for the same item/reason/triggering session within the dedupe
+// window must produce exactly one row, not two.
+func TestCreateRespawnEvent_should_DedupeWithinWindow_When_CalledTwiceForSameTrigger(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for dedupe test"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonReviewAbandoned, "same-trigger", "result-1", false))
+	require.NoError(t, repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonReviewAbandoned, "same-trigger", "result-2", false))
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 1, "overlapping calls within the dedupe window must record exactly one row")
+}
+
+// TestCreateRespawnEvent_should_DedupeEmptyTriggeringUuidRows_When_CalledTwice covers the
+// two call sites (AutoRespawnReview/AutoRespawnTriage) that have no prior active session,
+// so triggeringSessionUUID is empty — a NULL-vs-NULL dedupe match, not a unique-index one.
+func TestCreateRespawnEvent_should_DedupeEmptyTriggeringUuidRows_When_CalledTwice(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for nil-trigger dedupe test"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonTriageOrphaned, "", "result-1", false))
+	require.NoError(t, repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonTriageOrphaned, "", "result-2", false))
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 1, "overlapping calls with no triggering session must still dedupe")
+}
+
+// TestCreateRespawnEvent_should_RecordQueuedAttemptWithEmptyResultingUuid_When_SpawnWasQueued
+// verifies the queued/failed distinction (AC8): a queued attempt has queued=true and an
+// empty resulting session UUID, distinguishable from a failed spawn attempt.
+func TestCreateRespawnEvent_should_RecordQueuedAttemptWithEmptyResultingUuid_When_SpawnWasQueued(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for queued respawn test"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonAutonomousTurn, "", "", true))
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 1)
+	assert.True(t, fetched.RespawnEvents[0].Queued)
+	assert.Nil(t, fetched.RespawnEvents[0].ResultingSessionUUID)
+}

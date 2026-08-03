@@ -13,6 +13,7 @@ import {
   BacklogStatusEvent as BacklogStatusEventProto,
   BacklogProgressNote as BacklogProgressNoteProto,
   PipelineMode as PipelineModeProto,
+  RespawnEvent as RespawnEventProto,
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,27 @@ export interface LinkedSession {
    * current PipelineMode.contentHash to detect content drift.
    */
   pipelineModeSnapshotHash?: string;
+  /**
+   * How a headless (triage/review) call ended: "" (clean/unclassified),
+   * "shutdown", "timeout", "process_error", "claude_not_found", "other".
+   * Empty for interactive work sessions. See formatEndReason.
+   */
+  endReason?: string;
+}
+
+/** A single automated respawn/remediation attempt (append-only audit row). */
+export interface RespawnEvent {
+  id: string;
+  reason: string;
+  triggeringSessionUuid?: string;
+  resultingSessionUuid?: string;
+  createdAt?: string;
+  /**
+   * True when the spawn attempt hit the concurrency cap and was queued
+   * instead of spawning a session — distinguishes "queued" from "spawn
+   * attempt failed" when resultingSessionUuid is empty.
+   */
+  queued: boolean;
 }
 
 export interface BacklogItem {
@@ -122,6 +144,15 @@ export interface BacklogItem {
   statusEvents: StatusEvent[];
   /** Implementer's report_progress audit trail (audit log) */
   progressNotes: ProgressNote[];
+  /**
+   * Automated respawn/remediation audit trail (append-only, all-time; capped
+   * to 50 most recent server-side). Optional (not `[]`-defaulted here) so
+   * pre-existing BacklogItem test fixtures across the codebase that predate
+   * this field don't all need updating — mapBacklogItem always populates a
+   * real array (possibly empty), never omits the key, for actual API
+   * responses. Consumers should default via `item.respawnEvents ?? []`.
+   */
+  respawnEvents?: RespawnEvent[];
   /** Sum of estimated USD cost across all linked sessions */
   totalEstimatedCostUsd: number;
   /** GitHub PR URL when item is in pr_pending status */
@@ -286,6 +317,7 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     worktreePath: s.worktreePath || undefined,
     pipelineModeSnapshot: s.pipelineModeSnapshot ?? "",
     pipelineModeSnapshotHash: s.pipelineModeSnapshotHash ?? "",
+    endReason: s.endReason || undefined,
   };
 
   // Map review verdict if present
@@ -348,6 +380,17 @@ function mapProgressNote(n: BacklogProgressNoteProto): ProgressNote {
     note: n.note,
     status: n.status,
     createdAt: n.createdAt ? new Date(Number(n.createdAt.seconds) * 1000).toISOString() : undefined,
+  };
+}
+
+function mapRespawnEvent(e: RespawnEventProto): RespawnEvent {
+  return {
+    id: e.id,
+    reason: e.reason,
+    triggeringSessionUuid: e.triggeringSessionUuid || undefined,
+    resultingSessionUuid: e.resultingSessionUuid || undefined,
+    createdAt: e.createdAt ? new Date(Number(e.createdAt.seconds) * 1000).toISOString() : undefined,
+    queued: e.queued,
   };
 }
 
@@ -447,6 +490,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     triageResult,
     statusEvents: (p.statusEvents ?? []).map(mapStatusEvent),
     progressNotes: (p.progressNotes ?? []).map(mapProgressNote),
+    respawnEvents: (p.respawnEvents ?? []).map(mapRespawnEvent),
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,

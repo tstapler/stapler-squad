@@ -638,6 +638,37 @@ var (
 			},
 		},
 	}
+	// RespawnEventsColumns holds the columns for the "respawn_events" table.
+	RespawnEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "reason", Type: field.TypeString},
+		{Name: "triggering_session_uuid", Type: field.TypeString, Nullable: true},
+		{Name: "resulting_session_uuid", Type: field.TypeString, Nullable: true},
+		{Name: "queued", Type: field.TypeBool, Default: false},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "item_id", Type: field.TypeUUID},
+	}
+	// RespawnEventsTable holds the schema information for the "respawn_events" table.
+	RespawnEventsTable = &schema.Table{
+		Name:       "respawn_events",
+		Columns:    RespawnEventsColumns,
+		PrimaryKey: []*schema.Column{RespawnEventsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "respawn_events_backlog_items_respawn_events",
+				Columns:    []*schema.Column{RespawnEventsColumns[6]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "respawnevent_item_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{RespawnEventsColumns[6], RespawnEventsColumns[5]},
+			},
+		},
+	}
 	// ReviewVerdictsColumns holds the columns for the "review_verdicts" table.
 	ReviewVerdictsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1038,6 +1069,7 @@ var (
 		ItemSourcesTable,
 		PipelineModesTable,
 		ProjectsTable,
+		RespawnEventsTable,
 		ReviewVerdictsTable,
 		SessionsTable,
 		SessionGoalsTable,
@@ -1060,6 +1092,7 @@ func init() {
 	ClaudeSessionsTable.ForeignKeys[0].RefTable = SessionsTable
 	DiffStatsTable.ForeignKeys[0].RefTable = SessionsTable
 	ItemSessionsTable.ForeignKeys[0].RefTable = BacklogItemsTable
+	RespawnEventsTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	ReviewVerdictsTable.ForeignKeys[0].RefTable = ItemSessionsTable
 	SessionsTable.ForeignKeys[0].RefTable = ProjectsTable
 	ShellsTable.ForeignKeys[0].RefTable = SessionsTable

@@ -1457,6 +1457,12 @@ func TestAutoRespawnReview_NoActiveSession_TriggersReReview(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
 		"a PASS verdict from the respawned review should carry the item to done, same as a manual TriggerReReview call")
+
+	require.Len(t, updated.Msg.Item.RespawnEvents, 1, "expected exactly one RespawnEvent row")
+	ev := updated.Msg.Item.RespawnEvents[0]
+	assert.Equal(t, session.RespawnReasonReviewAbandoned, ev.Reason)
+	assert.Empty(t, ev.TriggeringSessionUuid)
+	assert.NotEmpty(t, ev.ResultingSessionUuid)
 }
 
 // --- AutoRespawnTriage: session.TriageRespawner implementation (orphaned_triage
@@ -1521,6 +1527,41 @@ func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
 	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
 	require.NoError(t, respawnErr)
 	assert.Empty(t, pool.calls, "an item that already moved off idea must not have triage re-triggered")
+}
+
+// TestAutoRespawnTriage_should_RecordRespawnEventWithReasonTriageOrphaned_When_ItemStillIdea
+// verifies the RespawnEvent audit trail (AC4/Epic 4.4): AutoRespawnTriage must append a
+// row with reason=triage_respawn, an empty triggering session (no prior active session
+// for an orphaned-triage item), and a non-empty resulting session UUID.
+func TestAutoRespawnTriage_should_RecordRespawnEventWithReasonTriageOrphaned_When_ItemStillIdea(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "Orphaned triage respawn event item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AutoRespawnTriage(t.Context(), item.ID))
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && len(updated.RespawnEvents) == 1
+	}, 5*time.Second, 50*time.Millisecond, "expected exactly one RespawnEvent row")
+
+	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, err)
+	require.Len(t, updated.RespawnEvents, 1)
+	ev := updated.RespawnEvents[0]
+	assert.Equal(t, session.RespawnReasonTriageOrphaned, ev.Reason)
+	assert.Nil(t, ev.TriggeringSessionUUID)
+	assert.NotNil(t, ev.ResultingSessionUUID)
 }
 
 // --- AutoReopenForPRFix: proactive branch sync with main (Task 2.1.6d) ---

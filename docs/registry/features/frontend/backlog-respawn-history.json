@@ -1,0 +1,16 @@
+{
+  "id": "backlog-respawn-history",
+  "type": "frontend",
+  "component": "RespawnHistorySection",
+  "path": "web-app/src/components/backlog/detail/RespawnHistorySection.tsx",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "RespawnHistorySection_should_RenderEmptyStateText_When_NoRespawnEventsExist",
+    "RespawnHistorySection_should_RenderEventRowWithFormattedReasonAndSessionRefs_When_EventHasBothUuids",
+    "RespawnHistorySection_should_RenderQueuedText_When_QueuedIsTrueAndNoResultingSession",
+    "RespawnHistorySection_should_RenderFailedText_When_NotQueuedAndNoResultingSession",
+    "RespawnHistorySection_should_RenderReconciliationCaption_When_EventsExist"
+  ],
+  "lastModified": "2026-08-02T00:00:00Z"
+}

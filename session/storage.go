@@ -1064,6 +1064,16 @@ func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, cr
 	return er.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
 }
 
+// CreateRespawnEvent records one automated respawn/remediation attempt as an
+// append-only audit row. Best-effort: see EntRepository.CreateRespawnEvent.
+func (s *Storage) CreateRespawnEvent(ctx context.Context, itemID, reason, triggeringSessionUUID, resultingSessionUUID string, queued bool) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("respawn event audit trail not supported by this storage backend")
+	}
+	return er.CreateRespawnEvent(ctx, itemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+}
+
 // AppendProgressNote records a single report_progress call as an immutable history
 // entry, in addition to the current-note-per-criterion updated by UpdateAcCriterionStatus.
 func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error {

@@ -44,6 +44,8 @@ type Tx struct {
 	PipelineMode *PipelineModeClient
 	// Project is the client for interacting with the Project builders.
 	Project *ProjectClient
+	// RespawnEvent is the client for interacting with the RespawnEvent builders.
+	RespawnEvent *RespawnEventClient
 	// ReviewVerdict is the client for interacting with the ReviewVerdict builders.
 	ReviewVerdict *ReviewVerdictClient
 	// Session is the client for interacting with the Session builders.
@@ -207,6 +209,7 @@ func (tx *Tx) init() {
 	tx.ItemSource = NewItemSourceClient(tx.config)
 	tx.PipelineMode = NewPipelineModeClient(tx.config)
 	tx.Project = NewProjectClient(tx.config)
+	tx.RespawnEvent = NewRespawnEventClient(tx.config)
 	tx.ReviewVerdict = NewReviewVerdictClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.SessionGoal = NewSessionGoalClient(tx.config)

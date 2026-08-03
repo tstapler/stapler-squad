@@ -82,6 +82,7 @@ import {
   snapshotError,
   memoryBadge,
   memoryBadgeWarning,
+  pauseReasonBadge,
   memoryBadgeHigh,
   cardMemoryPressure,
   taskFraction,
@@ -489,15 +490,21 @@ function SessionCardInner({
               />
             )}
             {isPaused && session.pauseReason ? (
-              <Tooltip label={formatPauseReason(session.pauseReason)} side="top">
-                <span
-                  className={`${status} ${getStatusColor(session.status)}`}
-                  role="img"
-                  aria-label={`Session status: ${getStatusText(session.status)}`}
-                >
-                  {getStatusText(session.status)}
-                </span>
-              </Tooltip>
+              <>
+                <Tooltip label={formatPauseReason(session.pauseReason)} side="top">
+                  <span
+                    className={`${status} ${getStatusColor(session.status)}`}
+                    role="img"
+                    aria-label={`Session status: ${getStatusText(session.status)}`}
+                  >
+                    {getStatusText(session.status)}
+                  </span>
+                </Tooltip>
+                {/* Always-visible text, not tooltip-only — hover tooltips are
+                    unreachable on touch/mobile, so the reason must be readable
+                    without hovering on any viewport. */}
+                <span className={pauseReasonBadge}>{formatPauseReason(session.pauseReason)}</span>
+              </>
             ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
               // ponytail: reuses creationProgress — the field is only cleared on a
               // successful start, so a startup/reconnect failure written here (see
