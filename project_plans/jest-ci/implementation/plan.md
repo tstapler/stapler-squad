@@ -132,36 +132,38 @@ GoF/PoEAA lens is N/A. Two real build-vs-alternative decisions apply:
    human still needs to file the issue manually. Epic 2 (the CI-facing `jest.yml`
    work) and Epic 3 (docs) proceed regardless; only the real issue number is
    deferred.
-3. **Exact post-quarantine green count** — expected (not yet empirically confirmed
-   at planning time) to be 259/259 passing Jest suites once the 9 affected tests
-   (1 in `BacklogEmptyState.test.tsx` + 8 across `SessionDetail.embedded.test.tsx`'s
-   two `describe` blocks) are skipped, since a suite with all-skipped tests still
-   reports as passed rather than failed. The "9 affected tests" figure is verified:
-   `BacklogEmptyState.test.tsx` has 12 total `it(...)` tests (1 quarantined, 11
-   remain) and `SessionDetail.embedded.test.tsx`'s two quarantined `describe` blocks
-   contain 5 + 3 = 8 tests, confirmed directly against the files (grep). The
-   259/259-suites figure is a project-wide count that cannot be confirmed by
-   inspecting these two files alone; Story 2.3 makes empirical confirmation of the
-   actual number (via a real `npx jest` run) a required task rather than trusting
-   this arithmetic.
+3. **Exact post-quarantine green count** — **superseded by actual implementation
+   results** (this question was written at planning time before Story 2.3's local
+   run; see the Post-implementation Actuals note at the end of this item).
+   Originally expected 259/259 passing Jest suites once 9 affected tests (1 in
+   `BacklogEmptyState.test.tsx` + 8 across `SessionDetail.embedded.test.tsx`'s two
+   `describe` blocks) were skipped. That estimate assumed only 1 test in
+   `BacklogEmptyState.test.tsx` needed quarantining — Task 2.3.1's actual run
+   revealed 6 more pre-existing failures in the same describe block once the
+   crashing test was skipped, so the real quarantine scope is 9 tests in that file
+   (the whole `describe.skip` block), not 1. See `.claude/rules/jest-ci.md` for the
+   authoritative documented scope.
 
-   **Reconciling this against requirements.md's baseline** (flagged by the Phase 4
-   cross-artifact consistency check): requirements.md's baseline says "3594/3601
-   tests pass" (7 failing) — that 3601 total was captured from the run where
-   `BacklogEmptyState.test.tsx` crashed its whole worker process *before reporting
-   any of its 12 tests*, so those 12 tests are entirely absent from the 3601
-   figure, not present-and-failing. Only `SessionDetail.embedded.test.tsx`'s 7
-   failures are inside the 3601/3594 numbers. Once quarantined: `SessionDetail`'s
-   8 tests (was 1 pass + 7 fail) all report as skipped instead; `BacklogEmptyState`
-   no longer crashes, so its 12 tests get counted for the first time (1 skip + 11
-   newly-passing). Correct expected post-quarantine total: **3613 tests** (3601 +
-   12 newly-countable), **3604 passing** (3594 − 1 SessionDetail test that flips
-   from passed-to-skipped + 11 newly-passing `BacklogEmptyState` tests), **0
-   failing**, **9 skipped**. `describe.skip`-ing the whole `SessionDetail` file is
-   a deliberate atomicity tradeoff (see Pattern Decisions, AC4 row) that also skips
-   its 1 previously-*passing* test, not just its 7 failures — Task 2.3.1 must
-   confirm **3604 passing / 9 skipped / 3613 total**, not the earlier (incorrect)
-   "~3592 passing" estimate, and flag a discrepancy if the real run doesn't match.
+   **Reconciling against requirements.md's baseline** (flagged by the Phase 4
+   cross-artifact consistency check, still correct as far as it goes): requirements.md's
+   baseline says "3594/3601 tests pass" (7 failing) — that 3601 total was captured
+   from the run where `BacklogEmptyState.test.tsx` crashed its whole worker process
+   *before reporting any of its 12 tests*, so those 12 tests are entirely absent
+   from the 3601 figure, not present-and-failing. Only `SessionDetail.embedded.test.tsx`'s
+   7 failures are inside the 3601/3594 numbers.
+
+   **Post-implementation actuals** (Task 2.3.1, run against the real quarantine):
+   **3596 passing**, **0 failing**, **17 skipped** (9 in `BacklogEmptyState.test.tsx`'s
+   "first-run state" block + 8 across `SessionDetail.embedded.test.tsx`'s two blocks),
+   **3613 total**, **258/259 suites passing + 1 suite fully skipped**
+   (`SessionDetail.embedded.test.tsx`, since every test in it is now skipped;
+   `BacklogEmptyState.test.tsx` counts as "passed" because it still has 3 running,
+   passing tests in its other two describe blocks). This supersedes both the
+   original planning-time estimate above and the 9-skipped/3604-passing figure this
+   section previously stated after the Phase 4 consistency-check reconciliation —
+   that reconciliation was arithmetically correct for the *originally scoped*
+   9-test quarantine, but the actually-shipped quarantine is 17 tests once the
+   additional `BacklogEmptyState` failures were discovered.
 4. **AC1 (path-filter triggering) and AC5 (Summary tab rendering) are not fully
    verifiable pre-merge.** Story 2.3's local verification runs bare `npx jest`
    directly in a shell — it can confirm Jest's own exit-code behavior (AC2) but
@@ -267,10 +269,22 @@ it comes last.
 > `TODO(#TBD)` and defers the real issue to a manually-filed follow-up — see
 > Unresolved Questions §2),
 > Then `npx jest --selectProjects web-app --maxWorkers=2` reports these tests as
-> **skipped** (not failed, not silently absent), the other 11 tests in
-> `BacklogEmptyState.test.tsx` (12 total, 1 quarantined) keep running and passing,
-> and the workflow no longer goes red because of these two pre-existing,
-> out-of-scope bugs.
+> **skipped** (not failed, not silently absent), the other 3 tests in
+> `BacklogEmptyState.test.tsx` (12 total; 9 quarantined, not 1 — see the
+> **Post-implementation update** below) keep running and passing, and the
+> workflow no longer goes red because of these two pre-existing, out-of-scope
+> bugs.
+>
+> **Post-implementation update** (this section originally assumed only the 1
+> crashing test needed quarantining): local verification (Task 2.3.1) revealed
+> 6 more pre-existing failures in `BacklogEmptyState.test.tsx`'s "first-run
+> state" describe block once the crashing test was skipped and the rest of the
+> file could finally run — the component has no inline-create-form UX at all,
+> but 6 of that block's other tests expect one. The entire 9-test
+> `describe.skip("BacklogEmptyState — first-run state", ...)` block is
+> quarantined, not just the 1 originally-scoped test, tracked in the same
+> issue ([#311](https://github.com/tstapler/stapler-squad/issues/311)). See
+> `.claude/rules/jest-ci.md` for the authoritative documented outcome.
 
 **AC5 — Step Summary shows Test Suites/Tests/Time on both pass and fail**
 > Given the "Run Jest (web-app project)" step captures `npx jest ... 2>&1` via
@@ -317,6 +331,17 @@ it comes last.
   // while wiring Jest into CI; fix tracked in the linked issue.
   ```
   Leave all other 11 tests (12 total in the file) untouched.
+
+  **Actual implementation note**: this task's original scope (skip just this 1
+  test) proved insufficient. Task 2.3.1's local run, performed right after this
+  edit, revealed 6 more pre-existing failures in the same
+  `describe("BacklogEmptyState — first-run state", ...)` block — the component
+  has no inline-create-form UX the other tests expect. The whole 9-test block
+  was quarantined via `describe.skip(...)` instead (superseding the single
+  `it.skip` above), tracked in the same issue (#311). Only the file's other two
+  describe blocks (`FilterZeroState`, `FooterNudge`, 3 tests) were left
+  untouched, not "11 tests" as originally planned. See `.claude/rules/jest-ci.md`
+  and Unresolved Questions §3's Post-implementation Actuals for the true scope.
 
 **Story 1.2 — Skip the two broken `SessionDetail` describe blocks**
 
@@ -466,10 +491,11 @@ isn't worth a new task here.
   npx jest --selectProjects web-app --maxWorkers=2 --ci
   ```
   with Epic 1's quarantine already applied. Confirm actual exit code 0 and record
-  the real `Test Suites:` / `Tests:` counts (expected 259/259 suites passing,
-  3604 tests passing / 0 failing / 9 skipped / 3613 total — see Unresolved
-  Questions §3 for the reconciled arithmetic — confirm the actual numbers
-  empirically and flag any discrepancy rather than trusting this estimate).
+  the real `Test Suites:` / `Tests:` counts — see Unresolved Questions §3's
+  Post-implementation Actuals for what this task actually found (**258/259 suites
+  passing + 1 fully-skipped suite**, **3596 passing / 0 failing / 17 skipped /
+  3613 total**), which superseded the pre-implementation estimate originally
+  written here once the real quarantine scope (17 tests, not 9) was known.
 - **Task 2.3.2** (3 min, 1 file temporarily): Temporarily break one currently-passing
   test (e.g. flip an `expect(...).toBe(true)` to `false` in any healthy, non-quarantined
   test file), rerun the same command, confirm a non-zero exit code and a `Test
