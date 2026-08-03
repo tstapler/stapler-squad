@@ -404,6 +404,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		if source.BackwardSyncEnabled && extItem.State == "closed" {
 			alreadyReconciled := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
 			if !alreadyReconciled {
+				advanceWatermark := true
 				if target, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
 					guardInput := BacklogItemTransitionInput{
 						Status:            BacklogStatus(existing.Status),
@@ -413,9 +414,10 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 						PlanArtifactsPath: existing.PlanArtifactsPath,
 					}
 					if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
-						if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil {
+						if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
 							log.WarningLog.Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
 							errored++
+							advanceWatermark = false
 						} else {
 							updated++
 						}
@@ -427,9 +429,11 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 					log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
 					skipped++
 				}
-				watermark := extItem.IssueUpdatedAt
-				if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
-					log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+				if advanceWatermark {
+					watermark := extItem.IssueUpdatedAt
+					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+						log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+					}
 				}
 			}
 		}
