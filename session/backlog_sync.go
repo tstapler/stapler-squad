@@ -37,27 +37,35 @@ type SyncLoop struct {
 	interval time.Duration
 	stopCh   chan struct{}
 	keyFunc  func() ([]byte, error) // provides encryption key for decryption
+
+	// workflowEngine evaluates backlog status transition guards for
+	// GitHub-driven sync writes (Phase 2/3 backward sync). Defaults to
+	// NewDefaultWorkflowEngine() so existing NewSyncLoop(...) call sites
+	// continue to compile unchanged.
+	workflowEngine WorkflowEngine
 }
 
 // NewSyncLoop creates a SyncLoop with the default interval and no key provider.
 func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
 	return &SyncLoop{
-		storage:  storage,
-		registry: registry,
-		interval: defaultSyncInterval,
-		stopCh:   make(chan struct{}),
-		keyFunc:  nil,
+		storage:        storage,
+		registry:       registry,
+		interval:       defaultSyncInterval,
+		stopCh:         make(chan struct{}),
+		keyFunc:        nil,
+		workflowEngine: NewDefaultWorkflowEngine(),
 	}
 }
 
 // NewSyncLoopWithKeyProvider creates a SyncLoop with a key provider for decryption.
 func NewSyncLoopWithKeyProvider(storage *Storage, registry *PluginRegistry, keyFunc func() ([]byte, error)) *SyncLoop {
 	return &SyncLoop{
-		storage:  storage,
-		registry: registry,
-		interval: defaultSyncInterval,
-		stopCh:   make(chan struct{}),
-		keyFunc:  keyFunc,
+		storage:        storage,
+		registry:       registry,
+		interval:       defaultSyncInterval,
+		stopCh:         make(chan struct{}),
+		keyFunc:        keyFunc,
+		workflowEngine: NewDefaultWorkflowEngine(),
 	}
 }
 
@@ -118,15 +126,21 @@ func (sl *SyncLoop) runAllSources(ctx context.Context) {
 	}
 }
 
-// decryptConfigToken decrypts an encrypted token in config JSON if needed.
+// DecryptConfigToken decrypts an encrypted token in config JSON if needed.
 // If the config has "encrypted":true, it decrypts the token field using the provided key function.
 // If decryption is not available or not needed, returns the raw config unchanged.
-// Exported for testing.
+// Exported so package server/services (holding a *SyncLoop handle) can call it
+// cross-package for the forward-sync subscriber.
+//
+// TestDecryptConfigToken remains as a thin forwarding wrapper: it is used by
+// server/services/backlog_service_encryption_test.go (outside this task's
+// file-ownership scope), which was not updated to call DecryptConfigToken
+// directly as part of this rename — see plan Task 0.6.2a.
 func (sl *SyncLoop) TestDecryptConfigToken(raw string) (string, error) {
-	return sl.decryptConfigToken(raw)
+	return sl.DecryptConfigToken(raw)
 }
 
-func (sl *SyncLoop) decryptConfigToken(raw string) (string, error) {
+func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 	if raw == "" {
 		return raw, nil
 	}
@@ -210,7 +224,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	}
 
 	// Decrypt config if needed before passing to plugin
-	decryptedConfig, err := sl.decryptConfigToken(source.Config)
+	decryptedConfig, err := sl.DecryptConfigToken(source.Config)
 	if err != nil {
 		return fmt.Errorf("decrypt config: %w", err)
 	}

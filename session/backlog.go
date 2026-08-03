@@ -89,8 +89,9 @@ const CategoryBacklog = "Backlog"
 
 // TriggeredBy values for BacklogStatusEvent records.
 const (
-	TriggeredByUser   = "user"
-	TriggeredBySystem = "system"
+	TriggeredByUser       = "user"
+	TriggeredBySystem     = "system"
+	TriggeredByGitHubSync = "github_sync"
 )
 
 // DefaultBacklogPriority is the default priority assigned to new backlog items
