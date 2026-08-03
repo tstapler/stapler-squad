@@ -1614,6 +1614,114 @@ follow-up pass extending the same `workSessionStaleness`-backed enrichment patte
 log lines (or a notification, matching `notifyIfActiveWorkSessionStale`'s shape) once a
 concrete stuck-item episode traces back to one of them.
 
+## Update — 2026-08-03: light verification pass — bucket [3]'s core gap confirmed substantially resolved; 08-02's routed fix shipped; no new bugs found live
+
+Not a full 4-agent re-run (same rationale as every pass since 07-28: live state keeps trending
+well and the last full pass was 07-19/07-22 for architecture/UX/code-review specifically).
+Checked `ListStuckBacklogItems` live, verified 08-02's routed fix landed, then — since this
+audit's core deliverable (per-item configurable pipeline) hasn't had a dedicated fresh look
+since 07-30 — spawned an independent fork with no prior knowledge of this doc to re-derive the
+`PipelineMode`/`PipelineEngine` ground truth from scratch, then cross-checked its conclusions
+against this doc's own history rather than trusting either source alone.
+
+**Live state**: `ListStuckBacklogItems` returns **1 row / 1 item** (`be676dab`,
+"Two-way linkage + status/label sync between imported backlog items and their GitHub issue
+counterparts"), `STUCK_REASON_PLAN_NOT_APPROVED`, `queued`. Confirmed working-as-designed
+(same `reconcilePlanNotApprovedItems`/`selfHealStuck` checkpoint pattern as every prior
+PLAN_NOT_APPROVED instance since 07-22): the item has a committed `requirements.md`
+(`project_plans/backlog-github-two-way-sync/`, commit `922ac4e9e`) but no `plan.md` yet — it's
+correctly waiting on a human plan-approval decision, not stuck on a bug. Total backlog is 6
+items (2 queued, 2 review, 1 in_progress, 1 ready) — the smallest live count this doc has
+recorded, consistent with the WIP-cap-driven `ready→queued` transition being the normal
+mechanism (verified via `59bbff11`'s `statusEvents`: `idea→ready` then `ready→queued` with
+note "WIP cap hit" — not a stuck state, doesn't appear in `ListStuckBacklogItems`).
+
+**08-02's routed fix — confirmed merged and live**: PR #301 ("exclude archived sessions from
+Review Queue polling") landed; `shouldSkipSession` (`session/review_queue_poller.go:641`) now
+includes `snap.ArchivedAt != nil` alongside the pre-existing `Hidden`/`Stopped`/`Paused` checks,
+and `TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue` exists and covers it.
+
+**Also already fixed, same-day, before this pass started**: HEAD commit `26e0d610f`
+("fail loudly instead of silently spawning sessions in the main checkout", fixing BUG-057,
+09:17 this morning) — `resolveSessionPath` previously fell back to an unscoped
+`session.ResolveSessionPath(repoPath)` whenever `CreateBacklogWorktree` failed for *any*
+reason (disk quota, detached HEAD, locked ref — not just "not a git repo"), landing the spawned
+session directly in the live checkout instead of an isolated worktree with no error surfaced.
+Now the plain-directory fallback is scoped to genuinely non-git-managed repos only; a
+git-managed repo whose worktree creation fails returns an error. **Recurring-shape note**: this
+is a *new* shape, not a repeat of the four already catalogued in this doc's mandate (silent
+no-op spawn, self-defeating exclusion guard, event lost across restart, notify-once never
+resolved) — call it a fifth: **a degraded-but-"successful" fallback silently masks a real error
+as normal operation**, differing from "silent no-op" in that it doesn't fail to act, it acts
+in the wrong place while looking like success. Worth watching for repeats of this specific
+shape (any `if createErr != nil { return degradedPath }` with no check on *why* the primary
+path failed) in future passes.
+
+**Bucket [3] — the core "software factory" gap — reassessed end-to-end, confirmed
+substantially RESOLVED.** An independent fork (briefed only on the original 2026-07-14 "Known
+Findings" framing, with no access to this doc's own 07-17→07-30 tracking) re-derived the
+current ground truth from source and reached the same conclusions this doc already
+established, confirming they've held since 07-30 with no regression:
+
+1. `BacklogItemData` (`session/repository.go:346-410`) now has `PipelineMode string`,
+   `Category string`, `ReworkCapOverride *int`, plus the original `SkipReviewGate`/
+   `SkipPlanning`/`AutoCreatePR` bools — the 07-14 claim of "only two bools exist" is stale.
+2. `PipelineMode` is a real, user-creatable, slug-addressed entity (`proto/session/v1/backlog.proto:166-168`)
+   with full CRUD RPCs and a settings UI (`web-app/src/app/settings/pipeline-modes/`), distinct
+   from `pipeline_mode_snapshot`/`pipeline_mode_snapshot_hash` (a separate per-session
+   audit-trail field recording which mode a session ran under — the two are cleanly separated,
+   not conflated).
+3. The item-level picker (`BacklogItemForm.tsx`), the Settings nav link
+   (`data-testid="settings-pipeline-modes-tab-link"`), the automatic review-gate's
+   `PipelineEngine` coverage (`session/review_gate.go`'s `reviewPromptFor`), and category-driven
+   defaults (`46b7e6239`, PR #285) are all confirmed shipped and live — this closes essentially
+   every concrete UI/wiring gap this doc tracked for bucket [3] between 07-18 and 07-30.
+4. `WriteSlashCommands` (`session/backlog_commands.go:31-68`) delegates to
+   `engine.SlashCommandSet(item)`, falling back to the old fixed set only when unwired —
+   the original 07-14 "every item gets the same fixed slash-command set" finding is resolved.
+5. **The one confirmed-unchanged thread**: ADR-013's `WorkflowEngine` remains
+   `DefaultWorkflowEngine` only — governs transition *guards*, not stage/skill *selection*. As
+   this doc concluded 07-19/07-22, this is now understood as a deliberate division of concerns
+   (`PipelineMode` owns content-selection, `WorkflowEngine` owns guard logic) rather than an
+   open gap requiring action — no new evidence this pass changes that assessment.
+
+**New feature landed since 08-02, not yet audited here**: the respawn-event audit trail
+(`22970e37b`, "surface session/respawn lifecycle status + respawn-event audit trail") — adopted
+`project_plans/backlog-session-lifecycle-ux`'s already-planned, adversarially-reviewed 5-phase
+plan as the vehicle for backlog item `0a366262` (07-22/08-02's stuck-item subject), rather than
+re-planning independently. Ships `end_reason`/`pause_reason` chips and a `RespawnHistorySection`
+recording every `AutoRespawnAutonomousWork`/`RemediateStaleWorkSession`/`AutoRespawnReview`/
+`AutoRespawnTriage` attempt with its reason — **this incidentally closes the 07-27 "pipeline
+provenance not visible after done/archived" UX finding**, since respawn reasons (which include
+pipeline-relevant context) are now visible in a durable per-item history section rather than a
+transient badge. Two rigorous same-day follow-up fixes (`ce0814ba9`, `38ab3ee2b`) closed a
+`CreateRespawnEvent` TOCTOU race (via `sdd:6-verify` + two independent `code:review` agents),
+confirming the SDD verify/review gate is catching real concurrency bugs before merge, not just
+style nits. Item `0a366262` itself is no longer live (moved to done/archived) — confirms PR
+#310's work actually unblocked the item it was seeded from.
+
+**Still open, unchanged, still low priority** — checked directly, both confirmed still present:
+- Interface-pollution cleanup (`PipelineModeRepository` in `session/pipeline_mode_repository.go:11`,
+  `Repository` in `session/repository.go:23`) — not routed, per standing low-priority assessment.
+- The 3 deferred `hasActiveWorkSession` sibling call sites from PR #292/07-31
+  (`AutoRespawnAutonomousWork:1441`, plus `AutoReopenForPRFix`/`AutoRespawnReview`) still just
+  `log.InfoLog.Printf` on a blocked respawn with no progress-signal enrichment or `RespawnEvent`
+  record — confirmed by direct read this pass. Note: PR #310's new `RespawnEvent` audit trail
+  instruments the four *successful/attempted* respawn call sites but not this *skipped-due-to-
+  active-session* branch specifically — a natural, cheap follow-on now that the `RespawnEvent`
+  table and dedupe machinery already exist, but still not urgent enough to route unprompted.
+
+### Recommended Next Actions
+
+Nothing new rises to `sdd:fix-bug`/`sdd:quick` urgency this pass — the one live stuck item is a
+correct human-decision checkpoint, and the one bug found (BUG-057) was already fixed before this
+pass started. Carried forward, unchanged priority:
+1. Interface-pollution cleanup (`PipelineModeRepository`, `Repository`) — still deferred to a
+   future refactor pass.
+2. The 3 `hasActiveWorkSession` sibling call sites — extend `RespawnEvent` recording to the
+   skipped-respawn branch, now cheaper than 07-31 since the table/dedupe logic already exists.
+3. `be676dab` needs a human plan-approval/reject decision — surfaced for visibility, not a fix.
+
 ## Update — 2026-08-02: light verification pass — 1 new root-caused bug (archived work sessions never leave the Review Queue), everything else confirmed working as designed
 
 Not a full 4-agent re-run (last full pass 07-18, light passes trending well since — same rationale
