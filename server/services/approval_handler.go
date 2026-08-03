@@ -222,7 +222,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
 					Decision:  classifier.AutoDeny,
 					RiskLevel: classifier.RiskCritical,
-					RuleID:    "secret-scan",
+					RuleID:    classifier.RuleIDSecretScan,
 					RuleName:  "Plaintext Secret Detection",
 					Reason:    msg,
 				}, sessionID, "", 0)
@@ -232,6 +232,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		}
 	}
 
+	// escalation captures the classification result (or its domain-age synthetic equivalent)
+	// that led to this request being queued for manual review. Zero-valued (no-match) unless
+	// set below.
+	var escalation classifier.ClassificationResult
+
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -240,25 +245,29 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			for _, domain := range domains {
 				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
 				if err != nil {
+					// Silenced on purpose: a single domain's check failing doesn't abort the
+					// whole request. But it means the reviewer sees whatever the classifier
+					// decides afterward (no-match/explicit-rule) with no indication a domain
+					// check was attempted and came back inconclusive for this domain.
 					log.Warn("[ApprovalHandler] domain age check error", "domain", domain, "err", err)
 					continue
 				}
 				if isNew {
 					threshDays := int(h.domainChecker.NewDomainThreshold().Hours() / 24)
 					reason := fmt.Sprintf("Domain %q was registered within the last %d days — possible phishing or supply-chain risk.", domain, threshDays)
-					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain)
+					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain, "escalation_category", "domain-age")
+					domainEscalation := classifier.ClassificationResult{
+						Decision:  classifier.Escalate,
+						RiskLevel: classifier.RiskHigh,
+						RuleID:    classifier.RuleIDNewDomainCheck,
+						RuleName:  "New Domain Check",
+						Reason:    reason,
+					}
 					if h.analyticsStore != nil {
-						h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
-							Decision:  classifier.Escalate,
-							RiskLevel: classifier.RiskHigh,
-							RuleID:    "new-domain-check",
-							RuleName:  "New Domain Check",
-							Reason:    reason,
-						}, sessionID, "", 0)
+						h.analyticsStore.RecordFromResult(payload, domainEscalation, sessionID, "", 0)
 					}
 					// Fall through to manual review queue (do NOT return here).
-					// The domain reason will appear in the pending approval context.
-					_ = reason // will be surfaced when the approval is shown in review queue
+					escalation = domainEscalation
 					goto createApproval
 				}
 			}
@@ -284,7 +293,15 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		durationMs := time.Since(start).Milliseconds()
 
 		if h.analyticsStore != nil {
-			h.analyticsStore.RecordFromResult(payload, result, sessionID, "", durationMs)
+			// Normalize RuleID the same way the default: branch below does before recording,
+			// so the analytics breakdown and the review-queue card agree on category for an
+			// unrecognized decision — result.RuleID is "" here (no rule lookup occurred), which
+			// would otherwise bucket as EscalationNoMatch instead of EscalationUnexpected.
+			recordResult := result
+			if result.Decision != classifier.AutoAllow && result.Decision != classifier.AutoDeny && result.Decision != classifier.Escalate {
+				recordResult.RuleID = classifier.RuleIDUnexpectedDecision
+			}
+			h.analyticsStore.RecordFromResult(payload, recordResult, sessionID, "", durationMs)
 		}
 
 		switch result.Decision {
@@ -308,7 +325,23 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			}
 			h.writeDecision(w, "deny", msg)
 			return
-			// Escalate: fall through to manual review queue
+		case classifier.Escalate:
+			escalation = result
+			// Fall through to manual review queue (createApproval label below).
+		default:
+			// Unrecognized classifier.ClassificationDecision (e.g. a future 4th value). Fail safe
+			// toward manual review rather than silently falling through with escalation unset —
+			// this switch's missing-case behavior is exactly the bug this feature fixes; guard
+			// against it recurring for any future decision value.
+			log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
+			// Pre-mortem P3: route through the synthetic RuleIDUnexpectedDecision sentinel so
+			// CategorizeEscalationRuleID buckets this as EscalationUnexpected, not EscalationNoMatch
+			// (result.RuleID is almost certainly "" here, since no rule lookup occurred) — an internal
+			// classifier bug must not silently render normal "no rule matched" copy or offer the
+			// Create Rule CTA as if this were a real coverage gap. Override RuleID before the
+			// assignment (not after) so escalation is never observably set without it.
+			result.RuleID = classifier.RuleIDUnexpectedDecision
+			escalation = result
 		}
 	}
 
@@ -356,14 +389,16 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	// Create a pending approval record
 	approvalID := uuid.New().String()
 	approval := &PendingApproval{
-		ID:              approvalID,
-		SessionID:       sessionID,
-		ClaudeSessionID: payload.SessionID,
-		ToolName:        payload.ToolName,
-		ToolInput:       payload.ToolInput,
-		Cwd:             payload.Cwd,
-		PermissionMode:  payload.PermissionMode,
-		CreatedAt:       time.Now(),
+		ID:                 approvalID,
+		SessionID:          sessionID,
+		ClaudeSessionID:    payload.SessionID,
+		ToolName:           payload.ToolName,
+		ToolInput:          payload.ToolInput,
+		Cwd:                payload.Cwd,
+		PermissionMode:     payload.PermissionMode,
+		CreatedAt:          time.Now(),
+		EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
+		EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
 		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
 		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}
@@ -500,6 +535,19 @@ func truncateString(s string, maxRunes int) string {
 		return s
 	}
 	return string(r[:maxRunes]) + "..."
+}
+
+// maxEscalationReasonLen bounds PendingApproval.EscalationReason. An explicit
+// rule's Reason is free text a rule author can set to any length, and
+// persistToDiskLocked re-marshals and writes ALL pending approvals to disk on
+// every single Create/Resolve while holding the write lock — an unbounded
+// string here would scale that cost with rule-author verbosity, not just
+// entry count.
+const maxEscalationReasonLen = 500
+
+// truncateEscalationReason caps s at maxEscalationReasonLen runes.
+func truncateEscalationReason(s string) string {
+	return truncateString(s, maxEscalationReasonLen)
 }
 
 // sanitizeNotificationText strips newlines and non-printable characters from

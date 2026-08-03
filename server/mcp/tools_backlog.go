@@ -12,8 +12,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -69,6 +71,29 @@ func featureDisabledResult(enabledCheck func() bool) *mcpgo.CallToolResult {
 	return nil
 }
 
+// --- Self-resolve source-status validation ---
+//
+// allowedSelfResolveSourceStatuses is the whitelist of source statuses a
+// self-resolve tool (request_review, report_duplicate) may transition an
+// item out of. Consulted only from inside validateSelfResolveSource.
+var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
+	session.BacklogStatusInProgress: true,
+	session.BacklogStatusPRPending:  true,
+}
+
+// validateSelfResolveSource is the single chokepoint both request_review and
+// report_duplicate call to obtain a validated source status. Downstream code
+// must use only its returned session.BacklogStatus for a transition's
+// ExpectedStatus — never item.Status directly — so that the CAS precondition
+// is never trivially self-satisfying for a disallowed status.
+func validateSelfResolveSource(item *session.BacklogItemData, toolName string) (session.BacklogStatus, error) {
+	s := session.BacklogStatus(item.Status)
+	if !allowedSelfResolveSourceStatuses[s] {
+		return "", fmt.Errorf("item is at status %q — %s only allowed from in_progress or pr_pending", item.Status, toolName)
+	}
+	return s, nil
+}
+
 // ReviewCompletionSignaler allows the MCP handler to stop an AutonomousDriver
 // after submit_review_verdict completes. The stop call is belt-and-suspenders;
 // the LLM orchestrator will also detect completion from the terminal tail.
@@ -107,6 +132,28 @@ type backlogHandlers struct {
 	// session.Storage has no public seam for constructing worktree data
 	// without spawning and starting a real Instance (real git/tmux calls).
 	resolveSessionBranch func(ctx context.Context, sessionUUID string) (string, error)
+	// listItemSessionsFn backs request_review's FR2 active-reviewer guard.
+	// Defaults to h.storage.ListItemSessions when nil; overridable in tests to
+	// force a storage error — session.Storage.ListItemSessions type-asserts
+	// its repository to the concrete *EntRepository (session/storage.go),
+	// so it has no swappable-Repository test seam of its own. This field
+	// mirrors verifyPRMatchesBranch/resolveSessionBranch's existing shape.
+	listItemSessionsFn func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+
+	// verifyGitHubRef backs report_duplicate's GitHub existence check for
+	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
+	// when nil; overridable in tests to avoid making real GitHub API calls —
+	// mirrors verifyPRMatchesBranch's existing shape so both GitHub-
+	// verification paths in this file are mocked the same way.
+	verifyGitHubRef func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error
+
+	// getBacklogItemFn backs request_review's fresh pre-transition read of the
+	// item (the read that feeds validateSelfResolveSource before the CAS
+	// write). Defaults to h.storage.GetBacklogItem when nil; overridable in
+	// tests to deterministically control the read/write interleaving between
+	// two concurrent request_review calls — mirrors listItemSessionsFn's
+	// existing shape.
+	getBacklogItemFn func(ctx context.Context, itemID string) (*session.BacklogItemData, error)
 }
 
 // --- get_backlog_item ---
@@ -401,27 +448,62 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// TriggerReviewForSession also honors the flag and no-ops — no review gate
 	// would ever spawn, leaving the item stuck in review indefinitely with
 	// nothing left to move it forward.
-	item, itemErr := h.storage.GetBacklogItem(ctx, itemID)
+	item, itemErr := h.getBacklogItemFor(ctx, itemID)
 	if itemErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
 	}
+
+	// Reject calls from a disallowed source status before constructing any
+	// precondition, so the CAS check is never trivially self-satisfying (FR1,
+	// FR9 — see validateSelfResolveSource).
+	validStatus, valErr := validateSelfResolveSource(item, "request_review")
+	if valErr != nil {
+		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
+	}
+
+	// FR2: refuse re-routing a pr_pending item out from under a running
+	// reviewer. Scoped to the pr_pending source path only — the in_progress
+	// path's existing behavior (including the pre-existing "zombie reviewer"
+	// edge case) is unchanged. Fail closed on a ListItemSessions error: never
+	// silently fall through as if no reviewer were active.
+	if validStatus == session.BacklogStatusPRPending {
+		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+		if lsErr != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("could not verify active-reviewer state for this item — retry: %v", lsErr), ""), nil
+		}
+		if services.HasActiveReviewSession(itemSessions) {
+			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
+		}
+	}
+
 	targetStatus := session.BacklogStatusReview
 	if item.SkipReviewGate {
 		targetStatus = session.BacklogStatusDone
 	}
 
-	// Transition item from in_progress to the target status.
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredBySystem); transErr != nil {
+	// Transition item from its validated source status to the target status.
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, targetStatus, precondition, session.TriggeredByAgent); transErr != nil {
 		log.InfoLog.Printf("[mcp:request_review] transition to %s failed: %v", targetStatus, transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
+		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
 	}
 
 	// Persist verification evidence on the work ItemSession so the review gate can
-	// surface it in the reviewer's prompt (see BuildReviewPrompt). Best-effort: a
-	// failure here should not block the status transition that already succeeded.
+	// surface it in the reviewer's prompt (see BuildReviewPrompt). Append, don't
+	// overwrite, any notes already on this ItemSession (e.g. left by an earlier
+	// report_duplicate call before a rework cycle) — UpdateItemSessionVerificationNotes
+	// is a plain overwrite, not an append; mirrors reportDuplicate's identical
+	// append-not-overwrite fix. Best-effort: a failure here should not block the
+	// status transition that already succeeded.
 	if verificationNotes != "" {
-		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, verificationNotes); updateErr != nil {
+		notes := verificationNotes
+		if itemSession.VerificationNotes != "" {
+			notes = itemSession.VerificationNotes + "\n\n---\n\n" + verificationNotes
+		}
+		if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, notes); updateErr != nil {
 			log.WarningLog.Printf("[mcp:request_review] failed to persist verification_notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
 		}
 	}
@@ -444,6 +526,28 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"Review requested for item %s. The item has been moved to review status.", itemID,
 	)), nil
+}
+
+// itemSessionsFor lists ItemSessions for itemID via the overridable
+// listItemSessionsFn seam when set, otherwise the real
+// h.storage.ListItemSessions. Used by request_review's FR2 active-reviewer
+// guard.
+func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error) {
+	if h.listItemSessionsFn != nil {
+		return h.listItemSessionsFn(ctx, itemID)
+	}
+	return h.storage.ListItemSessions(ctx, itemID)
+}
+
+// getBacklogItemFor loads a backlog item via the overridable getBacklogItemFn
+// seam when set, otherwise the real h.storage.GetBacklogItem. Used by
+// request_review's pre-transition read. Mirrors itemSessionsFor/sessionBranch/
+// verifyRef's existing nil-check-then-fallback shape.
+func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*session.BacklogItemData, error) {
+	if h.getBacklogItemFn != nil {
+		return h.getBacklogItemFn(ctx, itemID)
+	}
+	return h.storage.GetBacklogItem(ctx, itemID)
 }
 
 // --- submit_review_verdict ---
@@ -722,6 +826,227 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 
 	return mcpgo.NewToolResultText(fmt.Sprintf(
 		"PR #%d recorded for item %s. Item transitioned to pr_pending.", prNumber, itemID,
+	)), nil
+}
+
+// --- report_duplicate ---
+
+// verifyRef runs the GitHub existence check via the overridable
+// verifyGitHubRef seam when set, otherwise the real verifyGitHubRefExists.
+// Mirrors verifyPR/sessionBranch's nil-check-then-fallback shape.
+func (h *backlogHandlers) verifyRef(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
+	if h.verifyGitHubRef != nil {
+		return h.verifyGitHubRef(ctx, ref)
+	}
+	return h.verifyGitHubRefExists(ctx, ref)
+}
+
+// verifyGitHubRefExists dispatches to GetPR/GetIssue/GetCommit by ref.Type
+// and returns a single error whose classification is errors.Is-checkable —
+// githubpkg.ErrGitHubRefNotFound / ErrGitHubAccessDenied / ErrNotAuthenticated,
+// or a plain transient error for anything else. This is a single-error-return
+// contract, genuinely different in shape from verifyPR's (bool, error) — see
+// ADR-002.
+func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error {
+	switch ref.Type {
+	case githubpkg.RefTypePR:
+		_, err := githubpkg.GetPR(ctx, ref.Owner, ref.Repo, ref.PRNumber)
+		return err
+	case githubpkg.RefTypeIssue:
+		_, err := githubpkg.GetIssue(ctx, ref.Owner, ref.Repo, ref.IssueNumber)
+		return err
+	case githubpkg.RefTypeCommit:
+		_, err := githubpkg.GetCommit(ctx, ref.Owner, ref.Repo, ref.CommitSHA)
+		return err
+	default:
+		return fmt.Errorf("unsupported ref type %s", ref.Type)
+	}
+}
+
+// reportDuplicate lets a work session self-resolve a backlog item it
+// discovers is a duplicate of an already-shipped PR/issue/commit, routing the
+// item to review (never done/archived directly, ADR-001) instead of
+// continuing the (now redundant) work. Role: work only. See ADR-002
+// (GitHub verification), ADR-004 (idempotency: reject, don't merge, a
+// differing second ref), ADR-005 (no FR2-style active-reviewer refusal — only
+// the success-message wording changes).
+func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	callerUUID, err := callerSessionUUID(ctx)
+	if err != nil {
+		return errResult(ErrPermissionDenied, err.Error(), "Set STAPLER_SESSION_UUID in your environment."), nil
+	}
+
+	args := req.GetArguments()
+
+	itemID, ok := args["item_id"].(string)
+	if !ok || itemID == "" {
+		return errResult(ErrInvalidArgument, "item_id is required", ""), nil
+	}
+	if err := validateUUID(itemID); err != nil {
+		return errResult(ErrInvalidArgument, err.Error(), ""), nil
+	}
+
+	duplicateRef, ok := args["duplicate_ref"].(string)
+	if !ok || duplicateRef == "" {
+		return errResult(ErrInvalidArgument, "duplicate_ref is required", ""), nil
+	}
+	if len(duplicateRef) > 500 {
+		return errResult(ErrInvalidArgument, "duplicate_ref must be <= 500 characters", ""), nil
+	}
+
+	reason, ok := args["reason"].(string)
+	if !ok || reason == "" {
+		return errResult(ErrInvalidArgument, "reason is required", ""), nil
+	}
+	if len(reason) > 1000 {
+		return errResult(ErrInvalidArgument, "reason must be <= 1000 characters", ""), nil
+	}
+
+	// Verify session is linked to item with role=work.
+	itemSession, linkErr := h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
+	if linkErr != nil {
+		if errors.Is(linkErr, session.ErrNotFound) {
+			return errResult(ErrPermissionDenied, "this session is not linked to the specified backlog item", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("link check failed: %v", linkErr), ""), nil
+	}
+	if itemSession.Role != session.SessionRoleWork {
+		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a duplicate", itemSession.Role), ""), nil
+	}
+
+	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	if getErr != nil {
+		if errors.Is(getErr, session.ErrNotFound) {
+			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
+	}
+
+	// report_duplicate is unavailable for SkipReviewGate items — the opposite
+	// of request_review's pattern (which routes them straight to done): a
+	// duplicate claim must always land in front of a human/reviewer, so it
+	// cannot use the SkipReviewGate short-circuit at all.
+	if item.SkipReviewGate {
+		return errResult(ErrInvalidArgument, "report_duplicate is unavailable for items with SkipReviewGate enabled — use request_review instead.", ""), nil
+	}
+
+	// Idempotency (ADR-004): an exact retry of an already-succeeded call is a
+	// no-op success. Match on an exact, delimited line — not strings.Contains
+	// — so a shorter ref that happens to be a literal prefix of a longer,
+	// different ref sharing the same URL (e.g. .../pull/27 vs .../pull/272)
+	// is never misclassified as the same duplicate report.
+	notesMarker := "duplicate_ref=" + duplicateRef
+	if item.Status == string(session.BacklogStatusReview) {
+		for _, line := range strings.Split(itemSession.VerificationNotes, "\n") {
+			if strings.HasPrefix(line, notesMarker+" ") {
+				return mcpgo.NewToolResultText(fmt.Sprintf(
+					"duplicate report for %s already recorded for item %s (status already review) — no changes made.", duplicateRef, itemID,
+				)), nil
+			}
+		}
+	}
+
+	// Reject calls from a disallowed source status before any GitHub call or
+	// mutation — the same chokepoint request_review uses (see
+	// validateSelfResolveSource). This is also what makes ADR-004's "reject a
+	// differing second ref" behavior fall out for free: once the item has
+	// left the whitelist (e.g. already routed to review by a first
+	// successful call), any further report_duplicate call — matching or not
+	// — hits this branch unless it matched the idempotency check above.
+	validStatus, valErr := validateSelfResolveSource(item, "report_duplicate")
+	if valErr != nil {
+		return errResult(ErrInvalidArgument, valErr.Error(), ""), nil
+	}
+
+	// Parse + type-validate duplicate_ref before any network call (mirrors
+	// report_pr_created's pre-network sanity check).
+	ref, parseErr := githubpkg.ParseGitHubRef(duplicateRef)
+	if parseErr != nil {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref is not a recognizable GitHub PR/issue/commit URL: %v", parseErr), ""), nil
+	}
+	if ref.Type != githubpkg.RefTypePR && ref.Type != githubpkg.RefTypeIssue && ref.Type != githubpkg.RefTypeCommit {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref must be a GitHub PR, issue, or commit URL — got a %s reference", ref.Type), ""), nil
+	}
+
+	// Verify duplicate_ref actually exists on GitHub before any mutation
+	// (FR3). Three-channel split (FR4): no-credentials (non-retryable,
+	// distinct from a generic transient failure — see ADR-002's Negative
+	// consequences and pre-mortem F1), definitively-not-found/access-denied
+	// (non-retryable), or a plain transient error (retryable).
+	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
+		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
+			return errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), ""), nil
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), ""), nil
+		}
+		if errors.Is(verifyErr, githubpkg.ErrGitHubAccessDenied) {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("GitHub denied access verifying %s — this session's GitHub credentials may not have access to that repo; retrying will not help unless credentials change.", duplicateRef), ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("could not verify %s against GitHub — retry: %v", duplicateRef, verifyErr), ""), nil
+	}
+
+	// Transition item from its validated source status to review, with a
+	// human-legible Note (FR3, FR7) — never done/archived directly (ADR-001).
+	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("duplicate of %s: %s", duplicateRef, reason)}
+	if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReview, precondition, session.TriggeredByAgent); transErr != nil {
+		log.InfoLog.Printf("[mcp:report_duplicate] transition to review failed: %v", transErr)
+		if errors.Is(transErr, session.ErrPreconditionFailed) {
+			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil
+		}
+		return errResult(ErrInternalError, fmt.Sprintf("transition to review failed: %v", transErr), ""), nil
+	}
+
+	// Persist duplicate_ref/reason into VerificationNotes so the review gate
+	// surfaces it in the reviewer's prompt (FR7). Append, don't overwrite,
+	// any notes already on this ItemSession (e.g. left by an earlier
+	// request_review call before a rework cycle) — UpdateItemSessionVerificationNotes
+	// is a plain overwrite, not an append. Best-effort: a failure here must
+	// not fail the transition that already succeeded.
+	newEntry := fmt.Sprintf("duplicate_ref=%s reason=%s", duplicateRef, reason)
+	notes := newEntry
+	if itemSession.VerificationNotes != "" {
+		notes = itemSession.VerificationNotes + "\n\n---\n\n" + newEntry
+	}
+	if updateErr := h.storage.UpdateItemSessionVerificationNotes(ctx, itemSession.ID, notes); updateErr != nil {
+		log.WarningLog.Printf("[mcp:report_duplicate] failed to persist verification notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
+	}
+
+	// FR5: both the success-message wording and whether to trigger the review
+	// gate depend on whether a review-role session is already active. Fail
+	// conservative on a ListItemSessions error — never claim "Reviewer
+	// notified" without evidence, and treat an unknown state the same as "a
+	// reviewer might be active" so the trigger call below is also skipped.
+	itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
+	activeReview := lsErr != nil || services.HasActiveReviewSession(itemSessions)
+
+	// Trigger the review gate immediately only when no reviewer is already
+	// active. TriggerReviewForSession (-> spawnReviewGate -> ReviewGateRunner.Run)
+	// has no dedup check against an existing active review-role ItemSession —
+	// confirmed by reading the full function body, including every
+	// CreateItemSession/CreateItemSessionWithVerdict call site in it — so
+	// calling it unconditionally here (unlike request_review, which is
+	// refused outright before reaching its own trigger call whenever a
+	// reviewer is active on the pr_pending path, per FR2) would spawn a
+	// genuine second, concurrent review session for the same item.
+	if h.reviewTrigger != nil && !activeReview {
+		h.reviewTrigger.TriggerReviewForSession(callerUUID)
+	}
+
+	log.InfoLog.Printf("[mcp:report_duplicate] session=%s item=%s duplicate_ref=%s transitioned to review activeReviewSkipped=%v", callerUUID, itemID, duplicateRef, activeReview)
+
+	if activeReview {
+		return mcpgo.NewToolResultText(fmt.Sprintf(
+			"Item %s routed to review as a duplicate of %s. This will be picked up on the next review pass (a review session is already running and won't see this update live).",
+			itemID, duplicateRef,
+		)), nil
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Item %s routed to review as a duplicate of %s. Reviewer notified.",
+		itemID, duplicateRef,
 	)), nil
 }
 
@@ -1049,6 +1374,32 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 			),
 		),
 		h.reportPRCreated,
+	)
+
+	s.AddTool(
+		mcpgo.NewTool("report_duplicate",
+			mcpgo.WithDescription("Report that this item's work is a duplicate of an already-existing PR/issue/commit, routing the item to review instead of continuing it. "+
+				"Role: work only. "+
+				"Refuses if the item has SkipReviewGate enabled (use request_review instead), if the item isn't at in_progress or pr_pending, or if duplicate_ref cannot be verified to exist on GitHub — verification happens BEFORE any state change. "+
+				"On success, transitions the item to 'review' status (never done/archived directly) so a human/reviewer confirms the duplicate before closing it out. "+
+				"Calling this again with the same duplicate_ref after it already succeeded is safe (no-op). "+
+				"If verifying duplicate_ref against GitHub fails with INTERNAL_ERROR, this is transient — retry the call with the same arguments. "+
+				"If the result says this session has no configured GitHub credentials, that is not transient — do not retry. Leave the item as-is and note the missing-credentials issue in your summary so an operator can configure GitHub access for this session. "+
+				"This only confirms duplicate_ref exists on GitHub — it does not verify relevance to this item's work; that judgment is yours."),
+			mcpgo.WithString("item_id",
+				mcpgo.Description("UUID of the backlog item"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("duplicate_ref",
+				mcpgo.Description("GitHub PR/issue/commit URL naming what this item's work duplicates, e.g. https://github.com/owner/repo/pull/123 (max 500 chars). Cross-repo refs are allowed."),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("reason",
+				mcpgo.Description("Why duplicate_ref supersedes this item's work (max 1000 chars)"),
+				mcpgo.Required(),
+			),
+		),
+		h.reportDuplicate,
 	)
 
 	s.AddTool(

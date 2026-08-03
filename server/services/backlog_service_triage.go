@@ -1286,6 +1286,15 @@ func findActiveReviewSession(priorSessions []session.ItemSessionSummary) *sessio
 	return nil
 }
 
+// HasActiveReviewSession reports whether any of the provided ItemSessions is an
+// open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
+// AutoRespawnReview to avoid double-spawning a review pass that is already running,
+// and by server/mcp's request_review handler to refuse re-routing a pr_pending item
+// out from under a running reviewer (FR2).
+func HasActiveReviewSession(priorSessions []session.ItemSessionSummary) bool {
+	return findActiveReviewSession(priorSessions) != nil
+}
+
 // buildRevisionTitle returns the session title for a backlog work session. On reopen
 // (isReopen=true) it appends "-rN" where N is one past the existing work-session count.
 func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []session.ItemSessionSummary) string {
