@@ -191,3 +191,54 @@ export const errorMessage = style({
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   fontSize: vars.fontSize.sm,
 });
+
+// Row-level persistent warning for a non-transient (auth) sync failure
+// (Story 4.3.2) — same visual weight as errorMessage above, the existing
+// top-level lastError banner, scoped inline to the row instead of a block.
+export const authWarning = style({
+  display: "inline-flex",
+  alignItems: "center",
+  color: vars.color.errorText,
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: vars.radii.sm,
+  padding: `1px ${vars.space["2"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+});
+
+export const syncDirectionGroup = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space["2"],
+  padding: vars.space["2"],
+  background: vars.color.surfaceMuted,
+  borderRadius: vars.radii.sm,
+});
+
+export const subHeading = style({
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.semibold,
+  color: vars.color.textMuted,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+});
+
+export const syncDirectionRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  fontSize: vars.fontSize.sm,
+  color: vars.color.textPrimary,
+});
+
+// Both-directions loop-risk warning (Task 4.3.1c) — reuses the shared
+// warning color tokens rather than inventing a new one (per plan.md).
+export const bothDirectionsWarning = style({
+  color: vars.color.warningText,
+  background: vars.color.warningBg,
+  border: `1px solid ${vars.color.warning}`,
+  borderRadius: vars.radii.sm,
+  padding: `${vars.space["2"]} ${vars.space["3"]}`,
+  fontSize: vars.fontSize.xs,
+});

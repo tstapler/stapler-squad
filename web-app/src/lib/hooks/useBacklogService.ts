@@ -128,6 +128,12 @@ export interface BacklogItem {
   prUrl?: string;
   /** GitHub PR number when item is in pr_pending status */
   prNumber?: number;
+  /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
+  externalId?: string;
+  /** Deep link to the source tracker's issue for this item (e.g. a GitHub issue's html_url), populated for imported items only. */
+  externalUrl?: string;
+  /** Labels mirrored from the source tracker (e.g. GitHub issue labels), populated for imported items only. */
+  labels?: string[];
   /** Pipeline mode slug driving this item's triage/work/review, or "" for the built-in default. */
   pipelineMode?: string;
   /**
@@ -453,6 +459,9 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    externalId: p.externalId || undefined,
+    externalUrl: p.externalUrl || undefined,
+    labels: p.labels ?? [],
   };
 }
 

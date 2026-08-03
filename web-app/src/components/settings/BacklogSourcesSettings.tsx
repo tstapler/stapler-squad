@@ -17,15 +17,38 @@ function formatDate(iso?: string): string {
  * Settings panel for configuring backlog item sources (e.g. GitHub repos to
  * sync issues/PRs from): add a source, enable/disable, sync now, view history.
  */
+// Non-transient sync failures (auth revoked/expired) warrant a persistent,
+// row-level warning that doesn't require expanding history to notice
+// (Story 4.3.2) — a rate limit or a one-off network blip does not.
+function isAuthFailure(errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  return lower.includes("401") || lower.includes("403") || lower.includes("revoked");
+}
+
 export function BacklogSourcesSettings() {
-  const { listItemSources, createItemSource, setItemSourceEnabled, deleteItemSource, triggerSync, getSyncHistory, lastError, clearError } =
-    useBacklogSourcesService();
+  const {
+    listItemSources,
+    createItemSource,
+    setItemSourceEnabled,
+    setForwardSyncEnabled,
+    setBackwardSyncEnabled,
+    setForwardSyncCloseLabel,
+    deleteItemSource,
+    triggerSync,
+    getSyncHistory,
+    lastError,
+    clearError,
+  } = useBacklogSourcesService();
 
   const [sources, setSources] = useState<ItemSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [historyBySource, setHistoryBySource] = useState<Record<string, SyncHistoryResult>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Local in-progress edits to the close-label input, keyed by source id —
+  // committed to the backend on blur rather than per keystroke.
+  const [closeLabelDrafts, setCloseLabelDrafts] = useState<Record<string, string>>({});
 
   const [pluginId, setPluginId] = useState(PLUGIN_SCHEMAS[0].id);
   const [displayName, setDisplayName] = useState("");
@@ -49,7 +72,19 @@ export function BacklogSourcesSettings() {
     const list = await listItemSources();
     setSources(list);
     setLoading(false);
-  }, [listItemSources]);
+
+    // Eagerly load each source's sync history so the row-level
+    // non-transient-failure warning (Story 4.3.2) can render without the
+    // user needing to expand history first.
+    const histories = await Promise.all(list.map((s) => getSyncHistory(s.id)));
+    setHistoryBySource((prev) => {
+      const next = { ...prev };
+      list.forEach((s, i) => {
+        next[s.id] = histories[i];
+      });
+      return next;
+    });
+  }, [listItemSources, getSyncHistory]);
 
   useEffect(() => {
     refresh();
@@ -85,7 +120,26 @@ export function BacklogSourcesSettings() {
   };
 
   const handleToggleEnabled = async (source: ItemSource) => {
-    const updated = await setItemSourceEnabled(source.id, source.displayName, !source.enabled);
+    const updated = await setItemSourceEnabled(source, !source.enabled);
+    if (updated) await refresh();
+  };
+
+  const handleToggleForwardSync = async (source: ItemSource) => {
+    const updated = await setForwardSyncEnabled(source, !source.forwardSyncEnabled);
+    if (updated) await refresh();
+  };
+
+  // Turning backward sync OFF is unaffected — only turning it ON goes
+  // through a confirmation-with-preview step (Epic 4.4, implemented later —
+  // deliberately not wired here yet since it depends on Epic 2.1's
+  // determineBackwardSyncTarget, in flight concurrently elsewhere).
+  const handleToggleBackwardSync = async (source: ItemSource) => {
+    const updated = await setBackwardSyncEnabled(source, !source.backwardSyncEnabled);
+    if (updated) await refresh();
+  };
+
+  const handleCloseLabelChange = async (source: ItemSource, closeLabel: string) => {
+    const updated = await setForwardSyncCloseLabel(source, closeLabel);
     if (updated) await refresh();
   };
 
@@ -135,10 +189,22 @@ export function BacklogSourcesSettings() {
           ) : sources.length === 0 ? (
             <span className={styles.empty}>No sources configured.</span>
           ) : (
-            sources.map((source) => (
+            sources.map((source) => {
+              const mostRecentSyncError = historyBySource[source.id]?.events?.[0]?.errorMessage;
+              const closeLabelValue = closeLabelDrafts[source.id] ?? source.forwardSyncCloseLabel;
+              return (
               <div key={source.id} className={styles.listItem} data-testid={`source-row-${source.id}`}>
                 <div className={styles.listItemHeader}>
                   <span className={styles.listItemName}>{source.displayName}</span>
+                  {isAuthFailure(mostRecentSyncError) && (
+                    <span
+                      className={styles.authWarning}
+                      data-testid={`source-row-${source.id}-auth-warning`}
+                      role="alert"
+                    >
+                      ⚠ Sync failing — check credentials
+                    </span>
+                  )}
                   <span className={styles.listItemMeta}>{source.pluginId}</span>
                   <button
                     role="switch"
@@ -156,6 +222,51 @@ export function BacklogSourcesSettings() {
                   </button>
                 </div>
                 <span className={styles.listItemMeta}>Last synced: {formatDate(source.lastSyncedAt)}</span>
+
+                <div className={styles.syncDirectionGroup}>
+                  <span className={styles.subHeading}>Sync with GitHub</span>
+                  <div className={styles.syncDirectionRow}>
+                    <button
+                      role="switch"
+                      aria-checked={source.forwardSyncEnabled}
+                      className={`${styles.toggle} ${source.forwardSyncEnabled ? styles.toggleOn : ""}`}
+                      onClick={() => handleToggleForwardSync(source)}
+                      aria-label={`${source.forwardSyncEnabled ? "Disable" : "Enable"} closing GitHub issues when done`}
+                    />
+                    <span>Close GitHub issues when I finish here</span>
+                  </div>
+                  {source.forwardSyncEnabled && (
+                    <input
+                      type="text"
+                      className={styles.input}
+                      placeholder="Label to apply on close (optional)"
+                      aria-label={`Close label for ${source.displayName}`}
+                      value={closeLabelValue}
+                      onChange={(e) =>
+                        setCloseLabelDrafts((prev) => ({ ...prev, [source.id]: e.target.value }))
+                      }
+                      onBlur={() => handleCloseLabelChange(source, closeLabelValue)}
+                    />
+                  )}
+                  <div className={styles.syncDirectionRow}>
+                    <button
+                      role="switch"
+                      aria-checked={source.backwardSyncEnabled}
+                      className={`${styles.toggle} ${source.backwardSyncEnabled ? styles.toggleOn : ""}`}
+                      onClick={() => handleToggleBackwardSync(source)}
+                      aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`}
+                    />
+                    <span>Reflect GitHub status back here</span>
+                  </div>
+                  {source.forwardSyncEnabled && source.backwardSyncEnabled && (
+                    <div className={styles.bothDirectionsWarning}>
+                      Both directions are enabled — closing this item&apos;s issue may be observed and
+                      re-applied by backward sync. Verify this doesn&apos;t create a loop for items you also
+                      edit manually.
+                    </div>
+                  )}
+                </div>
+
                 <div className={styles.actionRow}>
                   <button
                     className={styles.smallBtn}
@@ -194,7 +305,8 @@ export function BacklogSourcesSettings() {
                   </div>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </section>

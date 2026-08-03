@@ -39,6 +39,7 @@ import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
 import { PullRequestSection } from "./detail/PullRequestSection";
+import { SourceSection } from "./detail/SourceSection";
 import { DescriptionSection } from "./detail/DescriptionSection";
 import { ActionsSection } from "./detail/ActionsSection";
 import { PlanArtifactsSection } from "./detail/PlanArtifactsSection";
@@ -321,6 +322,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
+  const [sourceExpanded, setSourceExpanded] = useSectionExpandState(itemId, "source", false);
 
   // Story 3.1.5: applies each status-dependent section's real default
   // exactly once, the first time `item` becomes available after this
@@ -378,6 +380,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
     ["notes", notesExpanded, setNotesExpanded],
+    ["source", sourceExpanded, setSourceExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
   const handleGroupValueChange = (next: string[]) => {
@@ -1209,6 +1212,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               actionLoading={actionLoading}
               onMarkDone={() => handleAction("mark_done")}
               readOnly={terminalState !== null}
+            />
+          )}
+
+          {item.externalUrl && (
+            <SourceSection
+              externalUrl={item.externalUrl}
+              externalId={item.externalId}
+              labels={item.labels ?? []}
+              defaultExpanded={sourceExpanded}
             />
           )}
 

@@ -8,7 +8,7 @@
  */
 
 import React from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { StuckReason, type StuckBacklogItem } from "@/gen/session/v1/backlog_pb";
 import { BacklogItemCard } from "./BacklogItemCard";
@@ -223,6 +223,44 @@ describe("BacklogItemCard — compact BlockerChip (Story 5.1.1)", () => {
     expect(screen.queryByTestId("blocker-chip")).not.toBeInTheDocument();
     // Footer still shows the action button as before.
     expect(screen.getByTestId("backlog-action-mark_ready")).toBeInTheDocument();
+  });
+});
+
+describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-two-way-sync)", () => {
+  it("BacklogItemCard_should_RenderProvenanceBadge_When_ExternalUrlPresent", () => {
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    const badge = screen.getByRole("link", { name: "Imported from GitHub issue #42" });
+    expect(badge).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
+    expect(badge).toHaveAttribute("target", "_blank");
+    expect(badge).toHaveTextContent("#42");
+  });
+
+  it("BacklogItemCard_should_OmitProvenanceBadge_When_ExternalUrlEmpty", () => {
+    render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+
+    expect(screen.queryByRole("link", { name: /Imported from GitHub issue/ })).not.toBeInTheDocument();
+  });
+
+  it("BacklogItemCard_should_NotTriggerOnClick_When_ProvenanceBadgeClicked", () => {
+    const onClick = jest.fn();
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: "42" })}
+        onAction={jest.fn()}
+        onClick={onClick}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Imported from GitHub issue #42" }));
+
+    expect(onClick).not.toHaveBeenCalled();
   });
 });
 

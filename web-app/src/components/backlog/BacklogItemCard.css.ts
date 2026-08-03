@@ -110,6 +110,30 @@ export const statusLabel = style({
   letterSpacing: "0.05em",
 });
 
+// Provenance badge (Epic 4.1, backlog-github-two-way-sync): "imported from
+// GitHub" indicator + link. Neutral surface/text/border tokens, not a
+// GitHub-brand color — ux.md flags brand colors here as unaudited for
+// contrast in both themes.
+export const provenanceBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  borderRadius: vars.radii.sm,
+  padding: `0 ${vars.space["1"]}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  height: "20px",
+  background: vars.color.surfaceMuted,
+  color: vars.color.textMuted,
+  border: `1px solid ${vars.color.borderMuted}`,
+  textDecoration: "none",
+  flexShrink: 0,
+  ":hover": {
+    color: vars.color.textSecondary,
+    borderColor: vars.color.borderHover,
+  },
+});
+
 export const cardFooter = style({
   display: "flex",
   alignItems: "center",

@@ -26,4 +26,22 @@ export class BacklogSourcesSettingsPage {
   row(displayName: string): Locator {
     return this.page.locator('[data-testid^="source-row-"]').filter({ hasText: displayName });
   }
+
+  /**
+   * Clicks the "Close GitHub issues when I finish here" (forward sync)
+   * toggle within a specific source's row (Epic 4.3, backlog-github-two-way-sync).
+   */
+  async enableForwardSync(displayName: string) {
+    await this.row(displayName).getByRole("switch", { name: /closing GitHub issues/ }).click();
+  }
+
+  /**
+   * Clicks the "Reflect GitHub status back here" (backward sync) toggle
+   * within a specific source's row (Epic 4.3, backlog-github-two-way-sync).
+   * Note: as of this wave, enabling backward sync flips the toggle
+   * immediately — the confirm-with-preview gate (Epic 4.4) is a later wave.
+   */
+  async enableBackwardSync(displayName: string) {
+    await this.row(displayName).getByRole("switch", { name: /reflecting GitHub status back/ }).click();
+  }
 }

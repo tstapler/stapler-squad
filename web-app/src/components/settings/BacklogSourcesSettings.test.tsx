@@ -40,6 +40,9 @@ const sampleSource = {
   enabled: true,
   tokenConfigured: true,
   lastSyncedAt: undefined,
+  forwardSyncEnabled: false,
+  backwardSyncEnabled: false,
+  forwardSyncCloseLabel: "",
 };
 
 beforeEach(() => {
@@ -191,6 +194,9 @@ describe("BacklogSourcesSettings", () => {
         displayName: "Acme Issues",
         enabled: false,
         token: "",
+        forwardSyncEnabled: false,
+        backwardSyncEnabled: false,
+        forwardSyncCloseLabel: "",
       });
     });
   });
@@ -251,5 +257,163 @@ describe("BacklogSourcesSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "View history" }));
 
     expect(await screen.findByText(/Older sync history exists but is not shown/)).toBeInTheDocument();
+  });
+});
+
+describe("BacklogSourcesSettings — Epic 4.3 (backlog-github-two-way-sync): sync-direction toggles", () => {
+  it("BacklogSourcesSettings_should_RenderTogglesWithFetchedState_When_SourceLoaded", async () => {
+    mockListItemSources.mockResolvedValue({
+      sources: [{ ...sampleSource, forwardSyncEnabled: true, backwardSyncEnabled: false }],
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.getByRole("switch", { name: /closing GitHub issues/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: /reflecting GitHub status back/ })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+  });
+
+  it("BacklogSourcesSettings_should_CallSetForwardSyncEnabled_When_ForwardToggleClicked", async () => {
+    mockUpdateItemSource.mockResolvedValue({ source: { ...sampleSource, forwardSyncEnabled: true } });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /closing GitHub issues/ }));
+
+    await waitFor(() => {
+      expect(mockUpdateItemSource).toHaveBeenCalledWith({
+        sourceId: "src-1",
+        displayName: "Acme Issues",
+        enabled: true,
+        token: "",
+        forwardSyncEnabled: true,
+        backwardSyncEnabled: false,
+        forwardSyncCloseLabel: "",
+      });
+    });
+  });
+
+  it("calls setBackwardSyncEnabled directly when disabling an already-enabled backward toggle", async () => {
+    mockListItemSources.mockResolvedValue({
+      sources: [{ ...sampleSource, backwardSyncEnabled: true }],
+    });
+    mockUpdateItemSource.mockResolvedValue({ source: { ...sampleSource, backwardSyncEnabled: false } });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /reflecting GitHub status back/ }));
+
+    await waitFor(() => {
+      expect(mockUpdateItemSource).toHaveBeenCalledWith({
+        sourceId: "src-1",
+        displayName: "Acme Issues",
+        enabled: true,
+        token: "",
+        forwardSyncEnabled: false,
+        backwardSyncEnabled: false,
+        forwardSyncCloseLabel: "",
+      });
+    });
+  });
+
+  it("shows the close-label input only while forward sync is enabled", async () => {
+    mockListItemSources.mockResolvedValue({
+      sources: [{ ...sampleSource, forwardSyncEnabled: true }],
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.getByPlaceholderText("Label to apply on close (optional)")).toBeInTheDocument();
+  });
+
+  it("BacklogSourcesSettings_should_ShowBothDirectionsWarning_When_BothTogglesEnabled", async () => {
+    mockListItemSources.mockResolvedValue({
+      sources: [{ ...sampleSource, forwardSyncEnabled: true, backwardSyncEnabled: true }],
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.getByText(/Both directions are enabled/)).toBeInTheDocument();
+  });
+
+  it("does not show the both-directions warning when only one direction is enabled", async () => {
+    mockListItemSources.mockResolvedValue({
+      sources: [{ ...sampleSource, forwardSyncEnabled: true, backwardSyncEnabled: false }],
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.queryByText(/Both directions are enabled/)).not.toBeInTheDocument();
+  });
+});
+
+describe("BacklogSourcesSettings — Story 4.3.2: row-level non-transient-failure warning", () => {
+  it("BacklogSourcesSettings_should_ShowRowLevelWarning_When_RecentSyncHasAuthError", async () => {
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-1",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 0,
+          itemsUpdated: 0,
+          itemsSkipped: 0,
+          itemsErrored: 1,
+          errorMessage: "fetch failed: 401 Unauthorized — token revoked",
+        },
+      ],
+      truncated: false,
+    });
+    render(<BacklogSourcesSettings />);
+
+    expect(await screen.findByTestId("source-row-src-1-auth-warning")).toBeInTheDocument();
+  });
+
+  it("BacklogSourcesSettings_should_ShowWarningForForwardSyncFailure_When_MostRecentEventIsACloseFailure", async () => {
+    // Regression test for pre-mortem P1 #3: the warning must render for a
+    // forward-sync CloseIssue failure (persisted via RecordSourceSyncFailure),
+    // not only a Fetch failure — same read path (historyBySource), any origin.
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-2",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 0,
+          itemsUpdated: 0,
+          itemsSkipped: 0,
+          itemsErrored: 1,
+          errorMessage: "close issue failed: 403 Forbidden",
+        },
+      ],
+      truncated: false,
+    });
+    render(<BacklogSourcesSettings />);
+
+    expect(await screen.findByTestId("source-row-src-1-auth-warning")).toBeInTheDocument();
+  });
+
+  it("does not show the row-level warning for a transient (non-auth) failure", async () => {
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-3",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 0,
+          itemsUpdated: 0,
+          itemsSkipped: 0,
+          itemsErrored: 1,
+          errorMessage: "rate limited, try again later",
+        },
+      ],
+      truncated: false,
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.queryByTestId("source-row-src-1-auth-warning")).not.toBeInTheDocument();
   });
 });
