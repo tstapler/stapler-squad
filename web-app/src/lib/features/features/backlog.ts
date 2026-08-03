@@ -251,6 +251,7 @@ export const backlogFeatures = {
       'pre-populates query with backlog item title on mount',
       'shows reassuring copy when zero matches found',
       'e2e:triage-related-work - Find related past work surfaces prior sessions',
+      'e2e:triage-related-work - Activating a result card opens the session in a new tab without disturbing the triage panel',
     ],
     status: 'stable',
     since: '1.0.0',
