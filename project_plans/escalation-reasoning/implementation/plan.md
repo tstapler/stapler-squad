@@ -24,25 +24,26 @@ separate ADR would just duplicate it.
 | Term | Definition | Notes |
 |------|-----------|-------|
 | `classifier.ClassificationResult` | Existing struct (`pkg/classifier/classifier.go:39-47`) carrying `Decision`, `RiskLevel`, `Reason`, `Alternative`, `RuleID`, `RuleName`, `Source` for one classify call. | Reused as-is — no new type. This *is* the "escalation result" object; there is no separate `EscalationEvent` type. |
-| `classifier.EscalationCategory` | New `type EscalationCategory string` in `pkg/classifier/escalation.go`. One of 5 constants. | Newtype, not raw string, *inside* `pkg/classifier` only — see Pattern Decisions for why it becomes a plain `string` at the `PendingApproval`/`ApprovalMetadata`/`ReviewItem.Metadata` boundary. |
+| `classifier.EscalationCategory` | New `type EscalationCategory string` in `pkg/classifier/escalation.go`. One of 6 constants (5 from the original taxonomy + `EscalationUnexpected`, pre-mortem P3 fix). | Newtype, not raw string, *inside* `pkg/classifier` only — see Pattern Decisions for why it becomes a plain `string` at the `PendingApproval`/`ApprovalMetadata`/`ReviewItem.Metadata` boundary. |
 | `EscalationNoMatch` | Constant `"no-match"` — `RuleID == ""`, `Decision == Escalate` (classifier fallback, `classifier.go:523-527`). | |
 | `EscalationExplicitRule` | Constant `"explicit-rule"` — a named rule's `Decision == Escalate` fired (e.g. `seed-escalate-git-branch-safe-delete`). | Default/fallback bucket of `CategorizeEscalationRuleID` — any non-empty `RuleID` not matching the other 3 sentinels lands here. |
 | `EscalationDomainAge` | Constant `"domain-age"` — `RuleID == "new-domain-check"`, synthetic result built in the domain-age branch (`approval_handler.go:237-266`). | |
 | `EscalationSecretScan` | Constant `"secret-scan"` — `RuleID == "secret-scan"`, terminal `AutoDeny` (`approval_handler.go:205-233`). Never appears on a `ReviewItem` (no queue item is created); analytics-only bucket. | |
 | `EscalationUnclassifiable` | Constant `"unclassifiable"` — `RuleID == "shell-expansion-program"`, the shell-expansion sentinel (`classifier.go:485-493,536-544`). | |
 | `CategorizeEscalationRuleID(ruleID string) EscalationCategory` | New pure function in `pkg/classifier/escalation.go` mapping a `RuleID` string to one of the 5 categories above. | Total function — every input string maps to a category; the "else" branch is `EscalationExplicitRule`, not a silent drop (guards against the `ComputeDailyBuckets`-style missing-default bug in pitfalls.md #2). |
-| `EscalationReasonText(result ClassificationResult) string` | New pure function in `pkg/classifier/escalation.go`. Returns `result.Reason` verbatim if non-empty, else a static no-match fallback sentence. | The single source of the human-readable string rendered on the review-queue card and stored in `PendingApproval.EscalationReason`. |
+| `EscalationReasonText(result ClassificationResult) string` | New pure function in `pkg/classifier/escalation.go`. Returns `result.Reason` verbatim if non-empty; if empty, the fallback is **category-aware** (pre-mortem P1 fix): the static "no rule matched" sentence only for `EscalationNoMatch`, a rule-naming fallback ("Rule '<RuleID>' flagged this for review — no reason text was provided.") for `EscalationExplicitRule`/`EscalationDomainAge`/`EscalationUnclassifiable`, and a distinct internal-error sentence for `EscalationUnexpected`. | The single source of the human-readable string rendered on the review-queue card and stored in `PendingApproval.EscalationReason`. **Pre-mortem P1**: branching only on `Reason == ""` (ignoring category) would make an explicit-rule escalation whose author left `Reason` blank (a real, unvalidated gap — rules can be created via `UpsertApprovalRule`, YAML import, or an accepted `SuggestedRuleCard` suggestion with no required-field check on `Reason`) render "No approval rule matched this request," flatly contradicting the card's own `RuleID`/category and AC1's "not a generic string" promise. |
+| `EscalationUnexpected` | 6th category, constant `"unexpected"` — added by the pre-mortem P3 fix for the classifier-switch `default:` arm (Task 2.1.2a). Distinguishes "classifier returned an unrecognized `ClassificationDecision`" (an internal bug) from a genuine `no-match` coverage gap, so it does not silently inherit `no-match`'s copy or Create-Rule-button eligibility. | `RuleIDUnexpectedDecision = "internal-unexpected-decision"` is the synthetic `RuleID` the `default:` arm sets to route here. |
 | `escalation` (local var) | New `var escalation classifier.ClassificationResult` hoisted to the top of `HandlePermissionRequest` (`approval_handler.go`), before the domain-age check. Zero-valued unless the domain-age branch or the classifier's `Escalate` case sets it. | This is the "hoist to function scope" fix described in requirements.md's grounded design constraints. Its zero value (`RuleID: "", Reason: ""`) is itself meaningful: `CategorizeEscalationRuleID("")` → `no-match`, and `EscalationReasonText` on an empty `Reason` returns the static fallback — so the case where neither the domain checker nor the classifier is configured degrades to a sane "no rule matched" default rather than an empty string. |
 | `PendingApproval.EscalationReason` / `.EscalationCategory` | Two new `string` fields on `session/services`' `PendingApproval` (`approval_store.go:21-39`). Set once at construction (`approval_handler.go:358-369`), never mutated afterward. | Plain `string`, not the classifier newtype — see Pattern Decisions. |
 | `PersistedApproval.EscalationReason` / `.EscalationCategory` | Disk-serializable twin of the above (`approval_store.go:42-53`), `json:"escalation_reason,omitempty"` / `json:"escalation_category,omitempty"`. | `omitempty` gives free backward-compat: approvals persisted before this feature deserialize with empty strings, not an error. |
 | `session.ApprovalMetadata.EscalationReason` / `.EscalationCategory` | Two new `string` fields on the poller-facing DTO (`review_queue_poller.go:54-61`). | Copied from `PendingApproval` inside `ApprovalStore.GetApprovalMetadataBySession` (`approval_store.go:137-154`). |
-| `ReviewItem.Metadata["escalation_reason"]` / `["escalation_reason_category"]` | Two new keys in the existing generic `map<string,string>` `ReviewItem.Metadata` (proto `types.proto:575`, no schema change). Set in the poller enrichment block (`review_queue_poller.go:807-829`), gated like the existing `if a.Cwd != ""` pattern. | This is what the frontend actually reads. |
+| `ReviewItem.Metadata["escalation_reason"]` / `["escalation_reason_category"]` | Two new keys in the existing generic `map<string,string>` `ReviewItem.Metadata` (proto `types.proto:575`, no schema change). Set in the poller enrichment block (`review_queue_poller.go:807-829`), gated like the existing `if a.Cwd != ""` pattern. | This is what the frontend actually reads. **Cross-artifact consistency note**: `requirements.md`'s grounded-design-constraints section illustratively named this key `escalation_category` (matching `PersistedApproval`'s JSON tag one hop earlier); this plan deliberately uses `escalation_reason_category` at this specific hop instead, to disambiguate from `PersistedApproval.EscalationCategory`'s JSON tag when both are in scope during implementation/debugging — not an accidental drift. |
 | `AnalyticsEntry` | Existing per-decision analytics record (`analytics_store.go:17-43`) — already carries `Decision` and `RuleID`, which is all `CategorizeEscalationRuleID` needs; no new field added here. | |
 | `AnalyticsSummary.EscalationReasonCounts` | New `map[string]int` field on `AnalyticsSummary` (`analytics_store.go:88-114`), keyed by the 5 category strings. Populated by `ComputeSummary` (`analytics_store.go:317-440`). | |
 | `AnalyticsSummaryProto.escalation_reason_counts` | New `map<string, int32> escalation_reason_counts = 17;` on `AnalyticsSummaryProto` (`proto/session/v1/types.proto:1107-1134`) — next free field number after 16. | Same `map<string,int32>` idiom as the existing `decision_counts = 2`. |
 | Escalation Reasons table | New section in `ApprovalAnalyticsPanel.tsx`, modeled on the existing "Top Triggered Rules" table (`ApprovalAnalyticsPanel.tsx:276-301`). | |
 | `ESCALATION_CATEGORY_LABELS` | New `Record<string, string>` (frontend, `ApprovalAnalyticsPanel.tsx`) mapping the 5 category keys to display labels for the analytics table. Distinct from the 4-entry emoji map used in `ReviewQueuePanel.tsx` (which never needs `secret-scan`, since that category never reaches a `ReviewItem`). | |
-| itemContext reason paragraph | The `<p className={itemContext} id={`escalation-reason-${queueItem.sessionId}`}>` rendered as the *first* child inside the existing `pending_approval_id` block (`ReviewQueuePanel.tsx:726-743`), before `commandPreview`. | Reuses the existing `itemContext` CSS class (AC6) — does **not** touch the unrelated suppression guard at line 718 (that guard governs `queueItem.context`, a different field). |
+| itemContext reason paragraph | The `<p className={escalationReasonText} id={`escalation-reason-${queueItem.sessionId}`}>` rendered as the *first* child inside the existing `pending_approval_id` block (`ReviewQueuePanel.tsx:726-743`), before `commandPreview`. `escalationReasonText` is a new vanilla-extract style (`ReviewQueuePanel.css.ts`) that composes `itemContext` (`style([itemContext, {maxHeight, overflowY, wordBreak}])`) rather than reusing the raw `itemContext` class directly. | Satisfies AC6 ("existing `itemContext` class pattern") via composition, not identity — chosen over mutating the shared `itemContext` class because that class is also used at line 719 for the unrelated `queueItem.context` field on non-approval cards; a direct mutation would silently change that unrelated render path too (pre-mortem/consistency-check finding). Does **not** touch the unrelated suppression guard at line 718 (that guard governs `queueItem.context`, a different field). |
 | Create Rule gating | The conditional controlling whether the "✦ Create Rule" button (`ReviewQueuePanel.tsx:818-838`) renders at all. Changed from "`tool_input_command` present" to "`tool_input_command` present **and** `escalation_reason_category === "no-match"`". | Resolved decision (was an open question in architecture.md; ux.md settled it) — recorded once here, not deferred further. |
 
 ---
@@ -121,7 +122,15 @@ One decision needs explicit human sign-off before merge, flagged per the adversa
   categories. The reasoning is sound and research-backed, not a guess, but the PR description
   (Phase 6/7 completion) must call this out explicitly as a behavior change so a human reviewer can
   veto before merge if the original filer's intent differs — do not let this land silently as an
-  implementation detail.
+  implementation detail. **Pre-mortem P2 addendum**: specifically for `domain-age`, this also
+  removes the button's only current use as a one-click path to allowlist a trusted-but-newly-
+  registered domain (`GenerateSuggestedRule` already supports `auto_allow`-decision suggestions,
+  not just deny/escalate patterns, per `rules_service.go`'s `validateSuggestion`) — today the button
+  is gated on `tool_input_command` presence only, so this is a real, if narrow, capability loss for
+  domain-age false positives, not purely a UX-emphasis question. The PR description must name this
+  specific trade-off (not just the general gating change) so a reviewer can judge whether losing
+  that one-click allow-listing path for domain-age is acceptable, rather than discovering it later
+  as a support request ("how do I stop this domain from re-escalating every time?").
 
 ## Dependency Visualization
 
@@ -171,6 +180,17 @@ parallel once Epic 2.2 lands — they touch disjoint files.
 
 ---
 
+## Implementation Note (pre-mortem P2)
+
+This plan's 41 tasks cite specific line numbers in `approval_handler.go`, `approval_store.go`,
+`review_queue_poller.go`, `ReviewQueuePanel.tsx`, and `ApprovalAnalyticsPanel.tsx` — files with
+demonstrated high churn (a prior PR rewrote 927 lines of `ReviewQueuePanel.tsx` in one pass) and,
+as of planning time, 10+ sibling worktrees in this same workspace hold in-flight diffs against
+these exact files. **Before editing, re-locate each cited construct by name/signature (not blindly
+by line number) against the current state of this branch** — the line numbers are planning-time
+anchors for review clarity, not a substitute for reading the surrounding code at implementation
+time. If a cited line has drifted, prefer the nearest matching construct over line-number literalism.
+
 ## Phase 1: Classifier Taxonomy
 
 ### Epic 1.1: Escalation Category Taxonomy
@@ -198,27 +218,44 @@ secret-scan/unclassifiable taxonomy is defined exactly once and every consumer (
     (`"secret-scan"`).
   - *Given* `ruleID = "shell-expansion-program"`, *When* called, *Then* it returns
     `EscalationUnclassifiable` (`"unclassifiable"`).
+  - *Given* `ruleID = "internal-unexpected-decision"` (`RuleIDUnexpectedDecision`), *When* called,
+    *Then* it returns `EscalationUnexpected` (`"unexpected"`) — pre-mortem P3 fix, distinguishes an
+    internal classifier bug from a genuine no-match coverage gap.
   - *Given* `ruleID = "some-future-rule-id-nobody-has-seen"`, *When* called, *Then* it returns
     `EscalationExplicitRule` (the default/fallback case — never a silent no-op).
-- `EscalationReasonText` returns the classifier's own `Reason` when present, and a fixed fallback
-  only when `Reason == ""`.
+- `EscalationReasonText` returns the classifier's own `Reason` when present, and a **category-aware**
+  fallback when `Reason == ""` (pre-mortem P1 fix — not a single static fallback for every category).
   - *Given* `result = ClassificationResult{Decision: Escalate, RuleID: "", Reason: "No matching
     rule; escalated for manual review."}` (the actual `classifySingle` fallback value,
     `classifier.go:526`), *When* `EscalationReasonText(result)` is called, *Then* it returns
     `"No matching rule; escalated for manual review."` verbatim (no re-wrapping).
   - *Given* `result = ClassificationResult{}` (zero value — the case where neither the domain
-    checker nor the classifier is configured), *When* called, *Then* it returns the static fallback
+    checker nor the classifier is configured; `RuleID == ""` categorizes as no-match), *When*
+    called, *Then* it returns the static fallback
     `"No approval rule matched this request — escalated to manual review by default."`.
+  - *Given* `result = ClassificationResult{Decision: Escalate, RuleID: "custom-rule", Reason: ""}`
+    (an explicit-rule match whose author left `Reason` blank — a real, unvalidated gap: no rule
+    creation path in this codebase requires `Reason` to be non-empty), *When* called, *Then* it
+    returns `Rule "custom-rule" flagged this for review — no reason text was provided.` and
+    **does not** contain the substring `"No approval rule matched"` — this is the exact case
+    pre-mortem P1 flagged: a blank-`Reason` explicit-rule escalation must never render text that
+    contradicts its own category.
+  - *Given* `result = ClassificationResult{RuleID: "internal-unexpected-decision", Reason: ""}`,
+    *When* called, *Then* it returns `"An internal classification error occurred — review
+    manually."`.
 
 **Files**: `pkg/classifier/escalation.go` (new), `pkg/classifier/escalation_test.go` (new)
 
-##### Task 1.1.1a: Create `EscalationCategory` type + 5 constants + shared sentinel RuleID constants (~4 min)
+##### Task 1.1.1a: Create `EscalationCategory` type + 6 constants + shared sentinel RuleID constants (~4 min)
 - New file `pkg/classifier/escalation.go`. Package `classifier`.
 - `type EscalationCategory string`
-- `const (EscalationNoMatch EscalationCategory = "no-match"; EscalationExplicitRule EscalationCategory = "explicit-rule"; EscalationDomainAge EscalationCategory = "domain-age"; EscalationSecretScan EscalationCategory = "secret-scan"; EscalationUnclassifiable EscalationCategory = "unclassifiable")`
+- `const (EscalationNoMatch EscalationCategory = "no-match"; EscalationExplicitRule EscalationCategory = "explicit-rule"; EscalationDomainAge EscalationCategory = "domain-age"; EscalationSecretScan EscalationCategory = "secret-scan"; EscalationUnclassifiable EscalationCategory = "unclassifiable"; EscalationUnexpected EscalationCategory = "unexpected")`
+  — the 6th constant, `EscalationUnexpected`, is the pre-mortem P3 fix (see Task 2.1.2a).
 - **Architecture review concern (Task 1.1.1b)**: also declare shared sentinel `RuleID` constants here —
-  `const (RuleIDNewDomainCheck = "new-domain-check"; RuleIDSecretScan = "secret-scan"; RuleIDShellExpansionProgram = "shell-expansion-program")`
-  — and update the 3 existing emitting sites to reference them instead of inline string literals:
+  `const (RuleIDNewDomainCheck = "new-domain-check"; RuleIDSecretScan = "secret-scan"; RuleIDShellExpansionProgram = "shell-expansion-program"; RuleIDUnexpectedDecision = "internal-unexpected-decision")`
+  (the 4th, `RuleIDUnexpectedDecision`, is synthetic — never emitted by the classifier itself, only set by
+  `HandlePermissionRequest`'s new `default:` arm) —
+  and update the 3 existing emitting sites to reference the first 3 instead of inline string literals:
   `approval_handler.go:225` (secret-scan `RuleID:` literal), `approval_handler.go:254` (domain-age
   `RuleID:` literal), `pkg/classifier/classifier.go:491,542` (shell-expansion `RuleID:` literals).
   This closes the "4th independent copy of the same literal" gap the review flagged — a future
@@ -227,16 +264,35 @@ secret-scan/unclassifiable taxonomy is defined exactly once and every consumer (
 
 ##### Task 1.1.1b: Implement `CategorizeEscalationRuleID` (~3 min)
 - In `pkg/classifier/escalation.go`: `func CategorizeEscalationRuleID(ruleID string) EscalationCategory`
-- Body: `switch ruleID { case "": return EscalationNoMatch; case RuleIDNewDomainCheck: return EscalationDomainAge; case RuleIDSecretScan: return EscalationSecretScan; case RuleIDShellExpansionProgram: return EscalationUnclassifiable; default: return EscalationExplicitRule }`
+- Body: `switch ruleID { case "": return EscalationNoMatch; case RuleIDNewDomainCheck: return EscalationDomainAge; case RuleIDSecretScan: return EscalationSecretScan; case RuleIDShellExpansionProgram: return EscalationUnclassifiable; case RuleIDUnexpectedDecision: return EscalationUnexpected; default: return EscalationExplicitRule }`
 - Files: `pkg/classifier/escalation.go`
 
-##### Task 1.1.1c: Implement `EscalationReasonText` (~2 min)
-- In `pkg/classifier/escalation.go`: `func EscalationReasonText(result ClassificationResult) string { if result.Reason != "" { return result.Reason }; return "No approval rule matched this request — escalated to manual review by default." }`
+##### Task 1.1.1c: Implement `EscalationReasonText`, category-aware (~4 min)
+- **Pre-mortem P1 fix**: branch on category, not solely on `Reason == ""` — an empty `Reason` on a
+  real rule (`explicit-rule`/`domain-age`/`unclassifiable`) must never render the no-match sentence.
+- In `pkg/classifier/escalation.go`:
+  ```go
+  func EscalationReasonText(result ClassificationResult) string {
+      if result.Reason != "" {
+          return result.Reason
+      }
+      switch CategorizeEscalationRuleID(result.RuleID) {
+      case EscalationNoMatch:
+          return "No approval rule matched this request — escalated to manual review by default."
+      case EscalationUnexpected:
+          return "An internal classification error occurred — review manually."
+      default:
+          // explicit-rule / domain-age / unclassifiable with a blank Reason: name the rule
+          // rather than falsely claiming no rule matched.
+          return fmt.Sprintf("Rule %q flagged this for review — no reason text was provided.", result.RuleID)
+      }
+  }
+  ```
 - Files: `pkg/classifier/escalation.go`
 
-##### Task 1.1.1d: Unit tests for both functions (~5 min)
-- New file `pkg/classifier/escalation_test.go`. Table-driven test `TestCategorizeEscalationRuleID` covering all 6 cases from the AC above (5 known + 1 fallback).
-- Second test `TestEscalationReasonText` covering the 2 cases from the AC above (non-empty `Reason` passthrough, zero-value fallback).
+##### Task 1.1.1d: Unit tests for both functions (~7 min)
+- New file `pkg/classifier/escalation_test.go`. Table-driven test `TestCategorizeEscalationRuleID` covering all 7 cases from the AC above (6 known including `EscalationUnexpected` + 1 fallback).
+- Second test `TestEscalationReasonText` covering: non-empty `Reason` passthrough; zero-value/no-match fallback; **pre-mortem P1 case** — `ClassificationResult{RuleID: "custom-rule", Reason: ""}` → assert the result is `Rule "custom-rule" flagged this for review — no reason text was provided.` and explicitly assert it does **not** contain the substring `"No approval rule matched"`; and an `EscalationUnexpected`-category case (`RuleID: RuleIDUnexpectedDecision, Reason: ""`) → assert the internal-error sentence.
 - Files: `pkg/classifier/escalation_test.go`
 
 ---
@@ -328,6 +384,12 @@ captured in a function-scoped variable instead of thrown away, **so that** it re
       // against it recurring for any future decision value.
       log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
       escalation = result
+      // Pre-mortem P3: route through the synthetic RuleIDUnexpectedDecision sentinel so
+      // CategorizeEscalationRuleID buckets this as EscalationUnexpected, not EscalationNoMatch
+      // (result.RuleID is almost certainly "" here, since no rule lookup occurred) — an internal
+      // classifier bug must not silently render normal "no rule matched" copy or offer the
+      // Create Rule CTA as if this were a real coverage gap.
+      escalation.RuleID = classifier.RuleIDUnexpectedDecision
   }
   ```
 - Architecture review concern: `ClassificationDecision` is a plain `int`-backed const block, not a
@@ -345,11 +407,26 @@ classifier `Escalate` fallthrough, or neither) gets a consistent, non-empty reas
 
 **Files**: `server/services/approval_handler.go`
 
-##### Task 2.1.3a: Add the two fields to the `PendingApproval{}` literal (~2 min)
+##### Task 2.1.3a: Add the two fields to the `PendingApproval{}` literal, with a length cap (~3 min)
 - In `approval_handler.go`, in the `approval := &PendingApproval{...}` literal (lines 358-369), add two fields:
   ```go
-  EscalationReason:   classifier.EscalationReasonText(escalation),
+  EscalationReason:   truncateEscalationReason(classifier.EscalationReasonText(escalation)),
   EscalationCategory: string(classifier.CategorizeEscalationRuleID(escalation.RuleID)),
+  ```
+- Pre-mortem P2 concern: an explicit-rule's `Reason` is free text a rule author can set to any
+  length, and `persistToDiskLocked` re-marshals and writes **all** pending approvals to disk on
+  every single `Create`/`Resolve` while holding the write lock — an unbounded string here scales
+  that cost with rule-author verbosity, not just entry count. Add a small helper in
+  `approval_handler.go` (or `escalation.go`):
+  ```go
+  const maxEscalationReasonLen = 500
+
+  func truncateEscalationReason(s string) string {
+      if len(s) <= maxEscalationReasonLen {
+          return s
+      }
+      return s[:maxEscalationReasonLen] + "…"
+  }
   ```
 - Files: `server/services/approval_handler.go`
 
@@ -491,14 +568,20 @@ before I see the raw command, **so that** I can decide how carefully to read the
 follows.
 
 **Acceptance Criteria** (AC1 rendering, AC6, and orphaned-fallback UX):
-- *Given* a `ReviewItem` with `metadata["pending_approval_id"] = "abc-123"`, `metadata["escalation_reason"] = "No matching rule; escalated for manual review."`, `metadata["escalation_reason_category"] = "no-match"`, *When* `ReviewQueuePanel` renders that card, *Then* a `<p className={itemContext} id="escalation-reason-<sessionId>">❓ No matching rule; escalated for manual review.</p>` renders as the *first* child inside the `pending_approval_id` block, before the `commandPreview` `<pre>`.
+- *Given* a `ReviewItem` with `metadata["pending_approval_id"] = "abc-123"`, `metadata["escalation_reason"] = "No matching rule; escalated for manual review."`, `metadata["escalation_reason_category"] = "no-match"`, *When* `ReviewQueuePanel` renders that card, *Then* a `<p className={escalationReasonText} id="escalation-reason-<sessionId>">❓ No matching rule; escalated for manual review.</p>` renders as the *first* child inside the `pending_approval_id` block, before the `commandPreview` `<pre>`.
 - *Given* `metadata["escalation_reason_category"] = "explicit-rule"` and `metadata["escalation_reason"] = "Branch deletion modifies repository structure and should be reviewed."`, *When* rendered, *Then* the paragraph reads `🛑 Branch deletion modifies repository structure and should be reviewed.` (backend text rendered verbatim, only the emoji prefix is category-driven per ux.md — the frontend does not reconstruct or re-wrap the sentence).
 - *Given* `metadata["pending_approval_id"]` is present but `metadata["escalation_reason"]` is absent (an orphaned approval persisted before this feature shipped — the JSON `omitempty` case from the Migration Plan), *When* rendered, *Then* the paragraph shows the fallback copy `"Reason not recorded — this request predates escalation-reason tracking."` instead of being omitted (an empty reason line next to cards that do show one would look like broken UI, per ux.md #4) — using a plain string, no emoji, since no category is known.
 - *Given* the poller enrichment in Epic 2.2 is synchronous with `store.Create` (confirmed via `h.queueChecker.CheckSession(inst)` being called immediately after `store.Create` in `HandlePermissionRequest`, `approval_handler.go:383-388` — see pitfalls.md #3), *When* a brand-new escalation is created, *Then* there is no "metadata present but reason still loading" intermediate state to design for — the existing `queueItem.metadata?.["key"] && (...)` guard pattern is sufficient without a new loading-state branch.
+- *Given* `metadata["escalation_reason"]` is a 600-character string (exceeding the 500-char cap
+  Task 2.1.3a applies at write time, so this specifically exercises the truncated/ellipsized case
+  a rule author's verbose `Reason` could still produce), *When* rendered, *Then* the paragraph
+  renders within `escalationReasonText`'s bounded box (`maxHeight: 6em`, `overflowY: auto`,
+  `wordBreak: break-word`) rather than growing the card unboundedly — this closes the UX design gap
+  flagged for Surface A (design/ux.md gap #1) with an explicit test, not just task prose.
 
 **Files**: `web-app/src/components/sessions/ReviewQueuePanel.tsx`
 
-##### Task 3.1.1a: Add a 4-entry category → emoji lookup map (~3 min)
+##### Task 3.1.1a: Add a 5-entry category → emoji lookup map (~3 min)
 - Near the top of `ReviewQueuePanel.tsx` (module scope, alongside other constants), add:
   ```ts
   const ESCALATION_REASON_EMOJI: Record<string, string> = {
@@ -506,17 +589,21 @@ follows.
     "explicit-rule": "🛑",
     "domain-age": "🌐",
     "unclassifiable": "⚙️",
+    "unexpected": "⚠️",
   };
   ```
   (No `secret-scan` entry — that category never reaches a `ReviewItem`, per requirements.md's
-  out-of-scope note; an unrecognized/missing category falls through to no emoji via `?? ""`.)
+  out-of-scope note; an unrecognized/missing category falls through to no emoji via `?? ""`. The
+  `unexpected` entry is the pre-mortem P3 fix's category — its text already reads "An internal
+  classification error occurred" from `EscalationReasonText`, so no button-gating change is needed
+  here: it's naturally excluded from the no-match-only Create Rule gate in Epic 3.2.)
 - Files: `web-app/src/components/sessions/ReviewQueuePanel.tsx`
 
 ##### Task 3.1.1b: Insert the reason `<p>` as the first child of the `pending_approval_id` block (~4 min)
 - In `ReviewQueuePanel.tsx`, inside the `{queueItem.metadata?.["pending_approval_id"] && ( <> ... )}` block (lines 726-743), insert as the *first* child inside the `<>` fragment, before the `commandPreview` conditional:
   ```tsx
   <p
-    className={itemContext}
+    className={escalationReasonText}
     id={`escalation-reason-${queueItem.sessionId}`}
   >
     {queueItem.metadata["escalation_reason"]
@@ -528,9 +615,22 @@ follows.
 - UX design gap (`design/ux.md`): unlike its sibling `commandPreview` (which bounds long content via
   `maxHeight`/`overflowY`/`wordBreak` in `ReviewQueuePanel.css.ts:202-223`), `itemContext` has no
   such bound — an explicit-rule's free-text `Reason` (rule-author-authored, unbounded length) could
-  grow the card unboundedly. Add `maxHeight`/`overflowY: auto`/`wordBreak: break-word` to the
-  `itemContext` class in `ReviewQueuePanel.css.ts` (or a scoped variant) to match `commandPreview`'s
-  existing bounding pattern.
+  grow the card unboundedly.
+- **Consistency-check concern, resolved explicitly**: `itemContext` is also used at
+  `ReviewQueuePanel.tsx:719` for the unrelated `queueItem.context` field on non-approval cards —
+  do **not** add the bound to the shared `itemContext` class itself, since that would silently
+  change rendering for that unrelated field too. Instead add a new vanilla-extract style in
+  `ReviewQueuePanel.css.ts` that composes `itemContext`'s existing rules and adds the bound on top:
+  ```ts
+  export const escalationReasonText = style([
+    itemContext,
+    { maxHeight: "6em", overflowY: "auto", wordBreak: "break-word" },
+  ]);
+  ```
+  (mirrors `commandPreview`'s own bound values) and use `className={escalationReasonText}` on the
+  new `<p>` in Task 3.1.1b instead of `className={itemContext}` — this closes the ambiguity the
+  review flagged ("or a scoped variant") in favor of the scoped-variant option, leaving the shared
+  class and the `queueItem.context` render path untouched.
 - Files: `web-app/src/components/sessions/ReviewQueuePanel.tsx`, `web-app/src/components/sessions/ReviewQueuePanel.css.ts`
 
 ##### Task 3.1.1c: Wire `aria-describedby` on the card's `role="button"` wrapper (~2 min)
@@ -584,11 +684,12 @@ regressions in the gating logic or intent are caught before merge.
 - *Given* a mocked `ReviewItem` with `escalation_reason_category: "no-match"`, *When* `ReviewQueuePanel` renders, *Then* the test asserts the reason `<p>` text content and that `create-rule-<id>` is present with `intent="secondary"` (via the rendered class/attribute, not a raw CSS selector — this repo's e2e locator rules don't apply to Jest/RTL, but keep to `data-testid`/role queries for consistency).
 - *Given* a mocked `ReviewItem` with `escalation_reason_category: "domain-age"`, *When* rendered, *Then* the test asserts `create-rule-<id>` is **absent** (`queryByTestId` returns `null`).
 - *Given* a mocked `ReviewItem` with `pending_approval_id` set but no `escalation_reason` key, *When* rendered, *Then* the test asserts the fallback copy string is shown.
+- *Given* a mocked `ReviewItem` with a 600-character `escalation_reason` string, *When* rendered, *Then* the test asserts the reason `<p>` carries the `escalationReasonText` class (not bare `itemContext`) — a proxy assertion for the `maxHeight`/`overflowY` bound applying, since jsdom doesn't compute layout (closes Story 3.1.1's overflow-bound AC and consistency-check nitpick #5).
 
 **Files**: `web-app/src/components/sessions/__tests__/ReviewQueuePanel.test.tsx`
 
-##### Task 3.2.2a: Add the 3 test cases above (~5 min)
-- In the existing `ReviewQueuePanel.test.tsx`, add a `describe("escalation reason", ...)` block with the 3 cases from the AC.
+##### Task 3.2.2a: Add the 4 test cases above (~6 min)
+- In the existing `ReviewQueuePanel.test.tsx`, add a `describe("escalation reason", ...)` block with the 4 cases from the AC.
 - Files: `web-app/src/components/sessions/__tests__/ReviewQueuePanel.test.tsx`
 
 ---
@@ -691,6 +792,11 @@ category, **so that** I can see which category dominates over the selected time 
 **Acceptance Criteria** (AC4 — the "frontend rendering test" requirement, not satisfied by the
 backend unit test alone):
 - *Given* `summary.escalationReasonCounts = {"no-match": 12, "explicit-rule": 5, "domain-age": 2, "secret-scan": 1, "unclassifiable": 0}` returned by a mocked `useApprovalAnalytics`, *When* `ApprovalAnalyticsPanel` renders, *Then* a "Escalation Reasons" table section renders with one row per non-zero-count category, showing the mapped label (via `ESCALATION_CATEGORY_LABELS`) and the count — e.g. a row reading `No auto-approval rule matched` / `12`.
+- *Given* `summary.escalationReasonCounts = {"no-match": 0, "explicit-rule": 0, "domain-age": 0, "secret-scan": 0, "unclassifiable": 0}` (or an empty/nil map — e.g. a 7-day window where every
+  decision was auto-allow/auto-deny), *When* rendered, *Then* the section shows the panel's existing
+  `empty`-styled message ("No escalations in this window.") instead of a header with zero table
+  rows — this closes UX design gap #2 (design/ux.md, UX-AC17) with an explicit test, not just task
+  prose (consistency-check nitpick #4).
 
 **Files**: `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx`, `web-app/src/components/sessions/ApprovalAnalyticsPanel.test.tsx`
 
@@ -703,6 +809,7 @@ backend unit test alone):
     "domain-age": "Newly-registered domain",
     "secret-scan": "Plaintext secret detected",
     "unclassifiable": "Shell expansion — couldn't classify",
+    "unexpected": "Internal classification error",
   };
   ```
 - Files: `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx`
@@ -719,8 +826,9 @@ backend unit test alone):
   omitting the section silently.
 - Files: `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx`
 
-##### Task 4.2.1c: Jest test for the new section (~4 min)
-- In `ApprovalAnalyticsPanel.test.tsx`, add a test mocking `useApprovalAnalytics` to return the fixture from the Story 4.2.1 AC, asserting the section renders with the expected labels and counts.
+##### Task 4.2.1c: Jest tests for the new section, including the empty-state case (~6 min)
+- In `ApprovalAnalyticsPanel.test.tsx`, add a test mocking `useApprovalAnalytics` to return the non-zero fixture from the Story 4.2.1 AC, asserting the section renders with the expected labels and counts.
+- Add a second test with the all-zero fixture, asserting the `empty`-styled message renders instead of an empty table (closes nitpick #4 above).
 - Files: `web-app/src/components/sessions/ApprovalAnalyticsPanel.test.tsx`
 
 ---
@@ -752,6 +860,10 @@ orphaned-reload path, **so that** this feature is provably additive.
 
 ##### Task 5.1.1c: Add orphaned-reload regression test (~5 min)
 - In `approval_service_test.go`, add `TestApprovalStore_LoadFromDisk_PreservesEscalationReason`, writing a `PersistedApproval` JSON fixture with both new fields populated, constructing a fresh `ApprovalStore` against that file, and asserting `GetApprovalMetadataBySession` returns both fields intact.
+- Files: `server/services/approval_service_test.go`
+
+##### Task 5.1.1d: Concurrency regression test (~5 min) — pre-mortem P2
+- In `approval_service_test.go`, add `TestApprovalStore_Create_ConcurrentEscalations_NoDataRace`: spin up N (e.g. 20) goroutines each calling `store.Create` with a distinct `PendingApproval{EscalationReason: ..., EscalationCategory: ...}`, run with `go test -race`, and assert all N entries are present and intact afterward (no lost writes, no corrupted `EscalationReason` across entries). This is a regression guard, not a new capability — `ApprovalStore`'s existing single-mutex design already serializes `Create`, so the test's job is confirming this feature's two new string fields don't introduce a copy/aliasing bug under concurrent load, not benchmarking throughput.
 - Files: `server/services/approval_service_test.go`
 
 ### Epic 5.2: `review_queue_determiner_test.go` regression confirmation

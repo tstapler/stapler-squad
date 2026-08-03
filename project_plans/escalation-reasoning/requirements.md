@@ -185,7 +185,7 @@ and poll separately.
 
 | AC | Summary | Primary files touched (expected) |
 |----|---------|-----------------------------------|
-| 1 | Real, per-path escalation reason on queue item | `approval_handler.go`, `classifier.go` (read-only), `review_queue_poller.go` |
+| 1 | Real, per-path escalation reason on queue item | `approval_handler.go`, `classifier.go` (scoped edit only — replacing 3 inline sentinel `RuleID` string literals with shared named constants during planning's architecture-review fix-up; no classification logic changes), `review_queue_poller.go` |
 | 2 | Persisted across restart | `approval_store.go` (`PendingApproval`, `PersistedApproval`, persist/load) |
 | 3 | No-match → SuggestedRuleCard flow | `ReviewQueuePanel.tsx` |
 | 4 | Analytics breakdown by reason | `analytics_store.go`, `types.proto`, `ApprovalAnalyticsPanel.tsx` + test |
