@@ -389,7 +389,9 @@ function mapRespawnEvent(e: RespawnEventProto): RespawnEvent {
     reason: e.reason,
     triggeringSessionUuid: e.triggeringSessionUuid || undefined,
     resultingSessionUuid: e.resultingSessionUuid || undefined,
-    createdAt: e.createdAt ? new Date(Number(e.createdAt.seconds) * 1000).toISOString() : undefined,
+    createdAt: e.createdAt
+      ? new Date(Number(e.createdAt.seconds) * 1000 + Math.floor(e.createdAt.nanos / 1e6)).toISOString()
+      : undefined,
     queued: e.queued,
   };
 }

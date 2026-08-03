@@ -21,15 +21,22 @@ interface BlockerChipProps {
   variant: "full" | "compact";
 }
 
-/** Formats a next-retry timestamp as a short relative string, or "" if unset/past. */
+/**
+ * Formats a next-retry timestamp as a short relative string: "" if unset,
+ * "retrying soon" if already due/past. Uses Math.ceil (not round) so a
+ * boundary value never undercounts as execution time elapses between when
+ * the caller reads the value and when this renders — a rounded-down "9m"
+ * flickering to "10m" a moment later would read as a bug, and would make
+ * tests asserting an exact minute value intermittently flaky.
+ */
 function formatNextRetry(nextRemediationAt: StuckBacklogItem["nextRemediationAt"]): string {
   if (!nextRemediationAt) return "";
   const ms = Number(nextRemediationAt.seconds) * 1000 - Date.now();
   if (ms <= 0) return "retrying soon";
-  const minutes = Math.round(ms / 60000);
+  const minutes = Math.ceil(ms / 60000);
   if (minutes < 1) return "retrying in <1m";
   if (minutes < 60) return `retrying in ${minutes}m`;
-  return `retrying in ${Math.round(minutes / 60)}h`;
+  return `retrying in ${Math.ceil(minutes / 60)}h`;
 }
 
 /**
