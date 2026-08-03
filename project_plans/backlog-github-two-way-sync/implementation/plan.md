@@ -22,7 +22,8 @@
 | `ForwardSyncCloseLabel` | Per-`ItemSource` optional string — a label applied (merged with existing labels, never replacing them) when forward sync closes an issue. | Empty string = no label applied. |
 | `TriggeredByGitHubSync` | New untyped string constant (`"github_sync"`), sibling to `TriggeredByUser`/`TriggeredBySystem` (`session/backlog.go:90-93`). | Distinguishes backward-sync-driven transitions in the `BacklogStatusEvent` audit trail and in `WorkflowHistorySection.tsx`'s `triggeredBy` display, from both real users and other system automations. |
 | `externalIssueCloser` | Narrow interface defined in `server/services` (the consumer package), with one method `CloseIssue`. Only `*GitHubIssuesPlugin` implements it. | Per `.claude/rules/interface-pollution-checklist.md` rules 1+2 — NOT a fourth method on the shared `ItemSourcePlugin` interface, which would force `GitHubPRsPlugin` to grow a no-op. |
-| `CloseIssue` | New method on `GitHubIssuesPlugin`: `CloseIssue(ctx, config PluginConfig, externalID string, existingLabels []string, closeLabel string) error`. Issues one `PATCH /repos/{owner}/{repo}/issues/{number}` with `state=closed` and, if `closeLabel != ""`, a merged (existing ∪ closeLabel) `labels` array — never a bare replacement, since GitHub's labels field on this endpoint fully replaces the array (verify against GitHub's docs at implementation time, per ADR-001 Decision 3's lesson about not assuming API behavior). | Also posts one explanatory bot comment via a second call (`POST .../comments`) — not mergeable into the same PATCH, GitHub has no combined endpoint for state+labels+comment. |
+| `CloseIssue` | New method on `GitHubIssuesPlugin`: `CloseIssue(ctx, config PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error)`. Issues one `PATCH /repos/{owner}/{repo}/issues/{number}` with `state=closed` and, if `closeLabel != ""`, a merged (existing ∪ closeLabel) `labels` array — never a bare replacement, since GitHub's labels field on this endpoint fully replaces the array (verify against GitHub's docs at implementation time, per ADR-001 Decision 3's lesson about not assuming API behavior). Returns the response's `updated_at` (or the zero `time.Time` on decode failure) — the caller's loop-prevention watermark write (pre-mortem P1 #1). | Also posts one explanatory bot comment via a second call (`POST .../comments`) — not mergeable into the same PATCH, GitHub has no combined endpoint for state+labels+comment. |
+| `RecordSourceSyncFailure` | New method, taking `(ctx, sourceID string, message string) error`, added to whichever repository type already backs `GetSyncHistory`/`historyBySource` (Task 4.3.2a: verify the exact receiver type against the live code before implementing — the write must land in that same store, not a new one). Persists a queryable failure record for forward-sync close failures. | Closes pre-mortem P1 #3 — without this, Unresolved Question #1's claim that the row-level warning covers forward-sync failures is false. |
 | `StartBacklogGitHubForwardSyncSubscriber` | New package-level function in `server/services/backlog_github_forward_sync.go`, mirroring `StartAnalyticsSubscriber`/`StartPushSubscriber`/`StartSubscriber`'s exact skeleton (nil-guard → `bus.Subscribe(ctx)` → one goroutine → `select` on event chan / `ctx.Done()`). | Wired into `server/server.go` alongside the other three `Start*Subscriber` calls (not `server/dependencies.go`, which only constructs `deps.EventBus`). |
 | `GuardedTransitionAllowed` | New function in `session/workflow_engine.go`: `GuardedTransitionAllowed(engine WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) bool` — evaluates `CanTransition` + `ValidateGates` without executing the transition. | Backward sync's read-only guard check, kept in package `session` (not `server/services`) since `SyncOne` lives there and cannot import `server/services` (would create an import cycle). Distinct from — and not a replacement for — `transitionWithGuard` (`server/services/backlog_service_triage.go:484-500`), which also executes the transition; a future refactor could have `transitionWithGuard` call this same helper, flagged as an optional simplification, not required by this plan. |
 | `determineBackwardSyncTarget` | New pure function: given the item's current `BacklogStatus`, returns the backward-sync target status for a closed issue (`BacklogStatusArchived`) or a sentinel meaning "no valid target, skip" for `in_progress`/`review`/`pr_pending`/already-terminal statuses. | See ADR-002 — this function embodies the "closed → archived, never done" policy decision. |
@@ -93,15 +94,15 @@ Chosen: **Option B**, documented in ADR-003.
 
 - **Feature flags**: `ForwardSyncEnabled`/`BackwardSyncEnabled`, both default `false` per-`ItemSource` — the feature is fully inert until a user explicitly opts in per source, per direction (AC3/AC4). No separate build-time flag needed.
 - **Staged rollout**: Phase 0 (prerequisites) and Phase 4 (UI) are safe to ship independently and are additive/inert. Phase 1 (forward sync) and Phase 2 (backward sync) are each gated by their own settings bool and can ship independently of each other — a user could enable forward sync alone with zero backward-sync code risk, and vice versa.
-- **Blast-radius warning**: per pitfalls research §9, the Settings UI (Phase 4) must warn when both directions are enabled on the same source, and first-enable of backward sync should not silently bulk-transition every already-imported item in one tick — see Phase 4, Story 4.3 and Unresolved Questions #3.
+- **Blast-radius warning**: per pitfalls research §9, the Settings UI (Phase 4) warns when both directions are enabled on the same source (Story 4.3.1), and first-enable of backward sync requires an explicit confirm-with-preview step rather than silently bulk-transitioning every already-imported item in one tick (Epic 4.4, resolving Unresolved Questions #3 — see that entry for the 2026-08-03 resolution).
 - **Rollback**: standard revert via PR; both new booleans defaulting `false` means a rollback of the UI toggle alone (leaving the backend merged) is also safe — no user could have had a way to enable the setting without the corresponding UI.
 - **Rate limiting**: forward sync's writes get their own `Retry-After`-aware check (Phase 1, Story 1.2) distinct from the existing read-path's primary-only check — a rate-limited write is retried on the next event (naturally, since a future done-transition or a manual "resync" — no automatic replay queue is built; see Unresolved Questions #5), not treated as fatal to the whole `SyncOne` batch (backward sync's per-item write failures already don't abort the batch — only `Fetch` failing does, unchanged by this project).
 
 ## Unresolved Questions
 
-1. **Should a failed forward-sync write get an automatic retry queue?** This plan logs the failure and relies on the next real trigger (another done-transition can't happen twice for the same item; a manual re-open→re-done cycle, or a future "resync this item" affordance) rather than building a dedicated retry queue — flagged as a possible follow-up if failed-write visibility (Phase 4's persistent row-level warning) proves insufficient in practice. Not a blocker for any story in this plan.
+1. **Should a failed forward-sync write get an automatic retry queue?** This plan logs the failure AND (per the 2026-08-03 validation-pass correction, pre-mortem P1 #3) persists it via `RecordSourceSyncFailure` into the same store Phase 4's row-level warning reads (Story 4.3.2), relying on the next real trigger (another done-transition can't happen twice for the same item; a manual re-open→re-done cycle, or a future "resync this item" affordance) rather than building a dedicated retry queue — flagged as a possible follow-up if failed-write visibility proves insufficient in practice. Not a blocker for any story in this plan. *(Originally this question asserted Phase 4's row-level warning already covered forward-sync failures without any task actually wiring that write — the pre-mortem caught that gap; Task 4.3.2a/1.2.1b now close it.)*
 2. **`CreateItemSource`'s pre-existing bug** (`server/services/backlog_service_lifecycle.go:663-694` hardcodes `Enabled: true`, never reading a request field) is confirmed but out of scope — this plan only adds fields to `UpdateItemSourceRequest` (sync-direction toggles are set post-creation, matching the existing UX where sources are configured incrementally after being added), so this pre-existing bug is not touched. Flagged for a separate, unrelated fix.
-3. **First-enable-of-backward-sync blast radius**: pitfalls research §9 recommends the first enable of backward sync should not silently bulk-transition the entire existing backlog for that source in one tick. This plan's Phase 4 adds an inline warning (static UI copy) but does NOT implement a preview/dry-run or a "only sync forward from now on" cutoff — a full bounded-reconciliation UX is out of scope for this plan's ACs (none of AC0-AC7 require it) and is flagged here as a genuine, not-fully-resolved product question rather than silently assumed safe.
+3. ~~**First-enable-of-backward-sync blast radius**~~ — **Resolved 2026-08-03** (triad review UX blocker): Epic 4.4 adds `PreviewBackwardSyncImpact` + a confirmation dialog gating the backward-sync toggle's OFF→ON transition, showing the exact count (and sample titles) of already-imported items that would immediately transition to `archived`, with Cancel/Confirm. This is a preview-and-confirm step, not a full dry-run/undo system — a bounded scope deliberately chosen over building a general reconciliation-preview UX, which remains out of scope.
 4. **Labels local-wins gate is currently unreachable** (no UI lets a user edit an item's `Labels` today) — implemented per AC4's literal wording anyway, for forward-compatibility, but has no observable effect until/unless a future feature adds label editing. Not a blocker; documented so a future reader doesn't mistake the dead gate for a bug.
 5. **No automatic retry queue for a rate-limited forward-sync write** (see #1) — an item that fails to forward-sync (e.g. secondary rate limit) shows a warning (Phase 4) but nothing re-attempts the write automatically. A user could manually re-trigger by transitioning the item out of and back into `done` (which re-fires the event) as a manual workaround; this plan does not build a cleaner one.
 6. **Whether outbound GitHub HTTP calls have existing OTel span coverage** — not verified by this research pass; flagged for the implementer to check before assuming Observability Plan's tracing claim holds.
@@ -326,7 +327,8 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 
 #### Story 0.3.2: `UpdateBacklogItem` RPC handler populates `UserModifiedFields` when Title/Description/Priority are touched
 **Acceptance Criteria** (prerequisite closing pitfalls research §1's gap — required for AC4 to have real meaning):
-- *Given* a backlog item with `UserModifiedFields: ""`, *When* a user calls `UpdateBacklogItem` with a non-empty `Title` in the request, *Then* the item's stored `UserModifiedFields` afterward parses to a set containing `"title"`.
+- *Given* a backlog item with `UserModifiedFields: ""`, *When* a user calls `UpdateBacklogItem` with a `Title` in the request that DIFFERS from the item's current title, *Then* the item's stored `UserModifiedFields` afterward parses to a set containing `"title"`.
+- *Given* a backlog item with `UserModifiedFields: ""` and current `Title: "foo"`, *When* a user calls `UpdateBacklogItem` with `Title: "foo"` (unchanged, as the edit form always resubmits it) but a genuinely different `Priority`, *Then* the item's stored `UserModifiedFields` contains `"priority"` but NOT `"title"` (pre-mortem P1 #2 regression — value-diff, not presence-check).
 - *Given* the same item now has `UserModifiedFields` containing `"title"`, *When* the next `SyncOne` backward-fetch tick runs with a plugin-fetched title differing from the local one, *Then* the local title is NOT overwritten (exercising the pre-existing `containsField(modifiedFields, "title")` gate in `SyncOne`, `session/backlog_sync.go:265-268`, now actually reachable in production for the first time).
 **Files**: `server/services/backlog_service_lifecycle.go`, `session/repository.go`, `session/ent_repository_backlog.go`, `server/services/backlog_service_test.go`
 
@@ -341,13 +343,15 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 - Files: `session/repository.go`, `session/ent_repository_backlog.go`
 
 ##### Task 0.3.2b: Populate `UserModifiedFields` in the RPC handler (~5 min)
-- In `server/services/backlog_service_lifecycle.go`'s `UpdateBacklogItem` (lines 235-334): first, confirm whether the handler already loads the existing item before building `update` — if not, add `existing, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)` near the top (needed to read the current `UserModifiedFields` raw string to merge into).
-- After the existing `if req.Msg.Title != "" { ... }` / `Description` / `Priority` presence checks (lines 249-263), collect a `var touchedFields []string` appending `"title"`/`"description"`/`"priority"` for each field the request actually set (mirrors the existing presence-based semantics already used for those three fields — this is a coarse "did this request touch the field" signal, not a value-diff, consistent with how the rest of this handler already works).
+- **Validation-pass correction (2026-08-03, pre-mortem P1 #2)**: `touchedFields` MUST be a value-diff against the existing item, not a bare presence check. The only frontend "Edit" path (`BacklogItemDetail.tsx`) always submits the current `Title` verbatim (it's a required field on the edit form) regardless of which field the user actually changed — a presence-only check (`req.Msg.Title != ""`) would mark Title/Description/Priority as user-modified on almost every edit, permanently defeating the very `SyncOne` gate (`containsField(modifiedFields,"title")`, `backlog_sync.go:265-268`) this epic exists to unlock.
+- In `server/services/backlog_service_lifecycle.go`'s `UpdateBacklogItem` (lines 235-334): confirm whether the handler already loads the existing item before building `update` — if not, add `existing, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)` near the top (needed both to read the current `UserModifiedFields` raw string to merge into, AND to diff against for this correction).
+- After the existing `if req.Msg.Title != "" { ... }` / `Description` / `Priority` presence checks (lines 249-263), collect `var touchedFields []string`, appending `"title"` only when `req.Msg.Title != "" && req.Msg.Title != existing.Title` (and the equivalent value-diff for `"description"`/`"priority"`) — a value-diff, not a presence check.
 - If `len(touchedFields) > 0`, call `merged, err := session.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)` and set `update.UserModifiedFields = &merged`.
 - Files: `server/services/backlog_service_lifecycle.go`
 
 ##### Task 0.3.2c: Add the RPC-level integration test (~5 min)
-- In `server/services/backlog_service_test.go`, add `TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit`: create an item, call `svc.UpdateBacklogItem` with a new `Title`, refetch, assert `UserModifiedFields` contains `"title"`.
+- In `server/services/backlog_service_test.go`, add `TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit`: create an item, call `svc.UpdateBacklogItem` with a new (different) `Title`, refetch, assert `UserModifiedFields` contains `"title"`.
+- Add `TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged` (the regression test for pre-mortem P1 #2): create an item, call `svc.UpdateBacklogItem` with `Title` set to the item's *existing, unchanged* title alongside a genuinely new `Priority` (mirroring the real edit-form behavior of always resubmitting `Title`), refetch, assert `UserModifiedFields` contains `"priority"` but NOT `"title"`.
 - Add `TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync` (the actual regression pitfalls research §1 asks for — not just that the plumbing compiles): create an item, edit its title via the RPC path (populating `UserModifiedFields` for real, not via a test-only `SetUserModifiedFields` call), then run `sl.SyncOne` with a plugin fetch returning a different title, assert the user's title survives.
 - Files: `server/services/backlog_service_test.go`, `session/backlog_sync_test.go` (whichever file the second test naturally belongs in, given `SyncOne` is package `session` — likely needs to be a `session`-package test seeding `UserModifiedFields` via the same merge helper rather than a live RPC call, since `session` cannot import `server/services`)
 
@@ -553,6 +557,7 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 **Files**: `session/backlog_plugin_github.go`, `session/backlog_plugin_github_test.go`
 
 ##### Task 1.1.1a: Implement `CloseIssue` (~5 min)
+- **Validation-pass correction (2026-08-03, pre-mortem P1 #1)**: `CloseIssue` MUST return the PATCH response's own `updated_at` (parsed via the existing `githubIssue` struct — reuse it, don't invent a new response type), not just `error`. ADR-003 chose the per-resource-timestamp watermark specifically to avoid clock skew; a signature that returns only `error` forces the caller (Task 1.2.1b) to fall back to local `time.Now()` for every single forward-sync watermark write, silently reintroducing the exact problem ADR-003 rejected — a manually-reopened item could get pulled back toward `archived` on the very next `SyncOne` tick.
 - In `session/backlog_plugin_github.go`, add:
   ```go
   // CloseIssue closes a GitHub issue and, if closeLabel is non-empty, merges it
@@ -560,10 +565,13 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
   // field on this endpoint fully replaces the array, so existingLabels must be
   // passed in and merged locally; verify this replace-vs-merge semantic against
   // GitHub's REST API docs before relying on it, per ADR-001 Decision 3's lesson).
-  func (p *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config PluginConfig, externalID string, existingLabels []string, closeLabel string) error {
+  // Returns the issue's post-close updated_at from GitHub's own response — the
+  // caller uses this (not local wall-clock time) for the ADR-003 loop-prevention
+  // watermark, to avoid clock-skew/read-after-write-lag entirely.
+  func (p *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error) {
       cfg, err := decodeGithubPluginConfig(config)
       if err != nil {
-          return err
+          return time.Time{}, err
       }
       body := map[string]interface{}{"state": "closed"}
       if closeLabel != "" {
@@ -571,27 +579,35 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
       }
       payload, err := json.Marshal(body)
       if err != nil {
-          return err
+          return time.Time{}, err
       }
       url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues/%s", cfg.Owner, cfg.Repo, externalID))
       req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
       if err != nil {
-          return err
+          return time.Time{}, err
       }
       req.Header.Set("Authorization", "token "+cfg.Token)
       req.Header.Set("Content-Type", "application/json")
       resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
       if err != nil {
-          return err
+          return time.Time{}, err
       }
       defer resp.Body.Close()
       if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") {
-          return fmt.Errorf("github: rate limited closing issue %s (retry-after=%s)", externalID, resp.Header.Get("Retry-After"))
+          return time.Time{}, fmt.Errorf("github: rate limited closing issue %s (retry-after=%s)", externalID, resp.Header.Get("Retry-After"))
       }
       if resp.StatusCode >= 300 {
-          return fmt.Errorf("github: close issue %s failed: status %d", externalID, resp.StatusCode)
+          return time.Time{}, fmt.Errorf("github: close issue %s failed: status %d", externalID, resp.StatusCode)
       }
-      return nil
+      var closed githubIssue
+      if err := json.NewDecoder(resp.Body).Decode(&closed); err != nil {
+          // The close itself succeeded (status < 300) — a response-body parse
+          // failure must not be treated as a failed close. Return a zero time;
+          // the caller falls back to local time for the watermark only in this
+          // narrow decode-failure case, not as the default path.
+          return time.Time{}, nil
+      }
+      return closed.UpdatedAt, nil
   }
 
   func mergeLabels(existing []string, add string) []string {
@@ -603,11 +619,11 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
       return append(append([]string{}, existing...), add)
   }
   ```
-- Note: reuse whatever the existing `Fetch` method already uses to decode `config` into `githubPluginConfig` (locate the exact helper — likely inline in `Fetch`, not a separate `decodeGithubPluginConfig` function; adjust to match the real decode call, don't invent a new one if `Fetch` already has this logic factored differently).
+- Note: reuse whatever the existing `Fetch` method already uses to decode `config` into `githubPluginConfig` (locate the exact helper — likely inline in `Fetch`, not a separate `decodeGithubPluginConfig` function; adjust to match the real decode call, don't invent a new one if `Fetch` already has this logic factored differently). Also reuse `githubIssue`'s existing `UpdatedAt` parsing (already added in Epic 0.2 for `IssueUpdatedAt`) rather than declaring a second response struct.
 - Files: `session/backlog_plugin_github.go`
 
 ##### Task 1.1.1b: Add `CloseIssue` tests (~5 min)
-- In `session/backlog_plugin_github_test.go`, add `TestGitHubIssuesPlugin_CloseIssue_MergesLabels` (asserts merged body), `TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField`, `TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError` (mock a 403 + `X-RateLimit-Remaining: 0` response, assert a descriptive error, not a panic).
+- In `session/backlog_plugin_github_test.go`, add `TestGitHubIssuesPlugin_CloseIssue_MergesLabels` (asserts merged body), `TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField`, `TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError` (mock a 403 + `X-RateLimit-Remaining: 0` response, assert a descriptive error, not a panic), and `TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt` (mock a PATCH response body with `"updated_at": "<fixed timestamp>"`, assert the returned `time.Time` equals that mocked value — NOT the test's wall-clock time; this is the regression test for pre-mortem P1 #1).
 - Files: `session/backlog_plugin_github_test.go`
 
 #### Story 1.1.2: Bot comment on close
@@ -644,7 +660,7 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
   package services
 
   type externalIssueCloser interface {
-      CloseIssue(ctx context.Context, config session.PluginConfig, externalID string, existingLabels []string, closeLabel string) error
+      CloseIssue(ctx context.Context, config session.PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error)
       PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error
   }
 
@@ -682,6 +698,10 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 - Files: `server/services/backlog_github_forward_sync.go`
 
 ##### Task 1.2.1b: Implement `handleForwardSyncClose` (~5 min)
+- **Validation-pass corrections applied below (2026-08-03)**:
+  - **Pre-mortem P1 #1**: use `CloseIssue`'s returned `updated_at`, falling back to local time only if it's the zero value (decode failure).
+  - **Pre-mortem P1 #3**: on `CloseIssue` failure, persist a queryable failure record via `RecordSourceSyncFailure` (new method, sibling to whatever already backs `historyBySource`/`GetSyncHistory` for the fetch side — see Story 4.3.2, which now reads this same store) instead of only logging. Unresolved Question #1's claim that "Phase 4's persistent row-level warning" mitigates undetected forward-sync failures is only true once this write exists.
+  - **Pre-mortem P2 #5** (cheap to fold in here, not a P1 blocker but low-cost): skip the close+comment entirely, logging instead, when the item's already-known `ExternalItem.State` (threaded through from the same event payload / a fresh lightweight state check) is already `"closed"` — avoids posting a misleading bot comment on an issue a human already closed for an unrelated reason. If plumbing the live state into this event path proves nontrivial at implementation time, this specific refinement may be deferred to a follow-up (it is P2, not blocking), but the plan should not silently regress it either — flag explicitly in the PR description if deferred.
 - In the same file:
   ```go
   func handleForwardSyncClose(ctx context.Context, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData) {
@@ -711,19 +731,26 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
           return
       }
       config := session.PluginConfig{ /* populate from source.Config + token, matching Fetch's own config-building shape */ }
-      if err := closer.CloseIssue(ctx, config, item.ExternalID, item.Labels, source.ForwardSyncCloseLabel); err != nil {
+      issueUpdatedAt, err := closer.CloseIssue(ctx, config, item.ExternalID, item.Labels, source.ForwardSyncCloseLabel)
+      if err != nil {
           log.WarningLog.Printf("[BacklogGitHubForwardSync] close issue failed item=%s: %v", item.ID, err)
+          entRepo.RecordSourceSyncFailure(ctx, source.ID, fmt.Sprintf("forward-sync close failed for item %s: %v", item.ID, err))
           return
       }
       _ = closer.PostIssueComment(ctx, config, item.ExternalID, "Closed automatically — the linked backlog item was marked done in stapler-squad.")
-      // Advance the loop-prevention watermark — see Phase 3 for the read side.
-      now := time.Now().UTC()
-      if _, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &now}, nil); err != nil {
+      // Advance the loop-prevention watermark using GitHub's own timestamp, not
+      // local wall-clock — see ADR-003 and pre-mortem P1 #1. Only fall back to
+      // local time in the narrow case CloseIssue couldn't parse a response.
+      watermark := issueUpdatedAt
+      if watermark.IsZero() {
+          watermark = time.Now().UTC()
+      }
+      if _, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); err != nil {
           log.WarningLog.Printf("[BacklogGitHubForwardSync] failed to persist watermark item=%s: %v", item.ID, err)
       }
   }
   ```
-- **Note for the implementer**: the exact accessor method names (`storage.Repo()`, `syncLoop.Registry()`, `session.PluginConfig{}`'s actual field names) were not captured with full precision by this plan's research pass — verify each against the live code before writing this file; the shape above is correct, the exact method/field names may need adjusting.
+- **Note for the implementer**: the exact accessor method names (`storage.Repo()`, `syncLoop.Registry()`, `session.PluginConfig{}`'s actual field names, and the new `RecordSourceSyncFailure` method's real signature — see Story 4.3.2's Task 4.3.2a for what it must expose to the UI) were not captured with full precision by this plan's research pass — verify each against the live code before writing this file; the shape above is correct, the exact method/field names may need adjusting.
 - Files: `server/services/backlog_github_forward_sync.go`
 
 ##### Task 1.2.1c: Wire the subscriber into `server/server.go` (~2 min)
@@ -735,7 +762,7 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 - Files: `server/server.go`
 
 ##### Task 1.2.2: Add subscriber tests (~5 min)
-- In `server/services/backlog_github_forward_sync_test.go`, add: `TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled`, `TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled`, `TestForwardSyncSubscriber_NoOpWhenPluginDoesNotImplementCloser` (using a fake `github_prs`-like plugin registered without `CloseIssue`).
+- In `server/services/backlog_github_forward_sync_test.go`, add: `TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled`, `TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled`, `TestForwardSyncSubscriber_NoOpWhenPluginDoesNotImplementCloser` (using a fake `github_prs`-like plugin registered without `CloseIssue`), `TestForwardSyncSubscriber_UsesCloseIssueResponseTimestampForWatermark` (fake closer returns a fixed non-zero `time.Time`; assert the persisted `GitHubSyncedIssueUpdatedAt` equals it, not the test's wall-clock — regression test for pre-mortem P1 #1), and `TestForwardSyncSubscriber_RecordsFailureOnCloseError` (fake closer returns an error; assert `RecordSourceSyncFailure` was called — regression test for pre-mortem P1 #3).
 - Files: `server/services/backlog_github_forward_sync_test.go`
 
 ##### Task 1.2.3: Run package tests for Epic 1.2 (~2 min)
@@ -866,15 +893,16 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 ##### Task 2.3.1a: Add the labels gating block (~2 min)
 - In `session/backlog_sync.go`'s existing-item branch, immediately after the existing `priority` gated block (lines 273-276), add:
   ```go
-  if !ContainsModifiedField(modifiedFields, "labels") {
+  if source.BackwardSyncEnabled && !ContainsModifiedField(modifiedFields, "labels") {
       update.Labels = &data.Labels
       anyField = true
   }
   ```
+  **Validation-pass correction (2026-08-03, cross-artifact consistency check)**: the `source.BackwardSyncEnabled` gate is required here — without it, Labels sync onto every source unconditionally regardless of the per-source opt-in, contradicting AC4/AC5 and the Domain Glossary's own definition of `BackwardSyncEnabled`. Epic 2.1 (closed-issue status) and Epic 2.2 (reopened-issue) already gate on this same field; this block was the one place that omitted it. `source` must be in scope in this branch the same way it already is for Epic 2.1/2.2's blocks.
 - Files: `session/backlog_sync.go`
 
 ##### Task 2.3.1b: Add tests (~4 min)
-- In `session/backlog_sync_test.go`, add `TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked` and `TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked` (seeding `UserModifiedFields` directly, since no production path sets `"labels"` today — documented as expected in the Domain Glossary).
+- In `session/backlog_sync_test.go`, add `TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked`, `TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked` (seeding `UserModifiedFields` directly, since no production path sets `"labels"` today — documented as expected in the Domain Glossary), and `TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled` (source with `BackwardSyncEnabled: false`, plugin returns different labels, assert `Labels` unchanged — the regression test for the 2026-08-03 gating fix above).
 - Files: `session/backlog_sync_test.go`
 
 ##### Task 2.3.2: Run package tests for Epic 2.3 (~2 min)
@@ -1079,6 +1107,7 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 - Files: `web-app/src/lib/hooks/useBacklogSourcesService.ts`
 
 ##### Task 4.3.1b: Add the two toggles + label input + warning to the source row (~5 min)
+- **Validation-pass correction (2026-08-03, triad UX blocker)**: flipping `backwardSyncEnabled` from `false`→`true` must NOT call `setBackwardSyncEnabled` directly on click. It must first call the new preview endpoint (Task 4.3.4a below) and route through a confirmation step (Task 4.3.4b) — see Epic 4.4. Flipping it `true`→`false`, and flipping `forwardSyncEnabled` in either direction, are unaffected and still call their setters directly on click.
 - In `BacklogSourcesSettings.tsx`, inside the existing per-source row (near the `enabled` toggle, lines 143-149), add a "Sync with GitHub" sub-section:
   ```tsx
   <div className={styles.syncDirectionGroup}>
@@ -1088,7 +1117,12 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
     {source.forwardSyncEnabled && (
       <input type="text" placeholder="Label to apply on close (optional)" value={source.forwardSyncCloseLabel} onChange={...} />
     )}
-    <button role="switch" aria-checked={source.backwardSyncEnabled} ... aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`} />
+    <button
+      role="switch"
+      aria-checked={source.backwardSyncEnabled}
+      onClick={() => source.backwardSyncEnabled ? setBackwardSyncEnabled(source.id, false) : openBackwardSyncConfirm(source.id) /* Task 4.3.4b — does NOT call setBackwardSyncEnabled directly on enable */}
+      aria-label={`${source.backwardSyncEnabled ? "Disable" : "Enable"} reflecting GitHub status back`}
+    />
     <span>Reflect GitHub status back here</span>
     {source.forwardSyncEnabled && source.backwardSyncEnabled && (
       <div className={styles.bothDirectionsWarning}>
@@ -1104,24 +1138,77 @@ Phase 4 (UI) has no code dependency on Phases 1-3 (it only reads already-added `
 - Files: `web-app/src/components/settings/BacklogSourcesSettings.css.ts`
 
 ##### Task 4.3.1d: Add tests (~5 min)
-- In `BacklogSourcesSettings.test.tsx`, add: toggles render with correct `aria-checked` from fetched state; clicking each toggle calls the corresponding hook function; the both-directions warning appears only when both are `true`.
+- In `BacklogSourcesSettings.test.tsx`, add: toggles render with correct `aria-checked` from fetched state; clicking the forward toggle (either direction) and the backward-disable toggle calls the corresponding hook function directly; clicking the backward-*enable* toggle does NOT call `setBackwardSyncEnabled` directly — it opens the confirmation flow instead (Task 4.3.4c covers the confirmed-path test); the both-directions warning appears only when both are `true`.
 - Files: `web-app/src/components/settings/BacklogSourcesSettings.test.tsx`
+
+---
+
+### Epic 4.4: First-enable-of-backward-sync confirmation (closes Unresolved Question #3 / triad UX blocker)
+
+**Goal**: turning on backward sync for a source must never silently bulk-transition already-imported items in the same tick it's enabled. Per ADR-002, a closed linked issue moves a local item to `archived` (never `done`) — the only items actually at risk are ones currently in `idea`/`refining`/`ready`/`queued` whose linked GitHub issue is already closed at the moment of enabling. The user must see how many that is and explicitly confirm before the toggle takes effect. This is the resolution to Unresolved Question #3, previously left open — a preview-and-confirm step, not a full dry-run/undo system (which the plan's Unresolved Questions section already judged disproportionate for this project's scope).
+
+#### Story 4.4.1: `PreviewBackwardSyncImpact` RPC
+**Acceptance Criteria**:
+- *Given* a source with `N` already-imported items in `idea`/`refining`/`ready`/`queued` whose linked GitHub issue is currently closed (per a live `Fetch` against that source, reusing the same decrypted token/config path `SyncOne` already uses — not a second credential flow), and `M` other already-imported items (open issues, or non-eligible statuses), *When* `PreviewBackwardSyncImpact(sourceID)` is called, *Then* it returns `{ itemCount: N, sampleTitles: [...up to 5 titles...] }`, excluding the `M` items entirely (mirrors `determineBackwardSyncTarget`'s exact eligibility logic — reuse that function, do not re-derive the eligibility rule a second time).
+- *Given* the source's `Fetch` call fails (e.g. rate limit, auth), *When* `PreviewBackwardSyncImpact` is called, *Then* it returns a typed error the frontend surfaces as "Couldn't check impact — try again" rather than silently reporting `itemCount: 0` (a false "nothing will change" would be worse than an explicit failure here).
+**Files**: `proto/session/v1/session.proto` (new RPC + response message), `server/services/backlog_service_lifecycle.go` or a new `server/services/backlog_sources_preview.go`, corresponding test file
+
+##### Task 4.4.1a: Add the RPC and handler (~6 min)
+- Add `PreviewBackwardSyncImpact(sourceID string) (itemCount int, sampleTitles []string, err error)` — proto request/response, `make proto-gen`, and a handler that: loads the source, decrypts its token, calls the plugin's `Fetch` once, cross-references returned closed-state `ExternalItem`s against locally-stored items for that source, and applies `determineBackwardSyncTarget` per item to count only truly-eligible ones.
+- Files: `proto/session/v1/session.proto`, `server/services/backlog_sources_preview.go` (new)
+
+##### Task 4.4.1b: Add tests (~5 min)
+- `TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems`, `TestPreviewBackwardSyncImpact_ReturnsErrorOnFetchFailure` (not a zero count).
+- Files: `server/services/backlog_sources_preview_test.go`
+
+#### Story 4.4.2: Confirmation dialog gates the backward-sync toggle
+**Acceptance Criteria** (closes the triad UX blocker; the four bullets below close the UX round-2 gaps found 2026-08-03):
+- *Given* a user clicks the backward-sync toggle to turn it ON, *When* `PreviewBackwardSyncImpact` returns `itemCount: 3`, *Then* a confirmation dialog appears: "Enabling this will immediately archive 3 already-imported item(s) whose linked GitHub issue is closed and can't be undone by disabling this toggle again: <sampleTitles, comma-joined, plus "and N more" if truncated>. Continue?" with Cancel/Confirm actions; the toggle only actually flips (calling `setBackwardSyncEnabled(sourceID, true)`) on Confirm. Copy explicitly states the archive is not undone by re-disabling the toggle (informed-consent gap from UX round 2).
+- *Given* `itemCount: 0`, *When* the toggle is clicked, *Then* it flips immediately with no dialog (no impact to preview — do not add friction where there's nothing to warn about).
+- *Given* the user clicks Cancel, *When* dismissed, *Then* the toggle's visual state remains unchanged (still off) and no RPC to change `backwardSyncEnabled` is made.
+- *Given* the toggle is clicked, *When* `PreviewBackwardSyncImpact` is in flight, *Then* the toggle shows a pending/disabled visual state until the preview resolves (UX round 2: visibility-of-system-status gap) — matches whatever pending-state convention the `enabled` toggle already uses, if any, or a simple spinner/opacity change otherwise.
+- *Given* `PreviewBackwardSyncImpact` returns an error (not just a nonzero count), *When* the toggle is clicked, *Then* the dialog is not shown, the toggle returns to its off pending state, and an inline error ("Couldn't check impact — try again") appears — a distinct, directly-testable path from the happy-path count display (UX round 2: error-path AC wasn't pinned separately from Story 4.4.1's).
+- The dialog uses `role="dialog" aria-modal="true"`, traps focus while open, closes on Escape (treated as Cancel), and returns focus to the backward-sync toggle button on close (UX round 2: accessibility AC gap) — required regardless of whether an existing modal primitive is reused or a new one is built (Task 4.4.2b).
+**Files**: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, a new small confirmation-dialog component (reuse any existing modal/dialog primitive in `web-app/src/components/shared/` if one exists — verify before adding a new one, per this repo's interface-pollution-checklist spirit applied to components), `web-app/src/lib/hooks/useBacklogSourcesService.ts` (thread the preview call)
+
+**Deferred, not blocking** (UX round 2, judged acceptable to defer per proportionality): preview-to-confirm staleness (the eligible-item count could change between preview and Confirm if the user waits and a real sync tick runs in between) — accepted as a rare, low-consequence race (worst case: one extra or one fewer item archived than the number shown, not a data-loss or security issue); no dedicated mobile-specific dialog layout beyond this repo's existing responsive dialog conventions (if any modal primitive is reused, its existing mobile behavior applies as-is).
+
+##### Task 4.4.2a: Wire `openBackwardSyncConfirm` (~5 min)
+- In `useBacklogSourcesService.ts`, add `previewBackwardSyncImpact(sourceID)` calling the new RPC.
+- In `BacklogSourcesSettings.tsx`, `openBackwardSyncConfirm(sourceID)` calls `previewBackwardSyncImpact`, then either flips the toggle immediately (`itemCount === 0`) or opens the confirm dialog with the returned count/titles; on Confirm, calls `setBackwardSyncEnabled(sourceID, true)`; on Cancel/dismiss, does nothing further.
+- Files: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, `web-app/src/lib/hooks/useBacklogSourcesService.ts`
+
+##### Task 4.4.2b: Add the dialog markup + CSS (~4 min)
+- Verify an existing dialog/modal primitive first (check `web-app/src/components/shared/`); if none exists, a minimal one is in-scope here (this repo's CSS architecture rule requires `createPortal(..., document.body)` for any overlay — see `.claude/rules/css-architecture.md`).
+- Files: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, `.css.ts` file for the dialog
+
+##### Task 4.4.2c: Add tests (~6 min)
+- `TestBacklogSourcesSettings_ShowsConfirmDialogWithPreviewCount_WhenEnablingBackwardSync`, `TestBacklogSourcesSettings_SkipsDialogWhenPreviewCountIsZero`, `TestBacklogSourcesSettings_CancelLeavesToggleOffAndMakesNoRPCCall`, `TestBacklogSourcesSettings_ConfirmFlipsToggleAndCallsSetBackwardSyncEnabled`, `TestBacklogSourcesSettings_TogglePendingWhilePreviewInFlight` (UX round 2 gap), `TestBacklogSourcesSettings_ShowsInlineErrorWhenPreviewFails_NoDialog` (UX round 2 gap, distinct from the happy-path count test), `TestBacklogSourcesSettings_ConfirmDialogTrapsFocusAndReturnsFocusOnClose` (UX round 2 accessibility gap).
+- Add one Playwright e2e spec (`tests/e2e/backlog-github-sync-settings.spec.ts`, extending the file from Story 4.3.2's UX test): enabling backward sync on a seeded source with 2 eligible items shows the confirmation dialog with "2" in its text before any toggle state changes.
+- Files: `web-app/src/components/settings/BacklogSourcesSettings.test.tsx`, `tests/e2e/backlog-github-sync-settings.spec.ts`
+
+##### Task 4.4.3: Run tests for Epic 4.4 (~2 min)
+- Run `go build ./... && go test ./server/services/... -run PreviewBackwardSyncImpact && cd web-app && npx jest --no-coverage --testPathPatterns="BacklogSourcesSettings"`
+- Files: none (verification only)
 
 ##### Task 4.3.2: Run frontend tests for Epic 4.3 (~2 min)
 - Run `cd web-app && npx jest --no-coverage --testPathPatterns="BacklogSourcesSettings"`
 - Files: none (verification only)
 
 #### Story 4.3.2: Persistent row-level warning for non-transient sync failures
-**Acceptance Criteria** (per UX research §4 — extends AC5's error-visibility expectations):
+**Acceptance Criteria** (AC11 — per UX research §4, extends AC5's error-visibility expectations):
 - *Given* a source's most recent sync history entry has an `errorMessage` indicating an auth failure (e.g. containing "401"/"403"/"revoked"), *When* the source row renders (without needing to expand history), *Then* a persistent warning affordance appears next to `source.displayName` (same visual weight as the existing top-level `lastError` banner, scoped to the row).
-**Files**: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, `web-app/src/components/settings/BacklogSourcesSettings.test.tsx`
+- *Given* a source's most recent failure came from **forward sync** (a `CloseIssue` error persisted via `RecordSourceSyncFailure`, Task 1.2.1b — pre-mortem P1 #3), not a `Fetch` failure, *When* the source row renders, *Then* the same warning affordance appears, sourced from the same `historyBySource`/sync-history read path — this is the corrected mitigation Unresolved Question #1 originally claimed already existed but did not.
+**Files**: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, `web-app/src/components/settings/BacklogSourcesSettings.test.tsx`, `server/services/backlog_sources_service.go` (or wherever `GetSyncHistory`'s backing store lives — verify at implementation time)
 
-##### Task 4.3.2a: Add the row-level warning affordance (~4 min)
-- In `BacklogSourcesSettings.tsx`'s `listItemHeader` (lines 140-157), add a conditional warning icon/text next to `source.displayName` when the most recent sync event (already fetched into `historyBySource`, or a lightweight "has recent auth-type error" flag threaded from the backend — verify whether this requires a new field on the `ItemSource` proto response or can be derived client-side from already-fetched history) indicates a non-transient failure.
-- Files: `web-app/src/components/settings/BacklogSourcesSettings.tsx`
+##### Task 4.3.2a: Ensure `RecordSourceSyncFailure` (Task 1.2.1b) writes into the same store `GetSyncHistory` reads (~4 min)
+- **Validation-pass correction (2026-08-03, pre-mortem P1 #3)**: verify — before writing any frontend code — that `RecordSourceSyncFailure` (added in Task 1.2.1b) persists into the identical backing store `GetSyncHistory`/`historyBySource` already reads from (e.g. the same `SourceSyncEvent`-shaped table/rows, with a `kind`/`source` discriminator distinguishing "fetch" from "forward-sync-close" if useful for the eventual UI copy, but not required for this AC — a shared record shape is sufficient). If no such shared store exists yet, add the minimal write path now (this was previously assumed-but-unbuilt per Unresolved Question #1).
+- In `BacklogSourcesSettings.tsx`'s `listItemHeader` (lines 140-157), add a conditional warning icon/text next to `source.displayName` when the most recent sync event (already fetched into `historyBySource`, or a lightweight "has recent auth-type error" flag threaded from the backend — verify whether this requires a new field on the `ItemSource` proto response or can be derived client-side from already-fetched history) indicates a non-transient failure — regardless of whether that event originated from `Fetch` or from forward-sync's `RecordSourceSyncFailure`.
+- Files: `web-app/src/components/settings/BacklogSourcesSettings.tsx`, backend store for `RecordSourceSyncFailure`
 
-##### Task 4.3.2b: Add a test (~3 min)
-- Add a test asserting the warning renders when the fixture's sync history contains an auth-type `errorMessage`.
+##### Task 4.3.2b: Add tests (~4 min)
+- Add a test asserting the warning renders when the fixture's sync history contains an auth-type `errorMessage` from a `Fetch` failure.
+- Add `TestBacklogSourcesSettings_ShowsWarningForForwardSyncFailure` (regression test for pre-mortem P1 #3): fixture's sync history contains an entry originating from `RecordSourceSyncFailure` (a forward-sync close failure, not a `Fetch` failure); assert the same warning affordance renders.
 - Files: `web-app/src/components/settings/BacklogSourcesSettings.test.tsx`
 
 ##### Task 4.3.3: Run frontend tests for Story 4.3.2 (~2 min)
