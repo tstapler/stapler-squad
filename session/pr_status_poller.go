@@ -93,6 +93,13 @@ func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) 
 	}
 }
 
+// PollInterval returns the poller's configured poll interval, so other components
+// (e.g. ApprovalHandler's CI-status staleness guard) can bound freshness against the
+// same live-configured value rather than a disconnected duplicate literal.
+func (p *PRStatusPoller) PollInterval() time.Duration {
+	return p.config.PollInterval
+}
+
 // SetInstances replaces the full list of monitored instances.
 func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
@@ -402,13 +409,22 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 		}
 	}
 
-	if result.PriorityChanged {
+	// Fire on either a priority change or a CI-conclusion-only change (Task 3.2.1a) — a
+	// conclusion flip that doesn't cross a priority boundary (e.g. pending -> failure with
+	// priority already "blocking") would otherwise leave the diff-viewer badge stale
+	// between poll ticks. Neither changed: no event, per the changed-only-publish guard.
+	if result.PriorityChanged || result.CheckConclusionChanged {
 		p.mu.RLock()
 		onUpdated := p.onUpdated
 		p.mu.RUnlock()
 		if onUpdated != nil {
 			onUpdated(inst)
 		}
-		log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
+		if result.PriorityChanged {
+			log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
+		}
+		if result.CheckConclusionChanged {
+			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", checkConclusion)
+		}
 	}
 }

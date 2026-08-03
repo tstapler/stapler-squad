@@ -1102,6 +1102,9 @@ message ApprovalRuleProto {
   // tool_category matches against classifier.CategorizeToolName() result.
   // Use one of: "builtin", "builtin-agent", "mcp", "mcp-read", "mcp-write".
   string          tool_category           = 28;
+  // require_ci_passing, when true, only matches when the requesting session's GitHub
+  // CI check conclusion is "success". Combinable (AND) with all other conditions.
+  bool            require_ci_passing      = 29;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

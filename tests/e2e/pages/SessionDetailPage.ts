@@ -45,4 +45,8 @@ export class SessionDetailPage {
   getConnectionIndicators(): Locator {
     return this.page.getByTestId(/connection-indicator|live-indicator/);
   }
+
+  getCIStatusBadge(): Locator {
+    return this.page.getByTestId("ci-status-badge");
+  }
 }

@@ -376,6 +376,10 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance lookup into ApprovalService's block-on-red-CI guard (AC5).
+	// GitHubCheckConclusion is not persisted (see plan.md's Implementation Deviations),
+	// so this must be the live registry, not storage.
+	approvalSvc.SetLiveInstanceFinder(svc)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)

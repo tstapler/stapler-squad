@@ -503,6 +503,18 @@ export const denyButton = style({
   },
 });
 
+export const ciBlockedRow = style({
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: "0.25rem",
+});
+
+export const ciBlockedText = style({
+  fontSize: "0.75rem",
+  color: vars.color.warningText,
+});
+
 export const resolvedBadge = style({
   display: "inline-flex",
   alignItems: "center",

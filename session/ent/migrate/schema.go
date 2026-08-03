@@ -80,6 +80,7 @@ var (
 		{Name: "required_flag_prefixes", Type: field.TypeJSON, Nullable: true},
 		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
 		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
+		{Name: "require_ci_passing", Type: field.TypeBool, Default: false},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
 	ApprovalRulesTable = &schema.Table{

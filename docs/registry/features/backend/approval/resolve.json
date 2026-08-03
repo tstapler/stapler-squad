@@ -5,7 +5,15 @@
   "method": "ResolveApproval",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
+  "tested": true,
+  "testIds": [
+    "TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled",
+    "TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled",
+    "TestResolveApproval_UnaffectedWhenNoPR",
+    "TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound",
+    "TestResolveApproval_NilLiveFinder_FailsOpen",
+    "TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly",
+    "TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired"
+  ],
+  "lastModified": "2026-08-03T00:00:00Z"
 }

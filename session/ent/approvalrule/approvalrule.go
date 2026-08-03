@@ -61,6 +61,8 @@ const (
 	FieldPythonModes = "python_modes"
 	// FieldSafePythonImportsOnly holds the string denoting the safe_python_imports_only field in the database.
 	FieldSafePythonImportsOnly = "safe_python_imports_only"
+	// FieldRequireCiPassing holds the string denoting the require_ci_passing field in the database.
+	FieldRequireCiPassing = "require_ci_passing"
 	// Table holds the table name of the approvalrule in the database.
 	Table = "approval_rules"
 )
@@ -92,6 +94,7 @@ var Columns = []string{
 	FieldRequiredFlagPrefixes,
 	FieldPythonModes,
 	FieldSafePythonImportsOnly,
+	FieldRequireCiPassing,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -137,6 +140,8 @@ var (
 	DefaultPythonModes []string
 	// DefaultSafePythonImportsOnly holds the default value on creation for the "safe_python_imports_only" field.
 	DefaultSafePythonImportsOnly bool
+	// DefaultRequireCiPassing holds the default value on creation for the "require_ci_passing" field.
+	DefaultRequireCiPassing bool
 )
 
 // OrderOption defines the ordering options for the ApprovalRule queries.
@@ -230,4 +235,9 @@ func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 // BySafePythonImportsOnly orders the results by the safe_python_imports_only field.
 func BySafePythonImportsOnly(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSafePythonImportsOnly, opts...).ToFunc()
+}
+
+// ByRequireCiPassing orders the results by the require_ci_passing field.
+func ByRequireCiPassing(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRequireCiPassing, opts...).ToFunc()
 }

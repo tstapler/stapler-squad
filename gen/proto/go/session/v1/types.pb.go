@@ -4385,9 +4385,12 @@ type ApprovalRuleProto struct {
 	RequiredFlagPrefixes  []string `protobuf:"bytes,27,rep,name=required_flag_prefixes,json=requiredFlagPrefixes,proto3" json:"required_flag_prefixes,omitempty"`
 	// tool_category matches against classifier.CategorizeToolName() result.
 	// Use one of: "builtin", "builtin-agent", "mcp", "mcp-read", "mcp-write".
-	ToolCategory  string `protobuf:"bytes,28,opt,name=tool_category,json=toolCategory,proto3" json:"tool_category,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ToolCategory string `protobuf:"bytes,28,opt,name=tool_category,json=toolCategory,proto3" json:"tool_category,omitempty"`
+	// require_ci_passing, when true, only matches when the requesting session's GitHub
+	// CI check conclusion is "success". Combinable (AND) with all other conditions.
+	RequireCiPassing bool `protobuf:"varint,29,opt,name=require_ci_passing,json=requireCiPassing,proto3" json:"require_ci_passing,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ApprovalRuleProto) Reset() {
@@ -4579,6 +4582,13 @@ func (x *ApprovalRuleProto) GetToolCategory() string {
 		return x.ToolCategory
 	}
 	return ""
+}
+
+func (x *ApprovalRuleProto) GetRequireCiPassing() bool {
+	if x != nil {
+		return x.RequireCiPassing
+	}
+	return false
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
@@ -6800,7 +6810,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x11seconds_remaining\x18\t \x01(\x05R\x10secondsRemaining\x1a<\n" +
 	"\x0eToolInputEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd1\x06\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xff\x06\n" +
 	"\x11ApprovalRuleProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -6827,7 +6837,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\fpython_modes\x18\x19 \x03(\tR\vpythonModes\x127\n" +
 	"\x18safe_python_imports_only\x18\x1a \x01(\bR\x15safePythonImportsOnly\x124\n" +
 	"\x16required_flag_prefixes\x18\x1b \x03(\tR\x14requiredFlagPrefixes\x12#\n" +
-	"\rtool_category\x18\x1c \x01(\tR\ftoolCategory\"\xbb\n" +
+	"\rtool_category\x18\x1c \x01(\tR\ftoolCategory\x12,\n" +
+	"\x12require_ci_passing\x18\x1d \x01(\bR\x10requireCiPassing\"\xbb\n" +
 	"\n" +
 	"\x15AnalyticsSummaryProto\x12'\n" +
 	"\x0ftotal_decisions\x18\x01 \x01(\x05R\x0etotalDecisions\x12^\n" +

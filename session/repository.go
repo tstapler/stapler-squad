@@ -220,6 +220,7 @@ type ApprovalRuleData struct {
 	RequiredFlagPrefixes  []string
 	PythonModes           []string
 	SafePythonImportsOnly bool
+	RequireCIPassing      bool
 }
 
 // SubcommandDecisionCount holds a (subcommand, decision) aggregate count.

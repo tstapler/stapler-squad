@@ -622,3 +622,32 @@ Goal 2 explicitly rejects").
 ##### Task 4.2.1d: Regenerate and verify (~3 min)
 - Run `make registry-generate`; diff `docs/registry/coverage-gaps.json` before/after and confirm no unexplained increase; commit the regenerated aggregate files alongside the per-feature sources.
 - Files: `docs/registry/coverage-gaps.json`, `docs/registry/backend-features.json`, `docs/registry/frontend-features.json`
+
+---
+
+## Implementation Deviations (discovered during Phase 1/2)
+
+Two corrections to this plan's assumptions, found while implementing Tasks 1.1.2a/2.2.2a:
+
+1. **`GitHubCheckConclusion`/`LastPRStatusCheck` are not persisted.** `Storage.UpdateInstancePRStatus`
+   (`session/storage.go:539-543`) is a deliberate no-op with the comment "PR fields are not
+   stored in the ent schema — they live in memory and are re-populated by PRStatusPoller on
+   each poll cycle." `session/ent/schema/session.go` has no `github_check_conclusion` or
+   `last_pr_status_check` column. This means `Storage.FindInstanceDataByID` (the lookup Tasks
+   1.1.2a and 2.2.2a specified) can **never** see these fields — they only exist on the live
+   in-memory `*session.Instance` objects the poller mutates directly. Fixed by reusing the
+   existing `LiveInstanceFinder` interface (`server/services/workspace_service.go:39-40`,
+   already satisfied by `*SessionService`) instead of `*session.Storage` for both gates:
+   `ApprovalHandler.liveFinder`/`SetLiveInstanceFinder` (Task 1.1.2a) and
+   `ApprovalService.liveFinder`/`SetLiveInstanceFinder` (Task 2.2.1a/2.2.2a). Both are wired
+   to `deps.SessionService` in `server/server.go`. `ApprovalService` still needed no `storage`
+   field at all — `LiveInstanceFinder` alone covers both `GitHubPRNumber` and
+   `GitHubCheckConclusion`. Ent schema/migration was not touched — persisting these fields was
+   out of scope and would be a much larger change than this plan's stated size.
+2. Adding `RequireCIPassing` (Task 1.1.3a-c) also required a previously-undocumented 3rd
+   persistence layer beyond `RuleSpec`/proto: rules are stored via `EntRepository.UpsertRule`/
+   `AllRules` (`session/ent_repository.go`) backed by `session/ent/schema/approvalrule.go`, not
+   only the JSON export path the plan's Migration Plan described. Added
+   `require_ci_passing` to the ent schema (`Default(false)`, same pattern as
+   `safe_python_imports_only`) and regenerated via `go run -mod=mod entgo.io/ent/cmd/ent
+   generate --feature sql/upsert ./schema` per `.claude/rules/ent-schema-generation.md`.
