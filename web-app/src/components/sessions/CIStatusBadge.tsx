@@ -1,3 +1,4 @@
+// +feature: session:ci-status-badge
 "use client";
 
 import { timestampDate, type Timestamp } from "@bufbuild/protobuf/wkt";
