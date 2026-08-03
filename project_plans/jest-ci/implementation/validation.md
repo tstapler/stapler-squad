@@ -1,0 +1,48 @@
+# Validation Plan: jest-ci
+
+**Date**: 2026-08-02
+
+## Happy Path Scenario
+
+Given the current state (the `web-app` Jest suite runs locally but is invoked
+nowhere in `.github/workflows/*.yml`), when a PR introduces a test regression,
+then the new `jest.yml` workflow goes red with the failure visible in both the
+check status and the Actions Summary tab.
+
+## UX Acceptance Tests
+
+N/A — no user-facing surface. This is a Complexity-1 CI/infra task (one new
+workflow YAML file, two test-file quarantine edits, one rules doc); there is
+no `design/ux.md` for this project and no UI is touched.
+
+## Requirement → Test Mapping
+
+| Requirement (AC) | Verification | Type | How to run / What proves it | Verifiable pre-merge? |
+|---|---|---|---|---|
+| AC1 — workflow triggers on push/PR, path filter broadened beyond `lint.yml` | **`jest-yml-path-filter-includes-package-json`**: static check that `jest.yml`'s `on.push.paths`/`on.pull_request.paths` include `web-app/**` and `.github/workflows/jest.yml` (a superset of `lint.yml`'s extension-only list, so it also covers `package.json`/`jest.config.js`/`pnpm-lock.yaml` diffs that `lint.yml` misses) | Local proxy (YAML review) for the filter's *content*; GHA-only for whether GitHub's server-side path-filter evaluation actually triggers a run | `grep -A6 'paths:' .github/workflows/jest.yml` and confirm `web-app/**` is present (not a narrower extension list); cross-check against `requirements.md`'s explicit list of file types (`package.json`, `jest.config.js`, lockfile) that must be covered | **No** — GitHub's `paths:` trigger evaluation only happens server-side on a real push/PR event. First real proof: open a PR that touches only `web-app/package.json` (no `.ts`/`.tsx`/`.css`) against this branch and confirm the `jest` check appears in the PR's checks list. plan.md's Unresolved Questions §4 already documents this as an accepted gap. |
+| AC2 — fails on real test failure or zero suites collected | **`jest-step-exits-nonzero-on-real-failure`** and **`jest-step-exits-zero-on-quarantined-green`** | Local, fully runnable | 1) In `web-app/`: `pnpm install --frozen-lockfile && npx jest --selectProjects web-app --maxWorkers=2 --ci`; confirm exit code `0` (`echo $?`) after quarantine is applied. 2) Temporarily flip one healthy `expect(...).toBe(true)` to `false` in any non-quarantined test, rerun the identical command, confirm non-zero exit code and a `Test Suites: 1 failed, ...` line in stdout, then revert the edit (never commit it) — `git diff --stat` must show zero changes after revert. 3) Confirm no `--passWithNoTests` flag appears anywhere in `jest.yml` or `jest.config.js` (`grep -rn passWithNoTests web-app/jest.config.js .github/workflows/jest.yml` returns nothing), which is what makes a hypothetical zero-suites-collected case (e.g. all test files deleted) also fail rather than silently pass | **Yes**, fully — this is the one AC whose real mechanism (Jest's own exit code) is identical locally and in CI; only the YAML plumbing around it (`tee`/`PIPESTATUS`/`exit "$JEST_EXIT"`) is CI-specific and covered by AC5's row |
+| AC3 — clean install, not stale `node_modules` | **`jest-yml-uses-frozen-lockfile-install`** | Local proxy (YAML + literal command match) | `grep -n 'pnpm install --frozen-lockfile' .github/workflows/jest.yml` returns exactly one match inside the `working-directory: web-app` step; confirm the step has no preceding step that could seed `node_modules` from cache in a way that bypasses the install (compare against `lint.yml`'s equivalent step, which this task copies verbatim) | **Partially** — the *command* and its local behavior (fresh install resolves only from `pnpm-lock.yaml`, fails loudly on a lockfile/`package.json` mismatch) are directly runnable and verifiable locally by running the same command from a clean `git clean -ndx web-app/node_modules`-equivalent state; whether GitHub's `ubuntu-latest` runner is actually free of a stale pre-seeded `node_modules` (as opposed to a contributor's local machine) is a GHA-runner-environment assumption, first proven on the real PR run. |
+| AC4 — 2 known-broken suites quarantined with tracked follow-up, other tests unaffected | **`quarantine-diff-touches-only-skip-and-todo-lines`**, **`quarantine-suites-report-skipped-not-failed`**, **`quarantine-no-issue-number-placeholder-left`** | Local, fully runnable | 1) `git diff web-app/src/components/backlog/BacklogEmptyState.test.tsx web-app/src/components/sessions/__tests__/SessionDetail.embedded.test.tsx` and manually confirm every changed line is either an `it(` → `it.skip(`/`describe(` → `describe.skip(` rename or an added `// TODO(#...)` comment block — no other line (assertions, setup, imports, unrelated tests) is touched. 2) Run `npx jest --selectProjects web-app --maxWorkers=2 --ci` and grep its output for the quarantined suites; confirm they show as skipped (Jest reports `Tests: N skipped`, not a failure) rather than absent from the run entirely, and confirm `BacklogEmptyState.test.tsx` still runs its other 11 tests (12 total, 1 skipped) — check the per-file line in `--ci` output or `--verbose` output. 3) `grep -rn '<ISSUE_NUMBER>' web-app/src` returns zero matches (per Task 1.3.2's own stated exit criterion in plan.md) — the only acceptable remaining placeholder is a literal `TODO(#TBD)`. | **Yes**, fully — quarantine mechanism, its scope, and Jest's skipped-vs-failed reporting are all locally observable. The one non-local piece (whether Task 1.3.1's `gh issue create` succeeded and produced a real issue number vs. `TBD`) is verified by reading the actual issue number in the diff, not by running anything. |
+| AC5 — Actions Summary tab shows Test Suites/Tests/Time on both pass and fail | **`jest-yml-summary-step-preserves-real-exit-code`** (local proxy) and **`actions-summary-tab-renders-jest-block`** (GHA-only) | Local proxy for the script logic; GHA-only for actual UI rendering | Local: extract the `Run Jest (web-app project)` step's `run:` block and execute it verbatim in a shell from `web-app/` (both once with the suite green and once with a temporarily-broken test per AC2's row); confirm (a) `jest-output.log` is written, (b) a file written to a local stand-in path for `$GITHUB_STEP_SUMMARY` (`GITHUB_STEP_SUMMARY=/tmp/summary.md bash -c '...'`) contains a `## Jest (web-app project)` fenced block with the `Test Suites:`/`Tests:`/`Time:` lines and no raw ANSI escape bytes (`grep -P '\x1b\[' /tmp/summary.md` returns nothing), and (c) the script's own exit code matches Jest's real exit code (`0` green / non-zero red), not `tee`'s (always-0) exit code. GHA-only: open the real PR, click into the `jest` job's Summary tab, and visually confirm the same block renders in the GitHub UI — the local check proves the script produces correct file content; it cannot prove GitHub's Summary tab actually displays `$GITHUB_STEP_SUMMARY` content as expected (a well-established GitHub Actions feature, but not exercised by any local tool). | **Partially** — script correctness (No gap) is local; real UI rendering (**No**) is proven only on the first real PR, per plan.md's Unresolved Questions §4. |
+| AC6 — documentation of which projects run in CI and why | **`jest-ci-rules-doc-covers-required-content`**, **`claude-md-index-has-jest-ci-row`** | Local, fully runnable | 1) Read `.claude/rules/jest-ci.md` and confirm it names all 4 `jest.config.js` projects, states only `web-app` runs in CI, gives a reason for excluding the other 3, names both quarantined suites with file:line, states the tracked issue number (or explicit `TBD` + manual-filing note), and describes the `$GITHUB_STEP_SUMMARY` `tee`/`PIPESTATUS` mechanism. 2) `grep -n 'jest-ci.md' CLAUDE.md` returns exactly one row in the Reference Documents Index table, formatted consistently with neighboring rows (e.g. `e2e-test-conventions.md`'s row). | **Yes**, fully — a documentation file's content and its cross-reference are both statically readable; no CI-only behavior is involved. |
+
+## Test Stack
+
+- Local: `pnpm install --frozen-lockfile && npx jest --selectProjects web-app --maxWorkers=2 --ci` in `web-app/` (the exact invocation `jest.yml`'s "Run Jest (web-app project)" step uses, per plan.md Story 2.2/Task 2.2.1)
+- Local proxy for the Summary-tab step: extract and run the step's `run:` block verbatim in a shell, pointing `$GITHUB_STEP_SUMMARY` at a local file, to check script logic (exit-code propagation, ANSI stripping, Markdown block shape) without needing a real Actions run
+- Local, static: `grep`/`git diff` checks against `jest.yml`, the two quarantined test files, `.claude/rules/jest-ci.md`, and `CLAUDE.md`
+- CI-only (cannot be replicated locally, per plan.md's Unresolved Questions §4): GitHub's `paths:` filter evaluation (AC1) and `$GITHUB_STEP_SUMMARY` Actions UI rendering (AC5) — both require an actual GitHub Actions run against a real PR; this validation plan does not invent a local proxy that claims to cover them, since none exists
+
+## Coverage Targets and How to Measure
+
+This task adds zero new application code, so conventional statement/branch
+coverage of "new code" does not apply. The *existing* `web-app` Jest project's
+own test coverage (259 test files / ~3600 tests measured at planning time,
+per requirements.md's Constraints section) is out of scope for this task —
+wiring it into CI does not change what it covers, only whether CI runs it.
+
+This task's own "test suite" is the verification-steps table above: 6 ACs,
+each with at least one concrete, runnable-or-explicitly-GHA-only check. There
+is no numeric coverage percentage to report; the relevant metric is the
+Requirements Coverage fraction below (6/6 ACs have at least one verification
+step defined).

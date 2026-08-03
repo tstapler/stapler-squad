@@ -1,0 +1,54 @@
+name: Jest (web-app)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'web-app/**'
+      - '.github/workflows/jest.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'web-app/**'
+      - '.github/workflows/jest.yml'
+
+jobs:
+  jest:
+    name: jest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      - name: Install web-app dependencies
+        working-directory: web-app
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Jest (web-app project)
+        working-directory: web-app
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          npx jest --selectProjects web-app --maxWorkers=2 --ci 2>&1 | tee jest-output.log
+          JEST_EXIT=${PIPESTATUS[0]}
+
+          {
+            echo "## Jest (web-app project)"
+            echo '```text'
+            tail -n 40 jest-output.log | sed -E 's/\x1b\[[0-9;?]*[a-zA-Z]//g'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$JEST_EXIT"

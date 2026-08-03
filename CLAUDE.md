@@ -249,6 +249,7 @@ kill %1   # stop it when done
 | Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
 | Interface pollution checklist (leaky abstractions in LLM-generated Go) | `.claude/rules/interface-pollution-checklist.md` |
 | E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
+| Jest CI wiring (scope, quarantine, Step Summary) | `.claude/rules/jest-ci.md` |
 | Commit SDD planning artifacts before ending a session | `.claude/rules/sdd-planning-artifacts-commit.md` |
 | Prefer go-git over shelling out to git CLI | `.claude/rules/prefer-go-git-over-subshells.md` |
 | Service restart kills every live tmux session without `--tmux-keep-server` | `.claude/rules/tmux-keep-server-on-restart.md` |
