@@ -980,28 +980,17 @@ func findActiveWorkSession(priorSessions []session.ItemSessionSummary) *session.
 // activeWorkSessionBlockedError builds the CodeAlreadyExists error for
 // spawnSessionAfterGates' 8b guard, enriched with the same progress signal
 // notifyIfActiveWorkSessionStale already computes for the review-reopen path
-// (via the shared workSessionStaleness helper below) — without this, a
-// caller blocked here has no way to tell "still working" from "silently
-// stuck" short of manually cross-referencing a session's last-activity
-// timestamp, a full diff pull, and a live tmux check (see
-// docs/tasks/backlog-feature-improvement.md's 2026-07-31 entry: discovered
-// live while manually unsticking backlog item 04089969). Reuses
+// (via the shared respawnBlockedActiveProgressSignal/workSessionStaleness
+// helpers below) — without this, a caller blocked here has no way to tell
+// "still working" from "silently stuck" short of manually cross-referencing a
+// session's last-activity timestamp, a full diff pull, and a live tmux check
+// (see docs/tasks/backlog-feature-improvement.md's 2026-07-31 entry:
+// discovered live while manually unsticking backlog item 04089969). Reuses
 // maxReworkBlockStaleness (15min) as the same "stalled" threshold that path
 // already established, rather than inventing a second one.
 func (s *BacklogService) activeWorkSessionBlockedError(active *session.ItemSessionSummary) error {
 	base := fmt.Sprintf("a work session (%s) is already active for this item; wait for it to finish or kill it first", active.SessionUUID)
-	if s.sessionStopper == nil {
-		return fmt.Errorf("%s — progress signal unavailable: sessionStopper not wired", base)
-	}
-	idle, live, stale := s.workSessionStaleness(active.SessionUUID)
-	if !live {
-		return fmt.Errorf("%s — progress signal unavailable: session not currently tracked live", base)
-	}
-	if stale {
-		return fmt.Errorf("%s — likely stalled: no output in %s (stale threshold %s), consider checking it manually",
-			base, idle.Round(time.Second), maxReworkBlockStaleness)
-	}
-	return fmt.Errorf("%s — still active: output %s ago", base, idle.Round(time.Second))
+	return fmt.Errorf("%s — %s", base, s.respawnBlockedActiveProgressSignal(active.SessionUUID))
 }
 
 // maxReworkBlockStaleness is the threshold notifyIfActiveWorkSessionStale (and
@@ -1036,6 +1025,101 @@ func (s *BacklogService) workSessionStaleness(sessionUUID string) (idle time.Dur
 	}
 	idle, live = s.sessionStopper.TimeSinceLastMeaningfulOutput(sessionUUID)
 	return idle, live, live && idle > maxReworkBlockStaleness
+}
+
+// respawnBlockedActiveProgressSignal renders the same "still active" vs.
+// "likely stalled" vs. "progress signal unavailable" text
+// activeWorkSessionBlockedError already gives spawnSessionAfterGates' 8b
+// guard, built from the shared workSessionStaleness computation. Factored out
+// so notifyRespawnBlockedByActiveSession doesn't duplicate that three-way
+// branch — the same duplication-avoidance activeWorkSessionBlockedError
+// itself already applies by calling workSessionStaleness rather than
+// recomputing idle/live/stale locally.
+func (s *BacklogService) respawnBlockedActiveProgressSignal(activeSessionUUID string) string {
+	if s.sessionStopper == nil {
+		return "progress signal unavailable: sessionStopper not wired"
+	}
+	idle, live, stale := s.workSessionStaleness(activeSessionUUID)
+	if !live {
+		return "progress signal unavailable: session not currently tracked live"
+	}
+	if stale {
+		return fmt.Sprintf("likely stalled: no output in %s (stale threshold %s)", idle.Round(time.Second), maxReworkBlockStaleness)
+	}
+	return fmt.Sprintf("still active: output %s ago", idle.Round(time.Second))
+}
+
+// notifyRespawnBlockedByActiveSession closes the audit-trail gap where
+// AutoRespawnAutonomousWork, AutoReopenForPRFix, and AutoRespawnReview's
+// findActiveWorkSession/findActiveReviewSession guards previously only
+// log.InfoLog.Printf'd the skip and returned nil — zero operator-visible
+// signal and no audit record, strictly worse than spawnSessionAfterGates' own
+// 8b guard (activeWorkSessionBlockedError), which at least returns a
+// progress-enriched error to its synchronous caller (see
+// docs/tasks/backlog-feature-improvement.md, 2026-07-31/2026-08-03 updates).
+//
+// Mirrors notifyReworkCapHit's structure (MarkStuck + MarkStuckNotified +
+// eventBus notification), reusing the dedicated
+// domain.StuckReasonRespawnBlockedActive reason so the item's stuck-reason
+// history can tell "blocked because a session is already running" apart from
+// rework_cap/bouncing/rework_blocked_stale. Reuses
+// respawnBlockedActiveProgressSignal (built on the same workSessionStaleness
+// helper activeWorkSessionBlockedError/notifyIfActiveWorkSessionStale/
+// ResolveReworkBlockedStaleIfRecovered already share) so an operator checking
+// a skipped item here gets the same "still active" vs. "likely stalled"
+// distinction instead of a bare log line.
+//
+// Deliberately NOT gated on staleness (unlike notifyIfActiveWorkSessionStale)
+// — these three call sites previously had zero signal even for a healthy,
+// still-progressing block, which is the gap being closed here. Deliberately
+// NOT gated on MarkStuck's `applied` return either, matching
+// notifyReworkCapHit/notifySpawnAndRollbackFailed's existing precedent: those
+// helpers already re-publish a notification on every call rather than only
+// once per open row, and callers of this helper are naturally rate-limited
+// the same way (each fires once per reconcile-triggered respawn attempt, not
+// on a tight poll loop).
+func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context, caller, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
+	progress := s.respawnBlockedActiveProgressSignal(activeSessionUUID)
+	log.InfoLog.Printf("[%s] item %s already has an active session %s; skipping respawn — %s", caller, itemID, activeSessionUUID, progress)
+
+	if s.storage != nil {
+		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, currentStatus,
+			fmt.Sprintf("%s skipped auto-respawn — session %s already active (%s)", caller, activeSessionUUID, progress))
+		if err != nil {
+			log.WarningLog.Printf("[%s] MarkStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
+		} else if applied {
+			if _, notifyErr := s.storage.MarkStuckNotified(ctx, itemID, domain.StuckReasonRespawnBlockedActive); notifyErr != nil {
+				log.WarningLog.Printf("[%s] MarkStuckNotified(respawn_blocked_active) item=%s: %v", caller, itemID, notifyErr)
+			}
+		}
+	}
+
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW),
+		"Auto-respawn skipped — session already active",
+		fmt.Sprintf("%s — automatic respawn (%s) was skipped because a session is already active: %s.", itemTitle, caller, progress),
+		map[string]string{"item_id": itemID},
+	))
+}
+
+// resolveRespawnBlockedActiveLogged clears an open
+// StuckReasonRespawnBlockedActive row for itemID, logging (not returning) any
+// storage error — mirrors resolveReworkBlockedStaleLogged. Called by all
+// three notifyRespawnBlockedByActiveSession callers once their active-session
+// guard passes (the block has cleared), so the row doesn't outlive the
+// condition it records.
+func (s *BacklogService) resolveRespawnBlockedActiveLogged(ctx context.Context, caller, itemID string) {
+	if s.storage == nil {
+		return
+	}
+	if _, err := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive); err != nil {
+		log.WarningLog.Printf("[%s] ResolveStuck(respawn_blocked_active) item=%s: %v", caller, itemID, err)
+	}
 }
 
 // notifyIfActiveWorkSessionStale closes the "zero operator signal" half of a
@@ -1187,16 +1271,19 @@ func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, it
 	}
 }
 
-// hasActiveReviewSession reports whether any of the provided ItemSessions is an
-// open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
-// AutoRespawnReview to avoid double-spawning a review pass that is already running.
-func hasActiveReviewSession(priorSessions []session.ItemSessionSummary) bool {
-	for _, ps := range priorSessions {
-		if ps.Role == session.SessionRoleReview && ps.EndedAt == nil {
-			return true
+// findActiveReviewSession returns the open (not yet ended) review-role
+// ItemSession, if any — the review-role counterpart of findActiveWorkSession.
+// Used by AutoRespawnReview to avoid double-spawning a review pass that is
+// already running, and to give its skip branch the session UUID it needs to
+// enrich notifyRespawnBlockedByActiveSession with a progress signal instead
+// of a bare "already active."
+func findActiveReviewSession(priorSessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+	for i := range priorSessions {
+		if priorSessions[i].Role == session.SessionRoleReview && priorSessions[i].EndedAt == nil {
+			return &priorSessions[i]
 		}
 	}
-	return false
+	return nil
 }
 
 // buildRevisionTitle returns the session title for a backlog work session. On reopen
@@ -1438,10 +1525,11 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	// callback that triggered this call already ended the session record, but
 	// a race with another respawn attempt is still possible.
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if hasActiveWorkSession(sessions) {
-		log.InfoLog.Printf("[AutoRespawnAutonomousWork] item %s already has an active work session; skipping respawn", itemID)
+	if active := findActiveWorkSession(sessions); active != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnAutonomousWork", itemID)
 
 	workCount := 0
 	for _, is := range sessions {
@@ -1578,10 +1666,11 @@ func (s *BacklogService) AutoReopenForPRFix(ctx context.Context, itemID string, 
 	// progress while its 4-hour-old autonomous work session was, in fact, still active
 	// (see docs/tasks/backlog-feature-improvement.md).
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if hasActiveWorkSession(sessions) {
-		log.InfoLog.Printf("[AutoReopenForPRFix] item %s already has an active work session; leaving pr_pending alone", itemID)
+	if active := findActiveWorkSession(sessions); active != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
 
 	workCount := 0
 	for _, is := range sessions {
@@ -1714,10 +1803,15 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	// since the detector query that found the item abandoned. Tombstone any work
 	// session confirmed dead first, mirroring AutoReopenForPRFix's identical guard.
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
-	if hasActiveWorkSession(sessions) || hasActiveReviewSession(sessions) {
-		log.InfoLog.Printf("[AutoRespawnReview] item %s already has an active session; skipping respawn", itemID)
+	active := findActiveWorkSession(sessions)
+	if active == nil {
+		active = findActiveReviewSession(sessions)
+	}
+	if active != nil {
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
+	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnReview", itemID)
 
 	// Cap on *review* sessions, not work sessions: this path never spawns a work
 	// session, so the work-session counters AutoReopenAfterFailedReview/

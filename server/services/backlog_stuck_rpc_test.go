@@ -412,6 +412,15 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// proceeds without killing the still-running session needs its own
 	// design, not built here).
 	domain.StuckReasonReworkBlockedStale: true,
+	// StuckReasonRespawnBlockedActive: deliberately notify + durably mark +
+	// resolve-once-the-guard-passes only, mirroring StuckReasonReworkBlockedStale
+	// above — a single reason spans three different triggering statuses/
+	// functions (AutoRespawnAutonomousWork/in_progress, AutoReopenForPRFix/
+	// pr_pending, AutoRespawnReview/review), so there is no single unambiguous
+	// "retry now" action to wire, and re-invoking any of the three while the
+	// blocking session is still active would just re-mark the same row —
+	// exactly what the next reconcile tick already does for free.
+	domain.StuckReasonRespawnBlockedActive: true,
 }
 
 // TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded

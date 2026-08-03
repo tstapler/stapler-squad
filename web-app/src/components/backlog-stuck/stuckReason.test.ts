@@ -20,6 +20,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.PUSH_FAILED,
   StuckReason.REWORK_BLOCKED_STALE,
   StuckReason.PR_NEEDS_FIX,
+  StuckReason.RESPAWN_BLOCKED_ACTIVE,
 ];
 
 describe("stuckReason", () => {
@@ -55,6 +56,15 @@ describe("stuckReason", () => {
         getStuckReasonLabel(StuckReason.UNSPECIFIED)
       );
       expect(getStuckReasonClass(StuckReason.PR_NEEDS_FIX)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
+    });
+
+    it("gives respawn_blocked_active a real label, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.RESPAWN_BLOCKED_ACTIVE)).not.toBe(
         getStuckReasonClass(StuckReason.UNSPECIFIED)
       );
     });
