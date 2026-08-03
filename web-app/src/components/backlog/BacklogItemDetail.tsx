@@ -1160,7 +1160,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                     ? "This item's most recent triage session ended without producing a usable plan. Retry triage to generate one."
                     : undefined
                 }
-                onRetry={handleRetriggerTriage}
+                // InlineError itself has no disabled/loading state (unmodified,
+                // pre-existing component) — guard the same way
+                // TriageLoadingIndicator's onCancel does above, swapping in a
+                // no-op while a retry is already in flight. Without this, a
+                // double-click fires two concurrent retriggerTriageCore calls,
+                // each doing transitionStatus(id,"idea") + triggerTriage(id) —
+                // worse for a queued item (two competing status resets) than the
+                // pre-existing idea-only exposure of this same button.
+                onRetry={actionLoading !== null ? () => {} : handleRetriggerTriage}
               />
             </div>
           )}

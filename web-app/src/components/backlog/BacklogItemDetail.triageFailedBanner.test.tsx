@@ -215,4 +215,31 @@ describe("BacklogItemDetail — triage-produced-no-usable-result banner", () => 
     expect(transitionStatus).not.toHaveBeenCalled();
     expect(triggerTriage).toHaveBeenCalledWith("item-1");
   });
+
+  // MINOR finding from PR #322 review: InlineError (unmodified, pre-existing)
+  // has no built-in disabled/loading state, so a double-click on its Retry
+  // button used to be able to fire two concurrent retriggerTriageCore calls —
+  // worse for a queued item than the pre-existing idea-only exposure, since
+  // each call does its own transitionStatus(id,"idea") + triggerTriage(id).
+  // BacklogItemDetail now threads the same actionLoading guard
+  // TriageLoadingIndicator's onCancel already used, swapping onRetry to a
+  // no-op while a retry is in flight.
+  it("does not dispatch a second retry while the first is still in flight (double-click guard)", async () => {
+    await renderItem("queued");
+
+    const banner = await screen.findByRole("alert");
+    const retryButton = within(banner).getByRole("button", { name: /retry/i });
+
+    fireEvent.click(retryButton);
+    fireEvent.click(retryButton);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(transitionStatus).toHaveBeenCalledTimes(1);
+    expect(triggerTriage).toHaveBeenCalledTimes(1);
+  });
 });

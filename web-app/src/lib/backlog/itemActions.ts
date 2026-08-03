@@ -41,7 +41,13 @@ export type BacklogActionId =
 export interface ItemActionabilityInput
   extends Pick<
     BacklogItem,
-    "status" | "skipPlanning" | "planApproved" | "planArtifactsPath" | "prUrl" | "linkedSessions"
+    | "status"
+    | "skipPlanning"
+    | "planApproved"
+    | "planArtifactsPath"
+    | "prUrl"
+    | "linkedSessions"
+    | "triageStatus"
   > {}
 
 export interface AvailableActions {
@@ -63,20 +69,40 @@ export interface AvailableActions {
   hasPlan: boolean;
 }
 
-const KNOWN_STATUSES = new Set<KnownBacklogStatus>([
-  "idea",
-  "refining",
-  "ready",
-  "queued",
-  "in_progress",
-  "review",
-  "pr_pending",
-  "done",
-  "archived",
-]);
+// KNOWN_STATUS_MEMBERSHIP, not a hand-typed Set<KnownBacklogStatus>, is what makes
+// asKnownStatus's runtime routing gate stay in sync with the KnownBacklogStatus union at
+// COMPILE time. A plain `new Set<KnownBacklogStatus>([...])` looks type-safe but isn't: TS
+// only checks that each listed literal belongs to the union, never that every union member
+// is listed — add a 10th status to KnownBacklogStatus (useBacklogService.ts) without adding
+// it here, and the switch below still forces you to add a `case` for it (its own `never`
+// check catches that), but nothing forces this object to grow too. With that desync,
+// asKnownStatus silently treats real items in the new status as "unknown" (status: undefined
+// below), routing them to the delete-only branch instead of the case you just wrote —
+// `tsc --strict` exits 0 the whole time. The exhaustiveness guarantee only ever covered the
+// switch, not the gate that lets values reach it. `satisfies Record<KnownBacklogStatus, true>`
+// closes that gap: TS errors here on both a missing key (a new status not yet added) and an
+// extra key (a status removed from the union), so the object's key set can never silently
+// drift from KnownBacklogStatus.
+// Exported so itemActions.test.ts can assert its key count against a literal
+// reference list — a cheap runtime tripwire on top of the `satisfies` check
+// above (which is the actual compile-time guarantee; this just makes the
+// invariant visible in test output too).
+export const KNOWN_STATUS_MEMBERSHIP = {
+  idea: true,
+  refining: true,
+  ready: true,
+  queued: true,
+  in_progress: true,
+  review: true,
+  pr_pending: true,
+  done: true,
+  archived: true,
+} satisfies Record<KnownBacklogStatus, true>;
 
 function asKnownStatus(status: string): KnownBacklogStatus | undefined {
-  return KNOWN_STATUSES.has(status as KnownBacklogStatus) ? (status as KnownBacklogStatus) : undefined;
+  return Object.prototype.hasOwnProperty.call(KNOWN_STATUS_MEMBERSHIP, status)
+    ? (status as KnownBacklogStatus)
+    : undefined;
 }
 
 /** Statuses with an earlier stage to return to — mirrors the original
@@ -125,12 +151,27 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
       actions.add("spawn_session");
       actions.add("spawn_session_autonomous");
       if (isGatedOnPlanApproval) {
-        actions.add(hasPlan ? "approve_plan" : "retry_triage");
+        if (hasPlan) {
+          actions.add("approve_plan");
+        } else if (item.triageStatus === "failed") {
+          // A ready item can also be reached via "Mark Ready" straight from idea,
+          // with no plan and no triage session ever having run (triageStatus
+          // undefined) — showing "Retry Triage" there would duplicate the
+          // "Trigger Triage" button above for a case with nothing to retry. Only
+          // surface it when there's actual evidence a triage attempt happened
+          // and produced nothing usable, matching the triage-failed banner's own
+          // condition in BacklogItemDetail.tsx.
+          actions.add("retry_triage");
+        }
       }
       break;
     case "queued":
       if (isGatedOnPlanApproval) {
-        actions.add(hasPlan ? "approve_plan" : "retry_triage");
+        if (hasPlan) {
+          actions.add("approve_plan");
+        } else if (item.triageStatus === "failed") {
+          actions.add("retry_triage");
+        }
       }
       break;
     case "in_progress":

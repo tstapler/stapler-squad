@@ -1,4 +1,4 @@
-import { getAvailableActions } from "./itemActions";
+import { getAvailableActions, KNOWN_STATUS_MEMBERSHIP } from "./itemActions";
 import type { BacklogItem, KnownBacklogStatus } from "@/lib/hooks/useBacklogService";
 
 function makeItem(overrides: Partial<BacklogItem> & { id: string }): BacklogItem {
@@ -64,14 +64,60 @@ describe("getAvailableActions", () => {
       expect(actions.has("retry_triage")).toBe(false);
     });
 
-    it("exposes retry_triage instead of approve_plan when gated but no plan exists — the be676dab dead-end fix", () => {
+    it("exposes retry_triage instead of approve_plan when gated, no plan exists, and the latest triage session failed — the be676dab dead-end fix", () => {
       const { actions, isGatedOnPlanApproval, hasPlan } = getAvailableActions(
-        makeItem({ id: "a", status: "ready", skipPlanning: false, planApproved: false, planArtifactsPath: undefined })
+        makeItem({
+          id: "a",
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: "failed",
+        })
       );
       expect(isGatedOnPlanApproval).toBe(true);
       expect(hasPlan).toBe(false);
       expect(actions.has("retry_triage")).toBe(true);
       expect(actions.has("approve_plan")).toBe(false);
+    });
+
+    // MAJOR finding from PR #322 review: a ready item can be reached via "Mark
+    // Ready" straight from idea with no plan and no triage session EVER having
+    // run (triageStatus undefined, not "failed") — gated + no-plan alone is not
+    // evidence of a failed retry. Before this fix, retry_triage rendered
+    // unconditionally whenever gated+no-plan, duplicating the always-present
+    // trigger_triage button and dispatching the identical underlying call for a
+    // status where nothing had actually failed yet.
+    it("does NOT expose retry_triage for a gated, no-plan ready item that was never triaged (only trigger_triage, no duplication)", () => {
+      const { actions } = getAvailableActions(
+        makeItem({
+          id: "a",
+          status: "ready",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: undefined,
+        })
+      );
+      expect(actions.has("retry_triage")).toBe(false);
+      expect(actions.has("approve_plan")).toBe(false);
+      expect(actions.has("trigger_triage")).toBe(true);
+    });
+
+    it("does NOT expose retry_triage for a gated, no-plan ready item whose triage is still running or already completed", () => {
+      for (const triageStatus of ["running", "completed"] as const) {
+        const { actions } = getAvailableActions(
+          makeItem({
+            id: "a",
+            status: "ready",
+            skipPlanning: false,
+            planApproved: false,
+            planArtifactsPath: undefined,
+            triageStatus,
+          })
+        );
+        expect(actions.has("retry_triage")).toBe(false);
+      }
     });
 
     it("exposes neither approve_plan nor retry_triage when skipPlanning is true, regardless of plan presence", () => {
@@ -102,11 +148,33 @@ describe("getAvailableActions", () => {
       expect(actions.has("retry_triage")).toBe(false);
     });
 
-    it("exposes retry_triage instead of approve_plan when gated but no plan exists — the be676dab dead-end fix", () => {
+    it("exposes retry_triage instead of approve_plan when gated, no plan exists, and the latest triage session failed — the be676dab dead-end fix", () => {
       const { actions } = getAvailableActions(
-        makeItem({ id: "a", status: "queued", skipPlanning: false, planApproved: false, planArtifactsPath: undefined })
+        makeItem({
+          id: "a",
+          status: "queued",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: "failed",
+        })
       );
       expect(actions.has("retry_triage")).toBe(true);
+      expect(actions.has("approve_plan")).toBe(false);
+    });
+
+    it("does NOT expose retry_triage for a gated, no-plan queued item with no failed-triage evidence", () => {
+      const { actions } = getAvailableActions(
+        makeItem({
+          id: "a",
+          status: "queued",
+          skipPlanning: false,
+          planApproved: false,
+          planArtifactsPath: undefined,
+          triageStatus: undefined,
+        })
+      );
+      expect(actions.has("retry_triage")).toBe(false);
       expect(actions.has("approve_plan")).toBe(false);
     });
 
@@ -214,5 +282,27 @@ describe("getAvailableActions", () => {
     for (const status of statuses) {
       expect(getAvailableActions(makeItem({ id: "a", status })).actions.has("delete")).toBe(true);
     }
+  });
+
+  // MAJOR finding from PR #322 review: KNOWN_STATUS_MEMBERSHIP is a second,
+  // independent source of truth alongside the KnownBacklogStatus union
+  // (useBacklogService.ts) — the `satisfies Record<KnownBacklogStatus, true>`
+  // annotation on its declaration is what actually closes the desync gap at
+  // compile time (a missing OR extra key is a build error). This test is a
+  // cheap runtime tripwire on top of that: it makes the invariant visible in
+  // test output, not just in a type-checker error a reviewer might not re-run.
+  it("KNOWN_STATUS_MEMBERSHIP's key set matches the full KnownBacklogStatus union with no extras or omissions", () => {
+    const expected: KnownBacklogStatus[] = [
+      "idea",
+      "refining",
+      "ready",
+      "queued",
+      "in_progress",
+      "review",
+      "pr_pending",
+      "done",
+      "archived",
+    ];
+    expect(Object.keys(KNOWN_STATUS_MEMBERSHIP).sort()).toEqual([...expected].sort());
   });
 });
