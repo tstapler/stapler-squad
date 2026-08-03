@@ -812,8 +812,18 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 
 		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).
+		//
+		// ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the
+		// session's stable ID (UUID when present, Title only as a fallback) so the
+		// live notification UI can match on it — but ReviewItem is keyed by Title.
+		// Look up by UUID first since that's what most approvals are indexed under,
+		// then fall back to Title for the rare case a session has no UUID.
 		if reason == ReasonApprovalPending && rqp.approvalProvider != nil {
-			if approvals := rqp.approvalProvider.GetApprovalMetadataBySession(snap.Title); len(approvals) > 0 {
+			approvals := rqp.approvalProvider.GetApprovalMetadataBySession(snap.UUID)
+			if len(approvals) == 0 && snap.UUID != snap.Title {
+				approvals = rqp.approvalProvider.GetApprovalMetadataBySession(snap.Title)
+			}
+			if len(approvals) > 0 {
 				a := approvals[0] // Use the most recent/first approval
 				if item.Metadata == nil {
 					item.Metadata = make(map[string]string)
