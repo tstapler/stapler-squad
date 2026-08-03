@@ -536,13 +536,9 @@ func truncateString(s string, maxRunes int) string {
 // entry count.
 const maxEscalationReasonLen = 500
 
-// truncateEscalationReason caps s at maxEscalationReasonLen bytes, appending
-// "…" when truncation occurs.
+// truncateEscalationReason caps s at maxEscalationReasonLen runes.
 func truncateEscalationReason(s string) string {
-	if len(s) <= maxEscalationReasonLen {
-		return s
-	}
-	return s[:maxEscalationReasonLen] + "…"
+	return truncateString(s, maxEscalationReasonLen)
 }
 
 // sanitizeNotificationText strips newlines and non-printable characters from

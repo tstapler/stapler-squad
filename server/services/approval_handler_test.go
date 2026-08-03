@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -258,5 +259,52 @@ func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
 	}
 	if captured.EscalationCategory != "domain-age" {
 		t.Errorf("EscalationCategory = %q, want %q", captured.EscalationCategory, "domain-age")
+	}
+}
+
+// TestTruncateEscalationReason covers the boundary cases the escalation-reasoning
+// architecture review flagged: truncateEscalationReason must never cut mid-rune, since
+// EscalationReasonText routinely produces strings containing multi-byte UTF-8 (e.g. the
+// em dash "—" in the no-match/domain-age sentences) and the result is persisted to disk.
+func TestTruncateEscalationReason(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "under limit passes through unchanged",
+			in:   "short reason",
+			want: "short reason",
+		},
+		{
+			name: "exact limit passes through unchanged",
+			in:   strings.Repeat("a", maxEscalationReasonLen),
+			want: strings.Repeat("a", maxEscalationReasonLen),
+		},
+		{
+			name: "over limit truncates at an ASCII boundary",
+			in:   strings.Repeat("a", maxEscalationReasonLen+10),
+			want: strings.Repeat("a", maxEscalationReasonLen) + "...",
+		},
+		{
+			name: "over limit with a multi-byte rune straddling the cut point stays valid UTF-8",
+			// Each "aaaaaaaaa—" chunk is exactly 10 runes (9 ASCII + 1 em dash), so the
+			// maxEscalationReasonLen-rune cut lands exactly between chunks — the case
+			// byte-slicing would corrupt, since len(em dash) in bytes != 1.
+			in:   strings.Repeat("aaaaaaaaa—", maxEscalationReasonLen/10+2),
+			want: strings.Repeat("aaaaaaaaa—", maxEscalationReasonLen/10) + "...",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateEscalationReason(tt.in)
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncateEscalationReason(%d runes) produced invalid UTF-8: %q", len([]rune(tt.in)), got)
+			}
+			if got != tt.want {
+				t.Errorf("truncateEscalationReason() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

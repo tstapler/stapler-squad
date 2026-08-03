@@ -144,7 +144,8 @@ export function ApprovalAnalyticsPanel() {
     return Object.entries(counts)
       .filter(([, count]) => count > 0)
       .sort((a, b) => b[1] - a[1]);
-  }, [summary]);
+  }, [summary?.escalationReasonCounts]);
+  const escalationReasonMaxCount = escalationReasonRows[0]?.[1] ?? 1;
 
   return (
     <div className={panel}>
@@ -344,7 +345,7 @@ export function ApprovalAnalyticsPanel() {
                       <td className={td}>{ESCALATION_CATEGORY_LABELS[category] ?? category}</td>
                       <td className={`${td} ${tdRight}`}>{count}</td>
                       <td className={`${td} ${tdBar}`}>
-                        <Bar value={count} max={escalationReasonRows[0]?.[1] ?? 1} className={barRule} />
+                        <Bar value={count} max={escalationReasonMaxCount} className={barRule} />
                       </td>
                     </tr>
                   ))}

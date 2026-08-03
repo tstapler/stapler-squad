@@ -416,7 +416,7 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 		// an AutoDeny — see requirements.md's AC4 scope note). Broader than the
 		// coverage-gap branch above (which only catches RuleID == ""): this must catch
 		// all 5 categories.
-		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == "secret-scan") {
+		if e.Decision == "escalate" || (e.Decision == "auto_deny" && e.RuleID == classifier.RuleIDSecretScan) {
 			cat := classifier.CategorizeEscalationRuleID(e.RuleID)
 			escalationReasonCounts[string(cat)]++
 		}
