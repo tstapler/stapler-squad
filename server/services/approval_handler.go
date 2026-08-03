@@ -334,13 +334,14 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			// this switch's missing-case behavior is exactly the bug this feature fixes; guard
 			// against it recurring for any future decision value.
 			log.Warn("[ApprovalHandler] unrecognized classifier decision, escalating for manual review", "decision", result.Decision)
-			escalation = result
 			// Pre-mortem P3: route through the synthetic RuleIDUnexpectedDecision sentinel so
 			// CategorizeEscalationRuleID buckets this as EscalationUnexpected, not EscalationNoMatch
 			// (result.RuleID is almost certainly "" here, since no rule lookup occurred) — an internal
 			// classifier bug must not silently render normal "no rule matched" copy or offer the
-			// Create Rule CTA as if this were a real coverage gap.
-			escalation.RuleID = classifier.RuleIDUnexpectedDecision
+			// Create Rule CTA as if this were a real coverage gap. Override RuleID before the
+			// assignment (not after) so escalation is never observably set without it.
+			result.RuleID = classifier.RuleIDUnexpectedDecision
+			escalation = result
 		}
 	}
 

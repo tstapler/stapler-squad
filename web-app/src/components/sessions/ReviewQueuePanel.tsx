@@ -14,6 +14,7 @@ import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource, Session, SessionSchema } from "@/gen/session/v1/types_pb";
 import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
+import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import {
   panel,
   header,
@@ -137,7 +138,7 @@ const SORT_FIELDS: SortField[] = ["priority", "age", "diffSize", "name"];
 // Category -> emoji prefix for the escalation reason line (WCAG 1.4.1 — not color-only).
 // No "secret-scan" entry: that category never reaches a ReviewItem (requirements.md
 // out-of-scope note). An unrecognized/missing category falls through to no emoji via `?? ""`.
-const ESCALATION_REASON_EMOJI: Record<string, string> = {
+const ESCALATION_REASON_EMOJI: Partial<Record<EscalationCategory, string>> = {
   "no-match": "❓",
   "explicit-rule": "🛑",
   "domain-age": "🌐",
@@ -748,7 +749,7 @@ export function ReviewQueuePanel({
                 data-testid={`escalation-reason-${queueItem.sessionId}`}
               >
                 {queueItem.metadata["escalation_reason"]
-                  ? `${ESCALATION_REASON_EMOJI[queueItem.metadata["escalation_reason_category"] ?? ""] ?? ""} ${queueItem.metadata["escalation_reason"]}`.trim()
+                  ? `${ESCALATION_REASON_EMOJI[queueItem.metadata["escalation_reason_category"] as EscalationCategory] ?? ""} ${queueItem.metadata["escalation_reason"]}`.trim()
                   : "Reason not recorded — this request predates escalation-reason tracking."}
               </p>
               {(queueItem.metadata["tool_input_command"] || queueItem.metadata["tool_input_file"]) && (

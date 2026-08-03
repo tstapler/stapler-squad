@@ -8,6 +8,7 @@ import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { DailyBucketProto, SubcommandStatProto, AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
 import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import type { EscalationCategory } from "@/lib/sessions/escalationCategory";
 import {
   panel, titleRow, title, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -94,7 +95,7 @@ const WINDOW_OPTIONS = [
 // human-readable labels shown in the "Escalation Reasons" table. Callers must fall back to the
 // raw category string for unmapped keys — see the `?? category` usage below — so an unrecognized
 // category never renders the literal string "undefined".
-const ESCALATION_CATEGORY_LABELS: Record<string, string> = {
+const ESCALATION_CATEGORY_LABELS: Record<EscalationCategory, string> = {
   "no-match": "No auto-approval rule matched",
   "explicit-rule": "Rule explicitly flagged for review",
   "domain-age": "Newly-registered domain",
@@ -342,7 +343,7 @@ export function ApprovalAnalyticsPanel() {
                 <tbody>
                   {escalationReasonRows.map(([category, count]) => (
                     <tr key={category} className={row}>
-                      <td className={td}>{ESCALATION_CATEGORY_LABELS[category] ?? category}</td>
+                      <td className={td}>{ESCALATION_CATEGORY_LABELS[category as EscalationCategory] ?? category}</td>
                       <td className={`${td} ${tdRight}`}>{count}</td>
                       <td className={`${td} ${tdBar}`}>
                         <Bar value={count} max={escalationReasonMaxCount} className={barRule} />
