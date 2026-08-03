@@ -1,5 +1,7 @@
 "use client";
 
+// +feature: backlog:item-detail-source-section
+
 // lucide-react (this repo's pinned v1.14) ships no brand "Github" glyph —
 // CircleDot is the closest available icon to GitHub's own issue-tracker
 // mark and is used here instead of the `Github` icon plan.md's snippet
