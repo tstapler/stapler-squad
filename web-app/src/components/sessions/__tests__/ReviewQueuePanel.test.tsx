@@ -16,7 +16,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ReviewQueuePanel, NON_NO_MATCH_ESCALATION_CATEGORIES } from "../ReviewQueuePanel";
+import { ReviewQueuePanel, isCreateRuleEligibleCategory } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
@@ -1113,9 +1113,24 @@ describe("escalation reason", () => {
     expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
   });
 
-  it("denylist matches exactly the 5 known non-no-match EscalationCategory values", () => {
-    expect(Array.from(NON_NO_MATCH_ESCALATION_CATEGORIES).sort()).toEqual(
-      ["domain-age", "explicit-rule", "secret-scan", "unclassifiable", "unexpected"].sort()
+  describe("isCreateRuleEligibleCategory", () => {
+    it("returns true for an orphaned approval (category undefined)", () => {
+      expect(isCreateRuleEligibleCategory(undefined)).toBe(true);
+    });
+
+    it("returns true for no-match", () => {
+      expect(isCreateRuleEligibleCategory("no-match")).toBe(true);
+    });
+
+    it.each(["explicit-rule", "domain-age", "secret-scan", "unclassifiable", "unexpected"])(
+      "returns false for %s (ties this guard to the 5 known non-no-match EscalationCategory constants)",
+      (category) => {
+        expect(isCreateRuleEligibleCategory(category)).toBe(false);
+      }
     );
+
+    it("returns true for an unrecognized/future category (fail-open by design)", () => {
+      expect(isCreateRuleEligibleCategory("some-future-category")).toBe(true);
+    });
   });
 });

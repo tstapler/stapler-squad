@@ -146,22 +146,31 @@ const ESCALATION_REASON_EMOJI: Partial<Record<EscalationCategory, string>> = {
   "unexpected": "⚠️",
 };
 
-// The EscalationCategory values other than "no-match" (PR #315) — denylist, not allowlist,
-// so an orphaned pre-deploy approval (escalation_reason_category key entirely absent because
-// it predates this field) is treated as Create-Rule-eligible the same way "no-match" is.
-// Fail-open by design: an unrecognized/future category also defaults to shown. Keep in sync
-// with EscalationCategory in web-app/src/lib/sessions/escalationCategory.ts (which itself
-// mirrors pkg/classifier/escalation.go) — see backlog 5fb93d9d.
-export const NON_NO_MATCH_ESCALATION_CATEGORIES: Set<EscalationCategory> = new Set([
-  "explicit-rule",
-  "domain-age",
-  "secret-scan",
-  "unclassifiable",
-  "unexpected",
-]);
+// Which EscalationCategory values (PR #315) disqualify the Create Rule button — a Record,
+// not a Set, so TypeScript forces every member of the union to be listed here; adding a 6th
+// category to EscalationCategory (web-app/src/lib/sessions/escalationCategory.ts, which mirrors
+// pkg/classifier/escalation.go) without updating this map is a compile error, not a silent
+// fail-open drift. An orphaned pre-deploy approval (escalation_reason_category key entirely
+// absent because it predates this field) and any wholly unrecognized string are both treated as
+// eligible (fail-open by design) — see backlog 5fb93d9d.
+const CREATE_RULE_INELIGIBLE_CATEGORIES: Record<EscalationCategory, boolean> = {
+  "no-match": false,
+  "explicit-rule": true,
+  "domain-age": true,
+  "secret-scan": true,
+  "unclassifiable": true,
+  "unexpected": true,
+};
+
+function isKnownEscalationCategory(value: string): value is EscalationCategory {
+  return Object.prototype.hasOwnProperty.call(CREATE_RULE_INELIGIBLE_CATEGORIES, value);
+}
 
 export function isCreateRuleEligibleCategory(category: string | undefined): boolean {
-  return category === undefined || !NON_NO_MATCH_ESCALATION_CATEGORIES.has(category as EscalationCategory);
+  if (category === undefined || !isKnownEscalationCategory(category)) {
+    return true;
+  }
+  return !CREATE_RULE_INELIGIBLE_CATEGORIES[category];
 }
 
 function joinSet(set: Set<string> | Set<number>): string | undefined {
