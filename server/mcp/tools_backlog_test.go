@@ -1168,7 +1168,26 @@ func TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails(t *testin
 	})
 	require.NoError(t, err)
 
-	handler := &backlogHandlers{storage: storage}
+	// readBarrier forces both goroutines' pre-transition GetBacklogItem reads
+	// to complete — both observing Status: "in_progress" — before either is
+	// allowed to proceed to its TransitionBacklogItemStatus write. Without
+	// this, startBarrier alone only synchronizes goroutine *start*: on a
+	// CI runner with more cores/different scheduling, one goroutine can run
+	// its full read->whitelist-check->write sequence before the other's
+	// first read even executes, so the "loser" reads the post-write
+	// Status: "review" and fails the whitelist check (ErrInvalidArgument)
+	// instead of racing the CAS write (ErrPreconditionFailed / ErrInternalError)
+	// — the actual behavior this test exists to exercise.
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		item, err := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return item, err
+	}
+
+	handler := &backlogHandlers{storage: storage, getBacklogItemFn: getBacklogItemFn}
 	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
 
 	var wg sync.WaitGroup

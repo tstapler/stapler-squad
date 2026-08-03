@@ -146,6 +146,14 @@ type backlogHandlers struct {
 	// mirrors verifyPRMatchesBranch's existing shape so both GitHub-
 	// verification paths in this file are mocked the same way.
 	verifyGitHubRef func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error
+
+	// getBacklogItemFn backs request_review's fresh pre-transition read of the
+	// item (the read that feeds validateSelfResolveSource before the CAS
+	// write). Defaults to h.storage.GetBacklogItem when nil; overridable in
+	// tests to deterministically control the read/write interleaving between
+	// two concurrent request_review calls — mirrors listItemSessionsFn's
+	// existing shape.
+	getBacklogItemFn func(ctx context.Context, itemID string) (*session.BacklogItemData, error)
 }
 
 // --- get_backlog_item ---
@@ -440,7 +448,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// TriggerReviewForSession also honors the flag and no-ops — no review gate
 	// would ever spawn, leaving the item stuck in review indefinitely with
 	// nothing left to move it forward.
-	item, itemErr := h.storage.GetBacklogItem(ctx, itemID)
+	item, itemErr := h.getBacklogItemFor(ctx, itemID)
 	if itemErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to load item: %v", itemErr), ""), nil
 	}
@@ -529,6 +537,17 @@ func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([
 		return h.listItemSessionsFn(ctx, itemID)
 	}
 	return h.storage.ListItemSessions(ctx, itemID)
+}
+
+// getBacklogItemFor loads a backlog item via the overridable getBacklogItemFn
+// seam when set, otherwise the real h.storage.GetBacklogItem. Used by
+// request_review's pre-transition read. Mirrors itemSessionsFor/sessionBranch/
+// verifyRef's existing nil-check-then-fallback shape.
+func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*session.BacklogItemData, error) {
+	if h.getBacklogItemFn != nil {
+		return h.getBacklogItemFn(ctx, itemID)
+	}
+	return h.storage.GetBacklogItem(ctx, itemID)
 }
 
 // --- submit_review_verdict ---
