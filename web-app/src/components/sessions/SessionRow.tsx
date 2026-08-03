@@ -255,7 +255,7 @@ function SessionRowInner({
             session.subStatus !== SubStatus.READY &&
             session.subStatus !== SubStatus.IDLE &&
             !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
-              <SubStatusChip subStatus={session.subStatus} />
+              <SubStatusChip subStatus={session.subStatus} subagentCount={session.subagentCount} />
             )}
           <GitHubBadge
             prNumber={session.githubPrNumber}

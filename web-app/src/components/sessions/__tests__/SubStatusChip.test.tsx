@@ -15,8 +15,12 @@ import { render, screen } from "@testing-library/react";
 import { SubStatusChip } from "../SubStatusChip";
 import { SubStatus } from "@/gen/session/v1/types_pb";
 
-function renderChip(subStatus: SubStatus | undefined | null) {
-  return render(<SubStatusChip subStatus={subStatus as SubStatus} />);
+function renderProps(props: { subStatus: SubStatus; subagentCount?: number }) {
+  return <SubStatusChip subStatus={props.subStatus} subagentCount={props.subagentCount} />;
+}
+
+function renderChip(subStatus: SubStatus | undefined | null, subagentCount?: number) {
+  return render(<SubStatusChip subStatus={subStatus as SubStatus} subagentCount={subagentCount} />);
 }
 
 describe("SubStatusChip", () => {
@@ -24,6 +28,61 @@ describe("SubStatusChip", () => {
     renderChip(SubStatus.WAITING_FOR_AGENT);
     expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Waiting for agents");
     expect(screen.getByText(/Waiting for Agents/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "title",
+      "Claude is waiting for background agents to finish",
+    );
+  });
+
+  it("renders count in Waiting for Agents chip when subagentCount > 0", () => {
+    renderChip(SubStatus.WAITING_FOR_AGENT, 2);
+    expect(screen.getByText(/2 Agents/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "title",
+      "Claude is waiting for 2 background agents to finish",
+    );
+    expect(screen.getByRole("status")).toHaveAttribute("aria-label", "Waiting for agents");
+  });
+
+  it("renders singular Agent for subagentCount === 1", () => {
+    renderChip(SubStatus.WAITING_FOR_AGENT, 1);
+    expect(screen.getByText(/1 Agent\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 Agents/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "title",
+      "Claude is waiting for 1 background agent to finish",
+    );
+  });
+
+  it.each([
+    ["0", 0],
+    ["undefined", undefined],
+    ["negative", -1],
+    ["NaN", NaN],
+  ])("omits count when subagentCount is %s", (_label, count) => {
+    renderChip(SubStatus.WAITING_FOR_AGENT, count);
+    expect(screen.getByText(/Waiting for Agents/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "title",
+      "Claude is waiting for background agents to finish",
+    );
+  });
+
+  it("renders large counts verbatim without clamping", () => {
+    renderChip(SubStatus.WAITING_FOR_AGENT, 847);
+    expect(screen.getByText(/847 Agents/)).toBeInTheDocument();
+  });
+
+  it("shows the fresh count on reappearance, not a stale count from a prior WAITING_FOR_AGENT occurrence", () => {
+    const { rerender } = render(renderProps({ subStatus: SubStatus.WAITING_FOR_AGENT, subagentCount: 3 }));
+    expect(screen.getByText(/3 Agents/)).toBeInTheDocument();
+
+    rerender(renderProps({ subStatus: SubStatus.PROCESSING }));
+    expect(screen.queryByText(/Waiting for/)).not.toBeInTheDocument();
+
+    rerender(renderProps({ subStatus: SubStatus.WAITING_FOR_AGENT, subagentCount: 1 }));
+    expect(screen.getByText(/1 Agent\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/3 Agents/)).not.toBeInTheDocument();
   });
 
   it("renders processing chip for PROCESSING with an aria-hidden spinner", () => {

@@ -246,7 +246,7 @@ const StatusDetectionTailBytes = 4096
 // This is the shared core called by both Detect() and DetectWithContext().
 //
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
-func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
+func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	ps := sd.patternSet.Load()
 	return ps.MatchLines(text, rawPTY)
 }
@@ -272,7 +272,7 @@ func (sd *StatusDetector) RecentEvents(n int) []DetectionEvent {
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, _ := sd.detectFromText(text, output)
+	status, patternName, _, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status
 }
@@ -281,7 +281,7 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 // Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := sd.normalizer.Normalize(string(output))
-	status, patternName, context := sd.detectFromText(text, output)
+	status, patternName, context, _ := sd.detectFromText(text, output)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status, context
 }
@@ -289,15 +289,17 @@ func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, stri
 // detectWithContextFromString is the string-accepting variant of DetectWithContext.
 // Avoids the string→[]byte→string round-trip in detectFromLines by aliasing the
 // string data via unsafe.Slice for the rawPTY argument (read-only use in hasScreenOverwrite).
-func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string) {
+// The 3rd return value is the subagent/shell/monitor count captured from the winning
+// WaitingForAgent match (0 for any other status) — see MatchLines.
+func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string, int) {
 	text := sd.normalizer.Normalize(line)
 	var rawPTY []byte
 	if len(line) > 0 {
 		rawPTY = unsafe.Slice(unsafe.StringData(line), len(line))
 	}
-	status, patternName, context := sd.detectFromText(text, rawPTY)
+	status, patternName, context, count := sd.detectFromText(text, rawPTY)
 	sd.appendDetectionEvent(status, patternName, text)
-	return status, context
+	return status, context, count
 }
 
 // getDefaultPatterns returns the default status detection patterns for Claude Code.
@@ -578,7 +580,7 @@ func getDefaultPatterns() StatusPatterns {
 				// "✻ Waiting for N dynamic workflow(s) to finish" lines.
 				// ✻ (U+273B), ◉ (U+25C9), and ✦ (U+2726, primary spinner) are all used
 				// as the turn-marker bullet.
-				Pattern:     `[✻◉✦]\s+Waiting for \d+ (?:background agent|dynamic workflow)`,
+				Pattern:     `[✻◉✦]\s+Waiting for (\d+) (?:background agent|dynamic workflow)`,
 				Description: "Claude is waiting for one or more background agents or dynamic workflows to finish",
 				Priority:    27,
 			},
@@ -590,7 +592,7 @@ func getDefaultPatterns() StatusPatterns {
 				// verb-duration marker — the session is not done yet.
 				// Also matches bare "N shell(s) running" / "N shells still running" variants
 				// found in the Claude Code bottom status bar.
-				Pattern:     `\d+\s+shells?\s+(?:still\s+)?running`,
+				Pattern:     `(\d+)\s+shells?\s+(?:still\s+)?running`,
 				Description: "Background shell processes still running — session not yet idle",
 				Priority:    27,
 			},
@@ -600,7 +602,7 @@ func getDefaultPatterns() StatusPatterns {
 				// lines that appear when Claude finishes a turn but background monitors (e.g.
 				// CI run watchers) are still active. Requires "still" to avoid false positives
 				// on generic "N monitors running" output from display tools, Prometheus, etc.
-				Pattern:     `\d+\s+monitors?\s+still\s+running`,
+				Pattern:     `(\d+)\s+monitors?\s+still\s+running`,
 				Description: "Background monitors still running — session not yet idle",
 				Priority:    27,
 			},
@@ -753,7 +755,7 @@ var builtBinaryDetectors = func() map[string]*StatusDetector {
 func (sd *StatusDetector) DetectForProgram(output []byte, program string) DetectedStatus {
 	if bsd, ok := builtBinaryDetectors[program]; ok {
 		text := stripANSI(collapseCarriageReturns(string(output)))
-		status, patternName, _ := bsd.detectFromText(text, output)
+		status, patternName, _, _ := bsd.detectFromText(text, output)
 		if status != StatusUnknown {
 			sd.appendDetectionEvent(status, patternName, text)
 			return status
@@ -765,9 +767,10 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 // detectFromLines is the shared implementation for DetectFromLines and DetectWithContextFromLines.
 // Scans lines in reverse (most recent first), handling CR-split segments.
 // See DetectFromLines for the full algorithm documentation.
-func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string) {
+func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, string, int) {
 	bestStatus := StatusUnknown
 	bestDesc := ""
+	bestCount := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
@@ -778,13 +781,13 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 				if strings.TrimSpace(segs[j]) == "" {
 					continue
 				}
-				s, desc := sd.detectWithContextFromString(segs[j])
+				s, desc, count := sd.detectWithContextFromString(segs[j])
 				if s == StatusUnknown {
 					continue
 				}
 				if s == StatusReady {
 					if bestStatus == StatusUnknown {
-						bestStatus, bestDesc = StatusReady, desc
+						bestStatus, bestDesc, bestCount = StatusReady, desc, count
 					}
 					continue
 				}
@@ -795,23 +798,23 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 				// attention. Low-urgency statuses (Success, Processing, Idle) in earlier
 				// segments were overwritten and should not override the visual display.
 				if j == len(segs)-1 || s == StatusExecuting || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
-					return s, desc
+					return s, desc, count
 				}
 				// Low-urgency earlier segment: record as candidate but keep scanning.
 				if bestStatus == StatusUnknown {
-					bestStatus, bestDesc = s, desc
+					bestStatus, bestDesc, bestCount = s, desc, count
 				}
 			}
 			continue // all segments of this CR line handled above
 		}
 
-		s, desc := sd.detectWithContextFromString(lines[i])
+		s, desc, count := sd.detectWithContextFromString(lines[i])
 		if s == StatusUnknown {
 			continue
 		}
 		if s == StatusReady {
 			if bestStatus == StatusUnknown {
-				bestStatus, bestDesc = StatusReady, desc
+				bestStatus, bestDesc, bestCount = StatusReady, desc, count
 			}
 			continue
 		}
@@ -821,7 +824,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		// High-urgency statuses (Error, NeedsApproval, InputRequired) also override Active.
 		if s == StatusExecuting {
 			if bestStatus == StatusUnknown || bestStatus == StatusReady {
-				bestStatus, bestDesc = StatusExecuting, desc
+				bestStatus, bestDesc, bestCount = StatusExecuting, desc, count
 			}
 			continue
 		}
@@ -830,16 +833,16 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 		if bestStatus == StatusExecuting {
 			switch s {
 			case StatusWaitingForAgent, StatusError, StatusNeedsApproval, StatusInputRequired:
-				return s, desc
+				return s, desc, count
 			case StatusUnknown, StatusReady, StatusProcessing, StatusIdle, StatusSuccess, StatusTestsFailing, StatusExecuting:
 				// Lower-urgency statuses when we already have Executing — skip
 				continue
 			}
 			continue
 		}
-		return s, desc // specific match wins immediately
+		return s, desc, count // specific match wins immediately
 	}
-	return bestStatus, bestDesc
+	return bestStatus, bestDesc, bestCount
 }
 
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
@@ -852,7 +855,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 // status pattern on an earlier line. StatusReady is returned as a fallback if no more
 // specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	s, _ := sd.detectFromLines(lines)
+	s, _, _ := sd.detectFromLines(lines)
 	return s
 }
 
@@ -864,7 +867,21 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // Blank/whitespace-only lines are skipped. StatusReady is treated as a low-confidence
 // fallback — the scan continues past Ready results looking for a more specific status,
 // preventing the `.*` catch-all from masking real patterns on earlier lines.
+//
+// Signature intentionally left unchanged (pinned by the TerminalDetector interface and its
+// callers) — see DetectWithContextAndCountFromLines for the count-aware sibling.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
+	s, desc, _ := sd.detectFromLines(lines)
+	return s, desc
+}
+
+// DetectWithContextAndCountFromLines is the count-aware sibling of DetectWithContextFromLines.
+// It returns the same status and context, plus the subagent/shell/monitor count captured
+// from the winning WaitingForAgent match (0 for any other status). Added as a new method
+// rather than changing DetectWithContextFromLines in place because that method is pinned by
+// the TerminalDetector interface and consumed by review_queue_determiner.go plus several
+// test files that don't need the count.
+func (sd *StatusDetector) DetectWithContextAndCountFromLines(lines []string) (DetectedStatus, string, int) {
 	return sd.detectFromLines(lines)
 }
 

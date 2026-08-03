@@ -170,6 +170,84 @@ func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
 	}
 }
 
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnCount_When_singleWaitingLine(t *testing.T) {
+	sd := NewStatusDetector()
+	lines := []string{"✻ Cogitated for 18m 41s · 1 monitor still running"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Errorf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_returnZeroCount_When_statusIsNotWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	lines := []string{"✻ Baked for 3s"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Fatalf("test fixture unexpectedly matched StatusWaitingForAgent")
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_notSumAcrossLines_When_multiplePatternsMatchDifferentLines(t *testing.T) {
+	sd := NewStatusDetector()
+	// Both lines independently match a WaitingForAgent pattern. Per the "winning line wins"
+	// decision, the count must come from whichever line the reverse-scan actually returns —
+	// never the sum (3) of both lines' counts.
+	lines := []string{
+		"✻ Waiting for 2 background agents to finish",
+		"1 shell still running",
+	}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count == 3 {
+		t.Errorf("count = %d; counts must not be summed across matched lines", count)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1 (the winning/last-scanned line's count)", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_carryCount_When_lineContainsCRSegments(t *testing.T) {
+	sd := NewStatusDetector()
+	// A single terminal line with an embedded \r (spinner redraw) where the segment after
+	// the final \r is the one that matches WaitingForAgent — the count must survive the
+	// CR-segment collapsing loop in detectFromLines, not just the non-CR fast path.
+	lines := []string{"✻ Baking...\r✻ Waiting for 2 background agents to finish"}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Fatalf("status = %v, want StatusWaitingForAgent", status)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+func TestStatusDetector_DetectWithContextAndCountFromLines_should_dropCount_When_laterStatusExecutingOverridesWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	// An earlier (higher, i.e. more recent in reverse-scan order) StatusExecuting-candidate
+	// line overrides the WaitingForAgent match found scanning further up — bestCount must
+	// reset to 0 alongside the status override, not leak the stale WaitingForAgent count.
+	lines := []string{
+		"✻ Waiting for 3 background agents to finish",
+		"> ",
+	}
+	status, _, count := sd.DetectWithContextAndCountFromLines(lines)
+	if status == StatusWaitingForAgent {
+		t.Fatalf("test fixture expected the later line to override WaitingForAgent, got status %v", status)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0 (no stale count leaking from the overridden WaitingForAgent match)", count)
+	}
+}
+
 func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
 	sd := NewStatusDetector()
 

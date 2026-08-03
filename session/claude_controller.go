@@ -38,9 +38,10 @@ type InstanceContext interface {
 // statusCacheEntry holds the result of the last successful status detection
 // along with the FNV hash of the tail content that produced it.
 type statusCacheEntry struct {
-	tailHash uint64
-	status   detection.DetectedStatus
-	desc     string
+	tailHash      uint64
+	status        detection.DetectedStatus
+	desc          string
+	subagentCount int
 }
 
 // idleCacheEntry holds the result of the last successful idle state detection
@@ -665,7 +666,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 	if sd == nil {
 		return detection.StatusUnknown, "status detector not initialized"
 	}
-	status, desc := sd.DetectWithContextFromLines(lines)
+	status, desc, count := sd.DetectWithContextAndCountFromLines(lines)
 
 	// Case A: filterTmuxMetadata discarded all content because the tmux status bar
 	// (starting with "[") is the only newline-bounded segment after tailContent snaps
@@ -699,6 +700,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 			"session", cc.sessionName,
 			"status", status,
 			"desc", desc,
+			"subagent_count", count,
 			"tail_len", len(tail),
 			"filtered_len", len(filtered),
 			"lines_count", len(lines),
@@ -706,7 +708,10 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		)
 	}
 
-	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
+	// count is stored in the cache (not returned — GetCurrentStatus's callers don't need
+	// it) purely for coherence with GetStatusAndIdleInfo, which shares this same
+	// atomic.Pointer[statusCacheEntry] cache keyed by tail hash. See ADR-001.
+	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count})
 	return status, desc
 }
 
@@ -952,7 +957,7 @@ func (cc *ClaudeController) GetIdleStateInfo() detection.IdleStateInfo {
 // GetStatusAndIdleInfo returns both the detected status and idle state info in one call.
 // Saves one GetRecentHash (murmur3 over 4KB) and one cache.Read on every poll tick
 // compared to calling GetCurrentStatus + GetIdleStateInfo separately.
-func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, string, detection.IdleStateInfo) {
+func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, string, detection.IdleStateInfo, int) {
 	id := cc.idleDetector.Load()
 	pa := cc.ptyAccess.Load()
 
@@ -972,30 +977,32 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	}
 
 	if pa == nil {
-		return detection.StatusUnknown, "PTY not initialized", buildIdleInfo(detection.IdleStateUnknown)
+		return detection.StatusUnknown, "PTY not initialized", buildIdleInfo(detection.IdleStateUnknown), 0
 	}
 
 	h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
 	if !hasData {
-		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown), 0
 	}
 
 	// Two independent lock-free loads replace the former single RLock read.
 	var statusHit, idleHit bool
 	var cachedStatus detection.DetectedStatus
 	var cachedDesc string
+	var cachedCount int
 	var cachedIdleState detection.IdleState
 	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
 		statusHit = true
 		cachedStatus = sc.status
 		cachedDesc = sc.desc
+		cachedCount = sc.subagentCount
 	}
 	if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
 		idleHit = true
 		cachedIdleState = ic.state
 	}
 	if statusHit && idleHit {
-		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState)
+		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState), cachedCount
 	}
 
 	// Cache miss: read tail into pooled buffer; convert to string before returning the buffer.
@@ -1003,7 +1010,7 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
 	if n == 0 {
 		tailBufPool.Put(bufp)
-		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown), 0
 	}
 	tail := string((*bufp)[:n])
 	tailBufPool.Put(bufp)
@@ -1011,14 +1018,15 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 
 	var status detection.DetectedStatus
 	var desc string
+	var count int
 	var idleState detection.IdleState
 
 	if statusHit {
-		status, desc = cachedStatus, cachedDesc
+		status, desc, count = cachedStatus, cachedDesc, cachedCount
 	} else {
 		lines := lastNLines(filtered, statusDetectionLinesWindow)
 		if sd := cc.statusDetector.Load(); sd != nil {
-			status, desc = sd.DetectWithContextFromLines(lines)
+			status, desc, count = sd.DetectWithContextAndCountFromLines(lines)
 			if status == detection.StatusUnknown && len(filtered) == 0 && detection.HasClaudeSpinnerActivity(tail) {
 				status = detection.StatusExecuting
 				desc = "spinner_verb: active spinner in filtered-to-empty tail"
@@ -1037,6 +1045,7 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 				"session", cc.sessionName,
 				"status", status,
 				"desc", desc,
+				"subagent_count", count,
 				"tail_len", len(tail),
 				"filtered_len", len(filtered),
 				"tail_snippet", fmt.Sprintf("%q", snippet),
@@ -1051,12 +1060,12 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	}
 
 	if !statusHit {
-		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
+		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc, subagentCount: count})
 	}
 	if !idleHit {
 		cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: idleState})
 	}
-	return status, desc, buildIdleInfo(idleState)
+	return status, desc, buildIdleInfo(idleState), count
 }
 
 // GetIdleDuration returns how long the session has been idle.

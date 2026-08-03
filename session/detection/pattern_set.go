@@ -3,6 +3,7 @@ package detection
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 )
 
 // PatternSet holds compiled regex slices for all StatusPatterns categories.
@@ -65,79 +66,90 @@ func (ps *PatternSet) compile() error {
 }
 
 // MatchLines runs the pattern priority chain on the given text string and raw PTY bytes.
-// Returns (status, patternName, description).
-func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, string, string) {
+// Returns (status, patternName, description, subagentCount). subagentCount is only ever
+// non-zero when the WaitingForAgent group wins — see the capturing group on the three
+// WaitingForAgent patterns in getDefaultPatterns().
+func (ps *PatternSet) MatchLines(text string, rawPTY []byte) (DetectedStatus, string, string, int) {
 	// Error patterns (highest priority)
 	for i, regex := range ps.errorRegexes {
 		if regex.MatchString(text) {
-			return StatusError, ps.patterns.Error[i].Name, ps.patterns.Error[i].Description
+			return StatusError, ps.patterns.Error[i].Name, ps.patterns.Error[i].Description, 0
 		}
 	}
 	// Tests failing
 	for i, regex := range ps.testsFailingRegexes {
 		if regex.MatchString(text) {
-			return StatusTestsFailing, ps.patterns.TestsFailing[i].Name, ps.patterns.TestsFailing[i].Description
+			return StatusTestsFailing, ps.patterns.TestsFailing[i].Name, ps.patterns.TestsFailing[i].Description, 0
 		}
 	}
 	// Needs approval
 	for i, regex := range ps.needsApprovalRegexes {
 		if regex.MatchString(text) {
-			return StatusNeedsApproval, ps.patterns.NeedsApproval[i].Name, ps.patterns.NeedsApproval[i].Description
+			return StatusNeedsApproval, ps.patterns.NeedsApproval[i].Name, ps.patterns.NeedsApproval[i].Description, 0
 		}
 	}
 	// Input required
 	for i, regex := range ps.inputRequiredRegexes {
 		if regex.MatchString(text) {
-			return StatusInputRequired, ps.patterns.InputRequired[i].Name, ps.patterns.InputRequired[i].Description
+			return StatusInputRequired, ps.patterns.InputRequired[i].Name, ps.patterns.InputRequired[i].Description, 0
 		}
 	}
 	// Readline typing
 	if readlineTypingRegex.MatchString(text) {
-		return StatusIdle, "readline_typing", "User composing at Claude readline — overrides stale completion marker in scrollback"
+		return StatusIdle, "readline_typing", "User composing at Claude readline — overrides stale completion marker in scrollback", 0
 	}
 	// Waiting for background agent/shells — checked BEFORE Success so that a line like
 	// "✻ Churned for 52s · 1 shell still running" is classified as WaitingForAgent
 	// rather than Success (the verb-duration pattern in Success would otherwise win).
 	for i, regex := range ps.waitingForAgentRegexes {
-		if regex.MatchString(text) {
-			return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description
+		if m := regex.FindStringSubmatch(text); m != nil {
+			count := 0
+			// len(m) > 1 guard is defensive insurance against a future pattern edit
+			// dropping/reordering the capture group; today's 3 patterns always produce
+			// len(m) == 2 on match (idiom from session/git/worktree_git.go:372-375).
+			if len(m) > 1 {
+				if n, convErr := strconv.Atoi(m[1]); convErr == nil && n > 0 {
+					count = n
+				}
+			}
+			return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description, count
 		}
 	}
 	// Success
 	for i, regex := range ps.successRegexes {
 		if regex.MatchString(text) {
-			return StatusSuccess, ps.patterns.Success[i].Name, ps.patterns.Success[i].Description
+			return StatusSuccess, ps.patterns.Success[i].Name, ps.patterns.Success[i].Description, 0
 		}
 	}
 	// Active
 	for i, regex := range ps.activeRegexes {
 		if regex.MatchString(text) {
-			return StatusExecuting, ps.patterns.Active[i].Name, ps.patterns.Active[i].Description
+			return StatusExecuting, ps.patterns.Active[i].Name, ps.patterns.Active[i].Description, 0
 		}
 	}
 	// Processing
 	for i, regex := range ps.processingRegexes {
 		if regex.MatchString(text) {
-			return StatusProcessing, ps.patterns.Processing[i].Name, ps.patterns.Processing[i].Description
+			return StatusProcessing, ps.patterns.Processing[i].Name, ps.patterns.Processing[i].Description, 0
 		}
 	}
 	// Screen-overwrite fallback
 	if hasScreenOverwrite(rawPTY) {
-		return StatusExecuting, "screen_overwrite", "Screen overwrite — spinner actively redrawing"
+		return StatusExecuting, "screen_overwrite", "Screen overwrite — spinner actively redrawing", 0
 	}
 	// Idle
 	for i, regex := range ps.idleRegexes {
 		if regex.MatchString(text) {
-			return StatusIdle, ps.patterns.Idle[i].Name, ps.patterns.Idle[i].Description
+			return StatusIdle, ps.patterns.Idle[i].Name, ps.patterns.Idle[i].Description, 0
 		}
 	}
 	// Ready (catch-all — must be last; returns StatusUnknown so the .* pattern renders no badge)
 	for i, regex := range ps.readyRegexes {
 		if regex.MatchString(text) {
-			return StatusUnknown, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description
+			return StatusUnknown, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description, 0
 		}
 	}
-	return StatusUnknown, "<none>", ""
+	return StatusUnknown, "<none>", "", 0
 }
 
 // Patterns returns the StatusPatterns used by this PatternSet.

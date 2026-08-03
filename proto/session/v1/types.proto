@@ -237,6 +237,10 @@ message Session {
   // when there's no GitHub remote). Sessions sharing this key are workspace peers. Empty
   // when neither GitHub info nor a repo path could be determined (e.g. a bare one-off session).
   string workspace_key = 71;
+
+  // Count of active background agents/shells/monitors from the WaitingForAgent detector.
+  // Only meaningful when detected_status == DETECTED_STATUS_WAITING_FOR_AGENT; 0 otherwise.
+  int32 subagent_count = 72;
 }
 
 // SessionArtifacts holds structured artifacts extracted from the session's
