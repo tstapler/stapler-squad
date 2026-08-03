@@ -824,10 +824,13 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		// live notification UI can match on it — but ReviewItem is keyed by Title.
 		// Look up by UUID first since that's what most approvals are indexed under,
 		// then fall back to Title for the rare case a session has no UUID.
-		if reason == ReasonApprovalPending && rqp.approvalProvider != nil {
-			approvals := rqp.approvalProvider.GetApprovalMetadataBySession(snap.UUID)
+		rqp.mu.RLock()
+		provider := rqp.approvalProvider
+		rqp.mu.RUnlock()
+		if reason == ReasonApprovalPending && provider != nil {
+			approvals := provider.GetApprovalMetadataBySession(snap.UUID)
 			if len(approvals) == 0 && snap.UUID != snap.Title {
-				approvals = rqp.approvalProvider.GetApprovalMetadataBySession(snap.Title)
+				approvals = provider.GetApprovalMetadataBySession(snap.Title)
 			}
 			if len(approvals) > 0 {
 				a := approvals[0] // Use the most recent/first approval
