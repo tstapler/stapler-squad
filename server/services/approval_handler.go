@@ -222,7 +222,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
 					Decision:  classifier.AutoDeny,
 					RiskLevel: classifier.RiskCritical,
-					RuleID:    "secret-scan",
+					RuleID:    classifier.RuleIDSecretScan,
 					RuleName:  "Plaintext Secret Detection",
 					Reason:    msg,
 				}, sessionID, "", 0)
@@ -251,7 +251,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 						h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
 							Decision:  classifier.Escalate,
 							RiskLevel: classifier.RiskHigh,
-							RuleID:    "new-domain-check",
+							RuleID:    classifier.RuleIDNewDomainCheck,
 							RuleName:  "New Domain Check",
 							Reason:    reason,
 						}, sessionID, "", 0)
