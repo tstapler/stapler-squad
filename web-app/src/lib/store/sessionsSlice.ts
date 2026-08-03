@@ -119,7 +119,13 @@ export const selectActiveSessionsSortedByUpdatedAt = createSelector(
   (sessions) =>
     sessions
       .filter((s) => s.status !== SessionStatus.UNSPECIFIED)
-      .sort((a, b) => Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0))
+      .sort((a, b) => {
+        const byUpdated = Number(b.updatedAt?.seconds ?? 0) - Number(a.updatedAt?.seconds ?? 0);
+        if (byUpdated !== 0) return byUpdated;
+        const byCreated = Number(b.createdAt?.seconds ?? 0) - Number(a.createdAt?.seconds ?? 0);
+        if (byCreated !== 0) return byCreated;
+        return a.id.localeCompare(b.id);
+      })
 );
 export const selectSessionIds = adapterSelectors.selectIds;
 export const selectSessionsTotal = adapterSelectors.selectTotal;

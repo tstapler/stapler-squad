@@ -130,12 +130,23 @@ type TriageRespawner interface {
 	// already re-triggered triage manually, or the item was otherwise
 	// resolved) — mirrors AutoRespawnReview's identical staleness guard.
 	AutoRespawnTriage(ctx context.Context, itemID string) error
+
+	// IsTriageLive reports whether the implementer (BacklogService) itself still
+	// has a headless triage call genuinely in flight for itemID. Added for
+	// reconcileOrphanedTriageItems' shape-1 staleness gate (BUG-055): a headless
+	// triage session has no live tmux instance to query, so before this existed
+	// that gate had no way to tell a session still open past
+	// maxHeadlessTriageSessionStaleness because it's genuinely still running
+	// apart from one that's actually dead — it assumed the latter unconditionally.
+	IsTriageLive(itemID string) bool
 }
 
-// QueueDequeuer claims and spawns as many queued backlog items as there are
-// free WIP slots, oldest-queued first. Called the moment a slot frees up
-// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
-// for a missed exit hook or a concurrency limit raised while items were queued.
+// QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
+// config.Config.AutoSpawnReadyItemsOrDefault) backlog items as there are free WIP
+// slots, highest-priority first. Called the moment a slot frees up (onSessionExited)
+// and by the periodic ReconcileStuck sweep as a safety net for a missed exit hook, a
+// concurrency limit raised while items were waiting, or an item reaching "ready"
+// between ticks.
 type QueueDequeuer interface {
 	DequeueNextQueuedItems(ctx context.Context) error
 }
@@ -2029,13 +2040,18 @@ const maxWorkSessionStaleness = 2 * time.Hour
 const headlessTriageSessionUUIDPrefix = "headless-triage-"
 
 // maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
-// trusted before reconcileOrphanedTriageItems flags it as orphaned. Headless triage calls
-// routinely run 7-15 minutes (see that function's doc comment); 30 minutes gives 2x margin
-// over that ceiling while closing the "triage session died before submit_triage_result,
-// item silently stuck in idea" gap (docs/tasks/triage-validation-*/research/pitfalls.md,
-// GAP-20/21) far faster than waiting out the general-purpose 2h threshold, which was tuned
-// for interactive/foreground triage sessions where a liveness signal isn't available here.
-const maxHeadlessTriageSessionStaleness = 30 * time.Minute
+// trusted before reconcileOrphanedTriageItems flags it as orphaned. MUST stay strictly
+// greater than server/services.triageCallBudget (the real per-call LLM budget, currently
+// 30m) with real margin — confirmed live 2026-08-01 (BUG-055) that headless triage calls
+// routinely run right up to that full 30m budget (27m41s, 27m53s, 30m38s observed across
+// distinct items in one incident), not the 7-15 minutes this constant was originally tuned
+// against. At exactly 30m (this constant's prior value, matching triageCallBudget with zero
+// margin), this sweep's periodic tick raced the call's own natural
+// completion/timeout on every slow call. IsTriageLive (checked by the shape-1 branch below)
+// is the structural fix for that race — this margin is a defense-in-depth belt-and-suspenders
+// measure on top of it, not a substitute: even with a real liveness check, there's no reason
+// to court the race in the first place when a full call is still plausibly finishing.
+const maxHeadlessTriageSessionStaleness = 35 * time.Minute
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
 // active work session has gone longer than maxWorkSessionStaleness without progress,
@@ -2320,20 +2336,32 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		var reasonDetail string
 		if latestTriage.EndedAt == nil {
 			// Shape 1: still open. Staleness gate as before.
+			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
-			if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
+			if isHeadless {
 				staleness = maxHeadlessTriageSessionStaleness
 			}
 			if time.Since(latestTriage.CreatedAt) <= staleness {
 				continue // still plausibly running
 			}
 
+			// Past staleness is no longer sufficient on its own for a headless session
+			// (BUG-055): consult IsTriageLive, the same liveness record
+			// tombstoneOrphanTriageSessions already trusts, before tombstoning a call
+			// that may genuinely still be running (the staleness margin above is
+			// defense-in-depth, not a substitute — see that constant's doc comment).
+			// No equivalent check exists for a non-headless (tmux-backed) session; that
+			// gap is unchanged from before this fix.
+			if isHeadless {
+				if respawner := l.getTriageRespawner(); respawner != nil && respawner.IsTriageLive(item.ID) {
+					continue // genuinely still running past staleness; don't tombstone a live call
+				}
+			}
+
 			// Tombstone the dead row now rather than leaving it open until a human
 			// manually re-triggers triage (the only other path that closes it, via
-			// tombstoneOrphanTriageSessions in server/services). Staleness past
-			// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
-			// (see doc comment above: no liveness checker, headless calls don't run
-			// this long) — nothing left to preserve by keeping the row open.
+			// tombstoneOrphanTriageSessions in server/services). Past staleness with no
+			// live record IS the confirmed-dead signal for this detector.
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
 			}
@@ -2341,6 +2369,26 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		} else {
 			// Shape 2: already ended, item still in idea. Nothing to tombstone —
 			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			if latestTriage.EndReason == "shutdown" { // must match classifyHeadlessCallError's bucket name (server/services/backlog_service_triage.go)
+				// The prior attempt was killed by our OWN graceful shutdown (a routine
+				// deploy restart cancelling s.shutdownCtx mid-call, not a failure of
+				// triage itself — see classifyHeadlessCallError). That carries zero
+				// evidence retrying would fail, so treat it as "never happened" rather
+				// than feeding it into MarkStuck/RemediationDue's exponential backoff
+				// (30m/2h/8h/.../72h, sized for OOM-crash bursts): respawn immediately,
+				// silently, with no remediation-attempt penalty and no user-facing
+				// "may be stuck" notification for what is an expected, self-inflicted event.
+				respawner := l.getTriageRespawner()
+				if respawner != nil {
+					log.InfoLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned by graceful shutdown, respawning immediately with no penalty", item.ID, latestTriage.SessionUUID)
+					go func(itemID string) {
+						if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+							log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn item=%s: %v", itemID, err)
+						}
+					}(item.ID)
+				}
+				continue
+			}
 			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
 		}
 

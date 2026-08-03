@@ -23,6 +23,8 @@ const (
 	FieldStartedAt = "started_at"
 	// FieldEndedAt holds the string denoting the ended_at field in the database.
 	FieldEndedAt = "ended_at"
+	// FieldEndReason holds the string denoting the end_reason field in the database.
+	FieldEndReason = "end_reason"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
 	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
@@ -78,6 +80,7 @@ var Columns = []string{
 	FieldSessionRole,
 	FieldStartedAt,
 	FieldEndedAt,
+	FieldEndReason,
 	FieldAcSnapshot,
 	FieldPipelineModeSnapshot,
 	FieldPipelineModeSnapshotHash,
@@ -115,6 +118,8 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultEndReason holds the default value on creation for the "end_reason" field.
+	DefaultEndReason string
 	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
 	DefaultPipelineModeSnapshot string
 	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
@@ -155,6 +160,11 @@ func ByStartedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEndedAt orders the results by the ended_at field.
 func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEndedAt, opts...).ToFunc()
+}
+
+// ByEndReason orders the results by the end_reason field.
+func ByEndReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEndReason, opts...).ToFunc()
 }
 
 // ByAcSnapshot orders the results by the ac_snapshot field.

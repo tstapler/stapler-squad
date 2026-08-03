@@ -282,6 +282,14 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 
 // UpdateItemSessionEnded records the end time for an ItemSession.
 func (r *EntRepository) UpdateItemSessionEnded(ctx context.Context, id string, endedAt time.Time) error {
+	return r.UpdateItemSessionEndedWithReason(ctx, id, endedAt, "")
+}
+
+// UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
+// classifyHeadlessCallError's bucket (or "" for a successful end) — see the end_reason
+// schema comment for why this exists: it lets orphan-recovery sweeps tell a call killed
+// by our own graceful shutdown apart from one that failed on its own merits.
+func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
@@ -289,6 +297,7 @@ func (r *EntRepository) UpdateItemSessionEnded(ctx context.Context, id string, e
 
 	_, err = r.client.ItemSession.UpdateOneID(parsedID).
 		SetEndedAt(endedAt).
+		SetEndReason(reason).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to set ended_at on item session %s: %w", id, err)

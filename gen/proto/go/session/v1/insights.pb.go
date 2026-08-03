@@ -1012,6 +1012,190 @@ func (x *InsightsEvent) GetAllParsed() bool {
 	return false
 }
 
+// TurnTokenStat is one assistant turn's token usage (per-turn breakdown tables).
+type TurnTokenStat struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Timestamp           *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // unset if the turn has no timestamp
+	Model               string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	InputTokens         int64                  `protobuf:"varint,3,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	OutputTokens        int64                  `protobuf:"varint,4,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	CacheCreationTokens int64                  `protobuf:"varint,5,opt,name=cache_creation_tokens,json=cacheCreationTokens,proto3" json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int64                  `protobuf:"varint,6,opt,name=cache_read_tokens,json=cacheReadTokens,proto3" json:"cache_read_tokens,omitempty"`
+	ToolNames           []string               `protobuf:"bytes,7,rep,name=tool_names,json=toolNames,proto3" json:"tool_names,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *TurnTokenStat) Reset() {
+	*x = TurnTokenStat{}
+	mi := &file_session_v1_insights_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TurnTokenStat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TurnTokenStat) ProtoMessage() {}
+
+func (x *TurnTokenStat) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_insights_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TurnTokenStat.ProtoReflect.Descriptor instead.
+func (*TurnTokenStat) Descriptor() ([]byte, []int) {
+	return file_session_v1_insights_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TurnTokenStat) GetTimestamp() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Timestamp
+	}
+	return nil
+}
+
+func (x *TurnTokenStat) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *TurnTokenStat) GetInputTokens() int64 {
+	if x != nil {
+		return x.InputTokens
+	}
+	return 0
+}
+
+func (x *TurnTokenStat) GetOutputTokens() int64 {
+	if x != nil {
+		return x.OutputTokens
+	}
+	return 0
+}
+
+func (x *TurnTokenStat) GetCacheCreationTokens() int64 {
+	if x != nil {
+		return x.CacheCreationTokens
+	}
+	return 0
+}
+
+func (x *TurnTokenStat) GetCacheReadTokens() int64 {
+	if x != nil {
+		return x.CacheReadTokens
+	}
+	return 0
+}
+
+func (x *TurnTokenStat) GetToolNames() []string {
+	if x != nil {
+		return x.ToolNames
+	}
+	return nil
+}
+
+// GetSessionTurnTimelineRequest looks up per-turn stats for a single session,
+// fetched on-demand when the session detail drawer opens.
+type GetSessionTurnTimelineRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"` // JSONL conversation UUID (SessionTokenSummary.conversation_id)
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetSessionTurnTimelineRequest) Reset() {
+	*x = GetSessionTurnTimelineRequest{}
+	mi := &file_session_v1_insights_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionTurnTimelineRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionTurnTimelineRequest) ProtoMessage() {}
+
+func (x *GetSessionTurnTimelineRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_insights_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionTurnTimelineRequest.ProtoReflect.Descriptor instead.
+func (*GetSessionTurnTimelineRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_insights_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetSessionTurnTimelineRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
+// GetSessionTurnTimelineResponse returns the per-turn breakdown for one session.
+type GetSessionTurnTimelineResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Turns         []*TurnTokenStat       `protobuf:"bytes,1,rep,name=turns,proto3" json:"turns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionTurnTimelineResponse) Reset() {
+	*x = GetSessionTurnTimelineResponse{}
+	mi := &file_session_v1_insights_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionTurnTimelineResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionTurnTimelineResponse) ProtoMessage() {}
+
+func (x *GetSessionTurnTimelineResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_insights_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionTurnTimelineResponse.ProtoReflect.Descriptor instead.
+func (*GetSessionTurnTimelineResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_insights_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetSessionTurnTimelineResponse) GetTurns() []*TurnTokenStat {
+	if x != nil {
+		return x.Turns
+	}
+	return nil
+}
+
 var File_session_v1_insights_proto protoreflect.FileDescriptor
 
 const file_session_v1_insights_proto_rawDesc = "" +
@@ -1122,11 +1306,25 @@ const file_session_v1_insights_proto_rawDesc = "" +
 	"\n" +
 	"all_parsed\x18\x03 \x01(\bR\tallParsedB\n" +
 	"\n" +
-	"\b_session2\xae\x02\n" +
+	"\b_session\"\xa6\x02\n" +
+	"\rTurnTokenStat\x128\n" +
+	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12!\n" +
+	"\finput_tokens\x18\x03 \x01(\x03R\vinputTokens\x12#\n" +
+	"\routput_tokens\x18\x04 \x01(\x03R\foutputTokens\x122\n" +
+	"\x15cache_creation_tokens\x18\x05 \x01(\x03R\x13cacheCreationTokens\x12*\n" +
+	"\x11cache_read_tokens\x18\x06 \x01(\x03R\x0fcacheReadTokens\x12\x1d\n" +
+	"\n" +
+	"tool_names\x18\a \x03(\tR\ttoolNames\"H\n" +
+	"\x1dGetSessionTurnTimelineRequest\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"Q\n" +
+	"\x1eGetSessionTurnTimelineResponse\x12/\n" +
+	"\x05turns\x18\x01 \x03(\v2\x19.session.v1.TurnTokenStatR\x05turns2\xa1\x03\n" +
 	"\x0fInsightsService\x12e\n" +
 	"\x12GetInsightsSummary\x12%.session.v1.GetInsightsSummaryRequest\x1a&.session.v1.GetInsightsSummaryResponse\"\x00\x12b\n" +
 	"\x11ListSessionTokens\x12$.session.v1.ListSessionTokensRequest\x1a%.session.v1.ListSessionTokensResponse\"\x00\x12P\n" +
-	"\rWatchInsights\x12 .session.v1.WatchInsightsRequest\x1a\x19.session.v1.InsightsEvent\"\x000\x01B\xad\x01\n" +
+	"\rWatchInsights\x12 .session.v1.WatchInsightsRequest\x1a\x19.session.v1.InsightsEvent\"\x000\x01\x12q\n" +
+	"\x16GetSessionTurnTimeline\x12).session.v1.GetSessionTurnTimelineRequest\x1a*.session.v1.GetSessionTurnTimelineResponse\"\x00B\xad\x01\n" +
 	"\x0ecom.session.v1B\rInsightsProtoP\x01ZCgithub.com/tstapler/stapler-squad/gen/proto/go/session/v1;sessionv1\xa2\x02\x03SXX\xaa\x02\n" +
 	"Session.V1\xca\x02\n" +
 	"Session\\V1\xe2\x02\x16Session\\V1\\GPBMetadata\xea\x02\vSession::V1b\x06proto3"
@@ -1143,55 +1341,62 @@ func file_session_v1_insights_proto_rawDescGZIP() []byte {
 	return file_session_v1_insights_proto_rawDescData
 }
 
-var file_session_v1_insights_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_session_v1_insights_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_session_v1_insights_proto_goTypes = []any{
-	(*SessionTokenSummary)(nil),        // 0: session.v1.SessionTokenSummary
-	(*TopToolEntry)(nil),               // 1: session.v1.TopToolEntry
-	(*DailyTokenBucket)(nil),           // 2: session.v1.DailyTokenBucket
-	(*ModelBreakdown)(nil),             // 3: session.v1.ModelBreakdown
-	(*TopEntry)(nil),                   // 4: session.v1.TopEntry
-	(*GetInsightsSummaryRequest)(nil),  // 5: session.v1.GetInsightsSummaryRequest
-	(*GetInsightsSummaryResponse)(nil), // 6: session.v1.GetInsightsSummaryResponse
-	(*ListSessionTokensRequest)(nil),   // 7: session.v1.ListSessionTokensRequest
-	(*ListSessionTokensResponse)(nil),  // 8: session.v1.ListSessionTokensResponse
-	(*WatchInsightsRequest)(nil),       // 9: session.v1.WatchInsightsRequest
-	(*InsightsEvent)(nil),              // 10: session.v1.InsightsEvent
-	nil,                                // 11: session.v1.DailyTokenBucket.CostByModelEntry
-	nil,                                // 12: session.v1.DailyTokenBucket.TokensByModelEntry
-	(*timestamppb.Timestamp)(nil),      // 13: google.protobuf.Timestamp
+	(*SessionTokenSummary)(nil),            // 0: session.v1.SessionTokenSummary
+	(*TopToolEntry)(nil),                   // 1: session.v1.TopToolEntry
+	(*DailyTokenBucket)(nil),               // 2: session.v1.DailyTokenBucket
+	(*ModelBreakdown)(nil),                 // 3: session.v1.ModelBreakdown
+	(*TopEntry)(nil),                       // 4: session.v1.TopEntry
+	(*GetInsightsSummaryRequest)(nil),      // 5: session.v1.GetInsightsSummaryRequest
+	(*GetInsightsSummaryResponse)(nil),     // 6: session.v1.GetInsightsSummaryResponse
+	(*ListSessionTokensRequest)(nil),       // 7: session.v1.ListSessionTokensRequest
+	(*ListSessionTokensResponse)(nil),      // 8: session.v1.ListSessionTokensResponse
+	(*WatchInsightsRequest)(nil),           // 9: session.v1.WatchInsightsRequest
+	(*InsightsEvent)(nil),                  // 10: session.v1.InsightsEvent
+	(*TurnTokenStat)(nil),                  // 11: session.v1.TurnTokenStat
+	(*GetSessionTurnTimelineRequest)(nil),  // 12: session.v1.GetSessionTurnTimelineRequest
+	(*GetSessionTurnTimelineResponse)(nil), // 13: session.v1.GetSessionTurnTimelineResponse
+	nil,                                    // 14: session.v1.DailyTokenBucket.CostByModelEntry
+	nil,                                    // 15: session.v1.DailyTokenBucket.TokensByModelEntry
+	(*timestamppb.Timestamp)(nil),          // 16: google.protobuf.Timestamp
 }
 var file_session_v1_insights_proto_depIdxs = []int32{
-	13, // 0: session.v1.SessionTokenSummary.first_message_at:type_name -> google.protobuf.Timestamp
-	13, // 1: session.v1.SessionTokenSummary.last_message_at:type_name -> google.protobuf.Timestamp
+	16, // 0: session.v1.SessionTokenSummary.first_message_at:type_name -> google.protobuf.Timestamp
+	16, // 1: session.v1.SessionTokenSummary.last_message_at:type_name -> google.protobuf.Timestamp
 	1,  // 2: session.v1.SessionTokenSummary.top_tools:type_name -> session.v1.TopToolEntry
-	13, // 3: session.v1.DailyTokenBucket.date:type_name -> google.protobuf.Timestamp
-	11, // 4: session.v1.DailyTokenBucket.cost_by_model:type_name -> session.v1.DailyTokenBucket.CostByModelEntry
-	12, // 5: session.v1.DailyTokenBucket.tokens_by_model:type_name -> session.v1.DailyTokenBucket.TokensByModelEntry
-	13, // 6: session.v1.GetInsightsSummaryRequest.from:type_name -> google.protobuf.Timestamp
-	13, // 7: session.v1.GetInsightsSummaryRequest.to:type_name -> google.protobuf.Timestamp
+	16, // 3: session.v1.DailyTokenBucket.date:type_name -> google.protobuf.Timestamp
+	14, // 4: session.v1.DailyTokenBucket.cost_by_model:type_name -> session.v1.DailyTokenBucket.CostByModelEntry
+	15, // 5: session.v1.DailyTokenBucket.tokens_by_model:type_name -> session.v1.DailyTokenBucket.TokensByModelEntry
+	16, // 6: session.v1.GetInsightsSummaryRequest.from:type_name -> google.protobuf.Timestamp
+	16, // 7: session.v1.GetInsightsSummaryRequest.to:type_name -> google.protobuf.Timestamp
 	0,  // 8: session.v1.GetInsightsSummaryResponse.sessions:type_name -> session.v1.SessionTokenSummary
 	2,  // 9: session.v1.GetInsightsSummaryResponse.daily:type_name -> session.v1.DailyTokenBucket
 	3,  // 10: session.v1.GetInsightsSummaryResponse.models:type_name -> session.v1.ModelBreakdown
 	4,  // 11: session.v1.GetInsightsSummaryResponse.top_skills:type_name -> session.v1.TopEntry
 	4,  // 12: session.v1.GetInsightsSummaryResponse.top_tools:type_name -> session.v1.TopEntry
-	13, // 13: session.v1.GetInsightsSummaryResponse.pricing_as_of:type_name -> google.protobuf.Timestamp
-	13, // 14: session.v1.ListSessionTokensRequest.from:type_name -> google.protobuf.Timestamp
-	13, // 15: session.v1.ListSessionTokensRequest.to:type_name -> google.protobuf.Timestamp
+	16, // 13: session.v1.GetInsightsSummaryResponse.pricing_as_of:type_name -> google.protobuf.Timestamp
+	16, // 14: session.v1.ListSessionTokensRequest.from:type_name -> google.protobuf.Timestamp
+	16, // 15: session.v1.ListSessionTokensRequest.to:type_name -> google.protobuf.Timestamp
 	0,  // 16: session.v1.ListSessionTokensResponse.sessions:type_name -> session.v1.SessionTokenSummary
-	13, // 17: session.v1.WatchInsightsRequest.from:type_name -> google.protobuf.Timestamp
-	13, // 18: session.v1.WatchInsightsRequest.to:type_name -> google.protobuf.Timestamp
+	16, // 17: session.v1.WatchInsightsRequest.from:type_name -> google.protobuf.Timestamp
+	16, // 18: session.v1.WatchInsightsRequest.to:type_name -> google.protobuf.Timestamp
 	0,  // 19: session.v1.InsightsEvent.session:type_name -> session.v1.SessionTokenSummary
-	5,  // 20: session.v1.InsightsService.GetInsightsSummary:input_type -> session.v1.GetInsightsSummaryRequest
-	7,  // 21: session.v1.InsightsService.ListSessionTokens:input_type -> session.v1.ListSessionTokensRequest
-	9,  // 22: session.v1.InsightsService.WatchInsights:input_type -> session.v1.WatchInsightsRequest
-	6,  // 23: session.v1.InsightsService.GetInsightsSummary:output_type -> session.v1.GetInsightsSummaryResponse
-	8,  // 24: session.v1.InsightsService.ListSessionTokens:output_type -> session.v1.ListSessionTokensResponse
-	10, // 25: session.v1.InsightsService.WatchInsights:output_type -> session.v1.InsightsEvent
-	23, // [23:26] is the sub-list for method output_type
-	20, // [20:23] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	16, // 20: session.v1.TurnTokenStat.timestamp:type_name -> google.protobuf.Timestamp
+	11, // 21: session.v1.GetSessionTurnTimelineResponse.turns:type_name -> session.v1.TurnTokenStat
+	5,  // 22: session.v1.InsightsService.GetInsightsSummary:input_type -> session.v1.GetInsightsSummaryRequest
+	7,  // 23: session.v1.InsightsService.ListSessionTokens:input_type -> session.v1.ListSessionTokensRequest
+	9,  // 24: session.v1.InsightsService.WatchInsights:input_type -> session.v1.WatchInsightsRequest
+	12, // 25: session.v1.InsightsService.GetSessionTurnTimeline:input_type -> session.v1.GetSessionTurnTimelineRequest
+	6,  // 26: session.v1.InsightsService.GetInsightsSummary:output_type -> session.v1.GetInsightsSummaryResponse
+	8,  // 27: session.v1.InsightsService.ListSessionTokens:output_type -> session.v1.ListSessionTokensResponse
+	10, // 28: session.v1.InsightsService.WatchInsights:output_type -> session.v1.InsightsEvent
+	13, // 29: session.v1.InsightsService.GetSessionTurnTimeline:output_type -> session.v1.GetSessionTurnTimelineResponse
+	26, // [26:30] is the sub-list for method output_type
+	22, // [22:26] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_insights_proto_init() }
@@ -1207,7 +1412,7 @@ func file_session_v1_insights_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_insights_proto_rawDesc), len(file_session_v1_insights_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

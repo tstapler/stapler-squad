@@ -115,10 +115,12 @@ Sessions support tag-based multi-dimensional organization with 8 grouping strate
 
 | Remote | Repo | Role |
 |---|---|---|
-| `origin` | `TylerStaplerAtFanatics/stapler-squad` | Work upstream (canonical) |
-| `personal` | `tstapler/stapler-squad` | Personal fork |
+| `origin` | `tstapler/stapler-squad` | Personal fork |
+| `upstream-fanatics` | `TylerStaplerAtFanatics/stapler-squad` | Work upstream (canonical) |
 
-When running `/sync-remotes`: `FORK_REMOTE=personal`, `UPSTREAM_REMOTE=origin`.
+`tstapler-ssh` is a duplicate of `origin` (same repo, explicit SSH URL); `mainrepo` points at this same local checkout, used for worktree cross-referencing.
+
+When running `/sync-remotes`: `FORK_REMOTE=origin`, `UPSTREAM_REMOTE=upstream-fanatics`.
 
 ## Pull Request Requirements
 

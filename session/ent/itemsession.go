@@ -28,6 +28,8 @@ type ItemSession struct {
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	// EndedAt holds the value of the "ended_at" field.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// Set only alongside ended_at for a headless (triage/review) call: classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error", "claude_not_found", "other") or "" for a successful end / not yet classified. Lets orphan-recovery sweeps distinguish a call killed by our own graceful shutdown (retry immediately, no penalty) from a call that actually failed on its own merits (apply the normal backoff).
+	EndReason string `json:"end_reason,omitempty"`
 	// JSON []AcCriterion at spawn time
 	AcSnapshot string `json:"ac_snapshot,omitempty"`
 	// The PipelineMode slug resolved and in effect when this session first started — snapshotted so later edits to the item's live pipeline_mode don't retroactively change what this session is shown to have run. Mirrors ac_snapshot's discipline.
@@ -103,7 +105,7 @@ func (*ItemSession) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case itemsession.FieldCommitCountSinceSpawn:
 			values[i] = new(sql.NullInt64)
-		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
+		case itemsession.FieldSessionUUID, itemsession.FieldSessionRole, itemsession.FieldEndReason, itemsession.FieldAcSnapshot, itemsession.FieldPipelineModeSnapshot, itemsession.FieldPipelineModeSnapshotHash, itemsession.FieldTriageResult, itemsession.FieldVerificationNotes, itemsession.FieldLastCommitSha, itemsession.FieldLastCommitMessage:
 			values[i] = new(sql.NullString)
 		case itemsession.FieldStartedAt, itemsession.FieldEndedAt, itemsession.FieldLastCommitAt, itemsession.FieldLastFileTouchAt, itemsession.FieldLastProgressAt, itemsession.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -157,6 +159,12 @@ func (_m *ItemSession) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.EndedAt = new(time.Time)
 				*_m.EndedAt = value.Time
+			}
+		case itemsession.FieldEndReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field end_reason", values[i])
+			} else if value.Valid {
+				_m.EndReason = value.String
 			}
 		case itemsession.FieldAcSnapshot:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -307,6 +315,9 @@ func (_m *ItemSession) String() string {
 		builder.WriteString("ended_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("end_reason=")
+	builder.WriteString(_m.EndReason)
 	builder.WriteString(", ")
 	builder.WriteString("ac_snapshot=")
 	builder.WriteString(_m.AcSnapshot)
