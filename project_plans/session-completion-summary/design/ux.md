@@ -6,8 +6,11 @@ Epic 3.2 tab integration, Epic 3.3 standalone route). This document does not
 re-decide component boundaries, RPCs, or data shape — it specifies layout,
 copy, and interaction detail for what plan.md already architected, resolving
 the three items plan.md left underspecified (skeleton treatment, `aria-live`
-strings, READY section ordering) and flagging one apparent coverage gap
-(stale-document-plus-banner) for the coordinator.
+strings, READY section ordering) and originally flagging two apparent
+coverage gaps (stale-document-plus-banner, surface (d2); standalone-route
+404, surface (g)) for the coordinator — both now RESOLVED in a later
+plan.md repair pass; see "Gap summary for the coordinator" near the end of
+this file for the closing task references.
 
 Grounded in `requirements.md` (8 ACs) and `research/ux.md` (comparable
 patterns, mental model, accessibility findings, empty-state copy, JTBD).
@@ -22,7 +25,7 @@ patterns, mental model, accessibility findings, empty-state copy, JTBD).
 | b | Summary tab — enabled, GENERATING | Story 3.1.2 |
 | c | Summary tab — enabled, READY (main document) | Story 3.1.2 |
 | d | Summary tab — enabled, ERROR | Story 3.1.2 |
-| d2 | ERROR with a stale prior READY document (**gap — see §Gap**) | not addressed |
+| d2 | ERROR with a stale prior READY document (**RESOLVED — see §Gap**) | plan.md Task 1.5.2c (backend field-scoped upsert-on-error) + Story 3.1.2 / Task 3.1.2a (frontend stale-doc-plus-banner branch) |
 | e | Copy-to-clipboard (success / failure) | Story 3.1.2 |
 | f | Regenerate (in-flight) | Story 3.1.2 / 2.2.2 |
 | g | Standalone post-deletion route | Story 3.3.1 |
@@ -288,7 +291,7 @@ string):
 
 **Note on `"diff"`**: this stage is currently unreachable given `BuildDiffSnapshot`'s nil-safe, always-succeeds design (`plan.md` Task 1.3.1a — it returns a zero-value `DiffSnapshot` for `nil`/empty input rather than erroring). It's kept in the table as a defensive/future-proofing entry rather than a live path — informational, not a bug, and not something this pass proposes removing.
 
-**Note on `"persist"`**: this is the real failure mode from `plan.md` Task 1.5.2b step 6 (the final upsert write itself failing after the LLM cost has already been spent) — previously missing from this table, which meant it fell through to the generic "Something went wrong" text instead of a tailored message.
+**Note on `"persist"`**: this is the real failure mode from `plan.md` Task 1.5.2c step 6 (the final upsert write itself failing after the LLM cost has already been spent) — previously missing from this table, which meant it fell through to the generic "Something went wrong" text instead of a tailored message.
 
 `error_message` (the raw backend string) is never shown inline in the
 primary text — it's placed inside the collapsed "▸ Details" disclosure
@@ -304,32 +307,50 @@ a regenerate attempt is itself in flight.
 
 ---
 
-## (d2) ERROR with a stale prior READY document — GAP, flagged explicitly
+## (d2) ERROR with a stale prior READY document — RESOLVED
 
-**This sub-state is not addressed anywhere in plan.md's Story 3.1.2.**
-`research/ux.md` §4 explicitly proposes it:
+**Status: resolved in a later plan.md repair pass.** The gap originally
+flagged below (this sub-state not being addressed anywhere in plan.md's
+Story 3.1.2) has been closed: the backend now guarantees field-scoped
+preservation of a prior successful generation's `markdown`/`narrative` on
+any error-path upsert (plan.md Task 1.5.2c — see the Pattern Decisions
+table's "Error-path field preservation" row), and the frontend now branches
+on `status === "ERROR" && !!data.markdown` to render exactly the
+stale-document-plus-banner layout described below, rather than the bare
+error card (plan.md Story 3.1.2's AC "stale-document case" + Task 3.1.2a).
+The rest of this section is kept as-written since it still accurately
+describes the implemented design (layout, copy, `aria-live` string,
+required frontend/backend branch conditions) — read the paragraphs below as
+"what was built," not "what is still proposed."
+
+`research/ux.md` §4 originally proposed it:
 
 > "if a *prior* successful generation exists (e.g. Regenerate itself failed
 > but an earlier READY doc is still stored), show the stale document with a
 > banner ... rather than replacing a working doc with a bare error."
 
-Plan.md's Story 3.1.2 AC only branches on `status: ERROR` → show
+**Original gap (now closed)**: at the time this section was first written,
+plan.md's Story 3.1.2 AC only branched on `status: ERROR` → show
 error/Regenerate (surface (d) above), with no conditional on whether
 `data.markdown`/`data.narrative` are non-empty at the time of that error.
-Task 1.5.2b (step 3, backend) upserts `status: "error"` on a
-`BuildDecisionsSnapshot` failure but doesn't specify whether the *previous*
-row's `markdown`/`narrative` field values survive that upsert untouched —
-ent's `Upsert...` API only overwrites the columns explicitly set in the
-update, so the previous `markdown` value would survive at the **data**
-layer by default ent semantics, but nothing in Story 1.5.2/2.2.1/3.1.2
-specifies exposing it or rendering it. As written, the plan's frontend
-branch is binary (`status === "READY"` vs `status === "ERROR"`) and would
-show the bare ERROR card even when `data.markdown` from a prior successful
-generation is sitting right there in the same response payload.
+Task 1.5.2c (step 3, backend) upserts `status: "error"` on a
+`BuildDecisionsSnapshot` failure and did not, at the time, specify whether
+the *previous* row's `markdown`/`narrative` field values survive that
+upsert untouched — ent's `Upsert...` API only overwrites the columns
+explicitly set in the update, so the previous `markdown` value would
+survive at the **data** layer by default ent semantics, but nothing in
+Story 1.5.2/2.2.1/3.1.2 specified exposing it or rendering it, and the
+plan's frontend branch was binary (`status === "READY"` vs `status ===
+"ERROR"`), which would have shown the bare ERROR card even when
+`data.markdown` from a prior successful generation was sitting right there
+in the same response payload. **Both halves are now specified**: plan.md's
+Pattern Decisions table's "Error-path field preservation" row commits to
+the field-scoped upsert explicitly, and Story 3.1.2's AC + Task 3.1.2a
+specify the `status === "ERROR" && !!data.markdown` frontend branch below.
 
-**Recommended design** (for the coordinator/planning phase to accept or
-reject — not something this UX pass is authorized to silently fold into
-plan.md):
+**Design (accepted and specified in plan.md)** — originally proposed here
+for the coordinator/planning phase to accept or reject; now accepted and
+reflected in Story 3.1.2's AC + Task 3.1.2a:
 
 ```
 ┌─ Session: fix-login-redirect ──────────────────────────────────────┐
@@ -365,16 +386,16 @@ plan.md):
   previous summary. Regeneration failed — see the banner for details."`
 - This sub-state requires: (1) the frontend to branch on `status ===
   "ERROR" && data.markdown` (non-empty) rather than only `status`, and (2)
-  confirmation that the backend upsert in Task 1.5.2b genuinely preserves
+  confirmation that the backend upsert in Task 1.5.2c genuinely preserves
   the prior row's `markdown`/`narrative`/`diff`/`decisions`/etc. fields
   when only `status`/`error_stage`/`error_message` are written on failure
   (i.e., the upsert must be field-scoped, not a full-row replace that
-  would null out the stale content). **Neither of these is currently
-  specified as a task in plan.md** — implementing this sub-state would
-  need a new task in Epic 1.5 (backend: confirm/guarantee field-scoped
-  upsert-on-error) and a task in Story 3.1.2 (frontend: stale-doc-plus-banner
-  branch), or an explicit decision to accept the gap and always show the
-  bare error card even when a usable stale document exists.
+  would null out the stale content). **Both are now specified as plan.md
+  tasks**: the backend field-scoped upsert-on-error guarantee lives in
+  Task 1.5.2c + the Pattern Decisions table's "Error-path field
+  preservation" row, and the frontend stale-doc-plus-banner branch lives in
+  Story 3.1.2's AC + Task 3.1.2a. This is no longer an open gap or a
+  pending coordinator decision.
 
 ---
 
@@ -531,13 +552,16 @@ context is the absence of sibling tabs and the presence of a "← Back" link.
   message with the "← Back" link as the only affordance — this is *not*
   the same as the GENERATING skeleton (surface (b)), since on this route
   there is no session-still-running context to justify an indefinite
-  polling skeleton. **This 404-shaped case is not explicitly covered by
-  plan.md's Story 3.3.1** (which only specs the found-and-READY path) —
-  flagged here as a smaller, secondary gap alongside the primary (d2) gap:
-  without a distinct empty-result message, this route would otherwise show
-  an indefinitely-polling GENERATING skeleton for a session that will never
-  produce a document, which is a dead end (violates the "no dead ends"
-  UX-AC below).
+  polling skeleton. **RESOLVED**: this 404-shaped case was originally not
+  explicitly covered by plan.md's Story 3.3.1 (which only specced the
+  found-and-READY path) — flagged here as a smaller, secondary gap alongside
+  the primary (d2) gap, since without a distinct empty-result message this
+  route would otherwise show an indefinitely-polling GENERATING skeleton for
+  a session that will never produce a document (a dead end, violating the
+  "no dead ends" UX-AC below). It is now closed by Task 3.1.1a's
+  `neverResolved`/`maxPollAttempts` (10 × 2s ≈ 20s) cap on `useSessionSummary`
+  plus Task 3.3.1a's terminal "No summary available for this session"
+  empty-result rendering on the standalone route.
 - Session still exists and is still running (user found/bookmarked the URL
   early): the route still works — `GetSessionSummary` returns `Summary:
   nil` the same way, which is indistinguishable at the RPC layer from "will
@@ -623,18 +647,36 @@ context is the absence of sibling tabs and the presence of a "← Back" link.
 
 ## Gap summary for the coordinator
 
-**Confirmed gap**: plan.md's Story 3.1.2 (`SessionSummaryPanel`) does not
-address the "stale document with a banner" case from `research/ux.md` §4.
-The plan's frontend branches only on `status` (READY vs. ERROR), with no
-path for "ERROR, but a usable prior document exists in the same response."
-As written, a failed Regenerate attempt on a session that already had a
-good READY document would replace that document with a bare error card,
-discarding a working summary from the user's view (the underlying DB row
-likely still has the old `markdown` depending on whether the error-path
-upsert in Task 1.5.2b is field-scoped — that itself is unconfirmed in the
-plan). See surface (d2) above for a proposed design and the two concrete
-task additions (one backend upsert-scoping confirmation, one frontend
-branch) it would require if accepted. A secondary, smaller gap in the same
-family is noted in surface (g): the standalone route has no explicit
-"no summary exists / never will" empty-result design, which risks an
-indefinite GENERATING-style dead end for a URL that will never resolve.
+**Both gaps below are RESOLVED as of a later plan.md repair pass.** This
+section is kept (rather than deleted) as the historical record of what was
+originally flagged and exactly which plan.md tasks closed each — useful
+context for why Story 3.1.2/3.3.1 and the Pattern Decisions table look the
+way they do.
+
+**Gap 1 — RESOLVED (primary, stale-document-plus-banner, surface (d2))**:
+plan.md's Story 3.1.2 (`SessionSummaryPanel`) originally did not address the
+"stale document with a banner" case from `research/ux.md` §4. The plan's
+frontend branched only on `status` (READY vs. ERROR), with no path for
+"ERROR, but a usable prior document exists in the same response." As
+originally written, a failed Regenerate attempt on a session that already
+had a good READY document would have replaced that document with a bare
+error card, discarding a working summary from the user's view (the
+underlying DB row likely still had the old `markdown` depending on whether
+the error-path upsert was field-scoped — that itself was unconfirmed at the
+time). See surface (d2) above for the accepted design. **Closed by**:
+plan.md Task 1.5.2c (backend: the error-path upsert is now explicitly
+field-scoped, preserving prior `markdown`/`narrative`/`diff`/`decisions` —
+see the Pattern Decisions table's "Error-path field preservation" row) +
+Story 3.1.2's AC "stale-document case" and Task 3.1.2a (frontend: the
+`status === "ERROR" && !!data.markdown` branch rendering the READY document
+with a banner instead of the bare error card).
+
+**Gap 2 — RESOLVED (secondary, smaller, standalone-route-404, surface (g))**:
+the standalone route originally had no explicit "no summary exists / never
+will" empty-result design, which risked an indefinite GENERATING-style dead
+end for a URL that will never resolve. **Closed by**: plan.md Task 3.1.1a
+(the `useSessionSummary` hook's `neverResolved`/`maxPollAttempts` cap — 10
+consecutive `nil` reads, ≈20s — after which polling stops) + Task 3.3.1a
+(the standalone route rendering a terminal "No summary available for this
+session" message, with the "← Back" link as the sole affordance, once
+`neverResolved` is true).

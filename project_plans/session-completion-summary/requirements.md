@@ -17,6 +17,11 @@ this project do so automatically. This feature closes that gap: a markdown
 completion summary generated when a session ends, covering the diff, approval
 decisions, timeline, and cost.
 
+**Target user**: stapler-squad is a solo-maintainer/small-team self-hosted
+tool, not a multi-tenant product; the user this feature is for is a developer
+running stapler-squad sessions who wants to know what an agent did without
+reading through raw scrollback.
+
 ## Goals
 
 - Generate a markdown completion summary automatically, without manual
@@ -151,6 +156,15 @@ path itself can't assume a live `Session` lookup.
 A one-click "Copy as Markdown" action copies the full document to the
 clipboard. The exported markdown must be usable verbatim as a GitHub PR body
 or issue-comment attachment (i.e., no app-specific markup, valid GFM).
+
+**Verification note**: the "reusable as a PR body/issue comment" claim is
+verified manually, not by an automated GFM-linter assertion — paste the
+exported markdown into an actual GitHub PR description field (or issue
+comment box) and confirm it renders correctly with no raw markdown artifacts
+(literal `#`/`-`/`[]()` characters showing instead of rendered headings,
+lists, and links). See `implementation/validation.md`'s Requirement → Test
+Mapping table (the "FR-4: 'Reusable as PR body' GFM-rendering claim" row)
+for where this is tracked as a manual verification step.
 
 ### FR-5: Asynchronous generation, non-blocking, graceful degradation (AC-5)
 
