@@ -58,6 +58,13 @@ type ApprovalMetadata struct {
 	ToolInput  map[string]interface{}
 	Cwd        string
 	Orphaned   bool
+
+	// EscalationReason and EscalationCategory explain why this request was
+	// escalated for manual review (no-match/explicit-rule/domain-age/
+	// unclassifiable/unexpected). Copied from PendingApproval via
+	// ApprovalStore.GetApprovalMetadataBySession.
+	EscalationReason   string
+	EscalationCategory string
 }
 
 // ApprovalMetadataProvider provides approval metadata for enriching review queue items.
@@ -825,7 +832,13 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.Orphaned {
 					item.Metadata["orphaned"] = "true"
 				}
-				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
+				if a.EscalationReason != "" {
+					item.Metadata["escalation_reason"] = a.EscalationReason
+				}
+				if a.EscalationCategory != "" {
+					item.Metadata["escalation_reason_category"] = a.EscalationCategory
+				}
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID, "escalation_category", item.Metadata["escalation_reason_category"])
 			}
 		}
 
