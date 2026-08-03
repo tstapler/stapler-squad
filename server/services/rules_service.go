@@ -116,6 +116,7 @@ func (rs *RulesService) UpsertApprovalRule(
 		RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
 		PythonModes:           r.PythonModes,
 		SafePythonImportsOnly: r.SafePythonImportsOnly,
+		RequireCIPassing:      r.RequireCiPassing,
 	}
 	if r.CreatedAt != nil {
 		spec.CreatedAt = r.CreatedAt.AsTime()
@@ -468,6 +469,7 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
 		PythonModes:           spec.PythonModes,
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
+		RequireCiPassing:      spec.RequireCIPassing,
 	}
 	if !spec.CreatedAt.IsZero() {
 		p.CreatedAt = timestamppb.New(spec.CreatedAt)
@@ -477,17 +479,18 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 
 func ruleToSpec(r classifier.Rule) RuleSpec {
 	spec := RuleSpec{
-		ID:           r.ID,
-		Name:         r.Name,
-		ToolName:     r.ToolName,
-		ToolCategory: r.ToolCategory,
-		Decision:     decisionString(r.Decision),
-		RiskLevel:    riskLevelString(r.RiskLevel),
-		Reason:       r.Reason,
-		Alternative:  r.Alternative,
-		Priority:     r.Priority,
-		Enabled:      r.Enabled,
-		Source:       r.Source,
+		ID:               r.ID,
+		Name:             r.Name,
+		ToolName:         r.ToolName,
+		ToolCategory:     r.ToolCategory,
+		Decision:         decisionString(r.Decision),
+		RiskLevel:        riskLevelString(r.RiskLevel),
+		Reason:           r.Reason,
+		Alternative:      r.Alternative,
+		Priority:         r.Priority,
+		Enabled:          r.Enabled,
+		Source:           r.Source,
+		RequireCIPassing: r.RequireCIPassing,
 	}
 	if r.ToolPattern != nil {
 		spec.ToolPattern = r.ToolPattern.String()
@@ -1212,6 +1215,7 @@ func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
 		RequiredFlagPrefixes:  p.RequiredFlagPrefixes,
 		PythonModes:           p.PythonModes,
 		SafePythonImportsOnly: p.SafePythonImportsOnly,
+		RequireCIPassing:      p.RequireCiPassing,
 		Decision:              autoDecisionToString(p.Decision),
 		RiskLevel:             p.RiskLevel,
 		Reason:                p.Reason,

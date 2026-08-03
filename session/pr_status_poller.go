@@ -93,6 +93,13 @@ func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) 
 	}
 }
 
+// PollInterval returns the poller's configured poll interval, so other components
+// (e.g. ApprovalHandler's CI-status staleness guard) can bound freshness against the
+// same live-configured value rather than a disconnected duplicate literal.
+func (p *PRStatusPoller) PollInterval() time.Duration {
+	return p.config.PollInterval
+}
+
 // SetInstances replaces the full list of monitored instances.
 func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()

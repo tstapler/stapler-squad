@@ -3267,3 +3267,115 @@ func TestSentinel_PulumiUpEscalates(t *testing.T) {
 		}
 	}
 }
+
+// ── RequireCIPassing (ci_passing) condition tests ──────────────────────────────
+
+func TestClassify_RequireCIPassing_Success_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "success"})
+	if result.Decision != AutoAllow {
+		t.Errorf("expected AutoAllow when CIStatus=success, got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_RequireCIPassing_Failure_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: "failure"})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when CIStatus=failure (rule shouldn't match), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+func TestClassify_RequireCIPassing_NoPR_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-ci-passing",
+			Name:             "Require CI passing",
+			ToolName:         "Bash",
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskLow,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": "echo hi"}}
+	result := c.Classify(payload, ClassificationContext{CIStatus: ""})
+	if result.Decision != Escalate {
+		t.Errorf("expected Escalate when CIStatus=\"\" (no PR/unknown), got %v (rule=%s)", result.Decision, result.RuleID)
+	}
+}
+
+// TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch is AC6's literal
+// worked example: a rule combining a regex CommandPattern with RequireCIPassing only
+// matches when BOTH hold.
+func TestClassify_RequireCIPassing_CommandPatternAnd_BothMustMatch(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{
+		{
+			ID:               "test-npm-publish-ci-gated",
+			Name:             "Allow npm publish only with green CI",
+			ToolName:         "Bash",
+			CommandPattern:   regexp.MustCompile(`^npm publish`),
+			RequireCIPassing: true,
+			Decision:         AutoAllow,
+			RiskLevel:        RiskMedium,
+			Priority:         100,
+			Enabled:          true,
+			Source:           "user",
+		},
+	})
+
+	tests := []struct {
+		name     string
+		cmd      string
+		ciStatus string
+		want     ClassificationDecision
+	}{
+		{"regex matches, CI passing", "npm publish", "success", AutoAllow},
+		{"regex matches, CI failing", "npm publish", "failure", Escalate},
+		{"regex does not match, CI passing", "npm install", "success", Escalate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": tt.cmd}}
+			result := c.Classify(payload, ClassificationContext{CIStatus: tt.ciStatus})
+			if result.Decision != tt.want {
+				t.Errorf("cmd=%q ciStatus=%q: expected %v, got %v (rule=%s)", tt.cmd, tt.ciStatus, tt.want, result.Decision, result.RuleID)
+			}
+		})
+	}
+}

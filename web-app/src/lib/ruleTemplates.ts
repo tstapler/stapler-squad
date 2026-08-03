@@ -15,6 +15,7 @@ export interface RuleTemplate {
   forbiddenFlags?: string[];
   pythonModes?: string[];
   safePythonImportsOnly?: boolean;
+  requireCiPassing?: boolean;
   toolName?: string;
   toolCategory?: string;
   commandPattern?: string;
