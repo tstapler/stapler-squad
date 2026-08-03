@@ -367,24 +367,28 @@ func init() {
 	itemsessionDescEndReason := itemsessionFields[5].Descriptor()
 	// itemsession.DefaultEndReason holds the default value on creation for the end_reason field.
 	itemsession.DefaultEndReason = itemsessionDescEndReason.Default.(string)
+	// itemsessionDescFailureCapturePath is the schema descriptor for failure_capture_path field.
+	itemsessionDescFailureCapturePath := itemsessionFields[6].Descriptor()
+	// itemsession.DefaultFailureCapturePath holds the default value on creation for the failure_capture_path field.
+	itemsession.DefaultFailureCapturePath = itemsessionDescFailureCapturePath.Default.(string)
 	// itemsessionDescPipelineModeSnapshot is the schema descriptor for pipeline_mode_snapshot field.
-	itemsessionDescPipelineModeSnapshot := itemsessionFields[7].Descriptor()
+	itemsessionDescPipelineModeSnapshot := itemsessionFields[8].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshot holds the default value on creation for the pipeline_mode_snapshot field.
 	itemsession.DefaultPipelineModeSnapshot = itemsessionDescPipelineModeSnapshot.Default.(string)
 	// itemsessionDescPipelineModeSnapshotHash is the schema descriptor for pipeline_mode_snapshot_hash field.
-	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[8].Descriptor()
+	itemsessionDescPipelineModeSnapshotHash := itemsessionFields[9].Descriptor()
 	// itemsession.DefaultPipelineModeSnapshotHash holds the default value on creation for the pipeline_mode_snapshot_hash field.
 	itemsession.DefaultPipelineModeSnapshotHash = itemsessionDescPipelineModeSnapshotHash.Default.(string)
 	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
-	itemsessionDescCommitCountSinceSpawn := itemsessionFields[14].Descriptor()
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[15].Descriptor()
 	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
 	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
 	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
-	itemsessionDescCreatedAt := itemsessionFields[17].Descriptor()
+	itemsessionDescCreatedAt := itemsessionFields[18].Descriptor()
 	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
 	// itemsessionDescEstimatedCostUsd is the schema descriptor for estimated_cost_usd field.
-	itemsessionDescEstimatedCostUsd := itemsessionFields[18].Descriptor()
+	itemsessionDescEstimatedCostUsd := itemsessionFields[19].Descriptor()
 	// itemsession.DefaultEstimatedCostUsd holds the default value on creation for the estimated_cost_usd field.
 	itemsession.DefaultEstimatedCostUsd = itemsessionDescEstimatedCostUsd.Default.(float64)
 	// itemsessionDescID is the schema descriptor for id field.

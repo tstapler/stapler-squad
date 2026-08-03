@@ -587,8 +587,19 @@ type ItemSession struct {
 	WorktreePath             string                 `protobuf:"bytes,15,opt,name=worktree_path,json=worktreePath,proto3" json:"worktree_path,omitempty"`
 	PipelineModeSnapshot     string                 `protobuf:"bytes,16,opt,name=pipeline_mode_snapshot,json=pipelineModeSnapshot,proto3" json:"pipeline_mode_snapshot,omitempty"`
 	PipelineModeSnapshotHash string                 `protobuf:"bytes,17,opt,name=pipeline_mode_snapshot_hash,json=pipelineModeSnapshotHash,proto3" json:"pipeline_mode_snapshot_hash,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// end_reason is set alongside ended_at for a headless (triage/review) call:
+	// classifyHeadlessCallError's bucket ("shutdown", "timeout", "process_error",
+	// "claude_not_found", "other"), or empty for a successful end. Already captured
+	// durably (session.ItemSessionSummary.EndReason) but previously never surfaced
+	// over the wire.
+	EndReason string `protobuf:"bytes,18,opt,name=end_reason,json=endReason,proto3" json:"end_reason,omitempty"`
+	// failure_capture_path is the absolute path to a durable file holding the
+	// size-capped raw stdout of a headless triage/review call that errored or
+	// whose result failed to parse — see session.WriteHeadlessFailureCapture. Empty
+	// when the call succeeded and parsed cleanly, or capture itself failed.
+	FailureCapturePath string `protobuf:"bytes,19,opt,name=failure_capture_path,json=failureCapturePath,proto3" json:"failure_capture_path,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ItemSession) Reset() {
@@ -736,6 +747,20 @@ func (x *ItemSession) GetPipelineModeSnapshot() string {
 func (x *ItemSession) GetPipelineModeSnapshotHash() string {
 	if x != nil {
 		return x.PipelineModeSnapshotHash
+	}
+	return ""
+}
+
+func (x *ItemSession) GetEndReason() string {
+	if x != nil {
+		return x.EndReason
+	}
+	return ""
+}
+
+func (x *ItemSession) GetFailureCapturePath() string {
+	if x != nil {
+		return x.FailureCapturePath
 	}
 	return ""
 }
@@ -7464,7 +7489,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x14clarifying_questions\x18\x03 \x03(\tR\x13clarifyingQuestions\x12,\n" +
 	"\x05tasks\x18\x04 \x03(\v2\x16.session.v1.TriageTaskR\x05tasks\x12\x1c\n" +
 	"\titeration\x18\x05 \x01(\x05R\titeration\x12\x1a\n" +
-	"\bfeedback\x18\x06 \x01(\tR\bfeedback\"\xf6\x06\n" +
+	"\bfeedback\x18\x06 \x01(\tR\bfeedback\"\xc7\a\n" +
 	"\vItemSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fsession_uuid\x18\x02 \x01(\tR\vsessionUuid\x12!\n" +
@@ -7485,7 +7510,10 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x0fworktree_branch\x18\x0e \x01(\tR\x0eworktreeBranch\x12#\n" +
 	"\rworktree_path\x18\x0f \x01(\tR\fworktreePath\x124\n" +
 	"\x16pipeline_mode_snapshot\x18\x10 \x01(\tR\x14pipelineModeSnapshot\x12=\n" +
-	"\x1bpipeline_mode_snapshot_hash\x18\x11 \x01(\tR\x18pipelineModeSnapshotHash\"\xe2\x01\n" +
+	"\x1bpipeline_mode_snapshot_hash\x18\x11 \x01(\tR\x18pipelineModeSnapshotHash\x12\x1d\n" +
+	"\n" +
+	"end_reason\x18\x12 \x01(\tR\tendReason\x120\n" +
+	"\x14failure_capture_path\x18\x13 \x01(\tR\x12failureCapturePath\"\xe2\x01\n" +
 	"\x12BacklogStatusEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vfrom_status\x18\x02 \x01(\tR\n" +

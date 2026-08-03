@@ -14078,6 +14078,7 @@ type ItemSessionMutation struct {
 	started_at                  *time.Time
 	ended_at                    *time.Time
 	end_reason                  *string
+	failure_capture_path        *string
 	ac_snapshot                 *string
 	pipeline_mode_snapshot      *string
 	pipeline_mode_snapshot_hash *string
@@ -14424,6 +14425,55 @@ func (m *ItemSessionMutation) EndReasonCleared() bool {
 func (m *ItemSessionMutation) ResetEndReason() {
 	m.end_reason = nil
 	delete(m.clearedFields, itemsession.FieldEndReason)
+}
+
+// SetFailureCapturePath sets the "failure_capture_path" field.
+func (m *ItemSessionMutation) SetFailureCapturePath(s string) {
+	m.failure_capture_path = &s
+}
+
+// FailureCapturePath returns the value of the "failure_capture_path" field in the mutation.
+func (m *ItemSessionMutation) FailureCapturePath() (r string, exists bool) {
+	v := m.failure_capture_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFailureCapturePath returns the old "failure_capture_path" field's value of the ItemSession entity.
+// If the ItemSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSessionMutation) OldFailureCapturePath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFailureCapturePath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFailureCapturePath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFailureCapturePath: %w", err)
+	}
+	return oldValue.FailureCapturePath, nil
+}
+
+// ClearFailureCapturePath clears the value of the "failure_capture_path" field.
+func (m *ItemSessionMutation) ClearFailureCapturePath() {
+	m.failure_capture_path = nil
+	m.clearedFields[itemsession.FieldFailureCapturePath] = struct{}{}
+}
+
+// FailureCapturePathCleared returns if the "failure_capture_path" field was cleared in this mutation.
+func (m *ItemSessionMutation) FailureCapturePathCleared() bool {
+	_, ok := m.clearedFields[itemsession.FieldFailureCapturePath]
+	return ok
+}
+
+// ResetFailureCapturePath resets all changes to the "failure_capture_path" field.
+func (m *ItemSessionMutation) ResetFailureCapturePath() {
+	m.failure_capture_path = nil
+	delete(m.clearedFields, itemsession.FieldFailureCapturePath)
 }
 
 // SetAcSnapshot sets the "ac_snapshot" field.
@@ -15164,7 +15214,7 @@ func (m *ItemSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSessionMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 19)
 	if m.session_uuid != nil {
 		fields = append(fields, itemsession.FieldSessionUUID)
 	}
@@ -15179,6 +15229,9 @@ func (m *ItemSessionMutation) Fields() []string {
 	}
 	if m.end_reason != nil {
 		fields = append(fields, itemsession.FieldEndReason)
+	}
+	if m.failure_capture_path != nil {
+		fields = append(fields, itemsession.FieldFailureCapturePath)
 	}
 	if m.ac_snapshot != nil {
 		fields = append(fields, itemsession.FieldAcSnapshot)
@@ -15237,6 +15290,8 @@ func (m *ItemSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.EndedAt()
 	case itemsession.FieldEndReason:
 		return m.EndReason()
+	case itemsession.FieldFailureCapturePath:
+		return m.FailureCapturePath()
 	case itemsession.FieldAcSnapshot:
 		return m.AcSnapshot()
 	case itemsession.FieldPipelineModeSnapshot:
@@ -15282,6 +15337,8 @@ func (m *ItemSessionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldEndedAt(ctx)
 	case itemsession.FieldEndReason:
 		return m.OldEndReason(ctx)
+	case itemsession.FieldFailureCapturePath:
+		return m.OldFailureCapturePath(ctx)
 	case itemsession.FieldAcSnapshot:
 		return m.OldAcSnapshot(ctx)
 	case itemsession.FieldPipelineModeSnapshot:
@@ -15351,6 +15408,13 @@ func (m *ItemSessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEndReason(v)
+		return nil
+	case itemsession.FieldFailureCapturePath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFailureCapturePath(v)
 		return nil
 	case itemsession.FieldAcSnapshot:
 		v, ok := value.(string)
@@ -15509,6 +15573,9 @@ func (m *ItemSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsession.FieldEndReason) {
 		fields = append(fields, itemsession.FieldEndReason)
 	}
+	if m.FieldCleared(itemsession.FieldFailureCapturePath) {
+		fields = append(fields, itemsession.FieldFailureCapturePath)
+	}
 	if m.FieldCleared(itemsession.FieldAcSnapshot) {
 		fields = append(fields, itemsession.FieldAcSnapshot)
 	}
@@ -15559,6 +15626,9 @@ func (m *ItemSessionMutation) ClearField(name string) error {
 	case itemsession.FieldEndReason:
 		m.ClearEndReason()
 		return nil
+	case itemsession.FieldFailureCapturePath:
+		m.ClearFailureCapturePath()
+		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ClearAcSnapshot()
 		return nil
@@ -15608,6 +15678,9 @@ func (m *ItemSessionMutation) ResetField(name string) error {
 		return nil
 	case itemsession.FieldEndReason:
 		m.ResetEndReason()
+		return nil
+	case itemsession.FieldFailureCapturePath:
+		m.ResetFailureCapturePath()
 		return nil
 	case itemsession.FieldAcSnapshot:
 		m.ResetAcSnapshot()

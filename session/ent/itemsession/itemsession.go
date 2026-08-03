@@ -25,6 +25,8 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldEndReason holds the string denoting the end_reason field in the database.
 	FieldEndReason = "end_reason"
+	// FieldFailureCapturePath holds the string denoting the failure_capture_path field in the database.
+	FieldFailureCapturePath = "failure_capture_path"
 	// FieldAcSnapshot holds the string denoting the ac_snapshot field in the database.
 	FieldAcSnapshot = "ac_snapshot"
 	// FieldPipelineModeSnapshot holds the string denoting the pipeline_mode_snapshot field in the database.
@@ -81,6 +83,7 @@ var Columns = []string{
 	FieldStartedAt,
 	FieldEndedAt,
 	FieldEndReason,
+	FieldFailureCapturePath,
 	FieldAcSnapshot,
 	FieldPipelineModeSnapshot,
 	FieldPipelineModeSnapshotHash,
@@ -120,6 +123,8 @@ func ValidColumn(column string) bool {
 var (
 	// DefaultEndReason holds the default value on creation for the "end_reason" field.
 	DefaultEndReason string
+	// DefaultFailureCapturePath holds the default value on creation for the "failure_capture_path" field.
+	DefaultFailureCapturePath string
 	// DefaultPipelineModeSnapshot holds the default value on creation for the "pipeline_mode_snapshot" field.
 	DefaultPipelineModeSnapshot string
 	// DefaultPipelineModeSnapshotHash holds the default value on creation for the "pipeline_mode_snapshot_hash" field.
@@ -165,6 +170,11 @@ func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEndReason orders the results by the end_reason field.
 func ByEndReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEndReason, opts...).ToFunc()
+}
+
+// ByFailureCapturePath orders the results by the failure_capture_path field.
+func ByFailureCapturePath(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFailureCapturePath, opts...).ToFunc()
 }
 
 // ByAcSnapshot orders the results by the ac_snapshot field.

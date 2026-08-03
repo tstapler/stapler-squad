@@ -544,6 +544,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
 }
 
+// HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
+// headless (triage/review claude -p) failure captures — see
+// session.WriteHeadlessFailureCapture. Always defaults to
+// "~/.stapler-squad/headless-failures".
+func (c *Config) HeadlessFailureCaptureDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "headless-failures"), nil
+}
+
 // BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
 // Uploaded images referenced from backlog item descriptions are stored here,
 // durably (unlike the 24h temp paste dir) since they're linked from persisted
