@@ -57,6 +57,7 @@ func NewSessionSummaryService(generator *session.SessionSummaryGenerator, instan
 // (deliberately chosen over a background sweep — see plan.md's Pattern Decisions
 // table). A caller polling this every 2s otherwise has no way to discover from the
 // method's name/contract alone that it can mutate state.
+// +api: GetSessionSummary
 func (s *SessionSummaryService) GetSessionSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetSessionSummaryRequest],
@@ -84,6 +85,7 @@ func (s *SessionSummaryService) GetSessionSummary(
 // handler) is what prevents a second overlapping pipeline when one is already
 // in flight for this session (AC-8) — this handler always dispatches unconditionally
 // and lets that guard reject the duplicate.
+// +api: RegenerateSessionSummary
 func (s *SessionSummaryService) RegenerateSessionSummary(
 	ctx context.Context,
 	req *connect.Request[sessionv1.RegenerateSessionSummaryRequest],

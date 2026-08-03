@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-summary-standalone-route
 
 import Link from "next/link";
 import { useParams } from "next/navigation";

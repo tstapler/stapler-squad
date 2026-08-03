@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-summary-tab
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
