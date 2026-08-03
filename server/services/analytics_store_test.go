@@ -278,3 +278,26 @@ func TestComputeSummary_should_showFewerGaps_After_ReclassifyGaps(t *testing.T) 
 	s := ComputeSummary(reclassified)
 	assert.Equal(t, 1, s.CoverageGapCount, "TC-G-21: 2 of 3 gaps covered by rule; 1 should remain")
 }
+
+func TestComputeSummary_EscalationReasonCounts(t *testing.T) {
+	// AC4: escalate/secret-scan-auto_deny entries bucket into the 5 escalation
+	// categories; non-escalation, non-secret-scan-deny entries contribute to none.
+	entries := []AnalyticsEntry{
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: ""},
+		{Decision: "escalate", RuleID: "new-domain-check"},
+		{Decision: "auto_deny", RuleID: "secret-scan"},
+		{Decision: "escalate", RuleID: "shell-expansion-program"},
+		{Decision: "escalate", RuleID: "seed-escalate-git-branch-safe-delete"},
+		{Decision: "auto_allow", RuleID: "some-rule"},
+	}
+
+	s := ComputeSummary(entries)
+	assert.Equal(t, map[string]int{
+		"no-match":       2,
+		"domain-age":     1,
+		"secret-scan":    1,
+		"unclassifiable": 1,
+		"explicit-rule":  1,
+	}, s.EscalationReasonCounts, "AC4: EscalationReasonCounts must bucket every escalate decision plus the secret-scan auto_deny special case, excluding the unrelated auto_allow entry")
+}
