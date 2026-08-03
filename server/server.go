@@ -595,6 +595,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
 	log.Info("Analytics EventBus subscriber started")
 
+	// Start EventBus GitHub forward-sync subscriber (closes the linked GitHub
+	// issue when a backlog item transitions to done — AC3). Shares
+	// BacklogService's plugin registry/key provider so behavior matches
+	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
+	if deps.BacklogService != nil {
+		services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+	}
+
 	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
 	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analyticsProvider, deps.AnalyticsEntClient)
 	analyticsHandler.RegisterRoutes(srv.mux)

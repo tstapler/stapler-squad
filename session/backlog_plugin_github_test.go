@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -160,6 +162,115 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	// Epic 0.1 (Story 0.1.3): Labels and ExternalURL must pass through unchanged.
 	require.Equal(t, []string{"bug", "p1"}, data.Labels)
 	require.Equal(t, "https://github.com/acme/widgets/issues/42", data.ExternalURL)
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_MergesLabels verifies that CloseIssue
+// merges closeLabel into the issue's existing labels (never replacing them —
+// GitHub's PATCH .../issues/{n} endpoint fully replaces the labels array, so
+// existingLabels must be passed in and merged locally) — AC3, Story 1.1.1.
+func TestGitHubIssuesPlugin_CloseIssue_MergesLabels(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]interface{}
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"2024-05-01T12:00:00Z"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "shipped")
+	require.NoError(t, err)
+
+	require.Equal(t, http.MethodPatch, gotMethod)
+	require.Equal(t, "/repos/acme/widgets/issues/42", gotPath)
+	require.Equal(t, "closed", gotBody["state"])
+	require.ElementsMatch(t, []interface{}{"bug", "shipped"}, gotBody["labels"])
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField verifies that when
+// closeLabel == "", the PATCH body omits `labels` entirely rather than sending
+// an empty array — GitHub interprets an empty array as "clear all labels",
+// which is a different (destructive) semantic from "don't touch labels".
+func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
+	var gotBody map[string]interface{}
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"2024-05-01T12:00:00Z"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "")
+	require.NoError(t, err)
+
+	require.Equal(t, "closed", gotBody["state"])
+	_, hasLabels := gotBody["labels"]
+	require.False(t, hasLabels, "labels field must be omitted entirely, not sent as an empty array")
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError verifies a 403 +
+// X-RateLimit-Remaining:0 response surfaces a descriptive error rather than
+// panicking.
+func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	_, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rate limited")
+}
+
+// TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt is the regression
+// test for pre-mortem P1 #1: CloseIssue must return the PATCH response's own
+// updated_at, not the test's (or caller's) wall-clock time. ADR-003 chose the
+// per-resource-timestamp watermark specifically to avoid clock skew.
+func TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt(t *testing.T) {
+	const fixedTimestamp = "2019-03-14T09:26:53Z"
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"number":42,"state":"closed","updated_at":"` + fixedTimestamp + `"}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	updatedAt, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
+	require.NoError(t, err)
+
+	expected, parseErr := time.Parse(time.RFC3339, fixedTimestamp)
+	require.NoError(t, parseErr)
+	require.True(t, updatedAt.Equal(expected), "expected %v, got %v (must not be wall-clock time)", expected, updatedAt)
+	require.False(t, updatedAt.Equal(time.Now()), "must not equal wall-clock time")
+}
+
+// TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody verifies the bot
+// comment left on an automated close (AC3, Story 1.1.2 — "no silent automated
+// action" convention).
+func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]string
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.Write([]byte(`{"id":1}`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	const comment = "Closed automatically — the linked backlog item was marked done in stapler-squad."
+	err := p.PostIssueComment(context.Background(), cfg, "42", comment)
+	require.NoError(t, err)
+
+	require.Equal(t, http.MethodPost, gotMethod)
+	require.Equal(t, "/repos/acme/widgets/issues/42/comments", gotPath)
+	require.Equal(t, comment, gotBody["body"])
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {

@@ -889,6 +889,24 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 	return s.repo.DeleteItemSource(ctx, id)
 }
 
+// GetItemSourceByID retrieves a single item source's domain data by UUID
+// string. Used by the GitHub forward-sync EventBus subscriber (see
+// server/services/backlog_github_forward_sync.go) to look up a backlog item's
+// source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
+// needing an *EntRepository handle of its own.
+func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSourceData, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	src, err := er.GetItemSourceByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	data := itemSourceToData(src)
+	return &data, nil
+}
+
 // ListSourceSyncEvents returns sync history events for an item source, most
 // recent first. Direct EntRepository delegation, like GetItemSession below.
 func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
@@ -907,6 +925,17 @@ func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAft
 		return ErrNotFound
 	}
 	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+}
+
+// RecordSourceSyncFailure records a forward-sync failure (e.g. CloseIssue
+// erroring) as a queryable sync-history row. Direct EntRepository delegation,
+// like CreateSourceSyncEvent above.
+func (s *Storage) RecordSourceSyncFailure(ctx context.Context, sourceID, message string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return er.RecordSourceSyncFailure(ctx, sourceID, message)
 }
 
 // --- ItemSession (direct EntRepository delegation) ---

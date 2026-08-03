@@ -1598,6 +1598,19 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 	return nil
 }
 
+// RecordSourceSyncFailure persists a zero-item sync-history row recording a
+// forward-sync failure (e.g. the forward-sync EventBus subscriber's CloseIssue
+// call erroring — see server/services/backlog_github_forward_sync.go), so the
+// failure is queryable via ListSourceSyncEvents / the Settings UI's row-level
+// warning (Story 4.3.2) instead of only appearing in server logs. Mirrors
+// CreateSourceSyncEvent's error-message convention used by SyncOne's own
+// fetch-failure path, but for the write direction (forward sync) rather than
+// the read direction (Fetch).
+func (r *EntRepository) RecordSourceSyncFailure(ctx context.Context, sourceID string, message string) error {
+	now := time.Now()
+	return r.CreateSourceSyncEvent(ctx, sourceID, "", 0, 0, 0, 1, message, now, now)
+}
+
 // FinishSourceSync atomically advances an ItemSource's sync cursor/last_synced_at
 // and records the SourceSyncEvent for a successful sync run. Wrapping both
 // writes in one transaction prevents a crash between them from leaving the
