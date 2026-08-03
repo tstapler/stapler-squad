@@ -1054,6 +1054,127 @@ func TestReconcileReworkBlockedStaleResolution_should_beNoOp_When_ResolverNotWir
 	})
 }
 
+// --- respawn_blocked_active: reconcileRespawnBlockedActiveResolution orchestration ---
+//
+// The mark side (notifyRespawnBlockedByActiveSession, server/services/
+// backlog_service_triage.go) is called from inside AutoRespawnAutonomousWork/
+// AutoReopenForPRFix/AutoRespawnReview, and each of those functions also
+// resolves the row itself the next time its own guard passes. That inline
+// resolve is NOT sufficient on its own for AutoRespawnReview: its only
+// caller, markAbandonedReview, gates the call behind
+// Storage.RemediationDue(StuckReasonAbandonedReview), which eventually parks
+// and stops re-invoking AutoRespawnReview for that item — so a row marked
+// once, right before parking, would never see AutoRespawnReview's guard pass
+// again and would be permanently orphaned without this independent sweep.
+// These tests exercise reconcileRespawnBlockedActiveResolution directly,
+// with no call to AutoRespawnReview at all, to prove the sweep — not the
+// inline resolve — is what actually guarantees resolution.
+
+// TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded
+// is the direct regression test for the orphaned-row scenario: a
+// respawn_blocked_active row is marked (simulating AutoRespawnReview's guard
+// having tripped once), the blocking review session then ends, and
+// reconcileRespawnBlockedActiveResolution — called on its own, with no
+// AutoRespawnReview/markAbandonedReview involved at all — must resolve the
+// row.
+func TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_BlockingSessionHasEnded(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Item stuck abandoned_review, its abandoned_review remediation now parked",
+		Status: string(BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "review-session-that-has-since-ended",
+		SessionRole: SessionRoleReview,
+	})
+	require.NoError(t, err)
+
+	// Simulate AutoRespawnReview's guard having tripped once (the mark side),
+	// with markAbandonedReview's caller never invoking AutoRespawnReview
+	// again — the row's only path to resolution is the sweep under test.
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonRespawnBlockedActive, BacklogStatusReview,
+		"AutoRespawnReview skipped auto-respawn — session review-session-that-has-since-ended already active")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// The blocking session has since ended.
+	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	for _, row := range open {
+		assert.False(t, row.ItemID == item.ID && row.Reason == domain.StuckReasonRespawnBlockedActive,
+			"the respawn_blocked_active row must be resolved once its blocking session has ended, independent of whether AutoRespawnReview is ever called again")
+	}
+}
+
+// TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_BlockingSessionStillActive
+// is the negative case: the sweep must not clear a row while the blocking
+// session genuinely remains open.
+func TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_BlockingSessionStillActive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:  "Item still genuinely blocked by an active work session",
+		Status: string(BacklogStatusInProgress),
+	})
+	require.NoError(t, err)
+
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-active-work-session",
+		SessionRole: SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonRespawnBlockedActive, BacklogStatusInProgress,
+		"AutoRespawnAutonomousWork skipped auto-respawn — session still-active-work-session already active")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+
+	open, err := storage.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	found := false
+	for _, row := range open {
+		if row.ItemID == item.ID && row.Reason == domain.StuckReasonRespawnBlockedActive {
+			found = true
+		}
+	}
+	assert.True(t, found, "the row must stay open while the blocking session is still genuinely active")
+}
+
+// TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows verifies
+// the sweep does nothing (and does not error) when there are no open
+// respawn_blocked_active rows to reconcile.
+func TestReconcileRespawnBlockedActiveResolution_should_beNoOp_When_NoOpenRows(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	listener := NewBacklogLifecycleListener(storage)
+
+	require.NotPanics(t, func() {
+		listener.reconcileRespawnBlockedActiveResolution(ctx, er)
+	})
+}
+
 // --- orphaned_triage: standing detector for tombstoneOrphanTriageSessions'
 // manual-re-trigger-only blind spot (backlog-feature-improvement audit finding #8) ---
 

@@ -1094,6 +1094,13 @@ func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context
 		}
 	}
 
+	// Publishes unconditionally, even when MarkStuck's `applied` came back
+	// false (e.g. the item's status changed out from under this call between
+	// the guard check and here) or MarkStuck errored outright — a known,
+	// pre-existing inconsistency this helper inherits from
+	// notifyReworkCapHit/notifySpawnAndRollbackFailed (both do the same),
+	// not something to "fix" here in isolation without touching those
+	// siblings too.
 	if s.eventBus == nil {
 		return
 	}

@@ -1519,6 +1519,15 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 		l.reconcileReworkBlockedStaleResolution(ctx, er)
 	})
 
+	// Resolve-only pass for respawn_blocked_active: load-bearing (not merely
+	// convenient) for AutoRespawnReview, whose only caller gates the respawn
+	// behind a backoff that eventually parks and stops re-invoking it — see
+	// reconcileRespawnBlockedActiveResolution's doc comment for the full
+	// orphaned-row scenario this closes.
+	l.runStuckDetector("respawn_blocked_active", &okNames, &panickedNames, func() {
+		l.reconcileRespawnBlockedActiveResolution(ctx, er)
+	})
+
 	// Flag review-status items that already have a review verdict but nothing
 	// active in flight (AutoReopenAfterFailedReview's spawn failed and rolled
 	// back, or a legacy review session exited without a verdict), plus
@@ -2212,6 +2221,57 @@ func (l *BacklogLifecycleListener) reconcileReworkBlockedStaleResolution(ctx con
 		if resolveErr := resolver.ResolveReworkBlockedStaleIfRecovered(ctx, row.ItemID); resolveErr != nil {
 			log.WarningLog.Printf("[BacklogLifecycle] reconcileReworkBlockedStaleResolution ResolveReworkBlockedStaleIfRecovered item=%s: %v", row.ItemID, resolveErr)
 		}
+	}
+}
+
+// reconcileRespawnBlockedActiveResolution is the resolve-only counterpart to
+// notifyRespawnBlockedByActiveSession (server/services/backlog_service_triage.go),
+// which marks StuckReasonRespawnBlockedActive but has no periodic tick of its
+// own guaranteed to notice when the blocking session ends. Unlike
+// reconcileReworkBlockedStaleResolution above, this closes a gap that is not
+// merely "convenient" but load-bearing for one of the three guarding
+// functions: AutoRespawnReview's only caller, markAbandonedReview, gates the
+// respawn attempt behind Storage.RemediationDue(StuckReasonAbandonedReview)
+// — once that gate exhausts its attempts and parks, markAbandonedReview never
+// calls AutoRespawnReview again for that item, so MarkStuck's own
+// guard-passing resolve path (the resolveRespawnBlockedActiveLogged call at
+// the top of AutoRespawnAutonomousWork/AutoReopenForPRFix/AutoRespawnReview)
+// would never re-run and the row would be permanently orphaned — reproducing
+// the exact "silently stuck forever" bug class this whole reason exists to
+// surface. AutoRespawnAutonomousWork and AutoReopenForPRFix don't strictly
+// need this sweep (both are re-invoked on every reconcile tick regardless of
+// backoff/parking), but StuckReasonRespawnBlockedActive is a single shared
+// reason across all three call sites, so one unconditional sweep covering all
+// of them is simpler and more robust than trying to prove each caller's retry
+// path is unconditional.
+//
+// Unlike reconcileReworkBlockedStaleResolution, this needs no
+// SessionStopper-backed liveness/staleness check (no Resolver interface
+// indirection) — StuckReasonRespawnBlockedActive only cares whether the
+// blocking work/review ItemSession has ended, a plain EndedAt-nil check
+// already available in-package via hasActiveSession (see its doc comment:
+// "package-local equivalent of server/services' hasActiveWorkSession/
+// hasActiveReviewSession"). Best-effort: query errors are logged, never
+// returned, so one item's failure can't skip the rest.
+func (l *BacklogLifecycleListener) reconcileRespawnBlockedActiveResolution(ctx context.Context, er *EntRepository) {
+	open, openErr := er.FindOpenStuckStates(ctx)
+	if openErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution FindOpenStuckStates error: %v", openErr)
+		return
+	}
+	for _, row := range open {
+		if row.Reason != domain.StuckReasonRespawnBlockedActive {
+			continue
+		}
+		sessions, sessErr := l.storage.ListItemSessions(ctx, row.ItemID)
+		if sessErr != nil {
+			log.WarningLog.Printf("[BacklogLifecycle] reconcileRespawnBlockedActiveResolution ListItemSessions item=%s: %v", row.ItemID, sessErr)
+			continue
+		}
+		if hasActiveSession(sessions) {
+			continue // still genuinely blocked — leave the row open
+		}
+		l.resolveStuckLogged(ctx, er, row.ItemID, domain.StuckReasonRespawnBlockedActive, "reconcileRespawnBlockedActiveResolution")
 	}
 }
 
