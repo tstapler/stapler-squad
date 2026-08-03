@@ -43,6 +43,8 @@ func (f *fakeSyncPlugin) MapToBacklogItem(item ExternalItem, sourceID string) Ba
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		SourceID:    sourceID,
+		ExternalURL: item.URL,
+		Labels:      item.Labels,
 	}
 }
 
@@ -58,6 +60,29 @@ func newTestSyncSetup(t *testing.T, plugin ItemSourcePlugin) (*Storage, func(), 
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Test Source",
 		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	return storage, cleanup, sl, src.ID
+}
+
+// newTestBackwardSyncSetup mirrors newTestSyncSetup but lets the caller
+// control BackwardSyncEnabled on the created ItemSource — every Phase 2/3
+// backward-sync test needs this opted in (or deliberately left off, for the
+// disabled-gate regression tests).
+func newTestBackwardSyncSetup(t *testing.T, plugin ItemSourcePlugin, backwardSyncEnabled bool) (*Storage, func(), *SyncLoop, string) {
+	t.Helper()
+	storage, cleanup := createTestStorage(t)
+
+	registry := NewPluginRegistry()
+	registry.Register(plugin)
+	sl := NewSyncLoop(storage, registry)
+
+	src, err := storage.CreateItemSource(context.Background(), ItemSourceData{
+		PluginID:            plugin.PluginID(),
+		DisplayName:         "Test Source",
+		Enabled:             true,
+		BackwardSyncEnabled: backwardSyncEnabled,
 	})
 	require.NoError(t, err)
 
@@ -530,4 +555,557 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "User Edited Title", refetched.Title, "user-edited title must survive backward sync")
 	require.Equal(t, 5, refetched.Priority, "priority was not user-modified, so remote wins")
+}
+
+// TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTargetOtherwise
+// pins ADR-002's decision table: pre-work statuses (idea/refining/ready/queued)
+// map to archived; everything else (mid-flight in_progress/review/pr_pending,
+// and the terminal done/archived statuses) has no valid target.
+func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTargetOtherwise(t *testing.T) {
+	tests := []struct {
+		current    BacklogStatus
+		wantTarget BacklogStatus
+		wantOK     bool
+	}{
+		{BacklogStatusIdea, BacklogStatusArchived, true},
+		{BacklogStatusRefining, BacklogStatusArchived, true},
+		{BacklogStatusReady, BacklogStatusArchived, true},
+		{BacklogStatusQueued, BacklogStatusArchived, true},
+		{BacklogStatusInProgress, "", false},
+		{BacklogStatusReview, "", false},
+		{BacklogStatusPRPending, "", false},
+		{BacklogStatusDone, "", false},
+		{BacklogStatusArchived, "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.current), func(t *testing.T) {
+			target, ok := determineBackwardSyncTarget(tt.current)
+			require.Equal(t, tt.wantOK, ok)
+			require.Equal(t, tt.wantTarget, target)
+		})
+	}
+}
+
+// TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem is the AC4 happy path:
+// a pre-work item whose linked issue is observed closed transitions to
+// archived, triggered via TriggeredByGitHubSync.
+func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
+	issueUpdatedAt := time.Now()
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: issueUpdatedAt},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusReady),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), refetched.Status)
+	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
+	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(issueUpdatedAt))
+}
+
+// TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem asserts that a
+// mid-flight item's closed issue does not force a transition — archived is
+// not reachable from in_progress under ADR-002's policy.
+func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: time.Now()},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusInProgress),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusInProgress), refetched.Status, "no valid target for in_progress under ADR-002")
+
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, 0, events[0].ItemsErrored)
+	require.Greater(t, events[0].ItemsSkipped, 0, "should be counted as skipped, not errored")
+}
+
+// TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled proves the master
+// gate: with BackwardSyncEnabled == false, a closed issue never triggers a
+// status transition even for an otherwise-eligible pre-work item.
+func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: time.Now()},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, false)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusReady),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReady), refetched.Status, "backward sync disabled — no transition")
+	require.Nil(t, refetched.GitHubSyncedIssueUpdatedAt, "watermark must not advance when backward sync is disabled")
+}
+
+// TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem pins ADR-002's
+// explicit "done is left alone" decision: forward sync closing the issue on
+// the transition into done is the expected, common path — not something
+// backward sync should react to by auto-archiving.
+func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: time.Now()},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusDone),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), refetched.Status, "done items are never auto-archived")
+}
+
+// TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp pins ADR-002's
+// documented no-op for reopened issues: archived's only outgoing edge is to
+// idea, and this policy deliberately never fires that transition
+// automatically. The watermark still advances so the reopen isn't re-logged
+// every tick.
+func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) {
+	issueUpdatedAt := time.Now()
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "open", IssueUpdatedAt: issueUpdatedAt},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusArchived),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "reopen is log-only; no automatic re-triage")
+	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt, "watermark must advance so the reopen isn't re-logged every tick")
+	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(issueUpdatedAt))
+}
+
+// TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked is the AC4 Labels
+// happy path: an item with existing labels picks up the remote's updated
+// label set when BackwardSyncEnabled is on and "labels" isn't user-locked.
+func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, Labels: []string{"bug", "p1"}},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusIdea),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+		Labels:     []string{"bug"},
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"bug", "p1"}, refetched.Labels)
+}
+
+// TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked exercises Epic 0.3's
+// local-wins gate for the "labels" field name, seeded directly since no
+// production UI path sets it today (documented in the Domain Glossary).
+func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, Labels: []string{"bug", "p1"}},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusIdea),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+		Labels:     []string{"bug"},
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	createdUUID, err := uuid.Parse(created.ID)
+	require.NoError(t, err)
+	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+		SetUserModifiedFields(`["labels"]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bug"}, refetched.Labels, "user-locked labels must not be overwritten")
+}
+
+// TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled is the
+// regression test for the 2026-08-03 validation-pass gating fix on Task
+// 2.3.1a: without the BackwardSyncEnabled gate, Labels would sync
+// unconditionally regardless of the per-source opt-in.
+func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, Labels: []string{"bug", "p1"}},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, false)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusIdea),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+		Labels:     []string{"bug"},
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bug"}, refetched.Labels, "backward sync disabled — remote labels must not overwrite local")
+}
+
+// TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels is AC6's happy path:
+// even with every other field locally locked, an item that has never had
+// labels gets them backfilled from the remote once (BackwardSyncEnabled on,
+// "labels" not itself locked).
+func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Remote Title", Description: "Remote Desc", Priority: 5, Labels: []string{"bug"}},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:       "Local Title",
+		Description: "Local Desc",
+		Priority:    1,
+		Status:      string(BacklogStatusIdea),
+		ExternalID:  "ext-1",
+		SourceID:    sourceID,
+		Labels:      nil,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	createdUUID, err := uuid.Parse(created.ID)
+	require.NoError(t, err)
+	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+		SetUserModifiedFields(`["title","description","priority"]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"bug"}, refetched.Labels, "labels must be backfilled even with other fields locked")
+	require.Equal(t, "Local Title", refetched.Title, "locked title must survive")
+}
+
+// TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate pins the
+// deliberate asymmetry AC6 calls out: unlike ExternalURL, Labels backfill IS
+// gated by UserModifiedFields — if "labels" is itself locked, it stays locked
+// even though the item has no labels yet.
+func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, Labels: []string{"bug"}},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusIdea),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+		Labels:     nil,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	createdUUID, err := uuid.Parse(created.ID)
+	require.NoError(t, err)
+	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+		SetUserModifiedFields(`["labels"]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Empty(t, refetched.Labels, "labels locked via UserModifiedFields must not be backfilled")
+}
+
+// TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified pins
+// ADR-001 Decision 1: ExternalURL backfills unconditionally, independent of
+// both UserModifiedFields and BackwardSyncEnabled — unlike the Labels block,
+// which is gated by both.
+func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Remote Title", Description: "Remote Desc", Priority: 5, URL: "https://github.com/example/repo/issues/1"},
+		},
+	}
+	// BackwardSyncEnabled deliberately false — ExternalURL backfill must still fire.
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, false)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:       "Local Title",
+		Description: "Local Desc",
+		Priority:    1,
+		Status:      string(BacklogStatusIdea),
+		ExternalID:  "ext-1",
+		SourceID:    sourceID,
+		ExternalURL: "",
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	createdUUID, err := uuid.Parse(created.ID)
+	require.NoError(t, err)
+	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+		SetUserModifiedFields(`["title","description","priority","labels"]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, "https://github.com/example/repo/issues/1", refetched.ExternalURL)
+	require.Equal(t, "Local Title", refetched.Title, "locked title must survive")
+}
+
+// TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark pins
+// AC7 Risk A: a done item's closed issue is structurally impossible to
+// re-archive/re-close via determineBackwardSyncTarget alone — proven without
+// relying on the watermark at all (GitHubSyncedIssueUpdatedAt deliberately
+// left nil).
+func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: time.Now()},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusDone),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+		// GitHubSyncedIssueUpdatedAt deliberately left nil.
+	})
+	require.NoError(t, err)
+	require.Nil(t, created.GitHubSyncedIssueUpdatedAt)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusDone), refetched.Status, "done→archived self-edge must never fire, watermark or not")
+}
+
+// TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed
+// pins AC7 Risk B — the watermark's actual job: after forward sync closed the
+// issue and recorded the watermark, and the item was then manually
+// transitioned back to in_progress locally, the next tick's fetch returning
+// the SAME (unchanged) IssueUpdatedAt must be treated as already-reconciled
+// and must not push the item back toward archived/done.
+func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *testing.T) {
+	t1 := time.Now().Add(-1 * time.Hour)
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: t1},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:                      "Issue",
+		Status:                     string(BacklogStatusInProgress),
+		ExternalID:                 "ext-1",
+		SourceID:                   sourceID,
+		GitHubSyncedIssueUpdatedAt: &t1,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusInProgress), refetched.Status, "exact-echo of an already-reconciled watermark must not re-trigger a transition")
+}
+
+// TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed is AC7's
+// companion happy path: once the fetched IssueUpdatedAt genuinely advances
+// past the stored watermark, backward sync evaluates the state fresh again —
+// proving the watermark only suppresses the exact-echo case.
+func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.T) {
+	t1 := time.Now().Add(-1 * time.Hour)
+	t2 := time.Now()
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: t2},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:                      "Issue",
+		Status:                     string(BacklogStatusReady),
+		ExternalID:                 "ext-1",
+		SourceID:                   sourceID,
+		GitHubSyncedIssueUpdatedAt: &t1,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "genuinely newer external state must be processed")
+	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
+	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(t2))
 }

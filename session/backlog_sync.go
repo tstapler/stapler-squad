@@ -291,6 +291,81 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// Status is always local-wins once user_modified_status_at is set.
 		// Status transitions are only done via TransitionBacklogItemStatus — no update here.
 
+		// Epic 2.3 (backward sync, AC4 part 3): Labels are gated on BOTH the
+		// per-source BackwardSyncEnabled opt-in AND local-wins via
+		// UserModifiedFields — see the 2026-08-03 validation-pass correction on
+		// Task 2.3.1a: without the BackwardSyncEnabled gate, Labels would sync
+		// unconditionally regardless of the per-source opt-in, unlike the
+		// status blocks below (Epic 2.1/2.2), which already gate on it.
+		if source.BackwardSyncEnabled && !ContainsModifiedField(modifiedFields, "labels") {
+			update.Labels = &data.Labels
+			anyField = true
+		}
+
+		// Epic 2.4 (AC6): ExternalURL is backfilled unconditionally — never
+		// gated by BackwardSyncEnabled or UserModifiedFields, per ADR-001
+		// Decision 1. This is a deliberate asymmetry with the Labels block
+		// above: an item's provenance link is not something a user "edits" in
+		// the same sense as content fields, so it always gets filled in once
+		// known. Kept structurally independent of the gated blocks.
+		if existing.ExternalURL == "" && data.ExternalURL != "" {
+			update.ExternalURL = &data.ExternalURL
+			anyField = true
+		}
+
+		// Epic 2.1/2.2 (AC4, ADR-002) + Phase 3 (AC7, ADR-003): backward-sync
+		// status handling for closed/reopened issues. Status transitions bypass
+		// BacklogItemUpdate/anyField entirely — they use
+		// TransitionBacklogItemStatus, a different call, per the "Status is
+		// always local-wins" comment above, which this block supersedes with
+		// real logic for the GitHub-driven case. These blocks do their own
+		// updated++/skipped++/errored++ accounting alongside the field-update
+		// counters above/below — both are legitimate, independent counts of
+		// different kinds of change for the same item in the same tick.
+		if source.BackwardSyncEnabled && extItem.State == "closed" {
+			alreadyReconciled := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
+			if !alreadyReconciled {
+				if target, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
+					guardInput := BacklogItemTransitionInput{
+						Status:            BacklogStatus(existing.Status),
+						AcCriteria:        AcCriteriaJSON(existing.AcceptanceCriteria),
+						PlanApproved:      existing.PlanApproved,
+						SkipPlanning:      existing.SkipPlanning,
+						PlanArtifactsPath: existing.PlanArtifactsPath,
+					}
+					if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
+						if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil {
+							log.WarningLog.Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
+							errored++
+						} else {
+							updated++
+						}
+					} else {
+						log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
+						skipped++
+					}
+				} else {
+					log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
+					skipped++
+				}
+				watermark := extItem.IssueUpdatedAt
+				if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+					log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+				}
+			}
+		}
+
+		if source.BackwardSyncEnabled && extItem.State == "open" && (existing.Status == string(BacklogStatusArchived) || existing.Status == string(BacklogStatusDone)) {
+			alreadyLogged := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
+			if !alreadyLogged {
+				log.InfoLog.Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
+				watermark := extItem.IssueUpdatedAt
+				if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+					log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+				}
+			}
+		}
+
 		if !anyField {
 			skipped++
 			continue
@@ -314,6 +389,21 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	log.InfoLog.Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",
 		source.ID, source.PluginID, created, updated, skipped, errored)
 	return nil
+}
+
+// determineBackwardSyncTarget implements ADR-002's policy: a closed GitHub
+// issue maps to BacklogStatusArchived for pre-work statuses only. It never
+// targets "done" (would require porting HasUnshippedCode/OverallOutcome
+// computation cross-package and risks conflating "closed" with "shipped").
+// Returns ok=false when there is no valid target under this policy (item is
+// already done/archived, or mid-flight in_progress/review/pr_pending).
+func determineBackwardSyncTarget(current BacklogStatus) (target BacklogStatus, ok bool) {
+	switch current {
+	case BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued:
+		return BacklogStatusArchived, true
+	default:
+		return "", false
+	}
 }
 
 // ParseUserModifiedFields deserializes UserModifiedFields JSON (e.g. ["title","description"]).
