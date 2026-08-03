@@ -38,9 +38,22 @@ Because the metadata-population code only sets the key when
 `EscalationCategory != ""`, these orphaned approvals get **no**
 `escalation_reason_category` key at all (not even `""`). The frontend's exact
 `=== "no-match"` check then fails for a key that's `undefined`, so the Create
-Rule button never renders for these items — even though most pre-PR-315
-escalations were, in practice, no-match escalations (that was the *only* kind
-of escalation that existed before this PR introduced the taxonomy).
+Rule button never renders for these items.
+
+**Correction (found during `pm:triad-review`'s UX pass, verified against git
+history):** an earlier draft of this doc claimed "no-match was the only kind
+of escalation that existed before PR #315" — that is **false**. The
+domain-age (`server/services/domain_checker.go`) and secret-scan escalation
+*decision paths* were wired into `approval_handler.go` back in commit
+`1c31f024d` (2026-03-26), about 4 months before PR #315 (2026-08-03). PR #315
+only added the `EscalationReason`/`EscalationCategory` **label** describing
+*why* an existing escalation happened — it did not introduce new reasons to
+escalate. So an orphaned approval's true underlying cause could genuinely be
+domain-age or secret-scan, not just no-match; the field is simply missing
+because it didn't exist yet at persist time, regardless of cause. Treating
+"missing category" as equivalent to "no-match" is therefore a **known,
+accepted approximation**, not a provably-safe inference — see the residual
+risk noted in Impact/Suggested fix below.
 
 ## Impact
 
@@ -55,6 +68,17 @@ Low / self-healing:
   the one-click "Create Rule" shortcut for a brief window and must fall back to
   manually approving + creating a rule from the settings UI (if that exists) or
   just approving repeatedly until the window passes.
+- **Residual risk of the fix itself (see Correction above):** because an
+  orphaned approval's true category could be domain-age or secret-scan (not
+  only no-match), the fix trades "button briefly missing" for "button
+  reappears without being able to distinguish a confirmed-safe no-match from
+  an unknown-but-possibly-flagged escalation." This is mitigated in practice
+  because (a) the existing "Reason not recorded — this request predates
+  escalation-reason tracking" copy already renders alongside the button for
+  these items, signaling the uncertainty rather than implying confirmed
+  safety, and (b) the window is identically bounded/self-healing. It is a
+  trade-off worth stating explicitly in the PR description, not a reason to
+  withhold the fix.
 
 ## Suggested fix (from item description)
 
