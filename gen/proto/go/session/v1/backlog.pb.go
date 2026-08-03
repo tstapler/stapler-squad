@@ -1189,17 +1189,20 @@ func (x *BacklogItem) GetCategory() string {
 // ItemSource represents an external plugin source that syncs items into the
 // backlog.
 type ItemSource struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	PluginId        string                 `protobuf:"bytes,2,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
-	DisplayName     string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Enabled         bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	LastSyncedAt    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_synced_at,json=lastSyncedAt,proto3" json:"last_synced_at,omitempty"`
-	TokenConfigured bool                   `protobuf:"varint,6,opt,name=token_configured,json=tokenConfigured,proto3" json:"token_configured,omitempty"`
-	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Id                    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	PluginId              string                 `protobuf:"bytes,2,opt,name=plugin_id,json=pluginId,proto3" json:"plugin_id,omitempty"`
+	DisplayName           string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Enabled               bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	LastSyncedAt          *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_synced_at,json=lastSyncedAt,proto3" json:"last_synced_at,omitempty"`
+	TokenConfigured       bool                   `protobuf:"varint,6,opt,name=token_configured,json=tokenConfigured,proto3" json:"token_configured,omitempty"`
+	CreatedAt             *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt             *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ForwardSyncEnabled    bool                   `protobuf:"varint,9,opt,name=forward_sync_enabled,json=forwardSyncEnabled,proto3" json:"forward_sync_enabled,omitempty"`
+	BackwardSyncEnabled   bool                   `protobuf:"varint,10,opt,name=backward_sync_enabled,json=backwardSyncEnabled,proto3" json:"backward_sync_enabled,omitempty"`
+	ForwardSyncCloseLabel string                 `protobuf:"bytes,11,opt,name=forward_sync_close_label,json=forwardSyncCloseLabel,proto3" json:"forward_sync_close_label,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ItemSource) Reset() {
@@ -1286,6 +1289,27 @@ func (x *ItemSource) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *ItemSource) GetForwardSyncEnabled() bool {
+	if x != nil {
+		return x.ForwardSyncEnabled
+	}
+	return false
+}
+
+func (x *ItemSource) GetBackwardSyncEnabled() bool {
+	if x != nil {
+		return x.BackwardSyncEnabled
+	}
+	return false
+}
+
+func (x *ItemSource) GetForwardSyncCloseLabel() string {
+	if x != nil {
+		return x.ForwardSyncCloseLabel
+	}
+	return ""
 }
 
 // PipelineMode is a named, slug-addressed, user-creatable definition of which
@@ -3982,13 +4006,16 @@ func (x *ListItemSourcesResponse) GetSources() []*ItemSource {
 }
 
 type UpdateItemSourceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SourceId      string                 `protobuf:"bytes,1,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Enabled       bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Token         string                 `protobuf:"bytes,4,opt,name=token,proto3" json:"token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	SourceId              string                 `protobuf:"bytes,1,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
+	DisplayName           string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Enabled               bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Token                 string                 `protobuf:"bytes,4,opt,name=token,proto3" json:"token,omitempty"`
+	ForwardSyncEnabled    bool                   `protobuf:"varint,5,opt,name=forward_sync_enabled,json=forwardSyncEnabled,proto3" json:"forward_sync_enabled,omitempty"`
+	BackwardSyncEnabled   bool                   `protobuf:"varint,6,opt,name=backward_sync_enabled,json=backwardSyncEnabled,proto3" json:"backward_sync_enabled,omitempty"`
+	ForwardSyncCloseLabel string                 `protobuf:"bytes,7,opt,name=forward_sync_close_label,json=forwardSyncCloseLabel,proto3" json:"forward_sync_close_label,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *UpdateItemSourceRequest) Reset() {
@@ -4045,6 +4072,27 @@ func (x *UpdateItemSourceRequest) GetEnabled() bool {
 func (x *UpdateItemSourceRequest) GetToken() string {
 	if x != nil {
 		return x.Token
+	}
+	return ""
+}
+
+func (x *UpdateItemSourceRequest) GetForwardSyncEnabled() bool {
+	if x != nil {
+		return x.ForwardSyncEnabled
+	}
+	return false
+}
+
+func (x *UpdateItemSourceRequest) GetBackwardSyncEnabled() bool {
+	if x != nil {
+		return x.BackwardSyncEnabled
+	}
+	return false
+}
+
+func (x *UpdateItemSourceRequest) GetForwardSyncCloseLabel() string {
+	if x != nil {
+		return x.ForwardSyncCloseLabel
 	}
 	return ""
 }
@@ -7541,7 +7589,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
-	"\t_category\"\xd9\x02\n" +
+	"\t_category\"\xf8\x03\n" +
 	"\n" +
 	"ItemSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -7553,7 +7601,11 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xff\x05\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x120\n" +
+	"\x14forward_sync_enabled\x18\t \x01(\bR\x12forwardSyncEnabled\x122\n" +
+	"\x15backward_sync_enabled\x18\n" +
+	" \x01(\bR\x13backwardSyncEnabled\x127\n" +
+	"\x18forward_sync_close_label\x18\v \x01(\tR\x15forwardSyncCloseLabel\"\xff\x05\n" +
 	"\fPipelineMode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -7753,12 +7805,15 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x06source\x18\x01 \x01(\v2\x16.session.v1.ItemSourceR\x06source\"\x18\n" +
 	"\x16ListItemSourcesRequest\"K\n" +
 	"\x17ListItemSourcesResponse\x120\n" +
-	"\asources\x18\x01 \x03(\v2\x16.session.v1.ItemSourceR\asources\"\x89\x01\n" +
+	"\asources\x18\x01 \x03(\v2\x16.session.v1.ItemSourceR\asources\"\xa8\x02\n" +
 	"\x17UpdateItemSourceRequest\x12\x1b\n" +
 	"\tsource_id\x18\x01 \x01(\tR\bsourceId\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x18\n" +
 	"\aenabled\x18\x03 \x01(\bR\aenabled\x12\x14\n" +
-	"\x05token\x18\x04 \x01(\tR\x05token\"J\n" +
+	"\x05token\x18\x04 \x01(\tR\x05token\x120\n" +
+	"\x14forward_sync_enabled\x18\x05 \x01(\bR\x12forwardSyncEnabled\x122\n" +
+	"\x15backward_sync_enabled\x18\x06 \x01(\bR\x13backwardSyncEnabled\x127\n" +
+	"\x18forward_sync_close_label\x18\a \x01(\tR\x15forwardSyncCloseLabel\"J\n" +
 	"\x18UpdateItemSourceResponse\x12.\n" +
 	"\x06source\x18\x01 \x01(\v2\x16.session.v1.ItemSourceR\x06source\"6\n" +
 	"\x17DeleteItemSourceRequest\x12\x1b\n" +

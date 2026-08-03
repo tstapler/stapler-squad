@@ -161,6 +161,9 @@ message ItemSource {
   bool token_configured = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  bool forward_sync_enabled = 9;
+  bool backward_sync_enabled = 10;
+  string forward_sync_close_label = 11;
 }
 
 // PipelineMode is a named, slug-addressed, user-creatable definition of which
@@ -511,6 +514,9 @@ message UpdateItemSourceRequest {
   string display_name = 2;
   bool enabled = 3;
   string token = 4;
+  bool forward_sync_enabled = 5;
+  bool backward_sync_enabled = 6;
+  string forward_sync_close_label = 7;
 }
 
 message UpdateItemSourceResponse {

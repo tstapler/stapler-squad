@@ -397,12 +397,20 @@ func init() {
 	itemsourceDescEnabled := itemsourceFields[4].Descriptor()
 	// itemsource.DefaultEnabled holds the default value on creation for the enabled field.
 	itemsource.DefaultEnabled = itemsourceDescEnabled.Default.(bool)
+	// itemsourceDescForwardSyncEnabled is the schema descriptor for forward_sync_enabled field.
+	itemsourceDescForwardSyncEnabled := itemsourceFields[5].Descriptor()
+	// itemsource.DefaultForwardSyncEnabled holds the default value on creation for the forward_sync_enabled field.
+	itemsource.DefaultForwardSyncEnabled = itemsourceDescForwardSyncEnabled.Default.(bool)
+	// itemsourceDescBackwardSyncEnabled is the schema descriptor for backward_sync_enabled field.
+	itemsourceDescBackwardSyncEnabled := itemsourceFields[6].Descriptor()
+	// itemsource.DefaultBackwardSyncEnabled holds the default value on creation for the backward_sync_enabled field.
+	itemsource.DefaultBackwardSyncEnabled = itemsourceDescBackwardSyncEnabled.Default.(bool)
 	// itemsourceDescCreatedAt is the schema descriptor for created_at field.
-	itemsourceDescCreatedAt := itemsourceFields[7].Descriptor()
+	itemsourceDescCreatedAt := itemsourceFields[10].Descriptor()
 	// itemsource.DefaultCreatedAt holds the default value on creation for the created_at field.
 	itemsource.DefaultCreatedAt = itemsourceDescCreatedAt.Default.(func() time.Time)
 	// itemsourceDescUpdatedAt is the schema descriptor for updated_at field.
-	itemsourceDescUpdatedAt := itemsourceFields[8].Descriptor()
+	itemsourceDescUpdatedAt := itemsourceFields[11].Descriptor()
 	// itemsource.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	itemsource.DefaultUpdatedAt = itemsourceDescUpdatedAt.Default.(func() time.Time)
 	// itemsource.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

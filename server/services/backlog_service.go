@@ -735,13 +735,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
 func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
-		Id:              src.ID,
-		PluginId:        src.PluginID,
-		DisplayName:     src.DisplayName,
-		Enabled:         src.Enabled,
-		TokenConfigured: src.TokenConfigured,
-		CreatedAt:       timestamppb.New(src.CreatedAt),
-		UpdatedAt:       timestamppb.New(src.UpdatedAt),
+		Id:                    src.ID,
+		PluginId:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		TokenConfigured:       src.TokenConfigured,
+		CreatedAt:             timestamppb.New(src.CreatedAt),
+		UpdatedAt:             timestamppb.New(src.UpdatedAt),
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)

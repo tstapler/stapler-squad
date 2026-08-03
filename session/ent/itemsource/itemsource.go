@@ -23,6 +23,12 @@ const (
 	FieldConfig = "config"
 	// FieldEnabled holds the string denoting the enabled field in the database.
 	FieldEnabled = "enabled"
+	// FieldForwardSyncEnabled holds the string denoting the forward_sync_enabled field in the database.
+	FieldForwardSyncEnabled = "forward_sync_enabled"
+	// FieldBackwardSyncEnabled holds the string denoting the backward_sync_enabled field in the database.
+	FieldBackwardSyncEnabled = "backward_sync_enabled"
+	// FieldForwardSyncCloseLabel holds the string denoting the forward_sync_close_label field in the database.
+	FieldForwardSyncCloseLabel = "forward_sync_close_label"
 	// FieldSyncCursor holds the string denoting the sync_cursor field in the database.
 	FieldSyncCursor = "sync_cursor"
 	// FieldLastSyncedAt holds the string denoting the last_synced_at field in the database.
@@ -60,6 +66,9 @@ var Columns = []string{
 	FieldDisplayName,
 	FieldConfig,
 	FieldEnabled,
+	FieldForwardSyncEnabled,
+	FieldBackwardSyncEnabled,
+	FieldForwardSyncCloseLabel,
 	FieldSyncCursor,
 	FieldLastSyncedAt,
 	FieldCreatedAt,
@@ -79,6 +88,10 @@ func ValidColumn(column string) bool {
 var (
 	// DefaultEnabled holds the default value on creation for the "enabled" field.
 	DefaultEnabled bool
+	// DefaultForwardSyncEnabled holds the default value on creation for the "forward_sync_enabled" field.
+	DefaultForwardSyncEnabled bool
+	// DefaultBackwardSyncEnabled holds the default value on creation for the "backward_sync_enabled" field.
+	DefaultBackwardSyncEnabled bool
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -115,6 +128,21 @@ func ByConfig(opts ...sql.OrderTermOption) OrderOption {
 // ByEnabled orders the results by the enabled field.
 func ByEnabled(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEnabled, opts...).ToFunc()
+}
+
+// ByForwardSyncEnabled orders the results by the forward_sync_enabled field.
+func ByForwardSyncEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldForwardSyncEnabled, opts...).ToFunc()
+}
+
+// ByBackwardSyncEnabled orders the results by the backward_sync_enabled field.
+func ByBackwardSyncEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBackwardSyncEnabled, opts...).ToFunc()
+}
+
+// ByForwardSyncCloseLabel orders the results by the forward_sync_close_label field.
+func ByForwardSyncCloseLabel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldForwardSyncCloseLabel, opts...).ToFunc()
 }
 
 // BySyncCursor orders the results by the sync_cursor field.

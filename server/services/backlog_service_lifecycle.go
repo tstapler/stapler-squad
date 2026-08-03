@@ -710,6 +710,14 @@ func (s *BacklogService) UpdateItemSource(
 	}
 	enabled := req.Msg.Enabled
 	update.Enabled = &enabled
+	fwd := req.Msg.ForwardSyncEnabled
+	update.ForwardSyncEnabled = &fwd
+	bwd := req.Msg.BackwardSyncEnabled
+	update.BackwardSyncEnabled = &bwd
+	if req.Msg.ForwardSyncCloseLabel != "" {
+		label := req.Msg.ForwardSyncCloseLabel
+		update.ForwardSyncCloseLabel = &label
+	}
 	if req.Msg.Token != "" {
 		// UpdateItemSource replaces the config wholesale (no prior config to merge).
 		tokenJSON, mergeErr := encryptAndMergeToken(s.cfg, req.Msg.Token, "")
@@ -721,7 +729,12 @@ func (s *BacklogService) UpdateItemSource(
 
 	updated, err := s.sourceBackend.UpdateItemSource(ctx, req.Msg.SourceId, update)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		// EntRepository.UpdateItemSource re-wraps ent's *ent.NotFoundError as
+		// session.ErrNotFound before returning (session/ent_repository_backlog.go),
+		// so the check here must match against that sentinel — ent.IsNotFound
+		// would never match since the original *ent.NotFoundError is not preserved
+		// in the wrap chain.
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update item source: %w", err))

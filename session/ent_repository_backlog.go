@@ -243,14 +243,17 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 
 func itemSourceToData(src *ent.ItemSource) ItemSourceData {
 	data := ItemSourceData{
-		ID:           src.ID.String(),
-		PluginID:     src.PluginID,
-		DisplayName:  src.DisplayName,
-		Config:       src.Config,
-		Enabled:      src.Enabled,
-		LastSyncedAt: src.LastSyncedAt,
-		CreatedAt:    src.CreatedAt,
-		UpdatedAt:    src.UpdatedAt,
+		ID:                    src.ID.String(),
+		PluginID:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Config:                src.Config,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		LastSyncedAt:          src.LastSyncedAt,
+		CreatedAt:             src.CreatedAt,
+		UpdatedAt:             src.UpdatedAt,
 	}
 	// TokenConfigured: true when the config JSON contains a non-empty "token" key.
 	data.TokenConfigured = src.Config != "" && strings.Contains(src.Config, `"token"`)
@@ -1367,6 +1370,9 @@ func (r *EntRepository) CreateItemSource(ctx context.Context, data ItemSourceDat
 		SetDisplayName(data.DisplayName).
 		SetNillableConfig(&data.Config).
 		SetEnabled(data.Enabled).
+		SetForwardSyncEnabled(data.ForwardSyncEnabled).
+		SetBackwardSyncEnabled(data.BackwardSyncEnabled).
+		SetNillableForwardSyncCloseLabel(&data.ForwardSyncCloseLabel).
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create item source: %w", err)
@@ -1401,6 +1407,15 @@ func (r *EntRepository) UpdateItemSource(ctx context.Context, id string, update 
 	}
 	if update.Enabled != nil {
 		u.SetEnabled(*update.Enabled)
+	}
+	if update.ForwardSyncEnabled != nil {
+		u.SetForwardSyncEnabled(*update.ForwardSyncEnabled)
+	}
+	if update.BackwardSyncEnabled != nil {
+		u.SetBackwardSyncEnabled(*update.BackwardSyncEnabled)
+	}
+	if update.ForwardSyncCloseLabel != nil {
+		u.SetForwardSyncCloseLabel(*update.ForwardSyncCloseLabel)
 	}
 	if update.Config != nil {
 		u.SetConfig(*update.Config)

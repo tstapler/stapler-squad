@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -3401,4 +3402,75 @@ func TestBacklogService_ScrollbackManager_ConcurrentSetAndGet_NoRace(t *testing.
 		}()
 	}
 	wg.Wait()
+}
+
+// ─── Epic 0.5: per-source sync-direction settings (ForwardSyncEnabled,
+// BackwardSyncEnabled, ForwardSyncCloseLabel) ──────────────────────────────
+
+// TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled verifies the
+// three new sync-direction fields flow all the way from the UpdateItemSource
+// RPC through storage and back out via ListItemSources, mirroring how the
+// pre-existing Enabled field already round-trips.
+func TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	// Newly created sources default to both directions disabled and no close label.
+	require.False(t, created.Msg.Source.ForwardSyncEnabled)
+	require.False(t, created.Msg.Source.BackwardSyncEnabled)
+	require.Equal(t, "", created.Msg.Source.ForwardSyncCloseLabel)
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			Enabled:               true,
+			ForwardSyncEnabled:    true,
+			BackwardSyncEnabled:   true,
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.True(t, found.ForwardSyncEnabled)
+	assert.True(t, found.BackwardSyncEnabled)
+	assert.Equal(t, "wontfix", found.ForwardSyncCloseLabel)
+}
+
+// TestUpdateItemSource_ReturnsErrorForUnknownSourceId verifies UpdateItemSource
+// surfaces a NotFound error (rather than silently succeeding) when the target
+// source id does not exist — the error path counterpart to the round-trip test.
+func TestUpdateItemSource_ReturnsErrorForUnknownSourceId(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	_, err := svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:           uuid.NewString(),
+			DisplayName:        "Nonexistent",
+			ForwardSyncEnabled: true,
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }

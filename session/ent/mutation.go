@@ -15747,27 +15747,30 @@ func (m *ItemSessionMutation) ResetEdge(name string) error {
 // ItemSourceMutation represents an operation that mutates the ItemSource nodes in the graph.
 type ItemSourceMutation struct {
 	config
-	op                   Op
-	typ                  string
-	id                   *uuid.UUID
-	plugin_id            *string
-	display_name         *string
-	_config              *string
-	enabled              *bool
-	sync_cursor          *string
-	last_synced_at       *time.Time
-	created_at           *time.Time
-	updated_at           *time.Time
-	clearedFields        map[string]struct{}
-	backlog_items        map[uuid.UUID]struct{}
-	removedbacklog_items map[uuid.UUID]struct{}
-	clearedbacklog_items bool
-	sync_events          map[uuid.UUID]struct{}
-	removedsync_events   map[uuid.UUID]struct{}
-	clearedsync_events   bool
-	done                 bool
-	oldValue             func(context.Context) (*ItemSource, error)
-	predicates           []predicate.ItemSource
+	op                       Op
+	typ                      string
+	id                       *uuid.UUID
+	plugin_id                *string
+	display_name             *string
+	_config                  *string
+	enabled                  *bool
+	forward_sync_enabled     *bool
+	backward_sync_enabled    *bool
+	forward_sync_close_label *string
+	sync_cursor              *string
+	last_synced_at           *time.Time
+	created_at               *time.Time
+	updated_at               *time.Time
+	clearedFields            map[string]struct{}
+	backlog_items            map[uuid.UUID]struct{}
+	removedbacklog_items     map[uuid.UUID]struct{}
+	clearedbacklog_items     bool
+	sync_events              map[uuid.UUID]struct{}
+	removedsync_events       map[uuid.UUID]struct{}
+	clearedsync_events       bool
+	done                     bool
+	oldValue                 func(context.Context) (*ItemSource, error)
+	predicates               []predicate.ItemSource
 }
 
 var _ ent.Mutation = (*ItemSourceMutation)(nil)
@@ -16029,6 +16032,127 @@ func (m *ItemSourceMutation) OldEnabled(ctx context.Context) (v bool, err error)
 // ResetEnabled resets all changes to the "enabled" field.
 func (m *ItemSourceMutation) ResetEnabled() {
 	m.enabled = nil
+}
+
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (m *ItemSourceMutation) SetForwardSyncEnabled(b bool) {
+	m.forward_sync_enabled = &b
+}
+
+// ForwardSyncEnabled returns the value of the "forward_sync_enabled" field in the mutation.
+func (m *ItemSourceMutation) ForwardSyncEnabled() (r bool, exists bool) {
+	v := m.forward_sync_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldForwardSyncEnabled returns the old "forward_sync_enabled" field's value of the ItemSource entity.
+// If the ItemSource object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSourceMutation) OldForwardSyncEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldForwardSyncEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldForwardSyncEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldForwardSyncEnabled: %w", err)
+	}
+	return oldValue.ForwardSyncEnabled, nil
+}
+
+// ResetForwardSyncEnabled resets all changes to the "forward_sync_enabled" field.
+func (m *ItemSourceMutation) ResetForwardSyncEnabled() {
+	m.forward_sync_enabled = nil
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (m *ItemSourceMutation) SetBackwardSyncEnabled(b bool) {
+	m.backward_sync_enabled = &b
+}
+
+// BackwardSyncEnabled returns the value of the "backward_sync_enabled" field in the mutation.
+func (m *ItemSourceMutation) BackwardSyncEnabled() (r bool, exists bool) {
+	v := m.backward_sync_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackwardSyncEnabled returns the old "backward_sync_enabled" field's value of the ItemSource entity.
+// If the ItemSource object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSourceMutation) OldBackwardSyncEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackwardSyncEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackwardSyncEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackwardSyncEnabled: %w", err)
+	}
+	return oldValue.BackwardSyncEnabled, nil
+}
+
+// ResetBackwardSyncEnabled resets all changes to the "backward_sync_enabled" field.
+func (m *ItemSourceMutation) ResetBackwardSyncEnabled() {
+	m.backward_sync_enabled = nil
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (m *ItemSourceMutation) SetForwardSyncCloseLabel(s string) {
+	m.forward_sync_close_label = &s
+}
+
+// ForwardSyncCloseLabel returns the value of the "forward_sync_close_label" field in the mutation.
+func (m *ItemSourceMutation) ForwardSyncCloseLabel() (r string, exists bool) {
+	v := m.forward_sync_close_label
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldForwardSyncCloseLabel returns the old "forward_sync_close_label" field's value of the ItemSource entity.
+// If the ItemSource object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ItemSourceMutation) OldForwardSyncCloseLabel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldForwardSyncCloseLabel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldForwardSyncCloseLabel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldForwardSyncCloseLabel: %w", err)
+	}
+	return oldValue.ForwardSyncCloseLabel, nil
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (m *ItemSourceMutation) ClearForwardSyncCloseLabel() {
+	m.forward_sync_close_label = nil
+	m.clearedFields[itemsource.FieldForwardSyncCloseLabel] = struct{}{}
+}
+
+// ForwardSyncCloseLabelCleared returns if the "forward_sync_close_label" field was cleared in this mutation.
+func (m *ItemSourceMutation) ForwardSyncCloseLabelCleared() bool {
+	_, ok := m.clearedFields[itemsource.FieldForwardSyncCloseLabel]
+	return ok
+}
+
+// ResetForwardSyncCloseLabel resets all changes to the "forward_sync_close_label" field.
+func (m *ItemSourceMutation) ResetForwardSyncCloseLabel() {
+	m.forward_sync_close_label = nil
+	delete(m.clearedFields, itemsource.FieldForwardSyncCloseLabel)
 }
 
 // SetSyncCursor sets the "sync_cursor" field.
@@ -16343,7 +16467,7 @@ func (m *ItemSourceMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ItemSourceMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 11)
 	if m.plugin_id != nil {
 		fields = append(fields, itemsource.FieldPluginID)
 	}
@@ -16355,6 +16479,15 @@ func (m *ItemSourceMutation) Fields() []string {
 	}
 	if m.enabled != nil {
 		fields = append(fields, itemsource.FieldEnabled)
+	}
+	if m.forward_sync_enabled != nil {
+		fields = append(fields, itemsource.FieldForwardSyncEnabled)
+	}
+	if m.backward_sync_enabled != nil {
+		fields = append(fields, itemsource.FieldBackwardSyncEnabled)
+	}
+	if m.forward_sync_close_label != nil {
+		fields = append(fields, itemsource.FieldForwardSyncCloseLabel)
 	}
 	if m.sync_cursor != nil {
 		fields = append(fields, itemsource.FieldSyncCursor)
@@ -16384,6 +16517,12 @@ func (m *ItemSourceMutation) Field(name string) (ent.Value, bool) {
 		return m.Config()
 	case itemsource.FieldEnabled:
 		return m.Enabled()
+	case itemsource.FieldForwardSyncEnabled:
+		return m.ForwardSyncEnabled()
+	case itemsource.FieldBackwardSyncEnabled:
+		return m.BackwardSyncEnabled()
+	case itemsource.FieldForwardSyncCloseLabel:
+		return m.ForwardSyncCloseLabel()
 	case itemsource.FieldSyncCursor:
 		return m.SyncCursor()
 	case itemsource.FieldLastSyncedAt:
@@ -16409,6 +16548,12 @@ func (m *ItemSourceMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldConfig(ctx)
 	case itemsource.FieldEnabled:
 		return m.OldEnabled(ctx)
+	case itemsource.FieldForwardSyncEnabled:
+		return m.OldForwardSyncEnabled(ctx)
+	case itemsource.FieldBackwardSyncEnabled:
+		return m.OldBackwardSyncEnabled(ctx)
+	case itemsource.FieldForwardSyncCloseLabel:
+		return m.OldForwardSyncCloseLabel(ctx)
 	case itemsource.FieldSyncCursor:
 		return m.OldSyncCursor(ctx)
 	case itemsource.FieldLastSyncedAt:
@@ -16453,6 +16598,27 @@ func (m *ItemSourceMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetEnabled(v)
+		return nil
+	case itemsource.FieldForwardSyncEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetForwardSyncEnabled(v)
+		return nil
+	case itemsource.FieldBackwardSyncEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackwardSyncEnabled(v)
+		return nil
+	case itemsource.FieldForwardSyncCloseLabel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetForwardSyncCloseLabel(v)
 		return nil
 	case itemsource.FieldSyncCursor:
 		v, ok := value.(string)
@@ -16515,6 +16681,9 @@ func (m *ItemSourceMutation) ClearedFields() []string {
 	if m.FieldCleared(itemsource.FieldConfig) {
 		fields = append(fields, itemsource.FieldConfig)
 	}
+	if m.FieldCleared(itemsource.FieldForwardSyncCloseLabel) {
+		fields = append(fields, itemsource.FieldForwardSyncCloseLabel)
+	}
 	if m.FieldCleared(itemsource.FieldSyncCursor) {
 		fields = append(fields, itemsource.FieldSyncCursor)
 	}
@@ -16537,6 +16706,9 @@ func (m *ItemSourceMutation) ClearField(name string) error {
 	switch name {
 	case itemsource.FieldConfig:
 		m.ClearConfig()
+		return nil
+	case itemsource.FieldForwardSyncCloseLabel:
+		m.ClearForwardSyncCloseLabel()
 		return nil
 	case itemsource.FieldSyncCursor:
 		m.ClearSyncCursor()
@@ -16563,6 +16735,15 @@ func (m *ItemSourceMutation) ResetField(name string) error {
 		return nil
 	case itemsource.FieldEnabled:
 		m.ResetEnabled()
+		return nil
+	case itemsource.FieldForwardSyncEnabled:
+		m.ResetForwardSyncEnabled()
+		return nil
+	case itemsource.FieldBackwardSyncEnabled:
+		m.ResetBackwardSyncEnabled()
+		return nil
+	case itemsource.FieldForwardSyncCloseLabel:
+		m.ResetForwardSyncCloseLabel()
 		return nil
 	case itemsource.FieldSyncCursor:
 		m.ResetSyncCursor()

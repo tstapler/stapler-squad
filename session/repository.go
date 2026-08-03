@@ -575,22 +575,28 @@ type BacklogItemPrecondition struct {
 
 // ItemSourceData is the domain model for an external item source.
 type ItemSourceData struct {
-	ID              string
-	PluginID        string
-	DisplayName     string
-	Config          string // JSON, may contain encrypted token
-	Enabled         bool
-	TokenConfigured bool
-	LastSyncedAt    *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                    string
+	PluginID              string
+	DisplayName           string
+	Config                string // JSON, may contain encrypted token
+	Enabled               bool
+	ForwardSyncEnabled    bool
+	BackwardSyncEnabled   bool
+	ForwardSyncCloseLabel string
+	TokenConfigured       bool
+	LastSyncedAt          *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // ItemSourceUpdate carries the mutable fields for UpdateItemSource.
 type ItemSourceUpdate struct {
-	DisplayName *string
-	Enabled     *bool
-	Config      *string
+	DisplayName           *string
+	Enabled               *bool
+	ForwardSyncEnabled    *bool
+	BackwardSyncEnabled   *bool
+	ForwardSyncCloseLabel *string
+	Config                *string
 }
 
 // ShellRepository is the minimal persistence interface for per-session shell management.
