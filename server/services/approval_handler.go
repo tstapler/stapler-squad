@@ -299,14 +299,20 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		start := time.Now()
 		classCtx := h.classifier.BuildContext(payload.Cwd)
 		if h.liveFinder != nil {
-			if inst := h.liveFinder.FindLiveInstance(sessionID); inst != nil && inst.GitHubPRNumber > 0 {
-				classCtx.CIStatus = inst.GitHubCheckConclusion
-				// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
-				// poller's configured interval may no longer reflect the branch's real CI
-				// state. Treat it as unknown rather than risk gating an irreversible
-				// auto-approve (RequireCIPassing) on stale data.
-				if time.Since(inst.LastPRStatusCheck) > 2*h.pollInterval {
-					classCtx.CIStatus = ""
+			if inst := h.liveFinder.FindLiveInstance(sessionID); inst != nil {
+				// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+				// fields on its own goroutine under inst.mu (session/instance.go's mu
+				// doc comment mandates Snapshot() for reads outside the actor).
+				github := inst.Snapshot().GitHub
+				if github.GitHubPRNumber > 0 {
+					classCtx.CIStatus = github.GitHubCheckConclusion
+					// Staleness guard (Task 1.1.2b): a cached conclusion older than 2x the
+					// poller's configured interval may no longer reflect the branch's real CI
+					// state. Treat it as unknown rather than risk gating an irreversible
+					// auto-approve (RequireCIPassing) on stale data.
+					if time.Since(github.LastPRStatusCheck) > 2*h.pollInterval {
+						classCtx.CIStatus = ""
+					}
 				}
 			}
 		}

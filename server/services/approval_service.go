@@ -91,10 +91,14 @@ func (as *ApprovalService) ResolveApproval(
 	// conditional on OverrideCiBlock.
 	if req.Msg.Decision == "allow" && config.LoadConfig().GetFeatureFlag(blockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
 		if inst := as.liveFinder.FindLiveInstance(sessionID); inst != nil {
-			blocked := inst.GitHubPRNumber > 0 && inst.GitHubCheckConclusion == ciConclusionFailure
+			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
+			// fields on its own goroutine under inst.mu (session/instance.go's mu doc
+			// comment mandates Snapshot() for reads outside the actor).
+			github := inst.Snapshot().GitHub
+			blocked := github.GitHubPRNumber > 0 && github.GitHubCheckConclusion == ciConclusionFailure
 			if blocked && req.Msg.OverrideCiBlock {
 				log.Info("[ApprovalService] approved despite failing CI (override)",
-					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", inst.GitHubCheckConclusion)
+					"approval_id", req.Msg.ApprovalId, "session_id", sessionID, "ci_conclusion", github.GitHubCheckConclusion)
 			} else if blocked {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("CI is failing on this branch — review before approving"))
