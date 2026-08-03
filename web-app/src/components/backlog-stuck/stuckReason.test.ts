@@ -19,6 +19,7 @@ const ALL_REASONS: StuckReason[] = [
   StuckReason.BOUNCING,
   StuckReason.PUSH_FAILED,
   StuckReason.REWORK_BLOCKED_STALE,
+  StuckReason.PR_NEEDS_FIX,
 ];
 
 describe("stuckReason", () => {
@@ -47,6 +48,15 @@ describe("stuckReason", () => {
 
     it("gives push_failed a distinct, descriptive label", () => {
       expect(getStuckReasonLabel(StuckReason.PUSH_FAILED)).toMatch(/push/i);
+    });
+
+    it("gives pr_needs_fix a real label, not the Unknown-reason fallback", () => {
+      expect(getStuckReasonLabel(StuckReason.PR_NEEDS_FIX)).not.toBe(
+        getStuckReasonLabel(StuckReason.UNSPECIFIED)
+      );
+      expect(getStuckReasonClass(StuckReason.PR_NEEDS_FIX)).not.toBe(
+        getStuckReasonClass(StuckReason.UNSPECIFIED)
+      );
     });
 
     it("falls back to the UNSPECIFIED label/class for an out-of-range value", () => {

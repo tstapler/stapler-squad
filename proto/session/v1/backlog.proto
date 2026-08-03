@@ -1015,6 +1015,12 @@ enum StuckReason {
   // (session/domain/backlog.go) — a review-status item's rework attempt is
   // blocked by a still-alive-but-stale prior work session.
   STUCK_REASON_REWORK_BLOCKED_STALE = 12;
+  // STUCK_REASON_PR_NEEDS_FIX: see domain.StuckReasonPRNeedsFix
+  // (session/domain/backlog.go) — a pr_pending item's PR has failing CI, a
+  // blocking review, a merge conflict, or unaddressed comment feedback, and
+  // ReconcilePRPending's comment-feedback-driven fix attempts have exhausted
+  // the shared rework cap.
+  STUCK_REASON_PR_NEEDS_FIX = 13;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

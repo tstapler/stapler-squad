@@ -122,6 +122,15 @@ export const chipReworkBlockedStale = style([
   },
 ]);
 
+export const chipPrNeedsFix = style([
+  chip,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warningText,
+    border: `1px solid ${vars.color.warning}`,
+  },
+]);
+
 export const chipUnknown = style([
   chip,
   {

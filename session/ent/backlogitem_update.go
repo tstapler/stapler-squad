@@ -557,6 +557,26 @@ func (_u *BacklogItemUpdate) ClearShippedSnapshotAt() *BacklogItemUpdate {
 	return _u
 }
 
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdate) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpdate {
+	_u.mutation.SetPrFeedbackAddressedAt(v)
+	return _u
+}
+
+// SetNillablePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field if the given value is not nil.
+func (_u *BacklogItemUpdate) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemUpdate {
+	if v != nil {
+		_u.SetPrFeedbackAddressedAt(*v)
+	}
+	return _u
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdate) ClearPrFeedbackAddressedAt() *BacklogItemUpdate {
+	_u.mutation.ClearPrFeedbackAddressedAt()
+	return _u
+}
+
 // SetShippedFileStats sets the "shipped_file_stats" field.
 func (_u *BacklogItemUpdate) SetShippedFileStats(v string) *BacklogItemUpdate {
 	_u.mutation.SetShippedFileStats(v)
@@ -1049,6 +1069,12 @@ func (_u *BacklogItemUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.ShippedSnapshotAtCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrFeedbackAddressedAt(); ok {
+		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PrFeedbackAddressedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
@@ -1870,6 +1896,26 @@ func (_u *BacklogItemUpdateOne) ClearShippedSnapshotAt() *BacklogItemUpdateOne {
 	return _u
 }
 
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdateOne) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpdateOne {
+	_u.mutation.SetPrFeedbackAddressedAt(v)
+	return _u
+}
+
+// SetNillablePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field if the given value is not nil.
+func (_u *BacklogItemUpdateOne) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemUpdateOne {
+	if v != nil {
+		_u.SetPrFeedbackAddressedAt(*v)
+	}
+	return _u
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (_u *BacklogItemUpdateOne) ClearPrFeedbackAddressedAt() *BacklogItemUpdateOne {
+	_u.mutation.ClearPrFeedbackAddressedAt()
+	return _u
+}
+
 // SetShippedFileStats sets the "shipped_file_stats" field.
 func (_u *BacklogItemUpdateOne) SetShippedFileStats(v string) *BacklogItemUpdateOne {
 	_u.mutation.SetShippedFileStats(v)
@@ -2392,6 +2438,12 @@ func (_u *BacklogItemUpdateOne) sqlSave(ctx context.Context) (_node *BacklogItem
 	}
 	if _u.mutation.ShippedSnapshotAtCleared() {
 		_spec.ClearField(backlogitem.FieldShippedSnapshotAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.PrFeedbackAddressedAt(); ok {
+		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PrFeedbackAddressedAtCleared() {
+		_spec.ClearField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)

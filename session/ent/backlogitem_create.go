@@ -414,6 +414,20 @@ func (_c *BacklogItemCreate) SetNillableShippedSnapshotAt(v *time.Time) *Backlog
 	return _c
 }
 
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (_c *BacklogItemCreate) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetPrFeedbackAddressedAt(v)
+	return _c
+}
+
+// SetNillablePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetPrFeedbackAddressedAt(*v)
+	}
+	return _c
+}
+
 // SetShippedFileStats sets the "shipped_file_stats" field.
 func (_c *BacklogItemCreate) SetShippedFileStats(v string) *BacklogItemCreate {
 	_c.mutation.SetShippedFileStats(v)
@@ -895,6 +909,10 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ShippedSnapshotAt(); ok {
 		_spec.SetField(backlogitem.FieldShippedSnapshotAt, field.TypeTime, value)
 		_node.ShippedSnapshotAt = &value
+	}
+	if value, ok := _c.mutation.PrFeedbackAddressedAt(); ok {
+		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
+		_node.PrFeedbackAddressedAt = &value
 	}
 	if value, ok := _c.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
@@ -1524,6 +1542,24 @@ func (u *BacklogItemUpsert) UpdateShippedSnapshotAt() *BacklogItemUpsert {
 // ClearShippedSnapshotAt clears the value of the "shipped_snapshot_at" field.
 func (u *BacklogItemUpsert) ClearShippedSnapshotAt() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldShippedSnapshotAt)
+	return u
+}
+
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsert) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldPrFeedbackAddressedAt, v)
+	return u
+}
+
+// UpdatePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdatePrFeedbackAddressedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldPrFeedbackAddressedAt)
+	return u
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsert) ClearPrFeedbackAddressedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldPrFeedbackAddressedAt)
 	return u
 }
 
@@ -2186,6 +2222,27 @@ func (u *BacklogItemUpsertOne) UpdateShippedSnapshotAt() *BacklogItemUpsertOne {
 func (u *BacklogItemUpsertOne) ClearShippedSnapshotAt() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearShippedSnapshotAt()
+	})
+}
+
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsertOne) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPrFeedbackAddressedAt(v)
+	})
+}
+
+// UpdatePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdatePrFeedbackAddressedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePrFeedbackAddressedAt()
+	})
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsertOne) ClearPrFeedbackAddressedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPrFeedbackAddressedAt()
 	})
 }
 
@@ -3027,6 +3084,27 @@ func (u *BacklogItemUpsertBulk) UpdateShippedSnapshotAt() *BacklogItemUpsertBulk
 func (u *BacklogItemUpsertBulk) ClearShippedSnapshotAt() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearShippedSnapshotAt()
+	})
+}
+
+// SetPrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsertBulk) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetPrFeedbackAddressedAt(v)
+	})
+}
+
+// UpdatePrFeedbackAddressedAt sets the "pr_feedback_addressed_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdatePrFeedbackAddressedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdatePrFeedbackAddressedAt()
+	})
+}
+
+// ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
+func (u *BacklogItemUpsertBulk) ClearPrFeedbackAddressedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearPrFeedbackAddressedAt()
 	})
 }
 

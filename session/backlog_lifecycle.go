@@ -248,6 +248,7 @@ type prCreator interface {
 	PushBranch() error
 	CreatePR(title, body string) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
+	RequestCopilotReview(prNumber int) error
 }
 
 // defaultPRCreatorFactory constructs the push/PR-creation client for a given
@@ -3361,6 +3362,22 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d auto-merge enabled", item.ID, prNumber)
 	}
 
+	// Request a GitHub Copilot review so async Copilot feedback has a chance
+	// to land before the item goes unwatched at pr_pending. Best-effort: a
+	// missing Copilot review is a missed nicety, not a missed auto-merge path
+	// (lower notification priority than the auto-merge failure above).
+	if reviewErr := g.RequestCopilotReview(prNumber); reviewErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR RequestCopilotReview item=%s pr=%d: %v", item.ID, prNumber, reviewErr)
+		l.notify(item.ID,
+			"Copilot review not requested",
+			fmt.Sprintf("%s — PR #%d could not get a Copilot review request (%v).", item.Title, prNumber, reviewErr),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			1, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+		)
+	} else {
+		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d Copilot review requested", item.ID, prNumber)
+	}
+
 	// Transition to pr_pending.
 	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
 		l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
@@ -4085,15 +4102,23 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 
 			emptyURL, zeroNum := "", 0
 			if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID.String(), BacklogItemUpdate{
-				PrURL:    &emptyURL,
-				PrNumber: &zeroNum,
+				PrURL:                      &emptyURL,
+				PrNumber:                   &zeroNum,
+				ClearPrFeedbackAddressedAt: true,
 			}, nil); updateErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending clear closed PR fields item=%s: %v", item.ID, updateErr)
 			}
 			continue
 		}
 
-		if !prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts {
+		// hasNewFeedback is true only when there's substantive PR review
+		// feedback (a COMMENTED review or plain comment) newer than the
+		// per-item dedup watermark — so already-addressed feedback never
+		// re-triggers a fix session on a later tick.
+		hasNewFeedback := prStatus.HasReviewFeedback &&
+			(item.PrFeedbackAddressedAt == nil || prStatus.LatestFeedbackAt.After(*item.PrFeedbackAddressedAt))
+
+		if !prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
 			// PR is open and healthy — wait for merge. Story 2.1.1: flag it
 			// pr_ready_unmerged once it's been solo-ready (prReadyToMergeSolo)
 			// past the threshold, using ONLY the already-fetched prStatus — no
@@ -4152,12 +4177,44 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			continue
 		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
-		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v)",
-			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts)
-		if _, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx); fixErr != nil {
+		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v, feedback=%v)",
+			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts, hasNewFeedback)
+
+		if hasNewFeedback {
+			logFeedbackBatchCoverage(item.ID.String(), prStatus)
+		}
+
+		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+		if fixErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
+		} else if attempted && hasNewFeedback {
+			watermark := prStatus.LatestFeedbackAt
+			if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID.String(), BacklogItemUpdate{
+				PrFeedbackAddressedAt: &watermark,
+			}, nil); updateErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending persist PrFeedbackAddressedAt item=%s: %v", item.ID, updateErr)
+			} else {
+				log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s PrFeedbackAddressedAt advanced to %s (PR #%d)", item.ID, watermark.Format(time.RFC3339), item.PrNumber)
+			}
 		}
 	}
+}
+
+// logFeedbackBatchCoverage logs the count and authors of every substantive
+// feedback item (commentReviews review + substantive plain comments) included
+// in a hasNewFeedback dispatch, but only when the dispatch covers more than
+// one — a single-item dispatch needs no extra log line. The timestamp
+// watermark this feature uses for dedup advances past the whole batch on
+// dispatch, not per-item, so a partially-addressed multi-item batch is
+// otherwise silently unresolved forever; this line is the one place an
+// operator can discover it happened (pre-mortem.md P1).
+func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
+	authors := prStatus.FeedbackAuthors()
+	if len(authors) <= 1 {
+		return
+	}
+	log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s dispatching PR-fix session covering %d feedback item(s) from [%s] — watermark advances to %s regardless of which items the session actually addresses",
+		itemID, len(authors), strings.Join(authors, ", "), prStatus.LatestFeedbackAt.Format(time.RFC3339))
 }
 
 // closeIfSupersededByMain checks whether item's last known work-session commit
