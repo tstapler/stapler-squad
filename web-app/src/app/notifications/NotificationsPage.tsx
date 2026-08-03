@@ -412,7 +412,7 @@ export function NotificationsPage() {
                           href={
                             liveSessionIds.has(notification.sessionId)
                               ? `/?session=${encodeURIComponent(notification.sessionId)}`
-                              : `/sessions/${encodeURIComponent(notification.sessionId)}/summary`
+                              : `/sessions/summary?sessionId=${encodeURIComponent(notification.sessionId)}`
                           }
                           className={viewButton}
                           onClick={() => handleNotificationClick(group.allIds, notification.onView, notification.sessionId)}

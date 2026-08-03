@@ -1,8 +1,8 @@
 /**
- * Route smoke test for the durable standalone `/sessions/[sessionId]/summary`
+ * Route smoke test for the durable standalone `/sessions/summary?sessionId=`
  * route (Epic 3.3, Task 3.3.1b). Confirms:
- *  - the page reads `sessionId` from the route param and passes it straight
- *    through to SessionSummaryPanel
+ *  - the page reads `sessionId` from the `?sessionId=` search param and
+ *    passes it straight through to SessionSummaryPanel
  *  - the page renders with no Redux Provider in the tree — if the page (not
  *    just SessionSummaryPanel, which is mocked out below) ever called
  *    `useAppSelector`, react-redux would throw "could not find react-redux
@@ -14,9 +14,9 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import SessionSummaryPage from "../page";
 
-const mockUseParams = jest.fn();
+const mockUseSearchParams = jest.fn();
 jest.mock("next/navigation", () => ({
-  useParams: () => mockUseParams(),
+  useSearchParams: () => mockUseSearchParams(),
 }));
 
 jest.mock("@/lib/analytics/usePageView", () => ({
@@ -30,13 +30,17 @@ jest.mock("@/components/sessions/SessionSummaryPanel", () => ({
   SessionSummaryPanel: (props: { sessionId: string }) => mockSessionSummaryPanel(props),
 }));
 
+function searchParamsWith(sessionId: string | null) {
+  return { get: (key: string) => (key === "sessionId" ? sessionId : null) };
+}
+
 describe("SessionSummaryPage", () => {
   beforeEach(() => {
     mockSessionSummaryPanel.mockClear();
-    mockUseParams.mockReturnValue({ sessionId: "sess-123" });
+    mockUseSearchParams.mockReturnValue(searchParamsWith("sess-123"));
   });
 
-  it("renders SessionSummaryPanel with the sessionId taken from the route param", () => {
+  it("renders SessionSummaryPanel with the sessionId taken from the sessionId search param", () => {
     render(<SessionSummaryPage />);
 
     expect(mockSessionSummaryPanel).toHaveBeenCalledWith(
@@ -52,13 +56,12 @@ describe("SessionSummaryPage", () => {
     // Renders without a <Provider> in the tree at all — see file header comment.
   });
 
-  it("handles a route param arriving as an array (Next.js catch-all edge case) by using the first segment", () => {
-    mockUseParams.mockReturnValue({ sessionId: ["sess-456"] });
+  it("does not render SessionSummaryPanel when sessionId is absent from the URL", () => {
+    mockUseSearchParams.mockReturnValue(searchParamsWith(null));
 
     render(<SessionSummaryPage />);
 
-    expect(mockSessionSummaryPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: "sess-456" }),
-    );
+    expect(mockSessionSummaryPanel).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("mock-session-summary-panel")).not.toBeInTheDocument();
   });
 });

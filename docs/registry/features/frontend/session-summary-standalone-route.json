@@ -2,13 +2,13 @@
   "id": "session-summary-standalone-route",
   "type": "frontend",
   "component": "SessionSummaryPage",
-  "path": "web-app/src/app/sessions/[sessionId]/summary/page.tsx",
+  "path": "web-app/src/app/sessions/summary/page.tsx",
   "markerLine": 2,
   "tested": true,
   "testIds": [
-    "SessionSummaryPage > renders SessionSummaryPanel with the sessionId taken from the route param",
+    "SessionSummaryPage > renders SessionSummaryPanel with the sessionId taken from the sessionId search param",
     "SessionSummaryPage > renders a back link and no Redux-dependent chrome (terminal/VCS/files tabs)",
-    "SessionSummaryPage > handles a route param arriving as an array (Next.js catch-all edge case) by using the first segment"
+    "SessionSummaryPage > does not render SessionSummaryPanel when sessionId is absent from the URL"
   ],
   "lastModified": "2026-08-03T00:00:00Z"
 }

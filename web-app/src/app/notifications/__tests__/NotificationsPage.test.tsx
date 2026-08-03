@@ -5,7 +5,7 @@
  * A notification's sessionId may reference a session that's since been
  * deleted (e.g. after DeleteSession) and so no longer appears in the
  * Redux `selectAllSessions` list. In that case the link must fall back to
- * the durable standalone `/sessions/<id>/summary` route instead of the
+ * the durable standalone `/sessions/summary?sessionId=<id>` route instead of the
  * live-list-dependent `/?session=<id>` route, which would be a dead link.
  */
 
@@ -87,7 +87,7 @@ describe("NotificationsPage — session link fallback (Task 3.3.2b)", () => {
     render(<NotificationsPage />);
 
     const link = screen.getByRole("link", { name: "View Session" });
-    expect(link).toHaveAttribute("href", "/sessions/sess-deleted/summary");
+    expect(link).toHaveAttribute("href", "/sessions/summary?sessionId=sess-deleted");
   });
 
   it("keeps the existing live-list route unaffected when the session is still live", () => {
