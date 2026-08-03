@@ -34,7 +34,7 @@ var llmNarrativeTimeout = 60 * time.Second
 // staleGenerationTimeout is the read-time staleness threshold: a row stuck in
 // GENERATING older than this is treated as interrupted (e.g. a server restart)
 // and flipped to ERROR on next read, unless the in-memory guard is still held by
-// this process (see reconcileStaleness).
+// this process (see ReconcileStaleness).
 const staleGenerationTimeout = 5 * time.Minute
 
 // regenerateCooldown rate-limits repeated manual-regenerate clicks, independent of
@@ -83,6 +83,42 @@ func NewSessionSummaryGenerator(entClient *ent.Client, pool headless.PoolClient,
 	}
 }
 
+// FindRowBySessionID queries the SessionSummary row for sessionID directly — never
+// via the Session-keyed live-instance machinery (AC-3: a summary must remain
+// retrievable after its Session row is gone). Wraps ent's not-found error as
+// ErrNotFound so callers in server/services (which must not import session/ent's
+// error-handling helpers directly — see .golangci.yml's no_ent_in_services/forbidigo
+// rules) can check it with errors.Is instead.
+func (g *SessionSummaryGenerator) FindRowBySessionID(ctx context.Context, sessionID string) (*ent.SessionSummary, error) {
+	row, err := g.entClient.SessionSummary.Query().Where(sessionsummary.SessionID(sessionID)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: session summary for session=%s", ErrNotFound, sessionID)
+		}
+		return nil, err
+	}
+	return row, nil
+}
+
+// SetNotificationLister wires notifLister after construction. Needed because
+// server/dependencies.go constructs SessionSummaryGenerator early (alongside the
+// headless pool, so it can be wired to every instance in the same loop that wires
+// backlogLifecycleListener) but the NotificationHistoryStore it needs isn't built
+// until later, in server.go's RunServer — the same "Set* called long after
+// construction" ordering constraint documented on SessionService.SetHeadlessPool.
+// Safe to call with nil; BuildDecisionsSnapshot nil-checks notifLister.
+func (g *SessionSummaryGenerator) SetNotificationLister(l NotificationDecisionLister) {
+	g.notifLister = l
+}
+
+// SetTokenStore wires tokenStore after construction, for the same reason and
+// timing as SetNotificationLister — the token store is also constructed after
+// SessionSummaryGenerator during server startup. Safe to call with nil;
+// BuildCostSnapshot nil-checks tokenStore.
+func (g *SessionSummaryGenerator) SetTokenStore(t tokens.TokenStoreReader) {
+	g.tokenStore = t
+}
+
 // tryAcquire attempts to acquire the in-process per-session guard for sessionUUID.
 // Returns (release, true) on success — the caller must call release() exactly once,
 // typically via defer. Returns (nil, false) if a generation is already in flight for
@@ -96,7 +132,7 @@ func (g *SessionSummaryGenerator) tryAcquire(sessionUUID string) (release func()
 	return m.Unlock, true
 }
 
-// isInFlight is a non-blocking probe used by reconcileStaleness to distinguish
+// isInFlight is a non-blocking probe used by ReconcileStaleness to distinguish
 // "still actively generating in this process" from "genuinely stuck (e.g. the
 // process restarted mid-generation)".
 func (g *SessionSummaryGenerator) isInFlight(sessionUUID string) bool {
@@ -112,13 +148,15 @@ func (g *SessionSummaryGenerator) isInFlight(sessionUUID string) bool {
 	return true
 }
 
-// reconcileStaleness flips a row stuck in GENERATING for longer than
+// ReconcileStaleness flips a row stuck in GENERATING for longer than
 // staleGenerationTimeout to ERROR, unless this process's in-memory guard is still
 // held for that session (a long-running call, not a genuinely stuck row). Called
 // from the RPC read path (Phase 2's GetSessionSummary), not a background sweep —
 // see plan.md's Pattern Decisions "FR-7 restart-survival dedup" row for the
 // accepted v1 gap (a never-revisited session stays stuck in GENERATING forever).
-func (g *SessionSummaryGenerator) reconcileStaleness(ctx context.Context, row *ent.SessionSummary) *ent.SessionSummary {
+// Exported so server/services.SessionSummaryService (a different package) can call
+// it directly from the RPC handler.
+func (g *SessionSummaryGenerator) ReconcileStaleness(ctx context.Context, row *ent.SessionSummary) *ent.SessionSummary {
 	if row == nil || row.Status != string(SessionSummaryStatusGenerating) || row.GenerationStartedAt == nil {
 		return row
 	}

@@ -218,6 +218,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// orphan-pruning sweep (enforceRetention → pruneOrphanedRecords).
 			// See buildSessionExistenceLookup for the uptime-gate rationale.
 			notifStore.SetSessionExistenceLookup(buildSessionExistenceLookup(storage, srv.startedAt))
+
+			// Wire the notification decision lister into SessionSummaryGenerator now
+			// that notifStore exists — session/session_summary_service.go's
+			// SetNotificationLister doc comment explains why this is late-bound rather
+			// than passed at construction (dependencies.go builds the generator before
+			// notifStore exists).
+			if deps.SessionSummaryGenerator != nil {
+				deps.SessionSummaryGenerator.SetNotificationLister(&notificationDecisionListerAdapter{store: notifStore})
+			}
 		}
 	}
 
@@ -357,6 +366,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		uwAPIPath := "/api" + uwPath
 		srv.RegisterConnectHandler(uwAPIPath, http.StripPrefix("/api", uwHandler))
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
+	}
+
+	// Register SessionSummaryService handler.
+	if deps.SessionSummaryGenerator != nil {
+		sessionSummaryService := services.NewSessionSummaryService(deps.SessionSummaryGenerator, deps.SessionService)
+		ssPath, ssHandler := sessionv1connect.NewSessionSummaryServiceHandler(sessionSummaryService, ConnectOptions(deps.ErrorRegistry)...)
+		ssAPIPath := "/api" + ssPath
+		srv.RegisterConnectHandler(ssAPIPath, http.StripPrefix("/api", ssHandler))
+		log.Info("Registered SessionSummaryService handler", "path", ssAPIPath)
 	}
 
 	// Register InsightsService handler for token usage analytics.
@@ -1016,6 +1034,36 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	}()
 
 	return nil
+}
+
+// notificationDecisionListerAdapter adapts *notifications.NotificationHistoryStore.List
+// to session.NotificationDecisionLister, which BuildDecisionsSnapshot
+// (session/session_summary_snapshot.go) needs. session cannot import
+// server/notifications directly (server/notifications -> server/events ->
+// pkg/events -> session is a real import cycle — see session.DecisionRecord's doc
+// comment), so this thin adapter lives here where both packages are already
+// imported.
+type notificationDecisionListerAdapter struct {
+	store *notifications.NotificationHistoryStore
+}
+
+// ListDecisionRecords implements session.NotificationDecisionLister.
+func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Context, sessionID string) ([]session.DecisionRecord, error) {
+	records, _, err := a.store.List(notifications.ListOptions{
+		SessionID: sessionID,
+		Limit:     notifications.MaxNotifications, // unpaginated — need every record for this session
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]session.DecisionRecord, len(records))
+	for i, r := range records {
+		out[i] = session.DecisionRecord{
+			NotificationType: r.NotificationType,
+			ApprovalDecision: r.Metadata["approval_decision"],
+		}
+	}
+	return out, nil
 }
 
 // instanceDataLister is the narrow slice of *session.Storage that
