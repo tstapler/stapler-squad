@@ -921,6 +921,67 @@ func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t
 	assert.Equal(t, domain.StuckReasonBouncing, open[0].Reason, "reuses the bouncing reason — same non-converging-cycle semantics, tripped immediately instead of waiting for the periodic sweep")
 }
 
+// TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress
+// is the regression test for backlog item 4c71d3a3-1dd5-4d82-86ec-694a98835d2f
+// ("request_review fails permanently when a backlog item is stuck in 'review'
+// status with no active reviewer"). Confirmed live 2026-08-03 on backlog item
+// 40a243b0: a review session recorded a FAIL verdict and then died as a
+// zombie (no clean exit) before handleReviewSessionExited ever processed it.
+// The crash-recovery sweep (reconcileUnprocessedReviewVerdicts) correctly
+// detected this and dispatched into AutoReopenAfterFailedReview — but this
+// function's hasActiveWorkSession guard used to return here without ever
+// transitioning the item out of "review", on the theory that the live work
+// session would "discover the verdict on its own next poll." That theory had
+// no implementation behind it: request_review is the only tool available to
+// a work session, and its own precondition hardcodes ExpectedStatus:
+// in_progress (server/mcp/tools_backlog.go) — so the live work session could
+// never make forward progress, no matter how many times it fixed the noted
+// gaps and called request_review again. It failed identically forever with
+// "concurrent modification detected: expected status \"in_progress\", got
+// \"review\"". This test asserts the item now transitions to in_progress
+// even when a work session is still active — it fails against the pre-fix
+// code, which left the item's status unchanged ("review") here.
+func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Item whose reviewer zombied out after a FAIL verdict",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// The work session that originally called request_review and is still
+	// alive, fixing the FAIL findings and about to call request_review again.
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "still-alive-work-session",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
+	require.NoError(t, reopenErr, "reusing an active work session is an expected outcome, not a failure")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"must transition back to in_progress even when a work session is already active — otherwise that session's request_review precondition can never be satisfied again")
+
+	// No new work session should have been spawned — the point is reusing the
+	// live one, not respawning.
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	workCount := 0
+	for _, is := range sessions {
+		if is.Role == session.SessionRoleWork {
+			workCount++
+		}
+	}
+	assert.Equal(t, 1, workCount, "must not spawn a second work session when one is already active")
+}
+
 // --- Stale-but-alive blocking work session: closes the "zero operator signal" gap ---
 //
 // hasActiveWorkSession's guard (above) is purely liveness-based (EndedAt == nil) and
@@ -935,13 +996,17 @@ func TestAutoReopenAfterFailedReview_RepeatedFailure_LeavesInReviewAndNotifies(t
 // is never stopped, killed, or bypassed — see that function's doc comment for why).
 
 // TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator verifies
-// that when the active work session blocking a reopen attempt is ALSO independently
+// that when the active work session blocking a respawn is ALSO independently
 // confirmed stale — using the exact same staleness computation and threshold
 // review_queue_determiner.go's own detector uses
 // (Instance.GetTimeSinceLastMeaningfulOutput vs
 // session.DefaultReviewQueuePollerConfig().StalenessThreshold) — an operator
-// notification fires, while the reopen decision itself (item stays in review, no new
-// session spawned, nothing stopped) is unchanged.
+// notification fires, while the "reuse the live session instead of
+// respawning" decision itself is unchanged. The item must still transition to
+// in_progress regardless (see
+// TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress):
+// request_review's own precondition requires it, and a stale-but-alive
+// session is still deliberately never stopped or bypassed here.
 func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -979,7 +1044,8 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "the reopen decision itself must be unchanged — this fix only adds a notification")
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"the item must still transition to in_progress so the live (if stale) work session's next request_review call can succeed — a stale session is never stopped, but the transition itself is unconditional")
 
 	select {
 	case ev := <-ch:
@@ -994,7 +1060,11 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	assert.Equal(t, domain.StuckReasonReworkBlockedStale, open[0].Reason)
-	assert.Equal(t, session.BacklogStatusReview, open[0].ItemStatus)
+	// ItemStatus reflects the item's actual current status at query time (it
+	// is not a snapshot taken when MarkStuck ran) — now in_progress, since the
+	// fix makes AutoReopenAfterFailedReview transition the item regardless of
+	// the active work session.
+	assert.Equal(t, session.BacklogStatusInProgress, open[0].ItemStatus)
 }
 
 // TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification is the
@@ -1002,7 +1072,11 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 // stale (idle time well under review_queue_determiner.go's own staleness threshold)
 // must not trigger a notification — this closes the "silent skip" gap only for
 // genuinely stuck sessions, not every routine active-session skip (which would make
-// the notification spam-prone rather than a meaningful signal).
+// the notification spam-prone rather than a meaningful signal). This is also the
+// exact shape backlog item 4c71d3a3 reported live: the item must still
+// transition to in_progress here (see
+// TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress
+// for the dedicated regression test), even though no notification fires.
 func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -1035,6 +1109,11 @@ func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *te
 
 	reopenErr := svc.AutoReopenAfterFailedReview(ctx, item.ID)
 	require.NoError(t, reopenErr)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"must still transition to in_progress so the live work session's next request_review call succeeds")
 
 	select {
 	case ev := <-ch:
@@ -1164,14 +1243,22 @@ func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPrecond
 	assert.Empty(t, open, "MarkStuck's expectedStatus precondition must have prevented the write")
 }
 
-// TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasReworkCapRowOpen
+// TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasBouncingRowOpen
 // is a coexistence smoke test (plan.md Task 2.1.1d): the multi-row
 // BacklogStuckState model already supports multiple simultaneous open
 // reasons per item (see notifyReworkCapHit's own tests) — this confirms
 // MarkStuck-ing rework_blocked_stale onto an item that already has an open,
-// unrelated rework_cap row does not clobber or conflict with it, catching a
-// regression if a future change accidentally assumes one-reason-per-item.
-func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasReworkCapRowOpen(t *testing.T) {
+// unrelated row does not clobber or conflict with it, catching a regression
+// if a future change accidentally assumes one-reason-per-item. Uses
+// "bouncing" as the pre-existing unrelated reason (not rework_cap): since
+// AutoReopenAfterFailedReview now always transitions the item to
+// in_progress when reused with a live work session (see
+// TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress),
+// it also resolves any open rework_cap/abandoned_review rows as part of that
+// transition — using rework_cap here would conflate "did the transition
+// correctly resolve a no-longer-applicable row" with the actual thing this
+// test checks (do two genuinely unrelated open reasons coexist).
+func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlreadyHasBouncingRowOpen(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
@@ -1185,7 +1272,7 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 	svc.SetEventBus(bus)
 
 	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:  "Item already parked on rework_cap",
+		Title:  "Item already parked on bouncing",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
@@ -1194,7 +1281,7 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 	})
 	require.NoError(t, err)
 
-	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, session.BacklogStatusReview, "rework cap hit")
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bouncing between review and in_progress")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -1202,12 +1289,12 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 
 	open, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	require.Len(t, open, 2, "both the pre-existing rework_cap row and the new rework_blocked_stale row must coexist")
+	require.Len(t, open, 2, "both the pre-existing bouncing row and the new rework_blocked_stale row must coexist")
 	reasons := map[domain.StuckReason]bool{}
 	for _, row := range open {
 		reasons[row.Reason] = true
 	}
-	assert.True(t, reasons[domain.StuckReasonReworkCap])
+	assert.True(t, reasons[domain.StuckReasonBouncing])
 	assert.True(t, reasons[domain.StuckReasonReworkBlockedStale])
 }
 
