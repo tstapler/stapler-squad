@@ -22,4 +22,21 @@ already found and got the plan to fix: missing `RuleID` sentinel constants, the 
 | 5 | Story 3.2.1 hides the "Create Rule" button entirely for `domain-age` escalations, reasoning that "domain-age escalations have no 'prevent this next time' story a pattern rule can express" — but `GenerateSuggestedRule`'s `validateSuggestion` (`rules_service.go:772-773`) explicitly supports `auto_allow`/`allow` decisions, not just deny/escalate patterns. A domain-age false positive (a legitimately new but trusted domain) is exactly the case where a user would want a one-click "always allow this domain" rule — which the button already supports today (it's `tool_input_command`-gated only, not category-gated) and would lose entirely after this ships. | A user who previously used Create Rule to allowlist a trusted-but-new domain after a domain-age escalation finds the button gone with no equivalent one-click path, and has to fall back to manually building a rule in the separate rules panel — a real capability loss, not just a UX-optics question needing sign-off (which is as far as `adversarial-review.md` took this). | Either scope the no-match-only gate to *deny/escalate-pattern* suggestions specifically (keep the button for domain-age, since an allow-suggestion is a valid use), or explicitly confirm with the PR description that domain-age's allow-rule use case is deliberately dropped, not just overlooked because the rationale text only considered "prevent this" and not "always allow this." | P2 |
 
 ## P1 Items (address before implementation)
-- [ ] #1 — Change `EscalationReasonText`'s fallback logic in `pkg/classifier/escalation.go` to branch on `CategorizeEscalationRuleID(result.RuleID)`, not solely on `Reason == ""`: only use the "No approval rule matched this request…" sentence for the `no-match` category. For `explicit-rule`/`domain-age`/`unclassifiable` categories with an empty `Reason`, use a category-aware fallback that names the `RuleID` instead of denying a match occurred. Add the corresponding test case to Story 1.1.1's table-driven test (`TestEscalationReasonText`) before Phase 1 is considered done.
+- [x] #1 — RESOLVED in `implementation/plan.md` (commit `d32763dd9`): Task 1.1.1c's
+  `EscalationReasonText` now branches on `CategorizeEscalationRuleID(result.RuleID)`, using the
+  "No approval rule matched this request…" sentence only for the `no-match` category; a
+  category-aware fallback ("Rule %q flagged this for review — no reason text was provided.") is
+  used for `explicit-rule`/`domain-age`/`unclassifiable`, and a distinct sentence for the new
+  `EscalationUnexpected` category (see finding #2's fix). Story 1.1.1's AC and Task 1.1.1d's test
+  list were both updated with this exact case.
+
+## P2/P3 Items — also addressed in plan.md (not required by the readiness gate, folded in since no code exists yet)
+- [x] #2 (P3) — `EscalationUnexpected` category + `RuleIDUnexpectedDecision` sentinel added; the
+  classifier switch's `default:` arm (Task 2.1.2a) now routes through it instead of inheriting
+  `no-match`.
+- [x] #3 (P2) — `EscalationReason` capped at 500 chars at write time (Task 2.1.3a); concurrency
+  regression test added (Task 5.1.1d).
+- [x] #4 (P2) — Implementation Note added ahead of Phase 1 instructing re-verification of cited
+  line numbers against current `main` before editing.
+- [x] #5 (P2) — Domain-age Create Rule capability loss added as an explicit PR-description
+  requirement in the Unresolved Questions section, alongside the existing gating-decision flag.
