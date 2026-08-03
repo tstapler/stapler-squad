@@ -212,8 +212,10 @@ Rules:
 1. Write all planning files to the artifact directory specified in the user prompt.
 2. Do NOT modify any source code.
 3. After writing all files, output ONLY a single JSON object — no text before or after it — matching this schema:
-{"summary":"2-3 sentence executive summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"one-line task","estimate":"2h","category":"backend"}]}
-Valid categories: backend, frontend, test, infra, docs. Maximum 12 tasks.`
+{"summary":"2-3 sentence executive summary","priority":3,"item_category":"feature","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"one-line task","estimate":"2h","category":"backend"}]}
+Valid task categories: backend, frontend, test, infra, docs. Maximum 12 tasks.
+priority: integer 1-5, your assessed urgency/impact after investigating the item and codebase — 1=P1 critical (blocking, security, data loss, broken build/CI), 2=P2 high, 3=P3 normal (default if genuinely unclear), 4=P4 low, 5=P5 trivial/nice-to-have. Do not default to 3 reflexively — make a real assessment.
+item_category: one of bugfix, feature, chore, refactor — classify what kind of work this item is. Distinct from each task's own "category" field above (engineering area, not item type).`
 
 // HeadlessTriageSystemPrompt returns the stable system prompt for headless triage calls.
 // Requests JSON output so the caller can parse the result without MCP tool execution.

@@ -178,7 +178,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		startupTimeout = 60 * time.Second
 	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, startupTimeout)
-	if !waitForIdle(startupCtx, statusCh, d.controller) {
+	// No settle window here: startup only needs to observe the session's
+	// first idle signal after launch, not debounce against a background
+	// fork — nothing has been injected yet, so there's no premature-nudge
+	// risk to guard against.
+	if !waitForIdle(startupCtx, statusCh, d.controller, 0) {
 		startupCancel()
 		log.Warn("AutonomousDriver: timed out waiting for initial idle state", "session", sessionName)
 		d.fireCompletion(sessionName, AutonomousDriverOutcome{Stuck: true, Reason: "startup timeout"})
@@ -260,7 +264,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		idleReached := waitForIdle(turnCtx, statusCh, d.controller)
+		idleReached := waitForIdle(turnCtx, statusCh, d.controller, idleSettleWindow)
 		turnCancel()
 		if !idleReached {
 			log.Warn("AutonomousDriver: session did not become idle after turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
@@ -366,27 +370,100 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 	}
 }
 
-// waitForIdle blocks until the controller is idle or ctx is cancelled.
-// Returns true if idle was detected, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController) bool {
-	// Fast path: already idle.
-	if cc.IsIdle() {
-		return true
+// idleSettlePollInterval and idleSettleWindow are vars (not consts) so tests
+// can shrink them instead of waiting out real timers, matching the
+// waitForPaneSettle pattern above.
+var (
+	idleSettlePollInterval = 500 * time.Millisecond
+	idleSettleWindow       = 60 * time.Second
+)
+
+// waitForIdle blocks until the session needs a new orchestrator turn, or ctx
+// is cancelled. Two paths satisfy it:
+//   - An explicit status arrives (approval pending, input required, error,
+//     tests failing) — these already mean "needs redirection now", no debounce.
+//   - A routine Idle/Ready/Success status persists, with no intervening
+//     StatusExecuting/StatusProcessing/StatusWaitingForAgent in between, for
+//     settleWindow. A settleWindow of 0 restores immediate first-idle-signal
+//     behavior (used for the startup wait, where nothing has been injected
+//     yet, so there's no premature-nudge risk to guard against).
+//
+// Without the settle window, a single transient idle blip — e.g. Claude
+// finishes printing a short reply while a background subagent/fork it just
+// launched is still running — was enough to fire a new orchestrator turn
+// immediately, injecting a nudge (and a paired notification, see
+// buildTurnCallback in server/services/autonomous_orchestration_service.go)
+// every few seconds instead of only when the session genuinely needed
+// redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
+//
+// Returns true if a turn is warranted, false if ctx expired first.
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow time.Duration) bool {
+	if settleWindow <= 0 {
+		if cc.IsIdle() {
+			return true
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case status := <-statusCh:
+				if isIdleStatus(status) || isImmediateStatus(status) {
+					return true
+				}
+			}
+		}
 	}
+
+	var idleSince time.Time
+	if cc.IsIdle() {
+		idleSince = time.Now()
+	}
+
 	for {
+		if !idleSince.IsZero() && time.Since(idleSince) >= settleWindow {
+			return true
+		}
+
+		wait := idleSettlePollInterval
+		if !idleSince.IsZero() {
+			if remaining := settleWindow - time.Since(idleSince); remaining < wait {
+				wait = remaining
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			return false
 		case status := <-statusCh:
-			if isIdleStatus(status) {
+			switch {
+			case isImmediateStatus(status):
 				return true
+			case isIdleStatus(status):
+				if idleSince.IsZero() {
+					idleSince = time.Now()
+				}
+			default:
+				idleSince = time.Time{}
 			}
+		case <-time.After(wait):
+			// Loop back around to re-check the settle window above.
 		}
 	}
 }
 
 func isIdleStatus(s detection.DetectedStatus) bool {
 	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
+}
+
+// isImmediateStatus reports whether s already represents an explicit signal
+// that the session needs redirection right now, bypassing idleSettleWindow.
+func isImmediateStatus(s detection.DetectedStatus) bool {
+	switch s {
+	case detection.StatusNeedsApproval, detection.StatusInputRequired, detection.StatusError, detection.StatusTestsFailing:
+		return true
+	default:
+		return false
+	}
 }
 
 // autonomousSystemPrompt is the stable system prompt for orchestrator LLM calls.
@@ -410,16 +487,38 @@ func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int) string
 		goal, tail, turnCount, maxTurns)
 }
 
+// orchestrationDirectiveMarker matches "DONE:" or "NEXT_MESSAGE:" case-insensitively,
+// anywhere in the response — not just as an exact prefix of the whole string. Confirmed
+// live (2026-08-01, BUG-056): despite the system prompt's "no other text" instruction,
+// the orchestrator model routinely writes a full free-text explanation and appends the
+// directive directly onto the end of its last sentence with no separating newline at
+// all (e.g. "...reflecting real findings rather than guesswork.DONE: Reached the
+// 20-turn limit..."), which the old exact-prefix match rejected outright, burning the
+// turn (see AutonomousDriver's malformedResponseCount — 8 of 20 turns wasted this way
+// on one live item). Matching case-insensitively anywhere handles this plus markdown
+// fencing and preamble-before-the-directive without needing separate handling for each.
+var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE)\s*:`)
+
 // parseOrchestrationResponse parses the LLM's reply into a next message or done signal.
+// Finds the LAST occurrence of a directive marker in the response (not the first): the
+// model's authoritative final answer consistently comes after any preamble/reasoning it
+// writes first, so preferring the last occurrence picks the real directive over an
+// earlier echo of the instructions or an incidental mention. Everything after that
+// marker, to the end of the response, is the payload — preserving a multi-line
+// NEXT_MESSAGE body.
 func parseOrchestrationResponse(resp string) (nextMsg string, done bool, reason string, err error) {
-	resp = strings.TrimSpace(resp)
-	if after, ok := strings.CutPrefix(resp, "DONE:"); ok {
-		return "", true, strings.TrimSpace(after), nil
+	trimmed := strings.TrimSpace(resp)
+	matches := orchestrationDirectiveMarker.FindAllStringSubmatchIndex(trimmed, -1)
+	if len(matches) == 0 {
+		return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
 	}
-	if after, ok := strings.CutPrefix(resp, "NEXT_MESSAGE:"); ok {
-		return strings.TrimSpace(after), false, "", nil
+	last := matches[len(matches)-1]
+	keyword := strings.ToUpper(trimmed[last[2]:last[3]])
+	payload := strings.TrimSpace(trimmed[last[1]:])
+	if keyword == "DONE" {
+		return "", true, payload, nil
 	}
-	return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
+	return payload, false, "", nil
 }
 
 var prURLRegex = regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/pull/\d+`)

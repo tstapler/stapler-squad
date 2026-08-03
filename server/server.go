@@ -642,6 +642,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Hibernation sweeper started",
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
+
+	// Start session retention sweeper (deletes archived sessions past the retention
+	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
+	if cfg.SessionRetention.EnabledOrDefault() {
+		retentionSweeper := services.NewSessionRetentionSweeper(deps.Storage, cfg, deps.SessionService)
+		go retentionSweeper.Start(serverCtx)
+		log.Info("Session retention sweeper started",
+			"retention_days", cfg.SessionRetention.RetentionDaysOrDefault())
+	}
 }
 
 // registerStaticRoutes mounts routes that are always registered regardless of

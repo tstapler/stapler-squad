@@ -1573,3 +1573,143 @@ cannot be type- or lint-checked for semantic correctness) — the detector-side 
 structural backstop that would catch *any* future variant of "triage call returns without
 transitioning the item," not just this specific placeholder-text shape, which is the right
 altitude for this fix.
+
+## Update — 2026-07-31: blocked-spawn error gave zero progress signal — fixed, plus a deferred-scope note on 3 sibling call sites
+
+**Finding**: `SpawnSessionFromItem`'s 8b guard (`server/services/backlog_service_triage.go`) —
+the check that rejects a second spawn attempt while a work session is already active for an
+item — returned a bare `"a work session (%s) is already active for this item; wait for it to
+finish or kill it first"` error with no indication of whether that blocking session was
+actually making progress. Discovered live while manually unsticking backlog item
+`04089969` (the same item as the 07-30 entry above, in a later stuck episode): the blocked-
+spawn error alone gave no way to tell "still working" from "silently stuck," and the answer
+had to be reconstructed by hand via `get_session`'s timestamps, a full diff pull, and a live
+tmux check — exactly the kind of manual cross-referencing this doc's `notifyIfActiveWorkSessionStale`
+finding (07-20-era work, see `maxReworkBlockStaleness`'s doc comment) already solved for the
+review-reopen path, just never extended to this RPC's own error response.
+
+**Classification** (`quality:reflect-and-fix` taxonomy): API Contract Gap — the server already
+computed the needed signal (`SessionStopper.TimeSinceLastMeaningfulOutput`, via the
+`maxReworkBlockStaleness` 15-minute threshold) for one narrow path
+(`notifyIfActiveWorkSessionStale` / `ResolveReworkBlockedStaleIfRecovered`), but never exposed
+it on the actual spawn-blocking RPC error a caller (human or agent) directly receives.
+
+**Fix**: PR #292 (branch `fix/spawn-blocked-progress-signal`) adds
+`activeWorkSessionBlockedError`, which enriches the 8b guard's error with the same
+`TimeSinceLastMeaningfulOutput`-vs-`maxReworkBlockStaleness` progress signal, and generalizes
+the staleness computation both existing call sites already had into one shared helper,
+`workSessionStaleness`, called from all three sites
+(`activeWorkSessionBlockedError`, `notifyIfActiveWorkSessionStale`,
+`ResolveReworkBlockedStaleIfRecovered`) so the "idle vs. threshold" comparison can no longer
+drift between them.
+
+**Deferred scope** (noted and deliberately out of scope for PR #292, not missed): 3 sibling
+call sites of `hasActiveWorkSession` — `AutoRespawnAutonomousWork`, `AutoReopenForPRFix`, and
+`AutoRespawnReview` — still silently log-and-skip when they find an active work session
+blocking their own respawn attempt, with no equivalent progress signal exposed anywhere. This
+is strictly worse than even the pre-fix `SpawnSessionFromItem` baseline, since none of the
+three even attempt `notifyIfActiveWorkSessionStale`-style enrichment. Left out of this PR
+because those are internal reconciler loops, not caller-facing RPC responses — but worth a
+follow-up pass extending the same `workSessionStaleness`-backed enrichment pattern to their
+log lines (or a notification, matching `notifyIfActiveWorkSessionStale`'s shape) once a
+concrete stuck-item episode traces back to one of them.
+
+## Update — 2026-08-02: light verification pass — 1 new root-caused bug (archived work sessions never leave the Review Queue), everything else confirmed working as designed
+
+Not a full 4-agent re-run (last full pass 07-18, light passes trending well since — same rationale
+as 07-28/07-30). Housekeeping first: found and committed 3 fully-planned SDD artifact sets
+(`backlog-session-lifecycle-ux`, `backlog-status-visibility`, `backlog-description-prominence`,
+through Phase 4 validation) sitting uncommitted in the working tree from prior sessions — per
+`.claude/rules/sdd-planning-artifacts-commit.md` (commit `42d630327`).
+
+**Substantial bucket-3 feature work landed since 07-31, not yet audited in this doc**: triage now
+assigns priority + item category (`639366809`), ready items auto-spawn by priority by default
+(`f9aadda7d`), and a full plan-review/reject/in-app-plan-rendering flow shipped
+(`c9a4c75f4`/`88f5c9c76`, with its own `chore(sdd): verification report for plan-approval-ux`).
+Confirmed PR #292 (07-31's blocked-spawn staleness signal) merged and live
+(`mergedAt: 2026-08-01T18:18:32Z`).
+
+**Live state**: `ListStuckBacklogItems` returns 3 items — all confirmed non-issues on inspection:
+- `0a366262` (**this is the `backlog-session-lifecycle-ux` item itself**) and `98f006f2` both
+  `STUCK_REASON_PLAN_NOT_APPROVED`, `queued`. Traced `reconcilePlanNotApprovedItems`
+  (`session/backlog_lifecycle.go:2509-2568`) and its `selfHealStuck` resolution case
+  (`backlog_lifecycle.go:3054`, `resolve = row.ItemStatus != BacklogStatusQueued`) — this is a
+  deliberate, well-built human-review checkpoint (has a `SkipPlanning` escape hatch, confirmed by
+  `TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue`, and self-resolves the
+  instant the item leaves `queued`), the same trust-boundary pattern as `AutoCreatePR`. Working as
+  designed, not a bug — these two just need a human to approve or reject the plan.
+- `04089969` (the recurring "Phantom repeated 1 keystroke" item from the 07-30/07-31 entries) is
+  flagged `STUCK_REASON_AUTONOMOUS_STUCK` again — **confirmed the same known, already-deprioritized
+  gap**, not new: `selfHealStuck`'s own `default` case
+  (`backlog_lifecycle.go:3060-3065`) explicitly documents that `autonomous_stuck` "stays open until
+  the blanket terminal rule... or its own event-site resolves it first" — i.e., the code itself
+  acknowledges this reason has no non-terminal self-heal anchor, by design. Confirmed via
+  `GetBacklogItem` that the item has real, live progress (3/6 acceptance criteria done, `review`
+  status, plan approved) and its current work session (`53f649e0...`, started 2026-08-01T22:38, no
+  `endedAt`) has been legitimately running 14+ hours — the stuck row is just a stale label sitting
+  on top of an item that's actually fine. Unchanged low-priority assessment from 07-19/07-30.
+
+### [1, FIXED] Archived/superseded backlog work sessions never leave the Review Queue — the tmux-pane-kill cleanup that fixed the *resource* leak left a *signal* leak behind
+
+**Status: FIXED.** `shouldSkipSession` (`session/review_queue_poller.go`) now also excludes
+instances with `ArchivedAt != nil`, closing the gap described below. Regression test:
+`TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue` (`session/review_queue_poller_test.go`).
+
+Triggered by cross-checking the Review Queue's overall size against 07-18's numbers out of habit —
+found 73 total items (up from 18-20), 28 tagged `backlog:work`, **26 of them `ATTENTION_REASON_STALE`,
+0 `TASK_COMPLETE`**. Several are the same item reopened many times in a row still sitting in the
+queue individually — e.g. `stapler-squad-terminal-visibility-resync-r10` through `-r14`,
+`stapler-squad-terminal-resize-loop-fix-r5` through `-r10`, `stapler-squad-launchd-shell-sourcing-r2`
+through `-r4` — several 175-184h stale (7+ days). None of these titles match any of the 27 items
+that currently exist across active/done/archived `ListBacklogItems` — i.e. these are sessions from
+items that have long since finished, been reopened repeatedly, or been deleted, whose *tmux
+sessions* were never actually retired from the queue's point of view.
+
+**Root-caused, not just observed.** `archiveItemWorkSessions` (`server/services/backlog_service.go:841-856`,
+called from `SpawnSessionFromItem`'s reopen path, `backlog_service_triage.go:867`) does exactly what
+its own doc comment says: `ArchiveSessionByUUID` (sets `Instance.ArchivedAt`) then
+`KillTmuxPaneOnly` (frees the tmux pane's memory/resources) for every prior-round work session on a
+reopen — this is the fix from the 07-18-era "every rework round piles up a fresh work session"
+finding, and it's working exactly as designed for its stated purpose (resource cleanup; this is
+*not* the OOM-adjacent session leak from the 2026-07-29 memory-noted fix, which was a different
+code path). **But `KillTmuxPaneOnly` deliberately does not call `StopSessionByUUID`/`Instance.Kill()`**
+(per its own name and the comment at `backlog_service_triage.go:726`, preserving the session record
+so its diff/history stays inspectable) — and the Review Queue poller's session filter,
+`shouldSkipSession` (`session/review_queue_poller.go:631-636`:
+`snap.Hidden || snap.Status == Stopped || snap.Status == Paused || !inst.Started()`), **never checks
+`snap.ArchivedAt`**. `ArchiveSessionByUUID` doesn't set `Hidden` or transition `Status` to `Stopped`
+either (confirmed by reading `server/services/session_service.go:508-526` directly) — it only sets
+`ArchivedAt`. So an archived-but-pane-killed session keeps getting evaluated by the poller every
+tick forever: its tmux pane is dead, so no real activity is ever detected, so it falls through to a
+staleness verdict and sits in the queue as `ATTENTION_REASON_STALE` permanently — a phantom entry
+for a session nobody can or should act on, since it was already deliberately superseded.
+
+This directly compounds the exact "signal quality" complaint the 07-18 entry raised about
+notifications ("degrades signal quality for whoever is meant to notice... while genuinely-repeating
+noise dominates") — here it's the Review Queue instead of the notification feed, and the mechanism
+is a cleanup path that solved its own problem (freed tmux resources) but created this one (the
+queue can never tell "archived" from "alive but idle"). 26 of the queue's 73 entries are candidates
+for this exact gap based on titles alone (many-times-reopened items, days-old timestamps); an exact
+count would need cross-referencing `ArchivedAt` on each queue entry's `Instance` directly.
+
+**Fix direction**: add an `ArchivedAt`-nil check to `shouldSkipSession` (mirroring the existing
+`Hidden`/`Stopped`/`Paused` checks) so an archived instance is excluded from every future poll tick,
+the same way a stopped one already is. Routed to `sdd:fix-bug` (Agent, isolation: worktree, per this
+repo's standing preference over `create_session` for Claude-driven fix work) — see below.
+
+**Recurring-shape check** (per this skill's mandate to name the shape, not just the instance): this
+is the same general class as the `abandoned_review`/`orphaned_triage` notify-once gaps this doc has
+tracked since 07-27/07-30 — a state transition (archival) that one consumer (the DB/Instance record)
+sees but a second, independent consumer (the poller's queue-membership decision) was never taught to
+check. The fix for those was "extend the detector's condition set"; the fix here is the same shape,
+one layer down the stack (a session-liveness filter instead of a backlog-status filter).
+
+### Recommended Next Actions
+
+1. **`sdd:fix-bug`** — the archived-session-never-leaves-review-queue gap above. Routed to a
+   worktree agent this session.
+2. `0a366262`/`98f006f2` — need a human plan-approval/reject decision, not a fix; surfaced here for
+   visibility since one is this doc's own subject item.
+3. Carried forward unchanged: the 3 deferred `hasActiveWorkSession` sibling call sites from PR #292,
+   and item #6 (interface-pollution cleanup, `PipelineModeRepository`/`Repository`) — still low
+   priority, still not routed.

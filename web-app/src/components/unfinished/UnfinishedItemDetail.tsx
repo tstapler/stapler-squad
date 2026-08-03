@@ -16,7 +16,7 @@ import { CommitPushModal } from "./CommitPushModal";
 import { WorktreeDiffModal } from "./WorktreeDiffModal";
 import { VcsWidget } from "@/components/shared/VcsWidget";
 import { fromUnfinishedWorktree } from "@/lib/vcs/adapters";
-import { GitHubBadge } from "@/components/sessions/GitHubBadge";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import * as styles from "./UnfinishedItemDetail.css";
 
 interface UnfinishedItemDetailProps {

@@ -169,6 +169,22 @@ type BacklogService struct {
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
 
+	// triageInFlight tracks, per item ID, whether a headless triage call this
+	// process itself started is still genuinely running. tombstoneOrphanTriageSessions
+	// has no other way to tell a still-running headless call apart from a dead one —
+	// unlike a work/review session, there's no tmux session to query liveness against
+	// (see BUG-054: before this field existed, tombstoneOrphanTriageSessions treated
+	// every not-yet-ended headless triage session as dead unconditionally, so
+	// retriggering triage for an item with a genuinely still-running call silently
+	// orphaned that live call in the DB and started a fully redundant duplicate).
+	// Same self-cleaning LoadOrStore-on-entry/Delete-via-defer-on-exit shape as
+	// spawnInFlight above, for the same reason: a sync.Map here never leaks an entry
+	// past the life of the call it tracks, and this is a single-process server so an
+	// in-process guard is sufficient. Deliberately NOT persisted — on a fresh process
+	// start after a restart, every item's entry is (correctly) absent, since no
+	// goroutine in the new process could possibly still be running an old triage call.
+	triageInFlight sync.Map
+
 	// capabilityCheck gates the first codebase-read call per process lifetime (Story
 	// 2.2.6). Defaults to headless.DefaultCapabilitySelfCheck (shared with
 	// ReviewGateRunner so a failure discovered via either call site short-circuits
@@ -280,6 +296,14 @@ func (s *BacklogService) maxAutoReworkIterations() int {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.MaxAutoReworkIterationsOrDefault()
+}
+
+// autoSpawnReadyItemsEnabled reads cfg.AutoSpawnReadyItemsOrDefault() under
+// cfgMu's read lock — see maxConcurrentBacklogWorkItems's doc comment.
+func (s *BacklogService) autoSpawnReadyItemsEnabled() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AutoSpawnReadyItemsOrDefault()
 }
 
 // SetEventBus wires in the event bus used to publish operator-facing notifications.

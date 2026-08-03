@@ -995,6 +995,16 @@ func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt
 	return er.UpdateItemSessionEnded(ctx, id, endedAt)
 }
 
+// UpdateItemSessionEndedWithReason records the end time for an ItemSession alongside
+// classifyHeadlessCallError's bucket (or "" for a successful end).
+func (s *Storage) UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionEndedWithReason(ctx, id, endedAt, reason)
+}
+
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
 func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {

@@ -76,6 +76,9 @@ test.describe('Backlog Rich Text', () => {
     await expect(itemRow.first()).toBeVisible();
     await backlogPage.openItemDetail(itemTitle);
 
+    // Relies on Description defaulting expanded (backlog-description-prominence) —
+    // CollapsibleSection removes collapsed content from the DOM entirely, so this
+    // assertion would fail with no header click if that default ever reverts.
     const rendered = page.locator('[data-testid="backlog-description-rendered"]');
     await expect(rendered.locator('img')).toBeVisible();
 

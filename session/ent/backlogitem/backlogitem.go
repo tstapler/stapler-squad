@@ -71,6 +71,8 @@ const (
 	FieldShippedChangesReqCount = "shipped_changes_req_count"
 	// FieldShippedSnapshotAt holds the string denoting the shipped_snapshot_at field in the database.
 	FieldShippedSnapshotAt = "shipped_snapshot_at"
+	// FieldPrFeedbackAddressedAt holds the string denoting the pr_feedback_addressed_at field in the database.
+	FieldPrFeedbackAddressedAt = "pr_feedback_addressed_at"
 	// FieldShippedFileStats holds the string denoting the shipped_file_stats field in the database.
 	FieldShippedFileStats = "shipped_file_stats"
 	// FieldShippedSnapshotCaptureFailed holds the string denoting the shipped_snapshot_capture_failed field in the database.
@@ -168,6 +170,7 @@ var Columns = []string{
 	FieldShippedApprovedCount,
 	FieldShippedChangesReqCount,
 	FieldShippedSnapshotAt,
+	FieldPrFeedbackAddressedAt,
 	FieldShippedFileStats,
 	FieldShippedSnapshotCaptureFailed,
 	FieldReworkCapOverride,
@@ -391,6 +394,11 @@ func ByShippedChangesReqCount(opts ...sql.OrderTermOption) OrderOption {
 // ByShippedSnapshotAt orders the results by the shipped_snapshot_at field.
 func ByShippedSnapshotAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldShippedSnapshotAt, opts...).ToFunc()
+}
+
+// ByPrFeedbackAddressedAt orders the results by the pr_feedback_addressed_at field.
+func ByPrFeedbackAddressedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPrFeedbackAddressedAt, opts...).ToFunc()
 }
 
 // ByShippedFileStats orders the results by the shipped_file_stats field.
