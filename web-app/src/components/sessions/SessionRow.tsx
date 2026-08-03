@@ -6,7 +6,7 @@ import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
-import { GitHubBadge } from "./GitHubBadge";
+import { GitHubBadge } from "@/components/shared/GitHubBadge";
 import {
   row,
   rowPaused,

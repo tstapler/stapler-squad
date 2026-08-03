@@ -59,6 +59,79 @@ func TestParseOrchestrationResponse_Malformed(t *testing.T) {
 	}
 }
 
+// TestParseOrchestrationResponse_DirectiveWithNoLeadingSeparator is the exact
+// real-world response captured live 2026-08-01 (BUG-056): the orchestrator model
+// writes a full free-text explanation and appends "DONE:" directly onto the end of
+// its last sentence with no separating newline at all. The old exact-prefix parser
+// rejected this outright as malformed, wasting the turn (8 of 20 turns wasted this
+// way on one live item, 1 on another).
+func TestParseOrchestrationResponse_DirectiveWithNoLeadingSeparator(t *testing.T) {
+	resp := "This is the final turn (20/20). The agent made solid progress, reflecting real findings rather than guesswork.DONE: Reached the 20-turn limit for this supervision session."
+	_, done, reason, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !done {
+		t.Error("expected done=true")
+	}
+	want := "Reached the 20-turn limit for this supervision session."
+	if reason != want {
+		t.Errorf("expected reason %q, got %q", want, reason)
+	}
+}
+
+// TestParseOrchestrationResponse_PreferLastDirective_When_ModelEchoesInstructionsFirst
+// guards the "prefer the LAST occurrence" decision: a model that restates part of its
+// own instructions (which literally contain "NEXT_MESSAGE:"/"DONE:") before giving its
+// real answer must not have that echo mistaken for the actual directive.
+func TestParseOrchestrationResponse_PreferLastDirective_When_ModelEchoesInstructionsFirst(t *testing.T) {
+	resp := "I was told to reply with NEXT_MESSAGE: <message> or DONE: <reason>. Given the state, DONE: the goal is complete."
+	_, done, reason, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !done {
+		t.Error("expected done=true")
+	}
+	if reason != "the goal is complete." {
+		t.Errorf("expected the LAST directive to win, got reason %q", reason)
+	}
+}
+
+// TestParseOrchestrationResponse_CaseInsensitiveDirective verifies a lowercase or
+// mixed-case directive keyword still parses — the system prompt asks for uppercase,
+// but nothing enforces the model actually complies.
+func TestParseOrchestrationResponse_CaseInsensitiveDirective(t *testing.T) {
+	msg, done, _, err := parseOrchestrationResponse("next_message: keep going please")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done {
+		t.Error("expected done=false")
+	}
+	if msg != "keep going please" {
+		t.Errorf("expected %q, got %q", "keep going please", msg)
+	}
+}
+
+// TestParseOrchestrationResponse_PreservesMultilineNextMessage guards against a
+// regression where switching from CutPrefix (whole-string) to a marker-search approach
+// accidentally truncates a NEXT_MESSAGE body that spans multiple lines.
+func TestParseOrchestrationResponse_PreservesMultilineNextMessage(t *testing.T) {
+	resp := "NEXT_MESSAGE: please do the following:\n1. fix the bug\n2. add a test"
+	msg, done, _, err := parseOrchestrationResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if done {
+		t.Error("expected done=false")
+	}
+	want := "please do the following:\n1. fix the bug\n2. add a test"
+	if msg != want {
+		t.Errorf("expected %q, got %q", want, msg)
+	}
+}
+
 func TestBuildOrchestrationPrompt_ContainsGoalAndTail(t *testing.T) {
 	prompt := buildOrchestrationPrompt("fix the login bug", "some tail output", 1, 20)
 	if !strContains(prompt, "fix the login bug") {

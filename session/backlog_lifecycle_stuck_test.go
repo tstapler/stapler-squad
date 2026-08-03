@@ -1154,6 +1154,57 @@ func TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min(t *t
 	assert.Equal(t, []string{"Triage may be stuck"}, notifier.titles())
 }
 
+// TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
+// guards the fix for BUG-055: before IsTriageLive existed, this shape-1 branch tombstoned
+// ANY headless triage session past maxHeadlessTriageSessionStaleness unconditionally, with
+// no way to tell "genuinely dead" apart from "still running, just slow" — confirmed live
+// 2026-08-01 that headless triage calls routinely run right up to their full 30m budget,
+// so this staleness-only gate raced the call's own natural completion on every slow call.
+// A respawner reporting the session as still live must now suppress the tombstone entirely.
+func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	// 45 minutes: past maxHeadlessTriageSessionStaleness (35m) — would have been
+	// tombstoned unconditionally before this fix.
+	item := newOrphanedTriageTestItem(t, storage, er, 45*time.Minute)
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	respawner := newFakeTriageRespawner()
+	respawner.liveIDs = map[string]bool{item.ID: true}
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a stale-but-genuinely-live headless session must not be marked stuck")
+	assert.Empty(t, notifier.titles(), "a genuinely live session must not trigger a \"may be stuck\" notification")
+
+	sessions, listErr := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "a genuinely live headless session must not be tombstoned")
+}
+
+// TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin guards
+// the exact margin regression named in BUG-055: this constant must stay strictly greater
+// than server/services.triageCallBudget (currently 30m — kept as a literal here rather than
+// imported, since session cannot depend on server/services) with real headroom, or every
+// slow-but-legitimate headless triage call races this sweep's staleness gate again,
+// regardless of how good IsTriageLive's liveness check is. If server/services.triageCallBudget
+// ever changes, this literal and the one there must be updated together.
+func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWithMargin(t *testing.T) {
+	const knownTriageCallBudget = 30 * time.Minute
+	const minMargin = 2 * time.Minute
+	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
+		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
+}
+
 // TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
 // is the regression test for the "compounding gap" half of the live incident tracked in
 // docs/tasks/backlog-feature-improvement.md's 2026-07-30 entry (backlog item 04089969):
@@ -1191,6 +1242,59 @@ func TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionE
 	// open-and-stale shape's identical guarantee.
 	listener.reconcileOrphanedTriageItems(ctx, er)
 	assert.Len(t, notifier.calls, 1)
+}
+
+// TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown
+// guards the fix for the 2026-08-01 live incident (docs/bugs/fixed/BUG-053): a
+// routine service restart (e.g. `make install-service`) cancels shutdownCtx,
+// which kills any in-flight triage call via classifyHeadlessCallError's
+// "shutdown" bucket — a self-inflicted, zero-evidence event, not a real
+// triage failure. Before this fix, shape 2 treated a shutdown-caused orphan
+// identically to a genuine failure: MarkStuck + a "may be stuck" notification
+// + RemediationDue's exponential backoff (30m/2h/8h/24h/72h, sized for OOM
+// bursts) before the next retry. This must instead respawn immediately with
+// no remediation-attempt penalty and no alarming notification.
+func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_When_EndedByGracefulShutdown(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Shutdown-orphaned triage test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusIdea),
+	})
+	require.NoError(t, err)
+
+	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-" + uuid.New().String(),
+		SessionRole: SessionRoleTriage,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), "shutdown"))
+
+	listener := NewBacklogLifecycleListener(storage)
+	notifier := &fakeNotifier{}
+	listener.SetNotifier(notifier)
+	respawner := newFakeTriageRespawner()
+	listener.SetTriageRespawner(respawner)
+
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	select {
+	case itemID := <-respawner.calls:
+		assert.Equal(t, item.ID, itemID)
+	case <-time.After(time.Second):
+		t.Fatal("expected AutoRespawnTriage to be dispatched immediately for a shutdown-caused orphan")
+	}
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a shutdown-caused orphan must not consume a remediation attempt or create a stuck-state row")
+	assert.Empty(t, notifier.titles(), "a shutdown-caused orphan is expected/self-inflicted and must not trigger a \"may be stuck\" notification")
 }
 
 // TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEndedSessionExists
@@ -1287,8 +1391,9 @@ func TestReconcileOrphanedTriageRemediation_should_retryEndedWithoutTransitionRo
 // because retryOrphanedTriageWithBackoffGate dispatches asynchronously —
 // mirrors fakeStaleWorkRemediator's identical rationale.
 type fakeTriageRespawner struct {
-	calls chan string
-	err   error
+	calls   chan string
+	err     error
+	liveIDs map[string]bool
 }
 
 func newFakeTriageRespawner() *fakeTriageRespawner {
@@ -1298,6 +1403,10 @@ func newFakeTriageRespawner() *fakeTriageRespawner {
 func (f *fakeTriageRespawner) AutoRespawnTriage(ctx context.Context, itemID string) error {
 	f.calls <- itemID
 	return f.err
+}
+
+func (f *fakeTriageRespawner) IsTriageLive(itemID string) bool {
+	return f.liveIDs[itemID]
 }
 
 // TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGate_When_RowIsDueAndRespawnerSucceeds

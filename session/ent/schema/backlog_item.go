@@ -99,6 +99,10 @@ func (BacklogItem) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Timestamp the durable ship snapshot was captured at."),
+		field.Time("pr_feedback_addressed_at").
+			Optional().
+			Nillable().
+			Comment("Per-item high-water mark: the newest substantive PR review-feedback timestamp a fix session has already been dispatched to address. GitHub never clears COMMENTED reviews/comments on push, so this watermark is what stops already-addressed feedback from re-triggering a fix session on every ReconcilePRPending tick."),
 		field.String("shipped_file_stats").
 			Optional().
 			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),

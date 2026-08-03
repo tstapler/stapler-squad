@@ -216,6 +216,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubRepo != "" {
 		sessionCreate.SetGithubRepo(data.GitHubRepo)
 	}
+	if data.ArchivedAt != nil {
+		sessionCreate.SetArchivedAt(*data.ArchivedAt)
+	}
 
 	// Link project if specified (look up by name)
 	if data.ProjectID != "" {

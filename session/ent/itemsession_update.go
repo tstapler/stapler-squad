@@ -99,6 +99,26 @@ func (_u *ItemSessionUpdate) ClearEndedAt() *ItemSessionUpdate {
 	return _u
 }
 
+// SetEndReason sets the "end_reason" field.
+func (_u *ItemSessionUpdate) SetEndReason(v string) *ItemSessionUpdate {
+	_u.mutation.SetEndReason(v)
+	return _u
+}
+
+// SetNillableEndReason sets the "end_reason" field if the given value is not nil.
+func (_u *ItemSessionUpdate) SetNillableEndReason(v *string) *ItemSessionUpdate {
+	if v != nil {
+		_u.SetEndReason(*v)
+	}
+	return _u
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (_u *ItemSessionUpdate) ClearEndReason() *ItemSessionUpdate {
+	_u.mutation.ClearEndReason()
+	return _u
+}
+
 // SetAcSnapshot sets the "ac_snapshot" field.
 func (_u *ItemSessionUpdate) SetAcSnapshot(v string) *ItemSessionUpdate {
 	_u.mutation.SetAcSnapshot(v)
@@ -447,6 +467,12 @@ func (_u *ItemSessionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.EndedAtCleared() {
 		_spec.ClearField(itemsession.FieldEndedAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.EndReason(); ok {
+		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
+	}
+	if _u.mutation.EndReasonCleared() {
+		_spec.ClearField(itemsession.FieldEndReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)
 	}
@@ -659,6 +685,26 @@ func (_u *ItemSessionUpdateOne) SetNillableEndedAt(v *time.Time) *ItemSessionUpd
 // ClearEndedAt clears the value of the "ended_at" field.
 func (_u *ItemSessionUpdateOne) ClearEndedAt() *ItemSessionUpdateOne {
 	_u.mutation.ClearEndedAt()
+	return _u
+}
+
+// SetEndReason sets the "end_reason" field.
+func (_u *ItemSessionUpdateOne) SetEndReason(v string) *ItemSessionUpdateOne {
+	_u.mutation.SetEndReason(v)
+	return _u
+}
+
+// SetNillableEndReason sets the "end_reason" field if the given value is not nil.
+func (_u *ItemSessionUpdateOne) SetNillableEndReason(v *string) *ItemSessionUpdateOne {
+	if v != nil {
+		_u.SetEndReason(*v)
+	}
+	return _u
+}
+
+// ClearEndReason clears the value of the "end_reason" field.
+func (_u *ItemSessionUpdateOne) ClearEndReason() *ItemSessionUpdateOne {
+	_u.mutation.ClearEndReason()
 	return _u
 }
 
@@ -1039,6 +1085,12 @@ func (_u *ItemSessionUpdateOne) sqlSave(ctx context.Context) (_node *ItemSession
 	}
 	if _u.mutation.EndedAtCleared() {
 		_spec.ClearField(itemsession.FieldEndedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.EndReason(); ok {
+		_spec.SetField(itemsession.FieldEndReason, field.TypeString, value)
+	}
+	if _u.mutation.EndReasonCleared() {
+		_spec.ClearField(itemsession.FieldEndReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.AcSnapshot(); ok {
 		_spec.SetField(itemsession.FieldAcSnapshot, field.TypeString, value)

@@ -410,16 +410,38 @@ func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int) string
 		goal, tail, turnCount, maxTurns)
 }
 
+// orchestrationDirectiveMarker matches "DONE:" or "NEXT_MESSAGE:" case-insensitively,
+// anywhere in the response — not just as an exact prefix of the whole string. Confirmed
+// live (2026-08-01, BUG-056): despite the system prompt's "no other text" instruction,
+// the orchestrator model routinely writes a full free-text explanation and appends the
+// directive directly onto the end of its last sentence with no separating newline at
+// all (e.g. "...reflecting real findings rather than guesswork.DONE: Reached the
+// 20-turn limit..."), which the old exact-prefix match rejected outright, burning the
+// turn (see AutonomousDriver's malformedResponseCount — 8 of 20 turns wasted this way
+// on one live item). Matching case-insensitively anywhere handles this plus markdown
+// fencing and preamble-before-the-directive without needing separate handling for each.
+var orchestrationDirectiveMarker = regexp.MustCompile(`(?i)(DONE|NEXT_MESSAGE)\s*:`)
+
 // parseOrchestrationResponse parses the LLM's reply into a next message or done signal.
+// Finds the LAST occurrence of a directive marker in the response (not the first): the
+// model's authoritative final answer consistently comes after any preamble/reasoning it
+// writes first, so preferring the last occurrence picks the real directive over an
+// earlier echo of the instructions or an incidental mention. Everything after that
+// marker, to the end of the response, is the payload — preserving a multi-line
+// NEXT_MESSAGE body.
 func parseOrchestrationResponse(resp string) (nextMsg string, done bool, reason string, err error) {
-	resp = strings.TrimSpace(resp)
-	if after, ok := strings.CutPrefix(resp, "DONE:"); ok {
-		return "", true, strings.TrimSpace(after), nil
+	trimmed := strings.TrimSpace(resp)
+	matches := orchestrationDirectiveMarker.FindAllStringSubmatchIndex(trimmed, -1)
+	if len(matches) == 0 {
+		return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
 	}
-	if after, ok := strings.CutPrefix(resp, "NEXT_MESSAGE:"); ok {
-		return strings.TrimSpace(after), false, "", nil
+	last := matches[len(matches)-1]
+	keyword := strings.ToUpper(trimmed[last[2]:last[3]])
+	payload := strings.TrimSpace(trimmed[last[1]:])
+	if keyword == "DONE" {
+		return "", true, payload, nil
 	}
-	return "", false, "", fmt.Errorf("unrecognized orchestration response: %q", resp)
+	return payload, false, "", nil
 }
 
 var prURLRegex = regexp.MustCompile(`https://github\.com/[^/\s]+/[^/\s]+/pull/\d+`)

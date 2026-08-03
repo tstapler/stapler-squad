@@ -27,6 +27,41 @@ type HibernationConfig struct {
 	RetentionDays int `json:"retention_days"`
 }
 
+// defaultSessionRetentionDays is used by RetentionDaysOrDefault whenever
+// RetentionDays is unset (zero), including for configs saved before this field
+// existed.
+const defaultSessionRetentionDays = 14
+
+// SessionRetentionConfig holds configuration for the automatic session-retention
+// cleanup sweep, which deletes archived sessions past a retention window once they
+// pass safety checks (clean worktree, no open PR).
+type SessionRetentionConfig struct {
+	// Enabled controls whether the retention sweep runs. A pointer so a config
+	// saved before this field existed (nil) can be distinguished from an explicit
+	// `false` — nil defaults to enabled, matching AutoSpawnReadyItems's pattern.
+	Enabled *bool `json:"enabled,omitempty"`
+	// RetentionDays is how many days after a session is archived before the sweep
+	// is eligible to delete it (still subject to safety checks). Default: 14.
+	RetentionDays int `json:"retention_days,omitempty"`
+}
+
+// EnabledOrDefault returns whether the sweep is enabled, defaulting to true when unset.
+func (c SessionRetentionConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// RetentionDaysOrDefault returns RetentionDays, falling back to
+// defaultSessionRetentionDays when unset (<=0).
+func (c SessionRetentionConfig) RetentionDaysOrDefault() int {
+	if c.RetentionDays <= 0 {
+		return defaultSessionRetentionDays
+	}
+	return c.RetentionDays
+}
+
 // TmuxExecGateConfig bounds how many tmux subprocesses may run concurrently
 // against one tmux server, across every process on the machine (the main
 // daemon and every --mcp process) — tmux's server is single-threaded, so

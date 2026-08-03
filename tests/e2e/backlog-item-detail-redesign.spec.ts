@@ -93,7 +93,7 @@ test.describe("backlog item detail redesign", () => {
     await expect(detailPage.triageReviewPanel()).toBeVisible();
   });
 
-  test("expands a top-level section from its own default-collapsed state", async ({ page, request }) => {
+  test("Description defaults expanded; collapsing and re-expanding it never affects Acceptance Criteria", async ({ page, request }) => {
     const title = `e2e headless-triage section-expand ${Date.now()}`;
     await seedHeadlessTriageItem(request, { title, status: "review" });
 
@@ -104,9 +104,19 @@ test.describe("backlog item detail redesign", () => {
     const detailPage = new BacklogItemDetailPage(page);
     await detailPage.openItemByTitle(title);
 
-    // DescriptionSection defaults collapsed for every item (Story 3.1.3).
+    // Description now defaults expanded (backlog-description-prominence) —
+    // Acceptance Criteria stays visible throughout every state change below,
+    // proving it shares no state with Description's collapse toggle.
+    const acHeading = page.getByRole("heading", { name: /Acceptance Criteria/ });
+    await expect(acHeading).toBeVisible();
+    await expect(detailPage.sectionHeader("description")).toHaveAttribute("aria-expanded", "true");
+
+    await detailPage.collapseSection("description");
     await expect(detailPage.sectionHeader("description")).toHaveAttribute("aria-expanded", "false");
+    await expect(acHeading).toBeVisible();
+
     await detailPage.expandSection("description");
     await expect(detailPage.sectionHeader("description")).toHaveAttribute("aria-expanded", "true");
+    await expect(acHeading).toBeVisible();
   });
 });

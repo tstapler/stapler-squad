@@ -196,6 +196,11 @@ func ShippedSnapshotAt(v time.Time) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldShippedSnapshotAt, v))
 }
 
+// PrFeedbackAddressedAt applies equality check predicate on the "pr_feedback_addressed_at" field. It's identical to PrFeedbackAddressedAtEQ.
+func PrFeedbackAddressedAt(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPrFeedbackAddressedAt, v))
+}
+
 // ShippedFileStats applies equality check predicate on the "shipped_file_stats" field. It's identical to ShippedFileStatsEQ.
 func ShippedFileStats(v string) predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldEQ(FieldShippedFileStats, v))
@@ -1654,6 +1659,56 @@ func ShippedSnapshotAtIsNil() predicate.BacklogItem {
 // ShippedSnapshotAtNotNil applies the NotNil predicate on the "shipped_snapshot_at" field.
 func ShippedSnapshotAtNotNil() predicate.BacklogItem {
 	return predicate.BacklogItem(sql.FieldNotNull(FieldShippedSnapshotAt))
+}
+
+// PrFeedbackAddressedAtEQ applies the EQ predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldEQ(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtNEQ applies the NEQ predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtNEQ(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNEQ(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtIn applies the In predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIn(FieldPrFeedbackAddressedAt, vs...))
+}
+
+// PrFeedbackAddressedAtNotIn applies the NotIn predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtNotIn(vs ...time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotIn(FieldPrFeedbackAddressedAt, vs...))
+}
+
+// PrFeedbackAddressedAtGT applies the GT predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtGT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGT(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtGTE applies the GTE predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtGTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldGTE(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtLT applies the LT predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtLT(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLT(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtLTE applies the LTE predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtLTE(v time.Time) predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldLTE(FieldPrFeedbackAddressedAt, v))
+}
+
+// PrFeedbackAddressedAtIsNil applies the IsNil predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtIsNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldIsNull(FieldPrFeedbackAddressedAt))
+}
+
+// PrFeedbackAddressedAtNotNil applies the NotNil predicate on the "pr_feedback_addressed_at" field.
+func PrFeedbackAddressedAtNotNil() predicate.BacklogItem {
+	return predicate.BacklogItem(sql.FieldNotNull(FieldPrFeedbackAddressedAt))
 }
 
 // ShippedFileStatsEQ applies the EQ predicate on the "shipped_file_stats" field.

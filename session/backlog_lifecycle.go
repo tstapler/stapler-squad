@@ -130,12 +130,23 @@ type TriageRespawner interface {
 	// already re-triggered triage manually, or the item was otherwise
 	// resolved) — mirrors AutoRespawnReview's identical staleness guard.
 	AutoRespawnTriage(ctx context.Context, itemID string) error
+
+	// IsTriageLive reports whether the implementer (BacklogService) itself still
+	// has a headless triage call genuinely in flight for itemID. Added for
+	// reconcileOrphanedTriageItems' shape-1 staleness gate (BUG-055): a headless
+	// triage session has no live tmux instance to query, so before this existed
+	// that gate had no way to tell a session still open past
+	// maxHeadlessTriageSessionStaleness because it's genuinely still running
+	// apart from one that's actually dead — it assumed the latter unconditionally.
+	IsTriageLive(itemID string) bool
 }
 
-// QueueDequeuer claims and spawns as many queued backlog items as there are
-// free WIP slots, oldest-queued first. Called the moment a slot frees up
-// (onSessionExited) and by the periodic ReconcileStuck sweep as a safety net
-// for a missed exit hook or a concurrency limit raised while items were queued.
+// QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
+// config.Config.AutoSpawnReadyItemsOrDefault) backlog items as there are free WIP
+// slots, highest-priority first. Called the moment a slot frees up (onSessionExited)
+// and by the periodic ReconcileStuck sweep as a safety net for a missed exit hook, a
+// concurrency limit raised while items were waiting, or an item reaching "ready"
+// between ticks.
 type QueueDequeuer interface {
 	DequeueNextQueuedItems(ctx context.Context) error
 }
@@ -237,6 +248,7 @@ type prCreator interface {
 	PushBranch() error
 	CreatePR(title, body string) (prURL string, prNumber int, err error)
 	EnablePRAutoMerge(prNumber int) error
+	RequestCopilotReview(prNumber int) error
 }
 
 // defaultPRCreatorFactory constructs the push/PR-creation client for a given
@@ -2028,13 +2040,18 @@ const maxWorkSessionStaleness = 2 * time.Hour
 const headlessTriageSessionUUIDPrefix = "headless-triage-"
 
 // maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
-// trusted before reconcileOrphanedTriageItems flags it as orphaned. Headless triage calls
-// routinely run 7-15 minutes (see that function's doc comment); 30 minutes gives 2x margin
-// over that ceiling while closing the "triage session died before submit_triage_result,
-// item silently stuck in idea" gap (docs/tasks/triage-validation-*/research/pitfalls.md,
-// GAP-20/21) far faster than waiting out the general-purpose 2h threshold, which was tuned
-// for interactive/foreground triage sessions where a liveness signal isn't available here.
-const maxHeadlessTriageSessionStaleness = 30 * time.Minute
+// trusted before reconcileOrphanedTriageItems flags it as orphaned. MUST stay strictly
+// greater than server/services.triageCallBudget (the real per-call LLM budget, currently
+// 30m) with real margin — confirmed live 2026-08-01 (BUG-055) that headless triage calls
+// routinely run right up to that full 30m budget (27m41s, 27m53s, 30m38s observed across
+// distinct items in one incident), not the 7-15 minutes this constant was originally tuned
+// against. At exactly 30m (this constant's prior value, matching triageCallBudget with zero
+// margin), this sweep's periodic tick raced the call's own natural
+// completion/timeout on every slow call. IsTriageLive (checked by the shape-1 branch below)
+// is the structural fix for that race — this margin is a defense-in-depth belt-and-suspenders
+// measure on top of it, not a substitute: even with a real liveness check, there's no reason
+// to court the race in the first place when a full call is still plausibly finishing.
+const maxHeadlessTriageSessionStaleness = 35 * time.Minute
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
 // active work session has gone longer than maxWorkSessionStaleness without progress,
@@ -2319,20 +2336,32 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		var reasonDetail string
 		if latestTriage.EndedAt == nil {
 			// Shape 1: still open. Staleness gate as before.
+			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
 			staleness := maxWorkSessionStaleness
-			if strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix) {
+			if isHeadless {
 				staleness = maxHeadlessTriageSessionStaleness
 			}
 			if time.Since(latestTriage.CreatedAt) <= staleness {
 				continue // still plausibly running
 			}
 
+			// Past staleness is no longer sufficient on its own for a headless session
+			// (BUG-055): consult IsTriageLive, the same liveness record
+			// tombstoneOrphanTriageSessions already trusts, before tombstoning a call
+			// that may genuinely still be running (the staleness margin above is
+			// defense-in-depth, not a substitute — see that constant's doc comment).
+			// No equivalent check exists for a non-headless (tmux-backed) session; that
+			// gap is unchanged from before this fix.
+			if isHeadless {
+				if respawner := l.getTriageRespawner(); respawner != nil && respawner.IsTriageLive(item.ID) {
+					continue // genuinely still running past staleness; don't tombstone a live call
+				}
+			}
+
 			// Tombstone the dead row now rather than leaving it open until a human
 			// manually re-triggers triage (the only other path that closes it, via
-			// tombstoneOrphanTriageSessions in server/services). Staleness past
-			// maxWorkSessionStaleness IS the confirmed-dead signal for this detector
-			// (see doc comment above: no liveness checker, headless calls don't run
-			// this long) — nothing left to preserve by keeping the row open.
+			// tombstoneOrphanTriageSessions in server/services). Past staleness with no
+			// live record IS the confirmed-dead signal for this detector.
 			if endErr := l.storage.UpdateItemSessionEnded(ctx, latestTriage.ID, time.Now()); endErr != nil { //nolint:silenttransition best-effort tombstone; MarkStuck+notify below runs unconditionally regardless of this write's outcome, so the item is surfaced either way
 				log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems UpdateItemSessionEnded item=%s session=%s: %v", item.ID, latestTriage.ID, endErr)
 			}
@@ -2340,6 +2369,26 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 		} else {
 			// Shape 2: already ended, item still in idea. Nothing to tombstone —
 			// TriggerTriage's own goroutine already called UpdateItemSessionEnded.
+			if latestTriage.EndReason == "shutdown" { // must match classifyHeadlessCallError's bucket name (server/services/backlog_service_triage.go)
+				// The prior attempt was killed by our OWN graceful shutdown (a routine
+				// deploy restart cancelling s.shutdownCtx mid-call, not a failure of
+				// triage itself — see classifyHeadlessCallError). That carries zero
+				// evidence retrying would fail, so treat it as "never happened" rather
+				// than feeding it into MarkStuck/RemediationDue's exponential backoff
+				// (30m/2h/8h/.../72h, sized for OOM-crash bursts): respawn immediately,
+				// silently, with no remediation-attempt penalty and no user-facing
+				// "may be stuck" notification for what is an expected, self-inflicted event.
+				respawner := l.getTriageRespawner()
+				if respawner != nil {
+					log.InfoLog.Printf("[BacklogLifecycle] item %s triage session %s orphaned by graceful shutdown, respawning immediately with no penalty", item.ID, latestTriage.SessionUUID)
+					go func(itemID string) {
+						if err := respawner.AutoRespawnTriage(l.shutdownCtx, itemID); err != nil {
+							log.WarningLog.Printf("[BacklogLifecycle] reconcileOrphanedTriageItems shutdown-respawn item=%s: %v", itemID, err)
+						}
+					}(item.ID)
+				}
+				continue
+			}
 			reasonDetail = fmt.Sprintf("triage session %s ended without moving the item out of idea", latestTriage.SessionUUID)
 		}
 
@@ -3313,6 +3362,22 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *Ba
 		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d auto-merge enabled", item.ID, prNumber)
 	}
 
+	// Request a GitHub Copilot review so async Copilot feedback has a chance
+	// to land before the item goes unwatched at pr_pending. Best-effort: a
+	// missing Copilot review is a missed nicety, not a missed auto-merge path
+	// (lower notification priority than the auto-merge failure above).
+	if reviewErr := g.RequestCopilotReview(prNumber); reviewErr != nil {
+		log.WarningLog.Printf("[BacklogLifecycle] pushAndCreatePR RequestCopilotReview item=%s pr=%d: %v", item.ID, prNumber, reviewErr)
+		l.notify(item.ID,
+			"Copilot review not requested",
+			fmt.Sprintf("%s — PR #%d could not get a Copilot review request (%v).", item.Title, prNumber, reviewErr),
+			8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
+			1, // sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW
+		)
+	} else {
+		log.InfoLog.Printf("[BacklogLifecycle] pushAndCreatePR item=%s PR #%d Copilot review requested", item.ID, prNumber)
+	}
+
 	// Transition to pr_pending.
 	if transErr := l.resolveToPRPending(ctx, item.ID, "", "pushAndCreatePR"); transErr != nil {
 		l.handlePRPendingTransitionFailed(ctx, item.ID, "pushAndCreatePR", transErr)
@@ -4037,15 +4102,23 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 
 			emptyURL, zeroNum := "", 0
 			if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID.String(), BacklogItemUpdate{
-				PrURL:    &emptyURL,
-				PrNumber: &zeroNum,
+				PrURL:                      &emptyURL,
+				PrNumber:                   &zeroNum,
+				ClearPrFeedbackAddressedAt: true,
 			}, nil); updateErr != nil {
 				log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending clear closed PR fields item=%s: %v", item.ID, updateErr)
 			}
 			continue
 		}
 
-		if !prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts {
+		// hasNewFeedback is true only when there's substantive PR review
+		// feedback (a COMMENTED review or plain comment) newer than the
+		// per-item dedup watermark — so already-addressed feedback never
+		// re-triggers a fix session on a later tick.
+		hasNewFeedback := prStatus.HasReviewFeedback &&
+			(item.PrFeedbackAddressedAt == nil || prStatus.LatestFeedbackAt.After(*item.PrFeedbackAddressedAt))
+
+		if !prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
 			// PR is open and healthy — wait for merge. Story 2.1.1: flag it
 			// pr_ready_unmerged once it's been solo-ready (prReadyToMergeSolo)
 			// past the threshold, using ONLY the already-fetched prStatus — no
@@ -4104,12 +4177,44 @@ func (l *BacklogLifecycleListener) ReconcilePRPending(ctx context.Context, er *E
 			continue
 		}
 		fixCtx := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", item.PrNumber, item.PrURL, prStatus.FeedbackText)
-		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v)",
-			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts)
-		if _, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx); fixErr != nil {
+		log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress for PR fix (CI=%v, reviews=%v, conflict=%v, feedback=%v)",
+			item.ID, prStatus.CIFailing, prStatus.HasBlockingReviews, prStatus.HasConflicts, hasNewFeedback)
+
+		if hasNewFeedback {
+			logFeedbackBatchCoverage(item.ID.String(), prStatus)
+		}
+
+		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx)
+		if fixErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)
+		} else if attempted && hasNewFeedback {
+			watermark := prStatus.LatestFeedbackAt
+			if _, updateErr := l.storage.UpdateBacklogItem(ctx, item.ID.String(), BacklogItemUpdate{
+				PrFeedbackAddressedAt: &watermark,
+			}, nil); updateErr != nil {
+				log.WarningLog.Printf("[BacklogLifecycle] ReconcilePRPending persist PrFeedbackAddressedAt item=%s: %v", item.ID, updateErr)
+			} else {
+				log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s PrFeedbackAddressedAt advanced to %s (PR #%d)", item.ID, watermark.Format(time.RFC3339), item.PrNumber)
+			}
 		}
 	}
+}
+
+// logFeedbackBatchCoverage logs the count and authors of every substantive
+// feedback item (commentReviews review + substantive plain comments) included
+// in a hasNewFeedback dispatch, but only when the dispatch covers more than
+// one — a single-item dispatch needs no extra log line. The timestamp
+// watermark this feature uses for dedup advances past the whole batch on
+// dispatch, not per-item, so a partially-addressed multi-item batch is
+// otherwise silently unresolved forever; this line is the one place an
+// operator can discover it happened (pre-mortem.md P1).
+func logFeedbackBatchCoverage(itemID string, prStatus *git.PRStatus) {
+	authors := prStatus.FeedbackAuthors()
+	if len(authors) <= 1 {
+		return
+	}
+	log.InfoLog.Printf("[BacklogLifecycle] ReconcilePRPending item=%s dispatching PR-fix session covering %d feedback item(s) from [%s] — watermark advances to %s regardless of which items the session actually addresses",
+		itemID, len(authors), strings.Join(authors, ", "), prStatus.LatestFeedbackAt.Format(time.RFC3339))
 }
 
 // closeIfSupersededByMain checks whether item's last known work-session commit
