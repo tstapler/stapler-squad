@@ -3940,3 +3940,27 @@ func TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR(t *testing.T) {
 	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "no matching PR — item must stay in review")
 	assert.Equal(t, 0, fetched.PrNumber)
 }
+
+// TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem is the
+// Epic 0.1 (Story 0.1.2) round-trip test: an item created with Labels/
+// ExternalURL set must read back identically via GetBacklogItem, confirming
+// the ent create+read mapping for both new fields end-to-end through Storage.
+func TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:       "item with labels and external URL",
+		Labels:      []string{"bug", "p1"},
+		ExternalURL: "https://github.com/tstapler/stapler-squad/issues/42",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "p1"}, created.Labels)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/42", created.ExternalURL)
+
+	fetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "p1"}, fetched.Labels)
+	assert.Equal(t, "https://github.com/tstapler/stapler-squad/issues/42", fetched.ExternalURL)
+}

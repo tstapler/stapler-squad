@@ -190,6 +190,8 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		PlanArtifactsPath:            item.PlanArtifactsPath,
 		Notes:                        item.Notes,
 		ExternalID:                   item.ExternalID,
+		ExternalURL:                  item.ExternalURL,
+		Labels:                       item.Labels,
 		ArchivedAt:                   item.ArchivedAt,
 		PrURL:                        item.PrURL,
 		PrNumber:                     item.PrNumber,
@@ -198,6 +200,7 @@ func backlogItemToData(item *ent.BacklogItem) BacklogItemData {
 		ShippedChangesReqCount:       item.ShippedChangesReqCount,
 		ShippedSnapshotAt:            item.ShippedSnapshotAt,
 		PrFeedbackAddressedAt:        item.PrFeedbackAddressedAt,
+		GitHubSyncedIssueUpdatedAt:   item.GithubSyncedIssueUpdatedAt,
 		ShippedFileStats:             item.ShippedFileStats,
 		ShippedSnapshotCaptureFailed: item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:            item.ReworkCapOverride,
@@ -293,8 +296,11 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 		SetNillablePlanArtifactsPath(&data.PlanArtifactsPath).
 		SetNillableNotes(&data.Notes).
 		SetNillableExternalID(&data.ExternalID).
+		SetNillableExternalURL(&data.ExternalURL).
+		SetLabels(data.Labels).
 		SetNillableArchivedAt(data.ArchivedAt).
-		SetNillableReworkCapOverride(data.ReworkCapOverride)
+		SetNillableReworkCapOverride(data.ReworkCapOverride).
+		SetNillableGithubSyncedIssueUpdatedAt(data.GitHubSyncedIssueUpdatedAt)
 
 	if data.SourceID != "" {
 		sourceUUID, parseErr := uuid.Parse(data.SourceID)
@@ -641,6 +647,17 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	if update.ReworkCapOverride != nil {
 		u.SetReworkCapOverride(*update.ReworkCapOverride)
 	}
+	if update.ExternalURL != nil {
+		u.SetExternalURL(*update.ExternalURL)
+	}
+	if update.Labels != nil {
+		u.SetLabels(*update.Labels)
+	}
+	if update.ClearGitHubSyncedIssueUpdatedAt {
+		u.ClearGithubSyncedIssueUpdatedAt()
+	} else if update.GitHubSyncedIssueUpdatedAt != nil {
+		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
+	}
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -746,6 +763,15 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 	}
 	if update.ReworkCapOverride != nil {
 		fields = append(fields, "reworkCapOverride")
+	}
+	if update.ExternalURL != nil {
+		fields = append(fields, "externalUrl")
+	}
+	if update.Labels != nil {
+		fields = append(fields, "labels")
+	}
+	if update.GitHubSyncedIssueUpdatedAt != nil || update.ClearGitHubSyncedIssueUpdatedAt {
+		fields = append(fields, "gitHubSyncedIssueUpdatedAt")
 	}
 	return fields
 }

@@ -47,6 +47,7 @@ type githubIssue struct {
 	Number    int    `json:"number"`
 	Title     string `json:"title"`
 	Body      string `json:"body"`
+	State     string `json:"state"`
 	UpdatedAt string `json:"updated_at"`
 	HTMLURL   string `json:"html_url"`
 	Labels    []struct {
@@ -87,7 +88,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
 
-	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=all&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
 	if cursor != "" {
 		url += "&since=" + cursor
 	}
@@ -144,13 +145,21 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 			labelNames[i] = l.Name
 		}
 
+		// Best-effort parse of updated_at for IssueUpdatedAt; if it fails to
+		// parse (unexpected format), IssueUpdatedAt is left at its zero value
+		// rather than failing the whole Fetch — the string form is still used
+		// unmodified for the newCursor comparison below.
+		issueUpdatedAt, _ := time.Parse(time.RFC3339, issue.UpdatedAt)
+
 		items = append(items, ExternalItem{
-			ExternalID:  strconv.Itoa(issue.Number),
-			Title:       issue.Title,
-			Description: issue.Body,
-			Labels:      labelNames,
-			Priority:    priority,
-			URL:         issue.HTMLURL,
+			ExternalID:     strconv.Itoa(issue.Number),
+			Title:          issue.Title,
+			Description:    issue.Body,
+			Labels:         labelNames,
+			Priority:       priority,
+			URL:            issue.HTMLURL,
+			State:          issue.State,
+			IssueUpdatedAt: issueUpdatedAt,
 		})
 
 		// Track latest updated_at as the new cursor.
@@ -180,6 +189,8 @@ func (g *GitHubIssuesPlugin) MapToBacklogItem(item ExternalItem, sourceID string
 		Priority:    item.Priority,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
+		ExternalURL: item.URL,
+		Labels:      item.Labels,
 		SourceID:    sourceID,
 	}
 }

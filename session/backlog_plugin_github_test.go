@@ -71,6 +71,56 @@ func TestGitHubIssuesPlugin_Fetch_ParsesIssuesAndComputesPriority(t *testing.T) 
 	require.Equal(t, "2024-01-03", newCursor)
 }
 
+// TestGitHubIssuesPlugin_Fetch_IssueUpdatedAtMatchesCursorValue verifies that
+// ExternalItem.IssueUpdatedAt (Epic 0.2, Story 0.2.2) is parsed from the same
+// updated_at value used to compute newCursor for that same issue — i.e. it's
+// the already-observed timestamp, not independently re-derived.
+func TestGitHubIssuesPlugin_Fetch_IssueUpdatedAtMatchesCursorValue(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[
+			{"number":1,"title":"Bug A","body":"desc A","updated_at":"2024-01-02T10:00:00Z","html_url":"https://x/1"},
+			{"number":2,"title":"Bug B","body":"desc B","updated_at":"2024-01-03T15:30:00Z","html_url":"https://x/2"}
+		]`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, newCursor, err := p.Fetch(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	require.Equal(t, "2024-01-03T15:30:00Z", newCursor)
+	require.True(t, items[0].IssueUpdatedAt.Equal(time.Date(2024, 1, 2, 10, 0, 0, 0, time.UTC)))
+	require.True(t, items[1].IssueUpdatedAt.Equal(time.Date(2024, 1, 3, 15, 30, 0, 0, time.UTC)))
+	require.Equal(t, newCursor, items[1].IssueUpdatedAt.Format(time.RFC3339))
+}
+
+// TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues verifies Fetch's query
+// switched from state=open to state=all (Epic 0.2, Story 0.2.1 / AC0): a
+// closed issue in the mock response — previously invisible to Fetch — now
+// appears in the returned []ExternalItem, with State decoded correctly for
+// both the open and closed issue.
+func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "all", r.URL.Query().Get("state"))
+		w.Write([]byte(`[
+			{"number":1,"title":"Open issue","body":"still open","state":"open","updated_at":"2024-01-02T00:00:00Z","html_url":"https://x/1"},
+			{"number":2,"title":"Closed issue","body":"already closed","state":"closed","updated_at":"2024-01-03T00:00:00Z","html_url":"https://x/2"}
+		]`))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, err := p.Fetch(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	require.Equal(t, "1", items[0].ExternalID)
+	require.Equal(t, "open", items[0].State)
+	require.Equal(t, "2", items[1].ExternalID)
+	require.Equal(t, "closed", items[1].State)
+}
+
 func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -98,6 +148,8 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 		Title:       string(longTitle),
 		Description: string(longDesc),
 		Priority:    2,
+		Labels:      []string{"bug", "p1"},
+		URL:         "https://github.com/acme/widgets/issues/42",
 	}
 	data := p.MapToBacklogItem(item, "src-1")
 	require.Len(t, data.Title, 200)
@@ -105,6 +157,9 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Equal(t, "42", data.ExternalID)
 	require.Equal(t, "src-1", data.SourceID)
 	require.Equal(t, string(BacklogStatusIdea), data.Status)
+	// Epic 0.1 (Story 0.1.3): Labels and ExternalURL must pass through unchanged.
+	require.Equal(t, []string{"bug", "p1"}, data.Labels)
+	require.Equal(t, "https://github.com/acme/widgets/issues/42", data.ExternalURL)
 }
 
 func TestGitHubPRsPlugin_PluginID(t *testing.T) {

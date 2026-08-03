@@ -1,6 +1,9 @@
 package session
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // ItemSourcePlugin is the interface all external source integrations must implement.
 type ItemSourcePlugin interface {
@@ -25,6 +28,15 @@ type ExternalItem struct {
 	Labels      []string
 	Priority    int // 1-5, derived from labels
 	URL         string
+	// State is the external item's raw state string (e.g. GitHub issue
+	// "open"/"closed"). Only populated by plugins that support two-way sync
+	// (GitHubIssuesPlugin); left at zero value ("") for plugins like
+	// GitHubPRsPlugin where two-way sync is out of scope.
+	State string
+	// IssueUpdatedAt is the external item's own last-modified timestamp (e.g.
+	// GitHub issue updated_at), used as the loop-prevention watermark
+	// comparison value. Zero value for plugins that don't populate it.
+	IssueUpdatedAt time.Time
 }
 
 // PluginRegistry holds registered source plugins.

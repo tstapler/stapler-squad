@@ -3004,6 +3004,9 @@ type BacklogItemMutation struct {
 	user_modified_fields            *string
 	notes                           *string
 	external_id                     *string
+	external_url                    *string
+	labels                          *[]string
+	appendlabels                    []string
 	user_modified_status_at         *time.Time
 	archived_at                     *time.Time
 	pr_url                          *string
@@ -3016,6 +3019,7 @@ type BacklogItemMutation struct {
 	addshipped_changes_req_count    *int
 	shipped_snapshot_at             *time.Time
 	pr_feedback_addressed_at        *time.Time
+	github_synced_issue_updated_at  *time.Time
 	shipped_file_stats              *string
 	shipped_snapshot_capture_failed *bool
 	rework_cap_override             *int
@@ -4006,6 +4010,120 @@ func (m *BacklogItemMutation) ResetExternalID() {
 	delete(m.clearedFields, backlogitem.FieldExternalID)
 }
 
+// SetExternalURL sets the "external_url" field.
+func (m *BacklogItemMutation) SetExternalURL(s string) {
+	m.external_url = &s
+}
+
+// ExternalURL returns the value of the "external_url" field in the mutation.
+func (m *BacklogItemMutation) ExternalURL() (r string, exists bool) {
+	v := m.external_url
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExternalURL returns the old "external_url" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldExternalURL(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExternalURL is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExternalURL requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExternalURL: %w", err)
+	}
+	return oldValue.ExternalURL, nil
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (m *BacklogItemMutation) ClearExternalURL() {
+	m.external_url = nil
+	m.clearedFields[backlogitem.FieldExternalURL] = struct{}{}
+}
+
+// ExternalURLCleared returns if the "external_url" field was cleared in this mutation.
+func (m *BacklogItemMutation) ExternalURLCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldExternalURL]
+	return ok
+}
+
+// ResetExternalURL resets all changes to the "external_url" field.
+func (m *BacklogItemMutation) ResetExternalURL() {
+	m.external_url = nil
+	delete(m.clearedFields, backlogitem.FieldExternalURL)
+}
+
+// SetLabels sets the "labels" field.
+func (m *BacklogItemMutation) SetLabels(s []string) {
+	m.labels = &s
+	m.appendlabels = nil
+}
+
+// Labels returns the value of the "labels" field in the mutation.
+func (m *BacklogItemMutation) Labels() (r []string, exists bool) {
+	v := m.labels
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLabels returns the old "labels" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldLabels(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLabels is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLabels requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLabels: %w", err)
+	}
+	return oldValue.Labels, nil
+}
+
+// AppendLabels adds s to the "labels" field.
+func (m *BacklogItemMutation) AppendLabels(s []string) {
+	m.appendlabels = append(m.appendlabels, s...)
+}
+
+// AppendedLabels returns the list of values that were appended to the "labels" field in this mutation.
+func (m *BacklogItemMutation) AppendedLabels() ([]string, bool) {
+	if len(m.appendlabels) == 0 {
+		return nil, false
+	}
+	return m.appendlabels, true
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (m *BacklogItemMutation) ClearLabels() {
+	m.labels = nil
+	m.appendlabels = nil
+	m.clearedFields[backlogitem.FieldLabels] = struct{}{}
+}
+
+// LabelsCleared returns if the "labels" field was cleared in this mutation.
+func (m *BacklogItemMutation) LabelsCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldLabels]
+	return ok
+}
+
+// ResetLabels resets all changes to the "labels" field.
+func (m *BacklogItemMutation) ResetLabels() {
+	m.labels = nil
+	m.appendlabels = nil
+	delete(m.clearedFields, backlogitem.FieldLabels)
+}
+
 // SetUserModifiedStatusAt sets the "user_modified_status_at" field.
 func (m *BacklogItemMutation) SetUserModifiedStatusAt(t time.Time) {
 	m.user_modified_status_at = &t
@@ -4508,6 +4626,55 @@ func (m *BacklogItemMutation) PrFeedbackAddressedAtCleared() bool {
 func (m *BacklogItemMutation) ResetPrFeedbackAddressedAt() {
 	m.pr_feedback_addressed_at = nil
 	delete(m.clearedFields, backlogitem.FieldPrFeedbackAddressedAt)
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (m *BacklogItemMutation) SetGithubSyncedIssueUpdatedAt(t time.Time) {
+	m.github_synced_issue_updated_at = &t
+}
+
+// GithubSyncedIssueUpdatedAt returns the value of the "github_synced_issue_updated_at" field in the mutation.
+func (m *BacklogItemMutation) GithubSyncedIssueUpdatedAt() (r time.Time, exists bool) {
+	v := m.github_synced_issue_updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGithubSyncedIssueUpdatedAt returns the old "github_synced_issue_updated_at" field's value of the BacklogItem entity.
+// If the BacklogItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BacklogItemMutation) OldGithubSyncedIssueUpdatedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGithubSyncedIssueUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGithubSyncedIssueUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGithubSyncedIssueUpdatedAt: %w", err)
+	}
+	return oldValue.GithubSyncedIssueUpdatedAt, nil
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (m *BacklogItemMutation) ClearGithubSyncedIssueUpdatedAt() {
+	m.github_synced_issue_updated_at = nil
+	m.clearedFields[backlogitem.FieldGithubSyncedIssueUpdatedAt] = struct{}{}
+}
+
+// GithubSyncedIssueUpdatedAtCleared returns if the "github_synced_issue_updated_at" field was cleared in this mutation.
+func (m *BacklogItemMutation) GithubSyncedIssueUpdatedAtCleared() bool {
+	_, ok := m.clearedFields[backlogitem.FieldGithubSyncedIssueUpdatedAt]
+	return ok
+}
+
+// ResetGithubSyncedIssueUpdatedAt resets all changes to the "github_synced_issue_updated_at" field.
+func (m *BacklogItemMutation) ResetGithubSyncedIssueUpdatedAt() {
+	m.github_synced_issue_updated_at = nil
+	delete(m.clearedFields, backlogitem.FieldGithubSyncedIssueUpdatedAt)
 }
 
 // SetShippedFileStats sets the "shipped_file_stats" field.
@@ -5093,7 +5260,7 @@ func (m *BacklogItemMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BacklogItemMutation) Fields() []string {
-	fields := make([]string, 0, 34)
+	fields := make([]string, 0, 37)
 	if m.title != nil {
 		fields = append(fields, backlogitem.FieldTitle)
 	}
@@ -5154,6 +5321,12 @@ func (m *BacklogItemMutation) Fields() []string {
 	if m.external_id != nil {
 		fields = append(fields, backlogitem.FieldExternalID)
 	}
+	if m.external_url != nil {
+		fields = append(fields, backlogitem.FieldExternalURL)
+	}
+	if m.labels != nil {
+		fields = append(fields, backlogitem.FieldLabels)
+	}
 	if m.user_modified_status_at != nil {
 		fields = append(fields, backlogitem.FieldUserModifiedStatusAt)
 	}
@@ -5180,6 +5353,9 @@ func (m *BacklogItemMutation) Fields() []string {
 	}
 	if m.pr_feedback_addressed_at != nil {
 		fields = append(fields, backlogitem.FieldPrFeedbackAddressedAt)
+	}
+	if m.github_synced_issue_updated_at != nil {
+		fields = append(fields, backlogitem.FieldGithubSyncedIssueUpdatedAt)
 	}
 	if m.shipped_file_stats != nil {
 		fields = append(fields, backlogitem.FieldShippedFileStats)
@@ -5244,6 +5420,10 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.Notes()
 	case backlogitem.FieldExternalID:
 		return m.ExternalID()
+	case backlogitem.FieldExternalURL:
+		return m.ExternalURL()
+	case backlogitem.FieldLabels:
+		return m.Labels()
 	case backlogitem.FieldUserModifiedStatusAt:
 		return m.UserModifiedStatusAt()
 	case backlogitem.FieldArchivedAt:
@@ -5262,6 +5442,8 @@ func (m *BacklogItemMutation) Field(name string) (ent.Value, bool) {
 		return m.ShippedSnapshotAt()
 	case backlogitem.FieldPrFeedbackAddressedAt:
 		return m.PrFeedbackAddressedAt()
+	case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+		return m.GithubSyncedIssueUpdatedAt()
 	case backlogitem.FieldShippedFileStats:
 		return m.ShippedFileStats()
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
@@ -5321,6 +5503,10 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldNotes(ctx)
 	case backlogitem.FieldExternalID:
 		return m.OldExternalID(ctx)
+	case backlogitem.FieldExternalURL:
+		return m.OldExternalURL(ctx)
+	case backlogitem.FieldLabels:
+		return m.OldLabels(ctx)
 	case backlogitem.FieldUserModifiedStatusAt:
 		return m.OldUserModifiedStatusAt(ctx)
 	case backlogitem.FieldArchivedAt:
@@ -5339,6 +5525,8 @@ func (m *BacklogItemMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldShippedSnapshotAt(ctx)
 	case backlogitem.FieldPrFeedbackAddressedAt:
 		return m.OldPrFeedbackAddressedAt(ctx)
+	case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+		return m.OldGithubSyncedIssueUpdatedAt(ctx)
 	case backlogitem.FieldShippedFileStats:
 		return m.OldShippedFileStats(ctx)
 	case backlogitem.FieldShippedSnapshotCaptureFailed:
@@ -5498,6 +5686,20 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetExternalID(v)
 		return nil
+	case backlogitem.FieldExternalURL:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExternalURL(v)
+		return nil
+	case backlogitem.FieldLabels:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLabels(v)
+		return nil
 	case backlogitem.FieldUserModifiedStatusAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -5560,6 +5762,13 @@ func (m *BacklogItemMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPrFeedbackAddressedAt(v)
+		return nil
+	case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGithubSyncedIssueUpdatedAt(v)
 		return nil
 	case backlogitem.FieldShippedFileStats:
 		v, ok := value.(string)
@@ -5716,6 +5925,12 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	if m.FieldCleared(backlogitem.FieldExternalID) {
 		fields = append(fields, backlogitem.FieldExternalID)
 	}
+	if m.FieldCleared(backlogitem.FieldExternalURL) {
+		fields = append(fields, backlogitem.FieldExternalURL)
+	}
+	if m.FieldCleared(backlogitem.FieldLabels) {
+		fields = append(fields, backlogitem.FieldLabels)
+	}
 	if m.FieldCleared(backlogitem.FieldUserModifiedStatusAt) {
 		fields = append(fields, backlogitem.FieldUserModifiedStatusAt)
 	}
@@ -5742,6 +5957,9 @@ func (m *BacklogItemMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(backlogitem.FieldPrFeedbackAddressedAt) {
 		fields = append(fields, backlogitem.FieldPrFeedbackAddressedAt)
+	}
+	if m.FieldCleared(backlogitem.FieldGithubSyncedIssueUpdatedAt) {
+		fields = append(fields, backlogitem.FieldGithubSyncedIssueUpdatedAt)
 	}
 	if m.FieldCleared(backlogitem.FieldShippedFileStats) {
 		fields = append(fields, backlogitem.FieldShippedFileStats)
@@ -5793,6 +6011,12 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 	case backlogitem.FieldExternalID:
 		m.ClearExternalID()
 		return nil
+	case backlogitem.FieldExternalURL:
+		m.ClearExternalURL()
+		return nil
+	case backlogitem.FieldLabels:
+		m.ClearLabels()
+		return nil
 	case backlogitem.FieldUserModifiedStatusAt:
 		m.ClearUserModifiedStatusAt()
 		return nil
@@ -5819,6 +6043,9 @@ func (m *BacklogItemMutation) ClearField(name string) error {
 		return nil
 	case backlogitem.FieldPrFeedbackAddressedAt:
 		m.ClearPrFeedbackAddressedAt()
+		return nil
+	case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+		m.ClearGithubSyncedIssueUpdatedAt()
 		return nil
 	case backlogitem.FieldShippedFileStats:
 		m.ClearShippedFileStats()
@@ -5897,6 +6124,12 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 	case backlogitem.FieldExternalID:
 		m.ResetExternalID()
 		return nil
+	case backlogitem.FieldExternalURL:
+		m.ResetExternalURL()
+		return nil
+	case backlogitem.FieldLabels:
+		m.ResetLabels()
+		return nil
 	case backlogitem.FieldUserModifiedStatusAt:
 		m.ResetUserModifiedStatusAt()
 		return nil
@@ -5923,6 +6156,9 @@ func (m *BacklogItemMutation) ResetField(name string) error {
 		return nil
 	case backlogitem.FieldPrFeedbackAddressedAt:
 		m.ResetPrFeedbackAddressedAt()
+		return nil
+	case backlogitem.FieldGithubSyncedIssueUpdatedAt:
+		m.ResetGithubSyncedIssueUpdatedAt()
 		return nil
 	case backlogitem.FieldShippedFileStats:
 		m.ResetShippedFileStats()
