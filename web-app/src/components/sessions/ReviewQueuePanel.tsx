@@ -146,6 +146,24 @@ const ESCALATION_REASON_EMOJI: Partial<Record<EscalationCategory, string>> = {
   "unexpected": "⚠️",
 };
 
+// The EscalationCategory values other than "no-match" (PR #315) — denylist, not allowlist,
+// so an orphaned pre-deploy approval (escalation_reason_category key entirely absent because
+// it predates this field) is treated as Create-Rule-eligible the same way "no-match" is.
+// Fail-open by design: an unrecognized/future category also defaults to shown. Keep in sync
+// with EscalationCategory in web-app/src/lib/sessions/escalationCategory.ts (which itself
+// mirrors pkg/classifier/escalation.go) — see backlog 5fb93d9d.
+export const NON_NO_MATCH_ESCALATION_CATEGORIES: Set<EscalationCategory> = new Set([
+  "explicit-rule",
+  "domain-age",
+  "secret-scan",
+  "unclassifiable",
+  "unexpected",
+]);
+
+export function isCreateRuleEligibleCategory(category: string | undefined): boolean {
+  return category === undefined || !NON_NO_MATCH_ESCALATION_CATEGORIES.has(category as EscalationCategory);
+}
+
 function joinSet(set: Set<string> | Set<number>): string | undefined {
   return set.size > 0 ? [...set].join(",") : undefined;
 }
@@ -843,7 +861,7 @@ export function ReviewQueuePanel({
               ✗ Deny
             </Button>
             {queueItem.metadata?.["tool_input_command"] &&
-              queueItem.metadata?.["escalation_reason_category"] === "no-match" && (
+              isCreateRuleEligibleCategory(queueItem.metadata?.["escalation_reason_category"]) && (
               <Button
                 intent="secondary"
                 size="md"

@@ -16,7 +16,7 @@
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ReviewQueuePanel } from "../ReviewQueuePanel";
+import { ReviewQueuePanel, NON_NO_MATCH_ESCALATION_CATEGORIES } from "../ReviewQueuePanel";
 import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
@@ -1059,5 +1059,63 @@ describe("escalation reason", () => {
     renderPanel();
 
     expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+  });
+
+  it("ReviewQueue_should_showCreateRuleButton_On_OrphanedApprovalMissingCategory", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        // no escalation_reason / escalation_reason_category — orphaned pre-deploy approval
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  it.each(["explicit-rule", "secret-scan", "unclassifiable", "unexpected"])(
+    "omits create-rule button when category is %s",
+    (category) => {
+      const item = makeApprovalItem({
+        metadata: {
+          pending_approval_id: "approval-123",
+          tool_input_command: "rm -rf /tmp/foo",
+          tool_name: "Bash",
+          escalation_reason: "test reason",
+          escalation_reason_category: category,
+        },
+      });
+      mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+      renderPanel();
+
+      expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
+    }
+  );
+
+  it("shows create-rule button for an unrecognized/future category (fail-open by design)", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "git push origin main",
+        tool_name: "Bash",
+        escalation_reason_category: "some-future-category",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.getByTestId("create-rule-session-approval")).toBeInTheDocument();
+  });
+
+  it("denylist matches exactly the 5 known non-no-match EscalationCategory values", () => {
+    expect(Array.from(NON_NO_MATCH_ESCALATION_CATEGORIES).sort()).toEqual(
+      ["domain-age", "explicit-rule", "secret-scan", "unclassifiable", "unexpected"].sort()
+    );
   });
 });
