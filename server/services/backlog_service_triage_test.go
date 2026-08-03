@@ -1642,6 +1642,42 @@ func TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea(t *testing.
 	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after the re-triggered headless triage completes")
 }
 
+// TestAutoRespawnTriage_should_resetQueuedToIdeaAndRetrigger_When_ItemQueued is the
+// regression test for the 2026-08-03 generalization (docs/tasks/backlog-feature-improvement.md,
+// item be676dab): a queued item gated on plan approval with no usable triage result must
+// have AutoRespawnTriage reset it queued->idea (TriggerTriage only ever accepts idea/ready)
+// before re-triggering triage — mirroring the manual "Return to Triage" recovery already
+// performed for be676dab, now automated.
+func TestAutoRespawnTriage_should_resetQueuedToIdeaAndRetrigger_When_ItemQueued(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:        "Queued item with no usable plan",
+		Status:       string(session.BacklogStatusQueued),
+		Priority:     3,
+		RepoPath:     repoPath,
+		SkipPlanning: false,
+		PlanApproved: false,
+	})
+	require.NoError(t, err)
+
+	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
+	require.NoError(t, respawnErr)
+
+	require.Eventually(t, func() bool {
+		return pool.callCount() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "must actually invoke the headless triage call after resetting to idea")
+
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "item should transition queued->idea->ready after the re-triggered headless triage completes")
+}
+
 // TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea verifies the staleness guard:
 // an item that moved off "idea" between the caller's stuck-row query and this async
 // call running (e.g. a human already re-triggered triage manually) must not be acted
