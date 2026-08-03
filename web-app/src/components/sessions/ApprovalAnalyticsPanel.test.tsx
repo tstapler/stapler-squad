@@ -41,11 +41,16 @@ const baseSummary = {
   topCommandPrograms: [],
   topPythonImports: [],
   commandSubcommandStats: [],
+  escalationReasonCounts: {},
 };
+
+// Mutable per-test override — reset to `baseSummary` in `beforeEach`. Tests that need a
+// different `summary` (e.g. the Escalation Reasons fixtures) reassign this before rendering.
+let mockSummary: typeof baseSummary = baseSummary;
 
 jest.mock("@/lib/hooks/useApprovalAnalytics", () => ({
   useApprovalAnalytics: () => ({
-    summary: baseSummary,
+    summary: mockSummary,
     dailyBuckets: [],
     loading: false,
     error: null,
@@ -154,6 +159,7 @@ describe("ApprovalAnalyticsPanel", () => {
     mockSuggestions = [];
     mockGenerateLoading = false;
     mockGenerateError = null;
+    mockSummary = baseSummary;
   });
 
   describe("Suggest Rule button", () => {
@@ -317,6 +323,56 @@ describe("ApprovalAnalyticsPanel", () => {
       const manualLinks = screen.getAllByText("or add manually →");
       // Two uncovered tools + one uncovered program = 3 links.
       expect(manualLinks.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("Escalation Reasons", () => {
+    it("renders Escalation Reasons table with mapped labels and counts", () => {
+      mockSummary = {
+        ...baseSummary,
+        escalationReasonCounts: {
+          "no-match": 12,
+          "explicit-rule": 5,
+          "domain-age": 2,
+          "secret-scan": 1,
+          "unclassifiable": 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getByText("Escalation Reasons")).toBeInTheDocument();
+
+      // Non-zero categories render with their mapped label + count.
+      expect(screen.getByText("No auto-approval rule matched")).toBeInTheDocument();
+      expect(screen.getByText("Rule explicitly flagged for review")).toBeInTheDocument();
+      expect(screen.getByText("Newly-registered domain")).toBeInTheDocument();
+      expect(screen.getByText("Plaintext secret detected")).toBeInTheDocument();
+      expect(screen.getByText("12")).toBeInTheDocument();
+      expect(screen.getByText("5")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+
+      // Zero-count category is omitted.
+      expect(screen.queryByText("Shell expansion — couldn't classify")).not.toBeInTheDocument();
+    });
+
+    it("renders empty-state message when all escalation categories are zero", () => {
+      mockSummary = {
+        ...baseSummary,
+        escalationReasonCounts: {
+          "no-match": 0,
+          "explicit-rule": 0,
+          "domain-age": 0,
+          "secret-scan": 0,
+          "unclassifiable": 0,
+        },
+      };
+
+      render(<ApprovalAnalyticsPanel />);
+
+      expect(screen.getByText("No escalations in this window.")).toBeInTheDocument();
+      expect(screen.queryByText("Escalation Reasons")).not.toBeInTheDocument();
     });
   });
 });
