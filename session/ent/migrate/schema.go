@@ -135,6 +135,7 @@ var (
 		{Name: "shipped_approved_count", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "shipped_changes_req_count", Type: field.TypeInt, Nullable: true, Default: 0},
 		{Name: "shipped_snapshot_at", Type: field.TypeTime, Nullable: true},
+		{Name: "pr_feedback_addressed_at", Type: field.TypeTime, Nullable: true},
 		{Name: "shipped_file_stats", Type: field.TypeString, Nullable: true},
 		{Name: "shipped_snapshot_capture_failed", Type: field.TypeBool, Nullable: true, Default: false},
 		{Name: "rework_cap_override", Type: field.TypeInt, Nullable: true},
@@ -150,7 +151,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "backlog_items_item_sources_backlog_items",
-				Columns:    []*schema.Column{BacklogItemsColumns[34]},
+				Columns:    []*schema.Column{BacklogItemsColumns[35]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -164,7 +165,7 @@ var (
 			{
 				Name:    "backlogitem_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[33]},
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[34]},
 			},
 			{
 				Name:    "backlogitem_status_queued_at",

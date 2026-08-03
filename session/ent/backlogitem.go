@@ -75,6 +75,8 @@ type BacklogItem struct {
 	ShippedChangesReqCount int `json:"shipped_changes_req_count,omitempty"`
 	// Timestamp the durable ship snapshot was captured at.
 	ShippedSnapshotAt *time.Time `json:"shipped_snapshot_at,omitempty"`
+	// Per-item high-water mark: the newest substantive PR review-feedback timestamp a fix session has already been dispatched to address. GitHub never clears COMMENTED reviews/comments on push, so this watermark is what stops already-addressed feedback from re-triggering a fix session on every ReconcilePRPending tick.
+	PrFeedbackAddressedAt *time.Time `json:"pr_feedback_addressed_at,omitempty"`
 	// JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time
 	ShippedFileStats string `json:"shipped_file_stats,omitempty"`
 	// true when CaptureShipSnapshot's GitHub fetch or file-stats computation failed — distinct from shipped_check_conclusion, which holds only genuine CI-conclusion values
@@ -178,7 +180,7 @@ func (*BacklogItem) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullInt64)
 		case backlogitem.FieldTitle, backlogitem.FieldDescription, backlogitem.FieldAcceptanceCriteria, backlogitem.FieldStatus, backlogitem.FieldRepoPath, backlogitem.FieldPipelineMode, backlogitem.FieldCategory, backlogitem.FieldPlanArtifactsPath, backlogitem.FieldUserModifiedFields, backlogitem.FieldNotes, backlogitem.FieldExternalID, backlogitem.FieldPrURL, backlogitem.FieldShippedCheckConclusion, backlogitem.FieldShippedFileStats:
 			values[i] = new(sql.NullString)
-		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
+		case backlogitem.FieldPlanApprovedAt, backlogitem.FieldQueuedAt, backlogitem.FieldUserModifiedStatusAt, backlogitem.FieldArchivedAt, backlogitem.FieldShippedSnapshotAt, backlogitem.FieldPrFeedbackAddressedAt, backlogitem.FieldCreatedAt, backlogitem.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case backlogitem.FieldID:
 			values[i] = new(uuid.UUID)
@@ -378,6 +380,13 @@ func (_m *BacklogItem) assignValues(columns []string, values []any) error {
 				_m.ShippedSnapshotAt = new(time.Time)
 				*_m.ShippedSnapshotAt = value.Time
 			}
+		case backlogitem.FieldPrFeedbackAddressedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field pr_feedback_addressed_at", values[i])
+			} else if value.Valid {
+				_m.PrFeedbackAddressedAt = new(time.Time)
+				*_m.PrFeedbackAddressedAt = value.Time
+			}
 		case backlogitem.FieldShippedFileStats:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field shipped_file_stats", values[i])
@@ -573,6 +582,11 @@ func (_m *BacklogItem) String() string {
 	builder.WriteString(", ")
 	if v := _m.ShippedSnapshotAt; v != nil {
 		builder.WriteString("shipped_snapshot_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.PrFeedbackAddressedAt; v != nil {
+		builder.WriteString("pr_feedback_addressed_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
