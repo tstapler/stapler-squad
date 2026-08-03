@@ -327,17 +327,18 @@ describe("SessionSummaryPanel", () => {
 
   describe("SessionSummaryPanel_should_reenableRegenerateButton_When_RegenerateCallFails", () => {
     it("re-enables the button after a failed regenerate() call, instead of staying stuck on 'Regenerating…'", async () => {
-      // useSessionSummary's regenerate() catches its own network/RPC errors
-      // internally (records them in `error` state) rather than rejecting —
-      // so a failure looks like a *resolved* promise that left `data`
-      // unchanged, meaning `phase` never changes either. Bug 2: relying
-      // solely on the phase-transition effect to clear `regenerating` would
-      // leave the button stuck disabled forever in exactly this case.
-      let resolveRegenerate: () => void = () => {};
+      // useSessionSummary's regenerate() rethrows after recording its own
+      // network/RPC errors in `error` state — a failure is a *rejected*
+      // promise that left `data` unchanged, so `phase` never changes either.
+      // Bug 2: relying solely on the phase-transition effect to clear
+      // `regenerating` would leave the button stuck disabled forever in
+      // exactly this case; the click handler's own catch/finally must clear
+      // it independently.
+      let rejectRegenerate: (err: Error) => void = () => {};
       mockRegenerate.mockImplementation(
         () =>
-          new Promise<void>((resolve) => {
-            resolveRegenerate = resolve;
+          new Promise<void>((_resolve, reject) => {
+            rejectRegenerate = reject;
           }),
       );
       const errorSummary = makeSummary({
@@ -355,14 +356,54 @@ describe("SessionSummaryPanel", () => {
         expect(screen.getByRole("button", { name: /Regenerating…/ })).toBeDisabled();
       });
 
-      // Simulate the failure resolving with `data` unchanged (phase stays
+      // Simulate the failure rejecting with `data` unchanged (phase stays
       // "error") — the phase-transition effect's early-return means it
-      // never fires again, so only the click handler's own finally can
+      // never fires again, so only the click handler's own catch/finally can
       // clear the flag.
-      resolveRegenerate();
+      rejectRegenerate(new Error("boom"));
 
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "↻ Regenerate" })).toBeEnabled();
+      });
+    });
+
+    it("announces the failure and resets regeneratingRef so a later unrelated transition to ready says 'Summary ready.' not 'Summary regenerated.'", async () => {
+      let rejectRegenerate: (err: Error) => void = () => {};
+      mockRegenerate.mockImplementation(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectRegenerate = reject;
+          }),
+      );
+      const errorSummary = makeSummary({
+        status: SessionSummaryStatus.ERROR,
+        markdown: "",
+        errorStage: "decisions",
+      });
+      mockHookReturn({ data: errorSummary });
+
+      const { rerender } = render(<SessionSummaryPanel sessionId="session-1" />);
+
+      fireEvent.click(screen.getByRole("button", { name: "↻ Regenerate" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /Regenerating…/ })).toBeDisabled();
+      });
+
+      rejectRegenerate(new Error("network down"));
+
+      await waitFor(() => {
+        expect(getLiveRegion().textContent).toBe("Regeneration failed: network down");
+      });
+
+      // An unrelated transition to "ready" (e.g. a background poll tick
+      // resolving, not a user-triggered regenerate) should announce
+      // "Summary ready.", not "Summary regenerated." — proving
+      // regeneratingRef was actually reset by the failure, not left stuck.
+      mockHookReturn({ data: makeSummary({ status: SessionSummaryStatus.READY }) });
+      rerender(<SessionSummaryPanel sessionId="session-1" />);
+
+      await waitFor(() => {
+        expect(getLiveRegion().textContent).toBe("Summary ready.");
       });
     });
   });

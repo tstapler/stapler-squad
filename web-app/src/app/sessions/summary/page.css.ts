@@ -8,6 +8,12 @@ export const page = style({
   display: "flex",
   flexDirection: "column",
   gap: vars.space["3"],
+  // Root layout's `mainContent` sets overflow: hidden — this page must opt in
+  // to scroll (per .claude/rules/css-architecture.md's Page Scroll
+  // Convention) or the markdown summary body, which can be arbitrarily long,
+  // gets clipped with no scrollbar.
+  height: "100%",
+  overflowY: "auto",
 });
 
 export const backLink = style({

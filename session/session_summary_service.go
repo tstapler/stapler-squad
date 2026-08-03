@@ -162,7 +162,17 @@ func (g *SessionSummaryGenerator) tryAcquire(sessionUUID string) (release func()
 	if !m.TryLock() {
 		return nil, false
 	}
-	return m.Unlock, true
+	return func() {
+		m.Unlock()
+		// Remove the map entry once this generation is done, so a session that
+		// triggers generation once doesn't leave a permanent *sync.Mutex behind
+		// for the process's lifetime (unbounded growth over the server's life).
+		// CompareAndDelete only removes it if it's still the same mutex we
+		// acquired — if a concurrent tryAcquire already raced in a fresh
+		// LoadOrStore between our Unlock and this line, that entry belongs to a
+		// different in-flight generation and must be left alone.
+		g.inFlight.CompareAndDelete(sessionUUID, m)
+	}, true
 }
 
 // isInFlight is a non-blocking probe used by ReconcileStaleness to distinguish
@@ -201,13 +211,38 @@ func (g *SessionSummaryGenerator) ReconcileStaleness(ctx context.Context, row *e
 	}
 
 	const restartInterruptedMessage = "generation did not complete, possibly due to a server restart"
-	updated, err := g.entClient.SessionSummary.UpdateOne(row).
+	// Predicated bulk update instead of UpdateOne(row): a fresh GenerateAndPersist
+	// call can acquire the in-flight guard and write a READY row in the narrow
+	// window between the isInFlight check above and this write landing — an
+	// unconditional UpdateOne(row) would stomp that fresh READY row back to
+	// ERROR (TOCTOU). Condition the write on the row still being in exactly the
+	// state we read (same status, same generation_started_at); if 0 rows match,
+	// someone else already transitioned it and this is a no-op, not an error.
+	affected, err := g.entClient.SessionSummary.Update().
+		Where(
+			sessionsummary.SessionID(row.SessionID),
+			sessionsummary.Status(string(SessionSummaryStatusGenerating)),
+			sessionsummary.GenerationStartedAtEQ(*row.GenerationStartedAt),
+		).
 		SetStatus(string(SessionSummaryStatusError)).
 		SetErrorStage("restart-interrupted").
 		SetErrorMessage(restartInterruptedMessage).
 		Save(ctx)
 	if err != nil {
 		log.ForSession(row.SessionID).Warn("[SessionSummary] failed to reconcile stale GENERATING row", "err", err)
+		return row
+	}
+	if affected == 0 {
+		// Someone else (a fresh GenerateAndPersist call, or a concurrent
+		// reconcile) already transitioned this row out of the state we read.
+		// Return the row as originally read, not a freshly-error'd one.
+		log.ForSession(row.SessionID).Info("[SessionSummary] skipped stale-GENERATING reconcile: row already transitioned")
+		return row
+	}
+
+	updated, err := g.entClient.SessionSummary.Query().Where(sessionsummary.SessionID(row.SessionID)).Only(ctx)
+	if err != nil {
+		log.ForSession(row.SessionID).Warn("[SessionSummary] reconciled stale GENERATING row but failed to re-read it", "err", err)
 		return row
 	}
 	log.ForSession(row.SessionID).Warn("[SessionSummary] reconciled stale GENERATING row to ERROR", "generation_started_at", row.GenerationStartedAt)
@@ -394,18 +429,27 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 		create = create.SetTotalTokens(cost.TotalTokens).SetEstimatedCostUsd(cost.EstimatedCostUSD)
 	}
 
-	upsert := create.OnConflictColumns(sessionsummary.FieldSessionID).UpdateNewValues()
-	if cost.DataUnavailable {
-		// UpdateNewValues() only sets columns explicitly Set() on the create
-		// mutation — total_tokens/estimated_cost_usd are skipped above when cost
-		// data is unavailable, which otherwise leaves a prior generation's stale
-		// values in place alongside cost_data_unavailable=true. Explicitly clear
-		// them so the two columns stay consistent with the unavailable flag.
-		upsert = upsert.Update(func(u *ent.SessionSummaryUpsert) {
-			u.ClearTotalTokens()
-			u.ClearEstimatedCostUsd()
+	upsert := create.OnConflictColumns(sessionsummary.FieldSessionID).UpdateNewValues().
+		Update(func(u *ent.SessionSummaryUpsert) {
+			// error_message/error_stage are Optional() fields with no Default(),
+			// so UpdateNewValues() (which only sets columns explicitly Set() on
+			// the create mutation) never clears them here. A prior failed
+			// generation for this session may have left both set — unconditionally
+			// clear them so a successful (READY) row never carries forward stale
+			// error state from an earlier failure.
+			u.ClearErrorMessage()
+			u.ClearErrorStage()
+			if cost.DataUnavailable {
+				// UpdateNewValues() only sets columns explicitly Set() on the
+				// create mutation — total_tokens/estimated_cost_usd are skipped
+				// above when cost data is unavailable, which otherwise leaves a
+				// prior generation's stale values in place alongside
+				// cost_data_unavailable=true. Explicitly clear them so the two
+				// columns stay consistent with the unavailable flag.
+				u.ClearTotalTokens()
+				u.ClearEstimatedCostUsd()
+			}
 		})
-	}
 
 	if err := upsert.Exec(ctx); err != nil {
 		// LLM cost already spent, row still says GENERATING — attempt a

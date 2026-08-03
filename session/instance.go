@@ -813,7 +813,12 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"
 		// row. Best-effort: error intentionally discarded, matching
 		// computeDirDiffStats's existing "returns nil on any error" convention.
-		_ = i.UpdateDiffStats()
+		// Skipped entirely when no listener is registered (e.g.
+		// SessionSummaryGenerator not wired) — UpdateDiffStats shells out to git
+		// diff and paying that cost on every exit for nobody is wasteful.
+		if i.hasLifecycleListeners() {
+			_ = i.UpdateDiffStats()
+		}
 		i.fireLifecycleEvent(EventExited, reason)
 	}
 }
@@ -1278,8 +1283,11 @@ func (i *Instance) Destroy() error {
 	// (dispatched off the EventStopped fire below) never sees an empty/errored
 	// diff due to the teardown race — see ADR-002. Best-effort: error
 	// intentionally discarded, matching computeDirDiffStats's existing
-	// "returns nil on any error" convention.
-	_ = i.UpdateDiffStats()
+	// "returns nil on any error" convention. Skipped entirely when no listener
+	// is registered — see instanceOnExitCallback's matching guard.
+	if i.hasLifecycleListeners() {
+		_ = i.UpdateDiffStats()
+	}
 
 	// Then clean up git worktree
 	if err := i.CleanupWorktree(); err != nil {

@@ -848,11 +848,6 @@ var (
 		PrimaryKey: []*schema.Column{SessionSummariesColumns[0]},
 		Indexes: []*schema.Index{
 			{
-				Name:    "sessionsummary_session_id",
-				Unique:  false,
-				Columns: []*schema.Column{SessionSummariesColumns[1]},
-			},
-			{
 				Name:    "sessionsummary_status",
 				Unique:  false,
 				Columns: []*schema.Column{SessionSummariesColumns[3]},

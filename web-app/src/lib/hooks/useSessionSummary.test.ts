@@ -323,6 +323,119 @@ describe("useSessionSummary", () => {
     expect(result.current.data?.status).toBe(SessionSummaryStatus.READY);
   });
 
+  it("useSessionSummary_should_rejectAndSetError_When_regenerateFails", async () => {
+    mockGetSessionSummary.mockResolvedValue({
+      summary: makeSummary(SessionSummaryStatus.ERROR, { errorStage: "decisions" }),
+    });
+
+    const { result } = renderHook(() => useSessionSummary("sess-123"));
+    await waitFor(() => expect(result.current.data?.status).toBe(SessionSummaryStatus.ERROR));
+
+    mockRegenerateSessionSummary.mockRejectedValue(new Error("regenerate boom"));
+
+    let caughtError: unknown;
+    await act(async () => {
+      try {
+        await result.current.regenerate();
+      } catch (err) {
+        caughtError = err;
+      }
+    });
+
+    expect(caughtError).toBeInstanceOf(Error);
+    expect((caughtError as Error).message).toBe("regenerate boom");
+    expect(result.current.error?.message).toBe("regenerate boom");
+  });
+
+  it("useSessionSummary_should_ignoreStaleResponse_When_sessionIdChangesWhileFetchInFlight", async () => {
+    let resolveOld: (v: { summary: SessionSummaryProto }) => void = () => {};
+    let resolveNew: (v: { summary: SessionSummaryProto }) => void = () => {};
+    mockGetSessionSummary.mockImplementation(({ sessionId }: { sessionId: string }) => {
+      if (sessionId === "sess-old") {
+        return new Promise((resolve) => {
+          resolveOld = resolve;
+        });
+      }
+      return new Promise((resolve) => {
+        resolveNew = resolve;
+      });
+    });
+
+    const { result, rerender } = renderHook(({ sessionId }) => useSessionSummary(sessionId), {
+      initialProps: { sessionId: "sess-old" },
+    });
+
+    await waitFor(() => expect(mockGetSessionSummary).toHaveBeenCalledTimes(1));
+
+    // Simulates SessionDetailView's Next/Previous queue navigation, which
+    // keeps the same SessionSummaryPanel/hook instance mounted across a
+    // session switch — the old sessionId's fetch is still in flight here.
+    rerender({ sessionId: "sess-new" });
+
+    await waitFor(() => expect(mockGetSessionSummary).toHaveBeenCalledTimes(2));
+
+    // The new session's fetch resolves first.
+    await act(async () => {
+      resolveNew({
+        summary: makeSummary(SessionSummaryStatus.READY, { sessionId: "sess-new" }),
+      });
+      await Promise.resolve();
+    });
+    expect(result.current.data?.sessionId).toBe("sess-new");
+
+    // The stale old-session fetch resolves late — it must not clobber the
+    // freshly-fetched sess-new state.
+    await act(async () => {
+      resolveOld({
+        summary: makeSummary(SessionSummaryStatus.READY, { sessionId: "sess-old" }),
+      });
+      await Promise.resolve();
+    });
+    expect(result.current.data?.sessionId).toBe("sess-new");
+  });
+
+  it("useSessionSummary_should_skipOverlappingPollTick_When_priorPollRequestStillInFlight", async () => {
+    let resolveSecondCall: (v: { summary: SessionSummaryProto }) => void = () => {};
+    let callIndex = 0;
+    mockGetSessionSummary.mockImplementation(() => {
+      callIndex += 1;
+      if (callIndex === 1) {
+        // Initial mount fetch resolves immediately as GENERATING, kicking
+        // off polling.
+        return Promise.resolve({ summary: makeSummary(SessionSummaryStatus.GENERATING) });
+      }
+      // The first poll tick's request hangs until resolved manually below.
+      return new Promise((resolve) => {
+        resolveSecondCall = resolve;
+      });
+    });
+
+    const { result } = renderHook(() => useSessionSummary("sess-123"));
+    await waitFor(() => expect(mockGetSessionSummary).toHaveBeenCalledTimes(1));
+
+    // First poll tick fires the second (hanging) call.
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+    expect(mockGetSessionSummary).toHaveBeenCalledTimes(2);
+
+    // A second poll tick fires while the first poll's request is still in
+    // flight — the in-flight guard must skip issuing a third call.
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+    expect(mockGetSessionSummary).toHaveBeenCalledTimes(2);
+
+    // Once the in-flight request resolves, polling resumes normally.
+    await act(async () => {
+      resolveSecondCall({ summary: makeSummary(SessionSummaryStatus.READY) });
+      await Promise.resolve();
+    });
+    expect(result.current.data?.status).toBe(SessionSummaryStatus.READY);
+  });
+
   it("isGenerating_should_beExportedAsCanonicalDefinition_treatingUnspecifiedPendingAndGeneratingAsInFlight", () => {
     expect(isGenerating(SessionSummaryStatus.UNSPECIFIED)).toBe(true);
     expect(isGenerating(SessionSummaryStatus.PENDING)).toBe(true);

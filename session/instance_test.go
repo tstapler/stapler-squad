@@ -316,7 +316,11 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 // verifies the ADR-002 ordering: Destroy() must call i.UpdateDiffStats() (added
 // ahead of CleanupWorktree() per plan.md Task 1.1.1a) so a fresh diff snapshot is
 // captured while the worktree directory still exists, before CleanupWorktree()
-// deletes it out from under a synchronous i.GetDiffStats() read.
+// deletes it out from under a synchronous i.GetDiffStats() read. A lifecycle
+// listener is registered because UpdateDiffStats' subprocess git-diff call is
+// now skipped entirely when nothing is wired to consume it (see
+// hasLifecycleListeners in instance_controller.go) — this test verifies the
+// ordering that still applies for instances that DO have a listener.
 func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst(t *testing.T) {
 	repoDir := setupTestRepository(t)
 
@@ -334,6 +338,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 	}
 
 	inst := &Instance{Title: "diff-capture-test", UUID: "sess-diff-capture"}
+	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(LifecycleEvent, string) {}})
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.Destroy(); err != nil {
@@ -354,6 +359,41 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 	}
 	if stats.Added == 0 {
 		t.Fatalf("expected a non-zero Added count from the pre-cleanup diff, got %+v", stats)
+	}
+}
+
+// TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered
+// guards the fix for the unconditional UpdateDiffStats subprocess call: an
+// instance with zero registered listeners (e.g. a deployment where
+// SessionSummaryGenerator was never wired) must not pay for the git-diff
+// subprocess on every Destroy() — nothing would consume the result anyway.
+func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(t *testing.T) {
+	repoDir := setupTestRepository(t)
+
+	wt, _, err := git.NewGitWorktree(repoDir, "diff-skip-test")
+	if err != nil {
+		t.Fatalf("NewGitWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("wt.Setup(): %v", err)
+	}
+
+	// Dirty the worktree so a captured diff (if UpdateDiffStats ran) would
+	// report non-zero Added/Removed.
+	if err := os.WriteFile(filepath.Join(wt.GetWorktreePath(), "new-file.txt"), []byte("hello\nworld\n"), 0644); err != nil {
+		t.Fatalf("failed to dirty the worktree: %v", err)
+	}
+
+	inst := &Instance{Title: "diff-skip-test", UUID: "sess-diff-skip"}
+	inst.SetGitWorktree(wt) // also sets started=true — no RegisterLifecycleListener call
+
+	if err := inst.Destroy(); err != nil {
+		t.Fatalf("Destroy(): %v", err)
+	}
+
+	stats := inst.GetDiffStats()
+	if stats != nil && !stats.IsEmpty() {
+		t.Fatalf("expected UpdateDiffStats to be skipped (no listeners registered), got a populated DiffSnapshot: %+v", stats)
 	}
 }
 

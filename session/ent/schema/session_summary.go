@@ -88,10 +88,13 @@ func (SessionSummary) Fields() []ent.Field {
 	}
 }
 
-// Indexes of the SessionSummary.
+// Indexes of the SessionSummary. session_id does not need its own
+// index.Fields("session_id") entry — its Unique() field definition above
+// already makes ent generate a unique index over that column; an explicit
+// entry here would be a second, redundant, non-unique index over the same
+// column.
 func (SessionSummary) Indexes() []ent.Index {
 	return []ent.Index{
-		index.Fields("session_id"),
 		index.Fields("status"),
 	}
 }

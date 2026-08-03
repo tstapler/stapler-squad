@@ -83,6 +83,44 @@ func TestGenerateAndPersist_should_RejectSecondCall_When_FirstCallHoldsInFlightG
 	}
 }
 
+// TestTryAcquire_should_RemoveInFlightMapEntry_When_ReleaseCalled guards against
+// unbounded growth of g.inFlight: every session that ever triggers generation
+// previously left a permanent *sync.Mutex entry in the map for the process's
+// lifetime, since tryAcquire's release func only ever called Unlock and never
+// removed the entry. release() must now also remove it (via CompareAndDelete)
+// once it's done, and a session with a released guard must not still be
+// reported in-flight afterward.
+func TestTryAcquire_should_RemoveInFlightMapEntry_When_ReleaseCalled(t *testing.T) {
+	gen, _, _ := newTestSessionSummaryGenerator(t)
+	sessionUUID := "sess-inflight-cleanup"
+
+	release, ok := gen.tryAcquire(sessionUUID)
+	if !ok {
+		t.Fatal("expected first acquire to succeed")
+	}
+
+	if _, stillPresent := gen.inFlight.Load(sessionUUID); !stillPresent {
+		t.Fatal("expected the map entry to exist while the guard is held")
+	}
+
+	release()
+
+	if _, stillPresent := gen.inFlight.Load(sessionUUID); stillPresent {
+		t.Fatal("expected release() to remove the inFlight map entry for the session")
+	}
+	if gen.isInFlight(sessionUUID) {
+		t.Fatal("expected isInFlight to report false for a session with no map entry")
+	}
+
+	// A fresh acquire for the same session must succeed cleanly (not reuse stale
+	// locked state left over from before release()).
+	release2, ok2 := gen.tryAcquire(sessionUUID)
+	if !ok2 {
+		t.Fatal("expected a follow-up acquire to succeed after release()")
+	}
+	release2()
+}
+
 func TestGenerateAndPersist_should_SkipRegeneration_When_ReadyRowAndDiffCountsUnchanged(t *testing.T) {
 	gen, client, pool := newTestSessionSummaryGenerator(t)
 	ctx := context.Background()
@@ -168,6 +206,64 @@ func TestGenerateAndPersist_should_SkipWrite_When_ManualRegenerateWithinCooldown
 	afterRow := getRow(t, client, sessionUUID)
 	if !afterRow.GeneratedAt.Equal(*beforeRow.GeneratedAt) {
 		t.Fatalf("expected no write during cooldown, generated_at changed: %v -> %v", beforeRow.GeneratedAt, afterRow.GeneratedAt)
+	}
+}
+
+// TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite
+// covers the TOCTOU fix: ReconcileStaleness reads a row snapshot, checks
+// isInFlight, then writes ERROR — if a fresh GenerateAndPersist call
+// completes (writing READY) in the window between the read and the write,
+// an unconditional UpdateOne(row) would stomp that fresh READY row back to
+// ERROR. The predicated bulk update must instead no-op when the row no
+// longer matches the snapshot it was read from.
+func TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerationCompletesBetweenCheckAndWrite(t *testing.T) {
+	gen, client, _ := newTestSessionSummaryGenerator(t)
+	ctx := context.Background()
+	sessionUUID := "sess-toctou"
+
+	staleStart := time.Now().Add(-10 * time.Minute)
+	_, err := client.SessionSummary.Create().
+		SetID("row-toctou").
+		SetSessionID(sessionUUID).
+		SetSessionTitle("title").
+		SetStatus(string(SessionSummaryStatusGenerating)).
+		SetGenerationStartedAt(staleStart).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("failed to seed row: %v", err)
+	}
+	staleRow := getRow(t, client, sessionUUID)
+
+	// Simulate a fresh GenerateAndPersist call completing concurrently, in the
+	// window between ReconcileStaleness reading staleRow and its write landing:
+	// the row transitions to READY with a new generation_started_at.
+	freshNow := time.Now()
+	if _, err := client.SessionSummary.Update().
+		Where(sessionsummary.SessionID(sessionUUID)).
+		SetStatus(string(SessionSummaryStatusReady)).
+		SetGenerationStartedAt(freshNow).
+		SetGeneratedAt(freshNow).
+		Save(ctx); err != nil {
+		t.Fatalf("failed to simulate concurrent fresh completion: %v", err)
+	}
+
+	// ReconcileStaleness operates on the stale snapshot, as GetSessionSummary's
+	// read-then-reconcile path would have read it before the fresh completion
+	// landed.
+	result := gen.ReconcileStaleness(ctx, staleRow)
+
+	// The predicated update must match 0 rows (generation_started_at no longer
+	// equals staleStart) — a no-op, not an overwrite. The returned value is the
+	// row as originally read, not a freshly-error'd one.
+	if result.Status != string(SessionSummaryStatusGenerating) {
+		t.Fatalf("expected ReconcileStaleness to return the stale snapshot unchanged, got status=%s", result.Status)
+	}
+
+	// Most importantly: the actual DB row must still be READY — the fresh
+	// completion must survive, not get stomped back to ERROR.
+	dbRow := getRow(t, client, sessionUUID)
+	if dbRow.Status != string(SessionSummaryStatusReady) {
+		t.Fatalf("expected the fresh READY row to survive ReconcileStaleness, got %s", dbRow.Status)
 	}
 }
 
@@ -272,6 +368,48 @@ func TestGenerateAndPersist_should_SetStatusErrorWithDecisionsStage_When_Decisio
 	}
 	if row.Markdown != priorRow.Markdown {
 		t.Fatal("expected prior markdown to be preserved on the decisions-stage error path")
+	}
+}
+
+// TestGenerateAndPersist_should_ClearStaleErrorFields_When_SubsequentGenerationSucceeds
+// covers the fix for a row left with error_message/error_stage set by a prior
+// failed generation surviving unchanged into a later successful (READY) row.
+// error_message/error_stage are Optional() ent fields with no Default(), so
+// UpdateNewValues() alone (which only sets columns explicitly Set() on the
+// create mutation) never clears them on the final success-path upsert unless
+// it's done explicitly.
+func TestGenerateAndPersist_should_ClearStaleErrorFields_When_SubsequentGenerationSucceeds(t *testing.T) {
+	gen, client, _ := newTestSessionSummaryGenerator(t)
+	ctx := context.Background()
+	sessionUUID := "sess-clear-stale-error"
+
+	// First call fails at the decisions stage, leaving error_message/error_stage set.
+	gen.reviewLookup = &fakeReviewQueueLookup{err: context.DeadlineExceeded}
+	firstDiff := &git.DiffStats{Added: 1, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(firstDiff), firstDiff.Content, nil, "pty-eof")
+
+	failedRow := getRow(t, client, sessionUUID)
+	if failedRow.Status != string(SessionSummaryStatusError) {
+		t.Fatalf("expected first generation to fail, got %s", failedRow.Status)
+	}
+	if failedRow.ErrorStage == "" || failedRow.ErrorMessage == "" {
+		t.Fatalf("expected error_stage/error_message to be set after the first failure, got stage=%q message=%q", failedRow.ErrorStage, failedRow.ErrorMessage)
+	}
+
+	// Second call, with a working review-queue lookup, succeeds.
+	gen.reviewLookup = &fakeReviewQueueLookup{}
+	secondDiff := &git.DiffStats{Added: 2, Removed: 2, Content: strings.Repeat("diff --git a/x.go b/x.go\n", 3)}
+	gen.GenerateAndPersist(ctx, sessionUUID, "title", time.Now(), BuildDiffSnapshot(secondDiff), secondDiff.Content, nil, "pty-eof")
+
+	row := getRow(t, client, sessionUUID)
+	if row.Status != string(SessionSummaryStatusReady) {
+		t.Fatalf("expected READY after the successful second generation, got %s", row.Status)
+	}
+	if row.ErrorStage != "" {
+		t.Fatalf("expected error_stage to be cleared after a successful generation, got %q", row.ErrorStage)
+	}
+	if row.ErrorMessage != "" {
+		t.Fatalf("expected error_message to be cleared after a successful generation, got %q", row.ErrorMessage)
 	}
 }
 

@@ -273,6 +273,18 @@ export function SessionSummaryPanel({ sessionId }: SessionSummaryPanelProps) {
     setLiveMessage("Regenerating summary…");
     try {
       await regenerate();
+    } catch (err) {
+      // regenerate() rethrows after a failed RPC. data/phase don't change in
+      // that case (nothing new was fetched), so the phase-transition effect
+      // above never re-fires — its early-return means regeneratingRef would
+      // otherwise stay stuck `true` forever, causing a later *unrelated*
+      // transition to "ready" (e.g. via ordinary polling) to wrongly
+      // announce "Summary regenerated." instead of "Summary ready." Reset it
+      // here, and announce the failure explicitly since the phase-transition
+      // effect's error branches won't fire for this either.
+      regeneratingRef.current = false;
+      const message = err instanceof Error ? err.message : "unknown error";
+      setLiveMessage(`Regeneration failed: ${message}`);
     } finally {
       // Only clears the button's in-flight state here — regeneratingRef
       // itself stays true until the phase-transition effect above observes
