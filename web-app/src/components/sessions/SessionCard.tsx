@@ -174,6 +174,7 @@ function SessionCardInner({
   const isSnapshotEnabled = session.status === SessionStatus.ACTIVE && isSnapshotOpen;
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
+  const pauseReasonText = session.pauseReason ? formatPauseReason(session.pauseReason) : "";
   const pendingProgramChange = hasPendingProgramChange(session);
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
     useTerminalSnapshot(session.id, isSnapshotEnabled);
@@ -491,7 +492,7 @@ function SessionCardInner({
             )}
             {isPaused && session.pauseReason ? (
               <>
-                <Tooltip label={formatPauseReason(session.pauseReason)} side="top">
+                <Tooltip label={pauseReasonText} side="top">
                   <span
                     className={`${status} ${getStatusColor(session.status)}`}
                     role="img"
@@ -503,7 +504,7 @@ function SessionCardInner({
                 {/* Always-visible text, not tooltip-only — hover tooltips are
                     unreachable on touch/mobile, so the reason must be readable
                     without hovering on any viewport. */}
-                <span className={pauseReasonBadge}>{formatPauseReason(session.pauseReason)}</span>
+                <span className={pauseReasonBadge}>{pauseReasonText}</span>
               </>
             ) : session.status === SessionStatus.STOPPED && session.creationProgress ? (
               // ponytail: reuses creationProgress — the field is only cleared on a

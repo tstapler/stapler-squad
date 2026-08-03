@@ -1393,12 +1393,36 @@ func (r *EntRepository) BulkResetStuckRemediation(ctx context.Context, reason *d
 // discipline. Callers should not treat a nil return as "a row was written";
 // they should treat a non-nil return as "the itemID was malformed", the only
 // error this can surface.
+//
+// Runs the dedupe check and insert inside one transaction: SQLite is capped
+// to one connection (SetMaxOpenConns(1), see recordStatusEvent), so holding
+// that connection for the transaction's duration serializes the whole
+// check-then-act sequence against any other goroutine's CreateRespawnEvent
+// call — closing the TOCTOU window a plain Exist()-then-Create() pair would
+// otherwise leave open for call sites with no other in-flight guard (e.g.
+// AutoRespawnReview has none, unlike AutoRespawnAutonomousWork's
+// spawnInFlight or AutoRespawnTriage's triageInFlight). If the transaction
+// itself fails to begin, falls back to a non-tx write rather than dropping
+// the audit row — a lost dedupe guarantee is preferable to a lost event.
 func (r *EntRepository) CreateRespawnEvent(ctx context.Context, itemID, reason, triggeringSessionUUID, resultingSessionUUID string, queued bool) error {
 	parsedItemID, err := uuid.Parse(itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	recordRespawnEvent(ctx, r.client.RespawnEvent, parsedItemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+
+	tx, txErr := r.client.Tx(ctx)
+	if txErr != nil {
+		log.ErrorLog.Printf("[CreateRespawnEvent] begin transaction failed for item=%s reason=%s, falling back to non-transactional write: %v", itemID, reason, txErr)
+		recordRespawnEvent(ctx, r.client.RespawnEvent, parsedItemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+		return nil
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	recordRespawnEvent(ctx, tx.RespawnEvent, parsedItemID, reason, triggeringSessionUUID, resultingSessionUUID, queued)
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		log.ErrorLog.Printf("[CreateRespawnEvent] commit failed for item=%s reason=%s: %v", itemID, reason, commitErr)
+	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,6 +277,40 @@ func TestCreateRespawnEvent_should_DedupeWithinWindow_When_CalledTwiceForSameTri
 	fetched, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	require.Len(t, fetched.RespawnEvents, 1, "overlapping calls within the dedupe window must record exactly one row")
+}
+
+// TestCreateRespawnEvent_should_DedupeUnderConcurrentGoroutines_When_TwoSweepsRaceForSameItem
+// is the literal race the pre-mortem/plan called for (Task 4.4.1d: "or concurrently via two
+// goroutines"), not the sequential-calls approximation above: two goroutines call
+// CreateRespawnEvent for the same item/reason/triggering-session at the same time, simulating
+// two overlapping reconciliation sweeps racing each other rather than one following the other.
+// CreateRespawnEvent's dedupe-check-then-insert runs inside one transaction specifically to
+// close this window — without it, both goroutines could pass the dedupe check before either
+// commits its insert.
+func TestCreateRespawnEvent_should_DedupeUnderConcurrentGoroutines_When_TwoSweepsRaceForSameItem(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for concurrent dedupe test"})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = repo.CreateRespawnEvent(ctx, item.ID, RespawnReasonAutonomousTurn, "racing-trigger", "result", false)
+		}(i)
+	}
+	wg.Wait()
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+
+	fetched, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, fetched.RespawnEvents, 1, "two genuinely concurrent respawn events for the same item/reason/trigger must still dedupe to exactly one row")
 }
 
 // TestCreateRespawnEvent_should_DedupeEmptyTriggeringUuidRows_When_CalledTwice covers the

@@ -1,7 +1,7 @@
 // +feature: backlog-respawn-history
 "use client";
 
-import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import type { BacklogItem, RespawnEvent } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection } from "@/components/ui/Collapsible";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { formatDate } from "@/lib/backlog/formatDate";
@@ -15,6 +15,11 @@ export interface RespawnHistorySectionProps {
 }
 
 const SHOW_MORE_CAP = 8;
+
+// Stable reference so a caller that hasn't populated respawnEvents (test
+// fixtures; mapBacklogItem always populates a real array for live API data)
+// doesn't defeat useShowMore's useMemo with a fresh [] on every render.
+const EMPTY_RESPAWN_EVENTS: RespawnEvent[] = [];
 
 /**
  * All-time, append-only audit trail of automated respawn/remediation
@@ -38,7 +43,7 @@ const SHOW_MORE_CAP = 8;
  * expected, not a bug.
  */
 export function RespawnHistorySection({ item, defaultExpanded }: RespawnHistorySectionProps) {
-  const respawnEvents = item.respawnEvents ?? [];
+  const respawnEvents = item.respawnEvents ?? EMPTY_RESPAWN_EVENTS;
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
     "respawn-history",
