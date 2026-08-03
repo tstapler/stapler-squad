@@ -1291,6 +1291,17 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return fmt.Errorf("list sessions for cap check: %w", sessErr)
 	}
 
+	// Tombstone any work session confirmed dead before checking liveness,
+	// mirroring AutoRespawnAutonomousWork's and AutoReopenForPRFix's identical
+	// guard (see AutoReopenForPRFix's doc comment for the incident this
+	// precaution exists for). Without this, hasActiveWorkSession below is
+	// purely DB-liveness (Role == Work && EndedAt == nil) — if the work
+	// session is ALSO a zombie (not just the reviewer), it would be treated as
+	// "active," the item would transition to in_progress with no live agent,
+	// and nothing would spawn a replacement until the separate staleness
+	// sweep catches it later.
+	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
+
 	// The work session for this round may still be alive (it stays running and
 	// polls get_backlog_item after request_review — see taskProtocolBlock step 8).
 	// Spawning a new one would fail on the hasActiveWorkSession guard anyway and
