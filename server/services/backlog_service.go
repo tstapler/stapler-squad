@@ -589,17 +589,19 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:          item.ID,
+		Title:       item.Title,
+		Priority:    int32(item.Priority),
+		Status:      string(item.Status),
+		RepoPath:    item.RepoPath,
+		Notes:       item.Notes,
+		ExternalId:  item.ExternalID,
+		ExternalUrl: &item.ExternalURL,
+		Labels:      item.Labels,
+		PrUrl:       item.PrURL,
+		PrNumber:    int32(item.PrNumber),
+		CreatedAt:   timestamppb.New(item.CreatedAt),
+		UpdatedAt:   timestamppb.New(item.UpdatedAt),
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -651,6 +653,8 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		PlanArtifactsPath: item.PlanArtifactsPath,
 		Notes:             item.Notes,
 		ExternalId:        item.ExternalID,
+		ExternalUrl:       &item.ExternalURL,
+		Labels:            item.Labels,
 		SourceId:          item.SourceID,
 		PrUrl:             item.PrURL,
 		PrNumber:          int32(item.PrNumber),

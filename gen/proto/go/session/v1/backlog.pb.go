@@ -948,7 +948,13 @@ type BacklogItem struct {
 	// category is a coarse classification (bugfix/feature/chore/refactor) the
 	// frontend uses to pre-fill sane automation-toggle defaults at creation
 	// time. Unset/empty means uncategorized.
-	Category      *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	Category *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	// external_url is the source tracker's own URL for this item (e.g. a
+	// GitHub issue's html_url), populated for imported items only.
+	ExternalUrl *string `protobuf:"bytes,30,opt,name=external_url,json=externalUrl,proto3,oneof" json:"external_url,omitempty"`
+	// labels mirrors the source tracker's labels (e.g. a GitHub issue's label
+	// names), populated for imported items only.
+	Labels        []string `protobuf:"bytes,31,rep,name=labels,proto3" json:"labels,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1184,6 +1190,20 @@ func (x *BacklogItem) GetCategory() string {
 		return *x.Category
 	}
 	return ""
+}
+
+func (x *BacklogItem) GetExternalUrl() string {
+	if x != nil && x.ExternalUrl != nil {
+		return *x.ExternalUrl
+	}
+	return ""
+}
+
+func (x *BacklogItem) GetLabels() []string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -7550,7 +7570,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa4\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf5\n" +
 	"\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
@@ -7586,10 +7606,13 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePr\x12F\n" +
 	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotes\x123\n" +
 	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
-	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
+	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01\x12&\n" +
+	"\fexternal_url\x18\x1e \x01(\tH\x03R\vexternalUrl\x88\x01\x01\x12\x16\n" +
+	"\x06labels\x18\x1f \x03(\tR\x06labelsB\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
-	"\t_category\"\xf8\x03\n" +
+	"\t_categoryB\x0f\n" +
+	"\r_external_url\"\xf8\x03\n" +
 	"\n" +
 	"ItemSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +

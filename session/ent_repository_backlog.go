@@ -497,6 +497,8 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 		summaries[i] = BacklogItemSummary{
 			ID:                 item.ID.String(),
 			ExternalID:         item.ExternalID,
+			ExternalURL:        item.ExternalURL,
+			Labels:             item.Labels,
 			Title:              item.Title,
 			Status:             BacklogStatus(item.Status),
 			Priority:           item.Priority,

@@ -148,6 +148,12 @@ message BacklogItem {
   // frontend uses to pre-fill sane automation-toggle defaults at creation
   // time. Unset/empty means uncategorized.
   optional string category = 29;
+  // external_url is the source tracker's own URL for this item (e.g. a
+  // GitHub issue's html_url), populated for imported items only.
+  optional string external_url = 30;
+  // labels mirrors the source tracker's labels (e.g. a GitHub issue's label
+  // names), populated for imported items only.
+  repeated string labels = 31;
 }
 
 // ItemSource represents an external plugin source that syncs items into the

@@ -468,6 +468,8 @@ type BacklogItemData struct {
 type BacklogItemSummary struct {
 	ID                 string               `json:"id"`
 	ExternalID         string               `json:"external_id"`
+	ExternalURL        string               `json:"external_url"`
+	Labels             []string             `json:"labels"`
 	Title              string               `json:"title"`
 	Status             BacklogStatus        `json:"status"`
 	Priority           int                  `json:"priority"`
