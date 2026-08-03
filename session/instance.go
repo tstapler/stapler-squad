@@ -808,6 +808,12 @@ func instanceOnExitCallback(i *Instance) func(string) {
 				}
 			}
 		})
+		// Capture the diff snapshot before firing EventExited so listeners (e.g.
+		// sessionSummaryListener) can read a fresh i.GetDiffStats() synchronously
+		// from the callback — see ADR-002 / plan.md's "Diff-stat capture timing"
+		// row. Best-effort: error intentionally discarded, matching
+		// computeDirDiffStats's existing "returns nil on any error" convention.
+		_ = i.UpdateDiffStats()
 		i.fireLifecycleEvent(EventExited, reason)
 	}
 }
@@ -1266,6 +1272,14 @@ func (i *Instance) Destroy() error {
 	if err := i.KillSession(); err != nil {
 		errs = append(errs, err)
 	}
+
+	// Capture the diff snapshot before CleanupWorktree deletes the worktree
+	// directory, so sessionSummaryListener's synchronous i.GetDiffStats() read
+	// (dispatched off the EventStopped fire below) never sees an empty/errored
+	// diff due to the teardown race — see ADR-002. Best-effort: error
+	// intentionally discarded, matching computeDirDiffStats's existing
+	// "returns nil on any error" convention.
+	_ = i.UpdateDiffStats()
 
 	// Then clean up git worktree
 	if err := i.CleanupWorktree(); err != nil {

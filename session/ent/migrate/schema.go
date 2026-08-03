@@ -811,6 +811,54 @@ var (
 			},
 		},
 	}
+	// SessionSummariesColumns holds the columns for the "session_summaries" table.
+	SessionSummariesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString, Unique: true},
+		{Name: "session_id", Type: field.TypeString, Unique: true},
+		{Name: "session_title", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeString, Default: "pending"},
+		{Name: "narrative", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "narrative_fallback_used", Type: field.TypeBool, Default: false},
+		{Name: "diff_files_changed", Type: field.TypeInt, Default: 0},
+		{Name: "diff_added", Type: field.TypeInt, Default: 0},
+		{Name: "diff_removed", Type: field.TypeInt, Default: 0},
+		{Name: "decisions_auto_approved", Type: field.TypeInt, Default: 0},
+		{Name: "decisions_manually_approved", Type: field.TypeInt, Default: 0},
+		{Name: "decisions_denied", Type: field.TypeInt, Default: 0},
+		{Name: "decisions_review_queue_resolved", Type: field.TypeInt, Default: 0},
+		{Name: "decisions_still_open", Type: field.TypeInt, Default: 0},
+		{Name: "session_started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "session_stopped_at", Type: field.TypeTime, Nullable: true},
+		{Name: "duration_ms", Type: field.TypeInt64, Nullable: true},
+		{Name: "total_tokens", Type: field.TypeInt64, Nullable: true},
+		{Name: "estimated_cost_usd", Type: field.TypeFloat64, Nullable: true},
+		{Name: "cost_data_unavailable", Type: field.TypeBool, Default: false},
+		{Name: "markdown", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "error_message", Type: field.TypeString, Nullable: true},
+		{Name: "error_stage", Type: field.TypeString, Nullable: true},
+		{Name: "generation_started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "generated_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// SessionSummariesTable holds the schema information for the "session_summaries" table.
+	SessionSummariesTable = &schema.Table{
+		Name:       "session_summaries",
+		Columns:    SessionSummariesColumns,
+		PrimaryKey: []*schema.Column{SessionSummariesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sessionsummary_session_id",
+				Unique:  false,
+				Columns: []*schema.Column{SessionSummariesColumns[1]},
+			},
+			{
+				Name:    "sessionsummary_status",
+				Unique:  false,
+				Columns: []*schema.Column{SessionSummariesColumns[3]},
+			},
+		},
+	}
 	// ShellsColumns holds the columns for the "shells" table.
 	ShellsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -1040,6 +1088,7 @@ var (
 		ReviewVerdictsTable,
 		SessionsTable,
 		SessionGoalsTable,
+		SessionSummariesTable,
 		ShellsTable,
 		SourceSyncEventsTable,
 		TagsTable,
