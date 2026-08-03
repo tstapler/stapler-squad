@@ -840,9 +840,10 @@ export function ReviewQueuePanel({
             >
               ✗ Deny
             </Button>
-            {queueItem.metadata?.["tool_input_command"] && (
+            {queueItem.metadata?.["tool_input_command"] &&
+              queueItem.metadata?.["escalation_reason_category"] === "no-match" && (
               <Button
-                intent="ghost"
+                intent="secondary"
                 size="md"
                 onClick={(e) => {
                   e.stopPropagation();

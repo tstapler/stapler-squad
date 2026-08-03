@@ -303,6 +303,7 @@ function makeApprovalItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
       pending_approval_id: "approval-123",
       tool_input_command: "git push origin main",
       tool_name: "Bash",
+      escalation_reason_category: "no-match",
     },
     subStatus: SubStatus.UNSPECIFIED,
     ...overrides,
@@ -936,6 +937,7 @@ describe("ReviewQueuePanel — URL-persisted filter state", () => {
 // ---------------------------------------------------------------------------
 
 import { escalationReasonText } from "../ReviewQueuePanel.css";
+import { button } from "@/components/ui/Button.css";
 
 describe("escalation reason", () => {
   beforeEach(() => {
@@ -1019,5 +1021,43 @@ describe("escalation reason", () => {
 
     const reasonEl = screen.getByText(`❓ ${longReason}`);
     expect(reasonEl).toHaveClass(String(escalationReasonText));
+  });
+
+  it("renders create-rule button with intent=secondary when category is no-match", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "rm -rf /tmp/foo",
+        tool_name: "Bash",
+        escalation_reason: "No matching rule; escalated for manual review.",
+        escalation_reason_category: "no-match",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    const createRuleButton = screen.getByTestId("create-rule-session-approval");
+    expect(createRuleButton).toBeInTheDocument();
+    expect(createRuleButton).toHaveClass(
+      String(button({ intent: "secondary", size: "md" }))
+    );
+  });
+
+  it("omits create-rule button when category is domain-age", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        tool_input_command: "curl https://newly-registered-domain.example/install.sh",
+        tool_name: "Bash",
+        escalation_reason: "Domain registered 3 days ago.",
+        escalation_reason_category: "domain-age",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(screen.queryByTestId("create-rule-session-approval")).not.toBeInTheDocument();
   });
 });
