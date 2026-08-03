@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -636,6 +637,94 @@ func TestRequestReview_TransitionsItemToReview(t *testing.T) {
 
 	// Verify item is now in review status.
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+}
+
+// TestRequestReview_SucceedsAgain_AfterAutoReopenFollowingZombieReviewerFailure
+// is the regression test for backlog item 4c71d3a3-1dd5-4d82-86ec-694a98835d2f:
+// request_review used to fail permanently and deterministically, forever, once
+// an item reached "review" and its reviewer session died before
+// handleReviewSessionExited ever processed its FAIL verdict (a zombie
+// reviewer — no clean exit event; live repro on backlog item 40a243b0 via
+// list_workspace_peers showing status:Active, lifecycle:gone).
+//
+// The crash-recovery sweep (session/backlog_lifecycle.go's
+// reconcileUnprocessedReviewVerdicts) correctly detects this shape and calls
+// into BacklogService.AutoReopenAfterFailedReview — simulated directly here,
+// the same way the sweep does after it confirms the reviewer is dead. But
+// AutoReopenAfterFailedReview's hasActiveWorkSession guard used to skip the
+// review->in_progress transition ENTIRELY whenever the original work session
+// was still alive (exactly this case: that live work session is the one
+// about to call request_review again after fixing the FAIL findings) —
+// leaving the item permanently wedged in "review", since request_review's
+// own precondition hardcodes ExpectedStatus: in_progress. Left unfixed, the
+// second requestReview call below fails with "concurrent modification
+// detected: expected status \"in_progress\", got \"review\"" every time.
+func TestRequestReview_SucceedsAgain_AfterAutoReopenFollowingZombieReviewerFailure(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Escalation reasoning",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	// The work session that originally called request_review and is still
+	// alive — it stays running, fixes the FAIL findings, and is about to call
+	// request_review again. This is exactly AutoReopenAfterFailedReview's
+	// hasActiveWorkSession case.
+	workUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: workUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// The reviewer session that recorded a FAIL verdict and then died as a
+	// zombie. By the time AutoReopenAfterFailedReview runs (dispatched by the
+	// crash-recovery sweep once it independently confirms the reviewer
+	// process is gone), the verdict is already on record — that confirmation
+	// step is exercised separately by reconcileUnprocessedReviewVerdicts'
+	// own tests, not re-tested here.
+	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleReview,
+	}, session.ReviewVerdictData{
+		OverallOutcome: session.ReviewVerdictFail,
+		Summary:        "found gaps in criterion 2",
+	})
+	require.NoError(t, err)
+
+	// Simulates the crash-recovery sweep handing the confirmed-zombie item to
+	// AutoReopenAfterFailedReview.
+	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+		"AutoReopenAfterFailedReview must transition back to in_progress even when the live work session blocks a respawn — otherwise request_review can never succeed again")
+
+	// The live work session's request_review call must now succeed.
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, workUUID)
+	req := makeToolReq(map[string]interface{}{
+		"item_id": item.ID,
+		"message": "Fixed the noted gaps in criterion 2.",
+	})
+
+	result, err := handler.requestReview(ctxWithUUID, req)
+	require.NoError(t, err)
+	require.Len(t, result.Content, 1)
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	require.Contains(t, tc.Text, "review", "request_review must succeed and move the item back to review, not fail the concurrent-modification precondition")
+
+	fetched, err = storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	require.Equal(t, string(session.BacklogStatusReview), fetched.Status)
 }

@@ -1266,8 +1266,12 @@ func (s *BacklogService) writeSessionFiles(item *session.BacklogItemData, priorS
 }
 
 // AutoReopenAfterFailedReview implements session.AutoReopenSpawner.
-// It transitions the item from review back to in_progress and spawns a new
-// work session so the review→rework cycle runs without manual intervention.
+// It always transitions the item from review back to in_progress (required
+// for request_review to become callable again — see its hardcoded
+// ExpectedStatus precondition), then either spawns a new work session or, if
+// one is already alive for this item, leaves it in place to continue and
+// re-request review — so the review→rework cycle runs without manual
+// intervention either way.
 func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID string) error {
 	if s.storage == nil {
 		return fmt.Errorf("storage not available")
@@ -1290,12 +1294,29 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// The work session for this round may still be alive (it stays running and
 	// polls get_backlog_item after request_review — see taskProtocolBlock step 8).
 	// Spawning a new one would fail on the hasActiveWorkSession guard anyway and
-	// strand the item with only the manual "Reopen for Revision" path; reusing the
-	// live session instead keeps its conversation (and prompt cache) intact.
-	if hasActiveWorkSession(sessions) {
-		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s already has an active work session; leaving it in place to pick up the verdict instead of respawning", itemID)
+	// would throw away its conversation (and prompt cache), so spawning is still
+	// skipped below when this is true — but the transition to in_progress must
+	// NOT be skipped: request_review's own precondition hardcodes
+	// ExpectedStatus: in_progress (server/mcp/tools_backlog.go), so without this
+	// transition the live work session can never call request_review again no
+	// matter how many times it fixes the noted gaps — it fails identically
+	// forever with "concurrent modification detected: expected status
+	// in_progress, got review". Confirmed live 2026-08-03 on backlog item
+	// 40a243b0: the review session that recorded the FAIL verdict died before
+	// its exit ever reached handleReviewSessionExited;
+	// reconcileUnprocessedReviewVerdicts' crash-recovery sweep correctly
+	// force-processed the FAIL verdict and called into this function, which
+	// used to return here without transitioning — permanently wedging the item
+	// in "review" with its live work session unable to make any further
+	// progress. See TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgress.
+	//
+	// notifyIfActiveWorkSessionStale still runs here, before the transition,
+	// while the BacklogStatusReview precondition it durably marks against
+	// still holds — it only surfaces a stale-but-alive session to the
+	// operator and does not gate the transition below.
+	activeWork := hasActiveWorkSession(sessions)
+	if activeWork {
 		s.notifyIfActiveWorkSessionStale(ctx, itemID, item.Title, sessions)
-		return nil
 	}
 
 	// Circuit breaker: if the last two verdicts failed for the identical reason,
@@ -1362,6 +1383,17 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	}
 	if _, resolveErr := s.storage.ResolveStuck(ctx, itemID, domain.StuckReasonAbandonedReview); resolveErr != nil {
 		log.WarningLog.Printf("[AutoReopenAfterFailedReview] ResolveStuck(abandoned_review) item=%s: %v", itemID, resolveErr)
+	}
+
+	if activeWork {
+		// Reuse the live work session instead of spawning a new one — spawning
+		// would fail against SpawnSessionFromItem's own hasActiveWorkSession gate
+		// anyway, and would discard the live session's conversation/prompt
+		// cache. The item is now back at in_progress, so that session's next
+		// request_review call succeeds instead of failing the precondition
+		// check forever.
+		log.InfoLog.Printf("[AutoReopenAfterFailedReview] item %s transitioned to in_progress; reusing its active work session instead of respawning", itemID)
+		return nil
 	}
 
 	_, spawnErr := s.SpawnSessionFromItem(ctx, connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
