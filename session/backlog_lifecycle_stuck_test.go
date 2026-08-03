@@ -1602,6 +1602,56 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 	assert.Empty(t, open, "a queued item with a usable triage result is a normal plan-approval wait, not orphaned triage")
 }
 
+// TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriageSession
+// locks in shape 1's `if !isIdea { continue }` guard: nothing in this codebase
+// ever creates a new triage-role session while an item is queued (TriggerTriage's
+// own status guard only accepts idea/ready), so an open session found on a queued
+// item is an unmodeled anomaly this detector must never act on — no staleness
+// flag, no tombstone. The session here is backdated well past
+// maxWorkSessionStaleness so this test would fail loudly (a false-positive flag)
+// if that guard were ever removed or narrowed, rather than passing vacuously.
+func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriageSession(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:              "Queued item with an unexpected open triage session",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusQueued),
+		SkipPlanning:       false,
+		PlanApproved:       false,
+	})
+	require.NoError(t, err)
+
+	// created_at is Immutable() in the ent schema, so backdating requires the
+	// raw ent client rather than storage.CreateItemSession (always time.Now())
+	// — mirrors newOrphanedTriageTestItem's identical need above.
+	parsedItemID, err := uuid.Parse(item.ID)
+	require.NoError(t, err)
+	_, err = er.client.ItemSession.Create().
+		SetSessionUUID("headless-triage-" + uuid.New().String()).
+		SetSessionRole(string(SessionRoleTriage)).
+		SetBacklogItemID(parsedItemID).
+		SetCreatedAt(time.Now().Add(-3 * time.Hour)). // beyond maxWorkSessionStaleness (2h)
+		Save(ctx)
+	require.NoError(t, err)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.reconcileOrphanedTriageItems(ctx, er)
+
+	open, err := er.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, open, "a queued item with a still-open triage session must never be flagged — this shape doesn't happen today, and this detector must not invent behavior for it")
+
+	sessions, err := storage.ListItemSessions(ctx, item.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Nil(t, sessions[0].EndedAt, "must not be tombstoned either — shape 1 is idea-only")
+}
+
 // TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanningOrPlanApproved
 // verifies the generalized shape respects the same escape hatches
 // reconcilePlanNotApprovedItems already does — an item that bypasses planning

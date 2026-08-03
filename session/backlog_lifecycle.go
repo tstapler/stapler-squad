@@ -2302,12 +2302,16 @@ func latestTriageSession(sessions []ItemSessionSummary) *ItemSessionSummary {
 // still covers the original idea-status shapes unchanged.
 //
 // Deliberately NOT generalized to "ready" status: TriggerTriage only ever
-// transitions idea->ready immediately after a successful parse+persist (see
-// its cleanupCtx block), so a ready item's CURRENT plan is reliably in
-// place — the only way a "no usable result" verdict could misfire there is
-// reading a stale, already-superseded session, which isn't a real gap the
-// live incident needed closed. idea and queued are the two statuses this
-// detector understands today.
+// transitions idea->ready immediately after a successful *parse* of the
+// headless call's output (see its cleanupCtx block) — that transition is
+// NOT additionally gated on the subsequent TriageResult persist write also
+// succeeding (persistFailures there only drives a one-time notification, not
+// a rollback), so a transient persist failure can in principle still leave a
+// ready item with an empty TriageResult on its latest session. That's a
+// real, pre-existing gap (nothing today detects "ready" items at all), but
+// one step further down the pipeline than this generalization's scope —
+// tracked separately rather than folded in here. idea and queued are the two
+// statuses this detector understands today.
 //
 // Three shapes share this one detector and StuckReason:
 //
