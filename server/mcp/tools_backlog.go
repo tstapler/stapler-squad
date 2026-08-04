@@ -541,8 +541,9 @@ func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([
 
 // getBacklogItemFor loads a backlog item via the overridable getBacklogItemFn
 // seam when set, otherwise the real h.storage.GetBacklogItem. Used by
-// request_review's pre-transition read. Mirrors itemSessionsFor/sessionBranch/
-// verifyRef's existing nil-check-then-fallback shape.
+// request_review's and report_duplicate's pre-transition reads. Mirrors
+// itemSessionsFor/sessionBranch/verifyRef's existing nil-check-then-fallback
+// shape.
 func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*session.BacklogItemData, error) {
 	if h.getBacklogItemFn != nil {
 		return h.getBacklogItemFn(ctx, itemID)
@@ -917,7 +918,15 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a duplicate", itemSession.Role), ""), nil
 	}
 
-	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	// Routed through the same overridable getBacklogItemFor seam request_review
+	// uses (not h.storage.GetBacklogItem directly) so tests can inject a
+	// readBarrier to deterministically force two racing report_duplicate calls'
+	// pre-transition reads to both land before either's write — see
+	// TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails and its
+	// request_review analogue for why this matters: without it, a sufficiently
+	// delayed loser can observe the winner's already-committed status+notes and
+	// take the idempotency short-circuit above instead of racing the CAS write.
+	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
 		if errors.Is(getErr, session.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil

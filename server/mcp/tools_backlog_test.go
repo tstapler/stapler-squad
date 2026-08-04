@@ -2582,9 +2582,32 @@ func TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails(t *test
 	})
 	require.NoError(t, err)
 
+	// readBarrier forces both goroutines' pre-transition GetBacklogItem reads
+	// to complete — both observing Status: "in_progress" — before either is
+	// allowed to proceed to its TransitionBacklogItemStatus write. Without
+	// this, startBarrier alone only synchronizes goroutine *start*: under
+	// scheduling variance (e.g. a busy machine running the full test suite in
+	// parallel), one goroutine can run its full read->write sequence before
+	// the other's first read even executes. The loser then observes the
+	// winner's already-committed Status: "review" plus matching
+	// VerificationNotes and takes reportDuplicate's idempotency short-circuit
+	// (same duplicate_ref/reason, same session) instead of racing the CAS
+	// write — producing two successes instead of one success + one CAS
+	// failure. Mirrors TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
+	// identical fix for the identical race shape.
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		item, err := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return item, err
+	}
+
 	handler := &backlogHandlers{
-		storage:         storage,
-		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+		storage:          storage,
+		verifyGitHubRef:  func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+		getBacklogItemFn: getBacklogItemFn,
 	}
 	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
 
