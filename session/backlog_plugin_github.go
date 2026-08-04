@@ -155,6 +155,12 @@ func decodeGithubIssuesFetchConfig(config PluginConfig) (cfg githubPluginConfig,
 			return githubPluginConfig{}, false, fmt.Errorf("github_issues: parse config: %w", err)
 		}
 	}
+	// Token is required; disabled when absent. Prefer the shared keychain (one
+	// credential per host, managed in Settings) over a per-source config token,
+	// falling back to it for sources configured before this migration.
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
+	}
 	if cfg.Token == "" {
 		return githubPluginConfig{}, true, nil
 	}
@@ -259,13 +265,19 @@ func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, 
 // return an empty result" — requires Owner/Repo/Token to be present, since
 // CloseIssue/PostIssueComment are only ever invoked once a source is already
 // known-enabled with credentials (the forward-sync subscriber checks
-// ForwardSyncEnabled before calling either method).
+// ForwardSyncEnabled before calling either method). Like
+// decodeGithubIssuesFetchConfig, prefers the shared keychain token for
+// cfg.Host over a per-source config token, falling back to it for sources
+// configured before the keychain migration.
 func decodeGithubIssuesConfig(config PluginConfig) (githubPluginConfig, error) {
 	var cfg githubPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
 			return cfg, fmt.Errorf("github_issues: parse config: %w", err)
 		}
+	}
+	if token := github.GetKeychainTokenForHost(cfg.Host); token != "" {
+		cfg.Token = token
 	}
 	if cfg.Token == "" {
 		return cfg, fmt.Errorf("github_issues: token is required")

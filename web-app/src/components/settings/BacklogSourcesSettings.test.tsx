@@ -111,9 +111,16 @@ describe("BacklogSourcesSettings", () => {
     });
     fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
     fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
-    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
 
     expect(addButton).not.toBeDisabled();
+  });
+
+  it("shows a link to connect a GitHub account instead of a token field for GitHub plugins", async () => {
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.queryByPlaceholderText("GitHub personal access token")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "GitHub accounts" })).toHaveAttribute("href", "/unfinished");
   });
 
   it("calls createItemSource with the correct payload on submit", async () => {
@@ -125,7 +132,6 @@ describe("BacklogSourcesSettings", () => {
     });
     fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
     fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
-    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
 
@@ -134,7 +140,7 @@ describe("BacklogSourcesSettings", () => {
         pluginId: "github_issues",
         displayName: "Widgets Issues",
         configJson: JSON.stringify({ owner: "acme", repo: "widgets" }),
-        token: "tok123",
+        token: "",
       });
     });
   });
@@ -149,7 +155,6 @@ describe("BacklogSourcesSettings", () => {
     });
     fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
     fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
-    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
 
     expect(await screen.findByText("token invalid")).toBeInTheDocument();
@@ -167,7 +172,6 @@ describe("BacklogSourcesSettings", () => {
     });
     fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
     fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
-    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
     fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
 
     await waitFor(() => expect(screen.queryByText("transient network error")).not.toBeInTheDocument());
