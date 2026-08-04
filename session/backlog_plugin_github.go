@@ -79,8 +79,13 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		}
 	}
 
-	// Token is required; disabled when absent.
-	if cfg.Token == "" {
+	// Token is required; disabled when absent. Prefer the shared keychain (one
+	// credential per host, managed in Settings) over a per-source config token.
+	token := github.GetKeychainTokenForHost(cfg.Host)
+	if token == "" {
+		token = cfg.Token
+	}
+	if token == "" {
 		return nil, cursor, nil
 	}
 	if cfg.Owner == "" || cfg.Repo == "" {
@@ -96,7 +101,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 	if err != nil {
 		return nil, cursor, fmt.Errorf("github_issues: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "token "+cfg.Token)
+	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	client := &http.Client{Timeout: 30 * time.Second}

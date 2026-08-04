@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import {
   useBacklogSourcesService,
   type ItemSource,
   type SyncHistoryResult,
 } from "@/lib/hooks/useBacklogSourcesService";
+import { routes } from "@/lib/routes";
 import { PLUGIN_SCHEMAS } from "./backlogSourceSchemas";
 import * as styles from "./BacklogSourcesSettings.css";
 
@@ -58,7 +60,7 @@ export function BacklogSourcesSettings() {
   const canSubmit =
     Boolean(displayName.trim()) &&
     schema.fields.every((f) => Boolean(fieldValues[f.key]?.trim())) &&
-    (!schema.requiresToken || Boolean(token.trim())) &&
+    (!schema.requiresToken || schema.credentialsManagedExternally || Boolean(token.trim())) &&
     !submitting;
 
   const handleAddSource = async () => {
@@ -73,7 +75,7 @@ export function BacklogSourcesSettings() {
       pluginId,
       displayName: displayName.trim(),
       configJson: JSON.stringify(config),
-      token: schema.requiresToken ? token.trim() : "",
+      token: schema.requiresToken && !schema.credentialsManagedExternally ? token.trim() : "",
     });
     setSubmitting(false);
     if (created) {
@@ -229,14 +231,21 @@ export function BacklogSourcesSettings() {
               />
             ))}
           </div>
-          {schema.requiresToken && (
-            <input
-              type="password"
-              className={styles.input}
-              placeholder={schema.tokenLabel}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
+          {schema.requiresToken && schema.credentialsManagedExternally ? (
+            <p className={styles.description}>
+              This source authenticates using a connected GitHub account. Connect one under{" "}
+              <Link href={routes.unfinished}>GitHub accounts</Link> if you haven&apos;t already.
+            </p>
+          ) : (
+            schema.requiresToken && (
+              <input
+                type="password"
+                className={styles.input}
+                placeholder={schema.tokenLabel}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            )
           )}
           <button className={styles.addBtn} onClick={handleAddSource} disabled={!canSubmit}>
             {submitting ? "Adding…" : "Add Source"}
