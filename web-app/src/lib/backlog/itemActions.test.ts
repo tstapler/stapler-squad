@@ -233,6 +233,14 @@ describe("getAvailableActions", () => {
       expect(actions.has("manual_review")).toBe(true);
       expect(actions.has("restart_session")).toBe(true);
     });
+
+    it("exposes link_existing_pr only when there is no PR yet, mirroring ship_pr", () => {
+      const noPr = getAvailableActions(makeItem({ id: "a", status: "review", prUrl: undefined }));
+      expect(noPr.actions.has("link_existing_pr")).toBe(true);
+
+      const withPr = getAvailableActions(makeItem({ id: "a", status: "review", prUrl: "https://github.com/x/y/pull/1" }));
+      expect(withPr.actions.has("link_existing_pr")).toBe(false);
+    });
   });
 
   describe("pr_pending", () => {
@@ -254,20 +262,20 @@ describe("getAvailableActions", () => {
   });
 
   describe("archived", () => {
-    it("exposes only delete", () => {
+    it("exposes only delete and status_override", () => {
       const { actions } = getAvailableActions(makeItem({ id: "a", status: "archived" }));
-      expect(actions).toEqual(new Set(["delete"]));
+      expect(actions).toEqual(new Set(["delete", "status_override"]));
     });
   });
 
   describe("unknown status", () => {
-    it("exposes only delete, defensively, for a forward-compatible unknown status string", () => {
+    it("exposes only delete and status_override, defensively, for a forward-compatible unknown status string", () => {
       const { actions } = getAvailableActions(makeItem({ id: "a", status: "some_future_status" }));
-      expect(actions).toEqual(new Set(["delete"]));
+      expect(actions).toEqual(new Set(["delete", "status_override"]));
     });
   });
 
-  it("always exposes delete regardless of status", () => {
+  it("always exposes delete and status_override regardless of status — the manual escape hatch must survive whatever state an item is stuck in", () => {
     const statuses: KnownBacklogStatus[] = [
       "idea",
       "refining",
@@ -280,7 +288,9 @@ describe("getAvailableActions", () => {
       "archived",
     ];
     for (const status of statuses) {
-      expect(getAvailableActions(makeItem({ id: "a", status })).actions.has("delete")).toBe(true);
+      const { actions } = getAvailableActions(makeItem({ id: "a", status }));
+      expect(actions.has("delete")).toBe(true);
+      expect(actions.has("status_override")).toBe(true);
     }
   });
 

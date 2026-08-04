@@ -7,6 +7,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
 // BacklogStatus represents the lifecycle state of a backlog item.
@@ -414,6 +415,26 @@ func CanTransitionBacklog(from, to BacklogStatus) bool {
 		return false
 	}
 	return targets[to]
+}
+
+// AllowedTransitionsBacklog returns the sorted set of statuses reachable from
+// from, per the same authoritative validTransitions table CanTransitionBacklog
+// checks. Used to populate the manual status-override control's target-status
+// options (BacklogItem.allowed_transitions, computed on read by
+// backlogItemToProto) so the frontend never re-encodes this graph itself.
+func AllowedTransitionsBacklog(from BacklogStatus) []BacklogStatus {
+	targets, ok := validTransitions[from]
+	if !ok {
+		return nil
+	}
+	out := make([]BacklogStatus, 0, len(targets))
+	for to, allowed := range targets {
+		if allowed {
+			out = append(out, to)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // ValidTransitions returns a deep copy of the authoritative transition table.

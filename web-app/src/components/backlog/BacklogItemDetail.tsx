@@ -24,6 +24,7 @@ import { selectBacklogItemById } from "@/lib/store/backlogItemsSlice";
 import { fromSessionVcs, fromShipStatus } from "@/lib/vcs/adapters";
 import { useSectionExpandState } from "@/lib/hooks/useSectionExpandState";
 import { copyToClipboard } from "@/lib/clipboard";
+import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { CollapsibleGroup } from "@/components/ui/Collapsible";
 import { InlineNotice } from "@/components/common/InlineNotice";
 import { ConnectionIndicator } from "./ConnectionIndicator";
@@ -47,6 +48,7 @@ import { SessionsSection } from "./detail/SessionsSection";
 import { WorkflowHistorySection } from "./detail/WorkflowHistorySection";
 import { ProgressHistorySection } from "./detail/ProgressHistorySection";
 import { NotesSection } from "./detail/NotesSection";
+import { ManualOverrideSection } from "./detail/ManualOverrideSection";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -322,6 +324,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [progressHistoryExpanded, setProgressHistoryExpanded] = useSectionExpandState(itemId, "progress-history", false);
   const [notesExpanded, setNotesExpanded] = useSectionExpandState(itemId, "notes", false);
   const [descriptionExpanded, setDescriptionExpanded] = useSectionExpandState(itemId, "description", true);
+  const [manualOverrideExpanded, setManualOverrideExpanded] = useSectionExpandState(itemId, "manual-override", false);
 
   // Story 3.1.5: applies each status-dependent section's real default
   // exactly once, the first time `item` becomes available after this
@@ -379,6 +382,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     ["workflow", workflowExpanded, setWorkflowExpanded],
     ["progress-history", progressHistoryExpanded, setProgressHistoryExpanded],
     ["notes", notesExpanded, setNotesExpanded],
+    ["manual-override", manualOverrideExpanded, setManualOverrideExpanded],
   ];
   const openSectionKeys = sectionExpandEntries.filter(([, expanded]) => expanded).map(([key]) => key);
   const handleGroupValueChange = (next: string[]) => {
@@ -907,6 +911,63 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, overrideVerdict, transitionStatus, lastError, load, showActionToast]);
 
+  // Manual escape-hatch: force a status transition directly, bypassing the
+  // automated pipeline's status-conditional buttons (ManualOverrideSection).
+  // CAS-protected via expectedStatus + expectedUpdatedAt pulled from the
+  // already-loaded item, so a concurrent automated transition racing this
+  // one fails cleanly (surfaced below) instead of one silently clobbering
+  // the other. Rethrows so ManualOverrideSection's own form shows the
+  // server's rejection message inline, in addition to the toast here.
+  const handleManualOverride = useCallback(
+    async (toStatus: BacklogItem["status"], reason: string) => {
+      if (!item) return;
+      const toastKey = `${item.id}:status_override`;
+      setActionLoading("status_override");
+      try {
+        await transitionStatus(item.id, toStatus, item.status, {
+          overrideReason: reason,
+          expectedUpdatedAt: item.updatedAt,
+        });
+        showActionToast(`Status manually overridden to "${toStatus}".`, "success", toastKey);
+        await load();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Manual status override failed.";
+        showActionToast(msg, "error", toastKey);
+        throw e;
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, transitionStatus, load, showActionToast]
+  );
+
+  // Manual escape-hatch: associate a PR that already exists on GitHub with
+  // this item, via UpdateBacklogItem's pr_url/pr_number handling
+  // (SetBacklogItemPRAndTransition) — no live linked session required.
+  // Spreads currentFlags() like every other partial updateBacklogItem call
+  // in this file, so skip_review_gate/skip_planning/auto_spawn_session/
+  // auto_create_pr aren't silently reset to false by this call.
+  const handleLinkPr = useCallback(
+    async (prUrl: string, prNumber: number) => {
+      if (!item) return;
+      const toastKey = `${item.id}:link_existing_pr`;
+      setActionLoading("link_existing_pr");
+      try {
+        const updated = await updateBacklogItem(item.id, { ...currentFlags(), prUrl, prNumber });
+        if (!updated) {
+          const msg = lastError?.message ?? "Failed to link PR — please try again.";
+          showActionToast(msg, "error", toastKey);
+          throw new Error(msg);
+        }
+        showActionToast(`PR #${prNumber} linked.`, "success", toastKey);
+        await load();
+      } finally {
+        if (mountedRef.current) setActionLoading(null);
+      }
+    },
+    [item, updateBacklogItem, currentFlags, lastError, load, showActionToast]
+  );
+
   // Only show the full-screen loader on the INITIAL load (no item yet). Background
   // refreshes must NOT unmount the detail view / edit form, or in-progress edits
   // like unsaved acceptance criteria get discarded when the form remounts.
@@ -1254,11 +1315,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             <LastReviewResultSection item={item} defaultExpanded={lastReviewResultExpanded} />
           )}
 
-          {item.status === "pr_pending" && (
+          {(item.status === "pr_pending" || item.status === "review") && (
             <PullRequestSection
               item={item}
               actionLoading={actionLoading}
               onMarkDone={() => handleAction("mark_done")}
+              onLinkPr={handleLinkPr}
               readOnly={terminalState !== null}
             />
           )}
@@ -1306,6 +1368,16 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
               setEditingNotes(false);
             }}
           />
+
+          {getAvailableActions(item).actions.has("status_override") && (
+            <ManualOverrideSection
+              item={item}
+              actionLoading={actionLoading}
+              defaultExpanded={manualOverrideExpanded}
+              readOnly={terminalState !== null}
+              onOverride={handleManualOverride}
+            />
+          )}
         </CollapsibleGroup>
       </div>
 

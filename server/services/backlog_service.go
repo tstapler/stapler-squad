@@ -657,6 +657,14 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		CreatedAt:         timestamppb.New(item.CreatedAt),
 		UpdatedAt:         timestamppb.New(item.UpdatedAt),
 	}
+
+	// allowed_transitions is derived from the authoritative state-machine
+	// table (session.AllowedTransitionsBacklog -> domain.AllowedTransitionsBacklog)
+	// on every read, so the manual status-override control never needs its
+	// own copy of the transition graph — see the proto field's doc comment.
+	for _, to := range session.AllowedTransitionsBacklog(session.BacklogStatus(item.Status)) {
+		p.AllowedTransitions = append(p.AllowedTransitions, string(to))
+	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
 	}

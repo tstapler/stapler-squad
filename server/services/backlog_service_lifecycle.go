@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -53,6 +55,30 @@ func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storag
 			log.WarningLog.Printf("[TransitionBacklogItemStatus] ResolveStuck(%s) item=%s: %v", reason, itemID, err)
 		}
 	}
+}
+
+// notifyManualOverrideSucceeded publishes an operator-facing notification when
+// one of the two manual escape-hatch writes (PR association via
+// UpdateBacklogItem, or a status override via TransitionBacklogItemStatus
+// with a non-empty OverrideReason) succeeds. Existing notification coverage
+// (notifyTransitionFailed, backlog_service_triage.go) is failure-only — a
+// human/operator directly editing an item's state outside the normal
+// automation path is exactly the kind of change other sessions/agents
+// polling the item need to see, per the "document AI decisions in edge
+// cases" convention: self-heal/override actions must post a visible
+// comment + notify(), never act silently. No-op if no event bus is wired.
+func (s *BacklogService) notifyManualOverrideSucceeded(itemID, itemTitle, detail string) {
+	if s.eventBus == nil {
+		return
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		itemID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM),
+		"Manual override applied",
+		fmt.Sprintf("%s — %s", itemTitle, detail),
+		map[string]string{"item_id": itemID},
+	))
 }
 
 // encryptAndMergeToken produces a token config JSON string suitable for storage.
@@ -306,6 +332,59 @@ func (s *BacklogService) UpdateBacklogItem(
 		update.Notes = &notes
 	}
 
+	// pr_url/pr_number: manual escape-hatch association of a PR that already
+	// exists on GitHub with this item — e.g. an operator recovering an item
+	// whose automation got wedged before report_pr_created ever ran. Both
+	// fields are presence-gated as a pair (setting only one is a client
+	// error, not a partial write) and, when present, route through
+	// SetBacklogItemPRAndTransition — the same primary-write path
+	// report_pr_created (server/mcp/tools_backlog.go) uses — rather than the
+	// generic partial-update fields above, so the PR write and the
+	// review->pr_pending transition land as the single atomic write that
+	// primitive guarantees. Deliberately does NOT re-run report_pr_created's
+	// GitHub cross-check against a live session's branch: there is no live
+	// session in this path by definition, only the parse+number-agreement
+	// validation report_pr_created also performs before any network call.
+	prURLSet, prNumberSet := req.Msg.PrUrl != nil, req.Msg.PrNumber != nil
+	if prURLSet != prNumberSet {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("pr_url and pr_number must be set together"))
+	}
+	var prAssociated bool
+	var prAssociationSummary string
+	if prURLSet && prNumberSet {
+		prURL := *req.Msg.PrUrl
+		prNumber := int(*req.Msg.PrNumber)
+
+		ref, parseErr := session.ParseGitHubURL(prURL)
+		if parseErr != nil || ref.Owner == "" || ref.Repo == "" || ref.Type != session.GitHubRefTypePR {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("pr_url is not a recognizable GitHub PR URL: %v", parseErr))
+		}
+		if ref.PRNumber != 0 && ref.PRNumber != prNumber {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("pr_url references PR #%d but pr_number=%d was given — these must match", ref.PRNumber, prNumber))
+		}
+
+		prAssociationSummary = fmt.Sprintf("PR #%d (%s) manually associated by operator", prNumber, prURL)
+		if setErr := s.storage.SetBacklogItemPRAndTransition(ctx, req.Msg.ItemId, prURL, prNumber, prAssociationSummary); setErr != nil {
+			if errors.Is(setErr, session.ErrPreconditionFailed) {
+				// Distinguish from a generic CAS failure: SetBacklogItemPRAndTransition
+				// hardcodes ExpectedStatus=review (session/storage.go), a deliberate v1
+				// scope limitation, not a race — a plain "precondition failed" message
+				// would send an operator chasing a concurrent-edit theory that doesn't
+				// apply here.
+				return nil, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("item is not in review status — manual PR association only works while an item is awaiting review: %w", setErr))
+			}
+			if ent.IsNotFound(setErr) || errors.Is(setErr, session.ErrNotFound) {
+				return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to associate PR: %w", setErr))
+		}
+		prAssociated = true
+	}
+
 	var precondition *session.BacklogItemPrecondition
 	if req.Msg.ExpectedStatus != "" || req.Msg.ExpectedUpdatedAt != nil {
 		precondition = &session.BacklogItemPrecondition{
@@ -326,6 +405,17 @@ func (s *BacklogService) UpdateBacklogItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
+	}
+
+	// Cross-cutting fix (both new manual-escape-hatch paths): a manual write
+	// must be visible to other sessions/agents polling the item, not just a
+	// silent DB write discoverable only by chance — see notifyTransitionFailed's
+	// doc comment for the "silent status-transition failure" bug shape this
+	// mirrors on the success side. SetBacklogItemPRAndTransition already
+	// records the progress note (session/storage.go); this only adds the
+	// operator-facing notification.
+	if prAssociated {
+		s.notifyManualOverrideSucceeded(req.Msg.ItemId, updated.Title, prAssociationSummary)
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateBacklogItemResponse{
@@ -605,6 +695,22 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		}
 	}
 
+	// Cross-cutting fix (both new manual escape-hatch paths, see
+	// notifyManualOverrideSucceeded's doc comment): a non-empty OverrideReason
+	// is this repo's signal that the caller is the manual "operator override"
+	// control (ManualOverrideSection.tsx) rather than a routine automated
+	// status button — see req.Msg.OverrideReason's threading in
+	// useBacklogService.ts's transitionStatus. Every other TransitionBacklogItemStatus
+	// caller today passes an empty reason and stays exactly as noisy as before.
+	if req.Msg.OverrideReason != "" {
+		if appendErr := s.storage.AppendProgressNote(ctx, req.Msg.ItemId, -1,
+			fmt.Sprintf("Manual override: %s -> %s (%s)", from, to, req.Msg.OverrideReason), "manual_override"); appendErr != nil {
+			log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to append manual-override progress note item=%s: %v", req.Msg.ItemId, appendErr)
+		}
+		s.notifyManualOverrideSucceeded(req.Msg.ItemId, updated.Title,
+			fmt.Sprintf("status manually overridden from %q to %q: %s", from, to, req.Msg.OverrideReason))
+	}
+
 	return connect.NewResponse(&sessionv1.TransitionBacklogItemStatusResponse{
 		Item: backlogItemToProto(updated, s.buildCostLookup()),
 	}), nil
@@ -820,7 +926,18 @@ func (s *BacklogService) OverrideVerdict(
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
 		}
-		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
+		// Build a real CAS precondition from the item just loaded above,
+		// rather than passing nil — every sibling RPC handler in this file
+		// (UpdateBacklogItem, TransitionBacklogItemStatus) always builds one.
+		// A nil precondition here meant this call could silently clobber a
+		// concurrent transition (e.g. an automated re-review landing between
+		// the GetBacklogItem load above and this write) instead of failing
+		// with ErrPreconditionFailed like every other transition path.
+		precondition := &session.BacklogItemPrecondition{
+			ExpectedStatus:    string(from),
+			ExpectedUpdatedAt: &currentItem.UpdatedAt,
+		}
+		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, precondition, session.TriggeredByUser) //nolint:silenttransition the fallback reload a few lines below returns the item's true post-transition state in the RPC response, so the caller sees the failure implicitly rather than a false "success"
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)
 		} else {

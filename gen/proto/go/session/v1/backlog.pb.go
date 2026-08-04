@@ -955,9 +955,17 @@ type BacklogItem struct {
 	// category is a coarse classification (bugfix/feature/chore/refactor) the
 	// frontend uses to pre-fill sane automation-toggle defaults at creation
 	// time. Unset/empty means uncategorized.
-	Category      *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Category *string `protobuf:"bytes,29,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	// allowed_transitions is DERIVED on read from the server's WorkflowEngine
+	// state machine (session.WorkflowEngine.AllowedTransitions, the same
+	// authority TransitionBacklogItemStatus's own CanTransition check uses) —
+	// never stored. Exists so the manual status-override UI (ManualOverrideSection)
+	// can populate its target-status <select> from the real state machine
+	// instead of re-encoding the transition graph as a second, driftable
+	// source of truth on the frontend.
+	AllowedTransitions []string `protobuf:"bytes,30,rep,name=allowed_transitions,json=allowedTransitions,proto3" json:"allowed_transitions,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BacklogItem) Reset() {
@@ -1191,6 +1199,13 @@ func (x *BacklogItem) GetCategory() string {
 		return *x.Category
 	}
 	return ""
+}
+
+func (x *BacklogItem) GetAllowedTransitions() []string {
+	if x != nil {
+		return x.AllowedTransitions
+	}
+	return nil
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -2456,7 +2471,18 @@ type UpdateBacklogItemRequest struct {
 	// category is presence-gated (optional string on the wire): unset means
 	// "leave the item's stored category untouched", a non-nil pointer
 	// (including one pointing at "") explicitly sets/clears it.
-	Category      *string `protobuf:"bytes,16,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	Category *string `protobuf:"bytes,16,opt,name=category,proto3,oneof" json:"category,omitempty"`
+	// pr_url and pr_number are the manual-escape-hatch fields for associating
+	// an already-existing PR with an item by hand (e.g. after automation gets
+	// wedged, outside the agent-only report_pr_created MCP tool path). Both
+	// are presence-gated like category: unset means "leave untouched". Setting
+	// only one of the pair is rejected — see UpdateBacklogItem's handler.
+	// Writing through UpdateBacklogItem routes these two fields through the
+	// same SetBacklogItemPRAndTransition primary-write path report_pr_created
+	// uses (session/storage.go), which only succeeds while the item is in
+	// "review" status (v1 scope limitation, deliberate).
+	PrUrl         *string `protobuf:"bytes,17,opt,name=pr_url,json=prUrl,proto3,oneof" json:"pr_url,omitempty"`
+	PrNumber      *int32  `protobuf:"varint,18,opt,name=pr_number,json=prNumber,proto3,oneof" json:"pr_number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2601,6 +2627,20 @@ func (x *UpdateBacklogItemRequest) GetCategory() string {
 		return *x.Category
 	}
 	return ""
+}
+
+func (x *UpdateBacklogItemRequest) GetPrUrl() string {
+	if x != nil && x.PrUrl != nil {
+		return *x.PrUrl
+	}
+	return ""
+}
+
+func (x *UpdateBacklogItemRequest) GetPrNumber() int32 {
+	if x != nil && x.PrNumber != nil {
+		return *x.PrNumber
+	}
+	return 0
 }
 
 type UpdateBacklogItemResponse struct {
@@ -7509,7 +7549,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x04note\x18\x03 \x01(\tR\x04note\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa4\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xd5\n" +
 	"\n" +
 	"\vBacklogItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
@@ -7545,7 +7585,8 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x0eauto_create_pr\x18\x1a \x01(\bR\fautoCreatePr\x12F\n" +
 	"\x0eprogress_notes\x18\x1b \x03(\v2\x1f.session.v1.BacklogProgressNoteR\rprogressNotes\x123\n" +
 	"\x13rework_cap_override\x18\x1c \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
-	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
+	"\bcategory\x18\x1d \x01(\tH\x02R\bcategory\x88\x01\x01\x12/\n" +
+	"\x13allowed_transitions\x18\x1e \x03(\tR\x12allowedTransitionsB\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
 	"\t_category\"\xd9\x02\n" +
@@ -7666,7 +7707,7 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x10include_terminal\x18\x04 \x01(\bR\x0fincludeTerminal\x12)\n" +
 	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\"I\n" +
 	"\x18ListBacklogItemsResponse\x12-\n" +
-	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xd3\x05\n" +
+	"\x05items\x18\x01 \x03(\v2\x17.session.v1.BacklogItemR\x05items\"\xaa\x06\n" +
 	"\x18UpdateBacklogItemRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
@@ -7684,10 +7725,15 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\rpipeline_mode\x18\r \x01(\tH\x00R\fpipelineMode\x88\x01\x01\x12$\n" +
 	"\x0eauto_create_pr\x18\x0e \x01(\bR\fautoCreatePr\x123\n" +
 	"\x13rework_cap_override\x18\x0f \x01(\x05H\x01R\x11reworkCapOverride\x88\x01\x01\x12\x1f\n" +
-	"\bcategory\x18\x10 \x01(\tH\x02R\bcategory\x88\x01\x01B\x10\n" +
+	"\bcategory\x18\x10 \x01(\tH\x02R\bcategory\x88\x01\x01\x12\x1a\n" +
+	"\x06pr_url\x18\x11 \x01(\tH\x03R\x05prUrl\x88\x01\x01\x12 \n" +
+	"\tpr_number\x18\x12 \x01(\x05H\x04R\bprNumber\x88\x01\x01B\x10\n" +
 	"\x0e_pipeline_modeB\x16\n" +
 	"\x14_rework_cap_overrideB\v\n" +
-	"\t_category\"H\n" +
+	"\t_categoryB\t\n" +
+	"\a_pr_urlB\f\n" +
+	"\n" +
+	"_pr_number\"H\n" +
 	"\x19UpdateBacklogItemResponse\x12+\n" +
 	"\x04item\x18\x01 \x01(\v2\x17.session.v1.BacklogItemR\x04item\"4\n" +
 	"\x19ArchiveBacklogItemRequest\x12\x17\n" +

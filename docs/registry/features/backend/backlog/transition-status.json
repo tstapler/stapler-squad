@@ -6,7 +6,12 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service_lifecycle.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-07-11T09:32:29.851760768-07:00"
+  "tested": true,
+  "testIds": [
+    "TestTransitionBacklogItemStatus_should_NotifyAndAppendNote_When_OverrideReasonProvided",
+    "TestTransitionBacklogItemStatus_should_NotNotify_When_OverrideReasonEmpty",
+    "backlog-manual-override \u003e manual status override transitions a backlog item directly, separate from the automated pipeline's buttons",
+    "backlog-manual-override \u003e manual override submit stays disabled until both a target status and a reason are provided"
+  ],
+  "lastModified": "2026-08-04T00:00:00-07:00"
 }

@@ -24,8 +24,17 @@ func (BacklogProgressNote) Fields() []ent.Field {
 		field.UUID("id", uuid.UUID{}).
 			Default(uuid.New),
 		field.UUID("item_id", uuid.UUID{}),
+		// Min(-1), not Min(0): -1 is an established sentinel for "not tied to
+		// a specific criterion" (see session.Storage.SetBacklogItemPRAndTransition's
+		// and TransitionBacklogItemStatus's manual-override note, both of
+		// which append item-level history with no single criterion to
+		// attach to). Before this fix the field rejected -1 outright, so
+		// every -1 call silently failed ent validation and
+		// AppendProgressNote's caller — which treats this as best-effort,
+		// per this type's own doc comment — logged a warning and moved on;
+		// the audit note was never actually persisted.
 		field.Int("criterion_index").
-			Min(0),
+			Min(-1),
 		field.String("note").
 			Optional().
 			Comment("Freeform note text reported via report_progress. Rendered call sites are responsible for truncation (see sanitizeField); stored unbounded here."),

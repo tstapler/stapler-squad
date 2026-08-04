@@ -1,0 +1,20 @@
+{
+  "id": "backlog-link-existing-pr-control",
+  "type": "frontend",
+  "name": "Manual escape-hatch \"Link existing PR\" form in PullRequestSection",
+  "component": "PullRequestSection",
+  "path": "web-app/src/components/backlog/detail/PullRequestSection.tsx",
+  "filePath": "web-app/src/components/backlog/detail/PullRequestSection.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "PullRequestSection > renders the Link existing PR control for a review-status item with no PR yet, when onLinkPr is provided",
+    "PullRequestSection > does not render the Link existing PR control when onLinkPr is omitted, even in review status",
+    "PullRequestSection > does not render the Link existing PR control when the item is pr_pending (already has a PR)",
+    "PullRequestSection > keeps the Link existing PR submit disabled until both a URL and a valid PR number are entered",
+    "PullRequestSection > calls onLinkPr with the URL and parsed number, then resets the form on success",
+    "PullRequestSection > surfaces the server's rejection message on failure (e.g. wrong status) instead of silently succeeding",
+    "backlog-manual-override > linking an existing PR associates it with a review-status item, no live session required"
+  ],
+  "lastModified": "2026-08-04T00:00:00Z"
+}

@@ -4,6 +4,7 @@ import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import {
   BacklogService,
   BacklogItem as BacklogItemProto,
@@ -153,6 +154,17 @@ export interface BacklogItem {
    * etc.) rather than the watch stream.
    */
   liveVersion?: number;
+  /**
+   * Statuses reachable from the item's current status, per the server's
+   * authoritative WorkflowEngine state machine — computed on read
+   * (backlogItemToProto), never re-derived client-side. Populates
+   * ManualOverrideSection's target-status <select>. Optional (rather than
+   * defaulting to `[]` in this interface) so existing test fixtures that
+   * construct a `BacklogItem` literal directly, not via `mapBacklogItem`,
+   * don't all need updating — `mapBacklogItem` itself always sets `[]` at
+   * minimum.
+   */
+  allowedTransitions?: KnownBacklogStatus[];
 }
 
 /**
@@ -246,6 +258,16 @@ export interface BacklogItemInput {
   category?: string;
   /** Per-item rework-cap override. 0 = unlimited for this item, >0 = this item's own cap. See BacklogItem.reworkCapOverride. */
   reworkCapOverride?: number;
+  /**
+   * Manual escape-hatch PR association (must be set together with
+   * `prNumber`, or omitted). Routes through UpdateBacklogItem's dedicated
+   * pr_url/pr_number handling (SetBacklogItemPRAndTransition), which only
+   * succeeds while the item is in "review" status — see PullRequestSection's
+   * "Link existing PR" form.
+   */
+  prUrl?: string;
+  /** See `prUrl`. */
+  prNumber?: number;
 }
 
 export interface ListBacklogItemsFilter {
@@ -453,6 +475,7 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    allowedTransitions: (p.allowedTransitions ?? []) as KnownBacklogStatus[],
   };
 }
 
@@ -518,7 +541,13 @@ interface UseBacklogServiceReturn {
   transitionStatus: (
     id: string,
     toStatus: BacklogItemStatus,
-    precondition?: BacklogItemStatus
+    precondition?: BacklogItemStatus,
+    options?: {
+      /** Required-reason text for a manual operator override (ManualOverrideSection). Empty/omitted for routine automated-button transitions — see backend's OverrideReason-gated notify(). */
+      overrideReason?: string;
+      /** CAS guard alongside `precondition`: the currently-loaded item's `updatedAt`, so a concurrent write racing this one fails cleanly instead of clobbering it. */
+      expectedUpdatedAt?: string;
+    }
   ) => Promise<BacklogItem | null>;
   spawnSessionFromItem: (id: string, options?: { autonomous?: boolean; force?: boolean }) => Promise<{ sessionUuid: string; queued: boolean } | null>;
   triggerTriage: (id: string, feedback?: string) => Promise<{ itemSessionId: string } | null>;
@@ -661,6 +690,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
           pipelineMode: data.pipelineMode,
           category: data.category,
           reworkCapOverride: data.reworkCapOverride,
+          prUrl: data.prUrl,
+          prNumber: data.prNumber,
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
@@ -700,7 +731,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (
       id: string,
       toStatus: BacklogItemStatus,
-      precondition?: BacklogItemStatus
+      precondition?: BacklogItemStatus,
+      options?: { overrideReason?: string; expectedUpdatedAt?: string }
     ): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
       try {
@@ -709,7 +741,10 @@ export function useBacklogService(): UseBacklogServiceReturn {
           itemId: id,
           targetStatus: toStatus,
           expectedStatus: precondition ?? "",
-          overrideReason: "",
+          expectedUpdatedAt: options?.expectedUpdatedAt
+            ? timestampFromDate(new Date(options.expectedUpdatedAt))
+            : undefined,
+          overrideReason: options?.overrideReason ?? "",
         });
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {

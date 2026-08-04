@@ -148,6 +148,14 @@ message BacklogItem {
   // frontend uses to pre-fill sane automation-toggle defaults at creation
   // time. Unset/empty means uncategorized.
   optional string category = 29;
+  // allowed_transitions is DERIVED on read from the server's WorkflowEngine
+  // state machine (session.WorkflowEngine.AllowedTransitions, the same
+  // authority TransitionBacklogItemStatus's own CanTransition check uses) —
+  // never stored. Exists so the manual status-override UI (ManualOverrideSection)
+  // can populate its target-status <select> from the real state machine
+  // instead of re-encoding the transition graph as a second, driftable
+  // source of truth on the frontend.
+  repeated string allowed_transitions = 30;
 }
 
 // ItemSource represents an external plugin source that syncs items into the
@@ -365,6 +373,17 @@ message UpdateBacklogItemRequest {
   // "leave the item's stored category untouched", a non-nil pointer
   // (including one pointing at "") explicitly sets/clears it.
   optional string category = 16;
+  // pr_url and pr_number are the manual-escape-hatch fields for associating
+  // an already-existing PR with an item by hand (e.g. after automation gets
+  // wedged, outside the agent-only report_pr_created MCP tool path). Both
+  // are presence-gated like category: unset means "leave untouched". Setting
+  // only one of the pair is rejected — see UpdateBacklogItem's handler.
+  // Writing through UpdateBacklogItem routes these two fields through the
+  // same SetBacklogItemPRAndTransition primary-write path report_pr_created
+  // uses (session/storage.go), which only succeeds while the item is in
+  // "review" status (v1 scope limitation, deliberate).
+  optional string pr_url = 17;
+  optional int32 pr_number = 18;
 }
 
 message UpdateBacklogItemResponse {

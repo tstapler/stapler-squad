@@ -193,6 +193,9 @@ var AggregateOutcome = domain.AggregateOutcome
 // CanTransitionBacklog reports whether a transition from one backlog status to another is permitted.
 var CanTransitionBacklog = domain.CanTransitionBacklog
 
+// AllowedTransitionsBacklog returns the sorted set of statuses reachable from from.
+var AllowedTransitionsBacklog = domain.AllowedTransitionsBacklog
+
 // validTransitions is a package-level snapshot of the domain transition table,
 // kept for use by WorkflowEngine (which deep-copies it at construction time).
 var validTransitions = domain.ValidTransitions()

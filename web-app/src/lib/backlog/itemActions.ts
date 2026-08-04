@@ -36,7 +36,16 @@ export type BacklogActionId =
   | "reopen"
   | "send_back_idea"
   | "send_back_ready"
-  | "delete";
+  | "delete"
+  /**
+   * Manual escape-hatch actions (project 7a383b3b — "manual escape hatch:
+   * associate a PR / override status on a backlog item by hand"). Both are
+   * registered here rather than left as unconditional JSX in their host
+   * components so their visibility stays centrally derived, same as every
+   * other action in this file.
+   */
+  | "status_override"
+  | "link_existing_pr";
 
 export interface ItemActionabilityInput
   extends Pick<
@@ -181,7 +190,14 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
       }
       break;
     case "review":
-      if (!item.prUrl) actions.add("ship_pr");
+      if (!item.prUrl) {
+        actions.add("ship_pr");
+        // Manual PR association (UpdateBacklogItem's pr_url/pr_number path)
+        // only succeeds while the item is in review status — see
+        // SetBacklogItemPRAndTransition's hardcoded ExpectedStatus=review
+        // (session/storage.go), a deliberate v1 scope limitation.
+        actions.add("link_existing_pr");
+      }
       actions.add("override_done");
       actions.add("re_review");
       actions.add("manual_review");
@@ -214,6 +230,14 @@ export function getAvailableActions(item: ItemActionabilityInput): AvailableActi
   if (status && CAN_SEND_BACK_READY.has(status)) {
     actions.add("send_back_ready");
   }
+
+  // Manual status override (ManualOverrideSection): the whole point of this
+  // escape hatch is recovering an item whatever state it's stuck in, so it's
+  // available for every known status — including "archived" and "done" — not
+  // gated by the per-status cases above. AllowedTransitions(from) (server
+  // state machine) is still the authority on which *target* statuses the
+  // control offers; this only controls whether the control itself renders.
+  actions.add("status_override");
 
   actions.add("delete");
 

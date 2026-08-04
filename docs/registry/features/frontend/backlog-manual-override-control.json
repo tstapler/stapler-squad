@@ -1,0 +1,22 @@
+{
+  "id": "backlog-manual-override-control",
+  "type": "frontend",
+  "name": "Manual status override control on the backlog item detail page",
+  "component": "ManualOverrideSection",
+  "path": "web-app/src/components/backlog/detail/ManualOverrideSection.tsx",
+  "filePath": "web-app/src/components/backlog/detail/ManualOverrideSection.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "ManualOverrideSection > renders the toggle collapsed by default and reveals the form on click",
+    "ManualOverrideSection > populates the status <select> from item.allowedTransitions, not a re-encoded transition table",
+    "ManualOverrideSection > disables the toggle when the item has no allowed transitions",
+    "ManualOverrideSection > disables the toggle when readOnly is set, even with allowed transitions available",
+    "ManualOverrideSection > keeps submit disabled until a status is chosen and the reason meets the minimum length",
+    "ManualOverrideSection > calls onOverride with the chosen status and trimmed reason, then resets the form on success",
+    "ManualOverrideSection > surfaces the server's rejection message on failure instead of silently succeeding",
+    "backlog-manual-override > manual status override transitions a backlog item directly, separate from the automated pipeline's buttons",
+    "backlog-manual-override > manual override submit stays disabled until both a target status and a reason are provided"
+  ],
+  "lastModified": "2026-08-04T00:00:00Z"
+}
