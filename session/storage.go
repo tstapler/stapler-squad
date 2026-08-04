@@ -764,17 +764,38 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prU
 		return nil // already recorded — idempotent no-op
 	}
 
+	// The status transition (review -> pr_pending) is the single CAS gate
+	// that establishes exclusive ownership, so it MUST happen before the
+	// field write, not after. UpdateBacklogItem never changes Status, so if
+	// the field write ran first (as it used to), two racing callers could
+	// both pass an ExpectedStatus:review precondition on their own field
+	// write — since status stays "review" until a transition succeeds — and
+	// both unconditionally overwrite PrURL/PrNumber; only the loser's
+	// *subsequent* transition call would fail, by which point its PR number
+	// may have already clobbered the winner's. Doing the transition first
+	// means only one caller's CAS can ever succeed, so only that caller
+	// reaches the field write below — no race window remains.
+	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
+	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending: %w", err)
+	}
+
+	// We only reach here if this call's transition CAS won, so the field
+	// write is safe to perform unconditionally with respect to other racing
+	// SetBacklogItemPRAndTransition callers — they all fail the transition
+	// above and return before ever attempting a field write. Deliberately no
+	// precondition here (unlike the transition above): adding one would open
+	// a new, worse failure mode than the one being fixed — if it ever missed
+	// (e.g. some unrelated concurrent status change in this narrow window),
+	// the item would be stuck in pr_pending with no PR fields and unable to
+	// self-heal, since every retry's transition precondition requires
+	// status=review, which this item can never be again.
 	prURLCopy, prNumCopy := prURL, prNumber
 	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
 		PrURL:    &prURLCopy,
 		PrNumber: &prNumCopy,
 	}, nil); err != nil {
 		return fmt.Errorf("persist PR fields: %w", err)
-	}
-
-	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
-	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
-		return fmt.Errorf("transition to pr_pending: %w", err)
 	}
 
 	// Best-effort from here: the primary contract (PR fields persisted, item
