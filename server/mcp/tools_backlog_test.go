@@ -1644,6 +1644,136 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 	assert.Equal(t, 0, fetched.PrNumber)
 }
 
+// TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails is the
+// regression test for the lost-update bug in SetBacklogItemPRAndTransition
+// (session/storage.go): that function used to write PrURL/PrNumber
+// unconditionally (precondition: nil) and only afterward apply its CAS
+// precondition to the status transition. Two racing report_pr_created calls
+// with DIFFERENT PR numbers could both pass that unconditional field write;
+// only the loser's transition failed afterward — by which point its PR
+// number had already clobbered the winner's persisted value. The fix
+// persists the status transition and PrURL/PrNumber together in a single
+// atomic UPDATE ... WHERE (TransitionBacklogItemStatusWithPRFields,
+// session/ent_repository_backlog.go), so this test's assertion — whichever
+// call's transition actually wins the CAS is also the call whose PR number
+// is durably persisted, the loser's PR number must never land, even
+// transiently — holds by construction, not just by timing luck.
+//
+// Mirrors TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails's
+// real-concurrency structure, plus TestRequestReview_ReportsDistinctMessage_
+// WhenCASPreconditionFails's readBarrier (via the getBacklogItemFor seam
+// reportPRCreated is now wired through). The readBarrier's job is only to
+// line up both racers' pre-write reads so they actually attempt to race
+// instead of one running start-to-finish before the other's first read even
+// executes — it does not itself decide a winner; that's the storage layer's
+// atomic UPDATE ... WHERE (the same SQL-level CAS TransitionBacklogItemStatus
+// already uses elsewhere).
+func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:  "Racing PR reports",
+		Status: string(session.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	// readBarrier forces both goroutines' pre-write GetBacklogItem reads
+	// (routed through the getBacklogItemFor seam) to complete before either
+	// is allowed to proceed into SetBacklogItemPRAndTransition's write —
+	// this only ensures both racers actually race (see
+	// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
+	// doc comment for why startBarrier alone is not sufficient); which one
+	// wins is decided by the storage layer's atomic UPDATE ... WHERE, not by
+	// this barrier.
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return it, getErr
+	}
+
+	handler := &backlogHandlers{
+		storage:               storage,
+		getBacklogItemFn:      getBacklogItemFn,
+		resolveSessionBranch:  func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
+		verifyPRMatchesBranch: func(context.Context, string, string, int, string) (bool, error) { return true, nil },
+	}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	type prRaceResult struct {
+		prNumber int
+		result   *mcpgo.CallToolResult
+		err      error
+	}
+
+	var wg sync.WaitGroup
+	var startBarrier sync.WaitGroup
+	startBarrier.Add(1)
+	results := make(chan prRaceResult, 2)
+
+	race := func(prNumber int) {
+		defer wg.Done()
+		startBarrier.Wait()
+		req := makeToolReq(map[string]interface{}{
+			"item_id":   item.ID,
+			"pr_url":    fmt.Sprintf("https://github.com/tstapler/stapler-squad/pull/%d", prNumber),
+			"pr_number": float64(prNumber),
+			"summary":   fmt.Sprintf("Racing report_pr_created call for PR #%d.", prNumber),
+		})
+		result, callErr := handler.reportPRCreated(ctxWithUUID, req)
+		// Do not require/assert here — this closure runs in a spawned
+		// goroutine; see callToolRaceResult's doc comment.
+		results <- prRaceResult{prNumber: prNumber, result: result, err: callErr}
+	}
+
+	wg.Add(2)
+	go race(100)
+	go race(200)
+	startBarrier.Done()
+	wg.Wait()
+	close(results)
+
+	var successes, failures int
+	var winnerPRNumber int
+	for rr := range results {
+		require.NoError(t, rr.err)
+		require.Len(t, rr.result.Content, 1)
+		tc, ok := rr.result.Content[0].(mcpgo.TextContent)
+		require.True(t, ok)
+
+		// The success path returns plain (non-JSON) text; errResult always
+		// emits a JSON-encoded MCPResult.
+		var parsed map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(tc.Text), &parsed); jsonErr != nil {
+			successes++
+			winnerPRNumber = rr.prNumber
+			continue
+		}
+		failures++
+	}
+
+	require.Equal(t, 1, successes, "exactly one racer should win the CAS transition")
+	require.Equal(t, 1, failures, "the loser must see an error, not silently succeed")
+
+	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, winnerPRNumber, fetched.PrNumber,
+		"the persisted PrNumber must match whichever racer's transition actually won the CAS — the loser's PR number must never land, even transiently")
+	assert.Contains(t, fetched.PrURL, fmt.Sprintf("/pull/%d", winnerPRNumber))
+}
+
 // TestRegisterBacklogTools_RequestReview_DescribesAlreadyImplementedCitationRequirement
 // verifies that the request_review tool description (and its verification_notes
 // field description) instruct the agent to cite an exact file path and

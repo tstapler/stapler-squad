@@ -541,9 +541,9 @@ func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([
 
 // getBacklogItemFor loads a backlog item via the overridable getBacklogItemFn
 // seam when set, otherwise the real h.storage.GetBacklogItem. Used by
-// request_review's and report_duplicate's pre-transition reads. Mirrors
-// itemSessionsFor/sessionBranch/verifyRef's existing nil-check-then-fallback
-// shape.
+// request_review's, report_duplicate's, and report_pr_created's
+// pre-transition reads. Mirrors itemSessionsFor/sessionBranch/verifyRef's
+// existing nil-check-then-fallback shape.
 func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*session.BacklogItemData, error) {
 	if h.getBacklogItemFn != nil {
 		return h.getBacklogItemFn(ctx, itemID)
@@ -775,7 +775,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
 	}
 
-	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
 		if errors.Is(getErr, session.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
