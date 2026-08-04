@@ -764,38 +764,30 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prU
 		return nil // already recorded — idempotent no-op
 	}
 
-	// The status transition (review -> pr_pending) is the single CAS gate
-	// that establishes exclusive ownership, so it MUST happen before the
-	// field write, not after. UpdateBacklogItem never changes Status, so if
-	// the field write ran first (as it used to), two racing callers could
-	// both pass an ExpectedStatus:review precondition on their own field
-	// write — since status stays "review" until a transition succeeds — and
-	// both unconditionally overwrite PrURL/PrNumber; only the loser's
-	// *subsequent* transition call would fail, by which point its PR number
-	// may have already clobbered the winner's. Doing the transition first
-	// means only one caller's CAS can ever succeed, so only that caller
-	// reaches the field write below — no race window remains.
-	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
-	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
-		return fmt.Errorf("transition to pr_pending: %w", err)
+	// The status transition (review -> pr_pending) and the PrURL/PrNumber
+	// field write must land as a single atomic UPDATE, not two separate
+	// calls — even with the transition ordered first (closing the original
+	// lost-update race: two racing callers with different PR numbers both
+	// unconditionally passing a field-write precondition before either
+	// transitioned), two separate calls still leave a narrower gap between
+	// them where a concurrent reader can observe status=pr_pending with
+	// PrNumber==0. That exact shape is what the pr_pending_no_pr / BUG-040
+	// stuck detector (reconcilePRPendingWithoutPRItems,
+	// session/backlog_lifecycle.go) exists to flag as a HIGH-priority,
+	// non-auto-recoverable alert — and its resolution condition is anchored
+	// on the item leaving pr_pending entirely, so a reconcile tick landing in
+	// that window could raise a spurious alert that stays open for days.
+	// TransitionBacklogItemStatusWithPRFields folds both writes into one
+	// UPDATE ... WHERE statement guarded by the same CAS precondition, so
+	// they always commit together — no reader can ever observe one without
+	// the other.
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SetBacklogItemPRAndTransition requires an *EntRepository backend, got %T", s.repo)
 	}
-
-	// We only reach here if this call's transition CAS won, so the field
-	// write is safe to perform unconditionally with respect to other racing
-	// SetBacklogItemPRAndTransition callers — they all fail the transition
-	// above and return before ever attempting a field write. Deliberately no
-	// precondition here (unlike the transition above): adding one would open
-	// a new, worse failure mode than the one being fixed — if it ever missed
-	// (e.g. some unrelated concurrent status change in this narrow window),
-	// the item would be stuck in pr_pending with no PR fields and unable to
-	// self-heal, since every retry's transition precondition requires
-	// status=review, which this item can never be again.
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); err != nil {
-		return fmt.Errorf("persist PR fields: %w", err)
+	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
+	if _, err := er.TransitionBacklogItemStatusWithPRFields(ctx, itemID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
 	// Best-effort from here: the primary contract (PR fields persisted, item

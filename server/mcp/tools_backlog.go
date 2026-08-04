@@ -917,7 +917,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a duplicate", itemSession.Role), ""), nil
 	}
 
-	item, getErr := h.storage.GetBacklogItem(ctx, itemID)
+	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
 		if errors.Is(getErr, session.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil

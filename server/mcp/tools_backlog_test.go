@@ -1651,17 +1651,23 @@ func TestReportPRCreated_should_ReturnRetryableError_When_GitHubLookupTransientl
 // precondition to the status transition. Two racing report_pr_created calls
 // with DIFFERENT PR numbers could both pass that unconditional field write;
 // only the loser's transition failed afterward — by which point its PR
-// number had already clobbered the winner's persisted value. This test
-// proves whichever call's transition actually wins the CAS is also the call
-// whose PR number is durably persisted — the loser's PR number must never
-// land, even transiently. Mirrors TestReportDuplicate_ReportsDistinctMessage_
-// WhenCASPreconditionFails's real-concurrency structure, plus
-// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
-// readBarrier (via the getBacklogItemFor seam reportPRCreated is now wired
-// through) — unlike the single-CAS-call races those tests exercise, this
-// race spans SetBacklogItemPRAndTransition's two sequential writes and needs
-// both racers' pre-write reads synchronized to reliably force the
-// interleaving that exposes the bug rather than depending on timing luck.
+// number had already clobbered the winner's persisted value. The fix
+// persists the status transition and PrURL/PrNumber together in a single
+// atomic UPDATE ... WHERE (TransitionBacklogItemStatusWithPRFields,
+// session/ent_repository_backlog.go), so this test's assertion — whichever
+// call's transition actually wins the CAS is also the call whose PR number
+// is durably persisted, the loser's PR number must never land, even
+// transiently — holds by construction, not just by timing luck.
+//
+// Mirrors TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails's
+// real-concurrency structure, plus TestRequestReview_ReportsDistinctMessage_
+// WhenCASPreconditionFails's readBarrier (via the getBacklogItemFor seam
+// reportPRCreated is now wired through). The readBarrier's job is only to
+// line up both racers' pre-write reads so they actually attempt to race
+// instead of one running start-to-finish before the other's first read even
+// executes — it does not itself decide a winner; that's the storage layer's
+// atomic UPDATE ... WHERE (the same SQL-level CAS TransitionBacklogItemStatus
+// already uses elsewhere).
 func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
@@ -1682,9 +1688,12 @@ func TestReportPRCreated_LoserPRNeverPersists_WhenCASPreconditionFails(t *testin
 
 	// readBarrier forces both goroutines' pre-write GetBacklogItem reads
 	// (routed through the getBacklogItemFor seam) to complete before either
-	// is allowed to proceed into SetBacklogItemPRAndTransition's writes —
-	// see TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
-	// doc comment for why startBarrier alone is not sufficient.
+	// is allowed to proceed into SetBacklogItemPRAndTransition's write —
+	// this only ensures both racers actually race (see
+	// TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
+	// doc comment for why startBarrier alone is not sufficient); which one
+	// wins is decided by the storage layer's atomic UPDATE ... WHERE, not by
+	// this barrier.
 	var readBarrier sync.WaitGroup
 	readBarrier.Add(2)
 	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
@@ -2685,6 +2694,16 @@ func TestReportDuplicate_DoesNotTreatPrefixRefAsIdempotentMatch(t *testing.T) {
 // calls genuinely race on the same in_progress item, the DB-level atomic
 // UPDATE...WHERE guarantees exactly one winner; the loser must see the same
 // distinct, non-retry "state changed" message, still under ErrInternalError.
+//
+// Uses the same readBarrier (via the getBacklogItemFor seam reportDuplicate
+// is wired through) as TestRequestReview's version of this test — without
+// it, this test was observed to flake under load (e.g. the full `make test`
+// suite's parallelism): startBarrier alone only synchronizes goroutine
+// *start*, so one goroutine can run its full read->transition sequence
+// before the other's first read even executes, occasionally producing two
+// successes instead of one winner + one loser. The readBarrier forces both
+// racers' pre-transition reads to complete together, reliably forcing the
+// actual race this test exists to exercise.
 func TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
@@ -2703,9 +2722,19 @@ func TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails(t *test
 	})
 	require.NoError(t, err)
 
+	var readBarrier sync.WaitGroup
+	readBarrier.Add(2)
+	getBacklogItemFn := func(fnCtx context.Context, itemID string) (*session.BacklogItemData, error) {
+		it, getErr := storage.GetBacklogItem(fnCtx, itemID)
+		readBarrier.Done()
+		readBarrier.Wait()
+		return it, getErr
+	}
+
 	handler := &backlogHandlers{
-		storage:         storage,
-		verifyGitHubRef: func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
+		storage:          storage,
+		getBacklogItemFn: getBacklogItemFn,
+		verifyGitHubRef:  func(ctx context.Context, ref *githubpkg.ParsedGitHubRef) error { return nil },
 	}
 	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
 
