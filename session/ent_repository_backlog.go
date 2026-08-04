@@ -1523,6 +1523,39 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID
 	return item, nil
 }
 
+// GetBacklogItemsByExternalIDs batches GetBacklogItemByExternalID's lookup
+// across many external IDs at once (a single IN query rather than one query
+// per ID), scoped to sourceID the same way. Used by
+// SyncLoop.PreviewBackwardSyncImpact, which previously issued one
+// GetBacklogItemByExternalID call per closed issue in a loop — an N+1 query
+// pattern against an index that isn't composite with the source FK. Returns
+// a map keyed by external_id; IDs with no matching local item are simply
+// absent from the map (not an error), matching the "not locally-imported,
+// exclude it" semantics the per-item lookup had.
+func (r *EntRepository) GetBacklogItemsByExternalIDs(ctx context.Context, sourceID string, externalIDs []string) (map[string]*ent.BacklogItem, error) {
+	result := make(map[string]*ent.BacklogItem, len(externalIDs))
+	if len(externalIDs) == 0 {
+		return result, nil
+	}
+
+	parsedSourceID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+	}
+
+	items, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ExternalIDIn(externalIDs...), backlogitem.HasSourceWith(itemsource.ID(parsedSourceID))).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch query backlog items by external_ids: %w", err)
+	}
+
+	for _, item := range items {
+		result[item.ExternalID] = item
+	}
+	return result, nil
+}
+
 // maxSourceSyncEventsHistory caps how many sync history rows a single
 // GetSyncHistory call returns, so a long-lived, frequently-synced source
 // doesn't grow into an unbounded response.

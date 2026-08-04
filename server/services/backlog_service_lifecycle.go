@@ -751,10 +751,8 @@ func (s *BacklogService) UpdateItemSource(
 	update.ForwardSyncEnabled = &fwd
 	bwd := req.Msg.BackwardSyncEnabled
 	update.BackwardSyncEnabled = &bwd
-	if req.Msg.ForwardSyncCloseLabel != "" {
-		label := req.Msg.ForwardSyncCloseLabel
-		update.ForwardSyncCloseLabel = &label
-	}
+	label := req.Msg.ForwardSyncCloseLabel
+	update.ForwardSyncCloseLabel = &label
 	if req.Msg.Token != "" {
 		// UpdateItemSource replaces the config wholesale (no prior config to merge).
 		tokenJSON, mergeErr := encryptAndMergeToken(s.cfg, req.Msg.Token, "")

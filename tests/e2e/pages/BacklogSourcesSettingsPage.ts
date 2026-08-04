@@ -38,8 +38,11 @@ export class BacklogSourcesSettingsPage {
   /**
    * Clicks the "Reflect GitHub status back here" (backward sync) toggle
    * within a specific source's row (Epic 4.3, backlog-github-two-way-sync).
-   * Note: as of this wave, enabling backward sync flips the toggle
-   * immediately — the confirm-with-preview gate (Epic 4.4) is a later wave.
+   * Note: the confirm-with-preview gate (Epic 4.4, BackwardSyncConfirmDialog)
+   * ships in this same PR and IS wired up here — this helper's fixture
+   * source just has zero linked items, so PreviewBackwardSyncImpact returns
+   * 0 and the dialog auto-skips, letting the toggle flip immediately. It is
+   * not evidence the gate is absent.
    */
   async enableBackwardSync(displayName: string) {
     await this.row(displayName).getByRole("switch", { name: /reflecting GitHub status back/ }).click();

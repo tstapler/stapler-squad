@@ -471,6 +471,22 @@ describe("BacklogSourcesSettings — Epic 4.4: first-enable-of-backward-sync con
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("TestBacklogSourcesSettings_ShowsDialogWithCaveat_WhenPreviewCountIsZeroButPossiblyIncomplete", async () => {
+    // itemCount: 0 alone skips the dialog (see the test above) — but if the
+    // underlying fetch hit its pagination cap, a 0 count is not trustworthy
+    // as "nothing to warn about" (the CRITICAL under-reporting finding this
+    // guards against). The dialog must still show, with an explicit caveat.
+    mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 0, sampleTitles: [], possiblyIncomplete: true });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("switch", { name: /reflecting GitHub status back/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByTestId("backward-sync-confirm-incomplete-caveat")).toBeInTheDocument();
+    expect(mockUpdateItemSource).not.toHaveBeenCalled();
+  });
+
   it("TestBacklogSourcesSettings_CancelLeavesToggleOffAndMakesNoRPCCall", async () => {
     mockPreviewBackwardSyncImpact.mockResolvedValue({ itemCount: 2, sampleTitles: ["A", "B"] });
     render(<BacklogSourcesSettings />);

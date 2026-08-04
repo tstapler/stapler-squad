@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,89 @@ func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
 	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
 	require.Error(t, err)
+}
+
+// fakeGithubIssuesPage renders a JSON array of n synthetic issues, numbered
+// starting at startNumber, for use as a canned page response in FetchAll
+// pagination tests.
+func fakeGithubIssuesPage(startNumber, n int) string {
+	issues := make([]string, n)
+	for i := 0; i < n; i++ {
+		num := startNumber + i
+		issues[i] = fmt.Sprintf(`{"number":%d,"title":"Issue %d","state":"closed","updated_at":"2024-01-01T00:00:00Z","html_url":"https://x/%d"}`, num, num, num)
+	}
+	return "[" + strings.Join(issues, ",") + "]"
+}
+
+// TestGitHubIssuesPlugin_FetchAll_AggregatesMultiplePages verifies FetchAll
+// (the PaginatedFetcher implementation used by PreviewBackwardSyncImpact)
+// follows page= across a full first page and a short second page, stopping
+// once a page comes back under githubIssuesPerPage — proving it retrieves
+// issues beyond what a single Fetch call (page 1 only) would see.
+func TestGitHubIssuesPlugin_FetchAll_AggregatesMultiplePages(t *testing.T) {
+	var pagesRequested []string
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		pagesRequested = append(pagesRequested, page)
+		switch page {
+		case "1", "":
+			w.Write([]byte(fakeGithubIssuesPage(1, githubIssuesPerPage)))
+		case "2":
+			w.Write([]byte(fakeGithubIssuesPage(githubIssuesPerPage+1, 10)))
+		default:
+			t.Fatalf("unexpected page requested: %q", page)
+		}
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "2"}, pagesRequested)
+	require.Len(t, items, githubIssuesPerPage+10)
+	require.False(t, possiblyIncomplete, "short second page means the full result set was retrieved")
+	require.Equal(t, "1", items[0].ExternalID)
+	require.Equal(t, strconv.Itoa(githubIssuesPerPage+10), items[len(items)-1].ExternalID)
+}
+
+// TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit verifies
+// that when every page up to the pagination cap comes back full, FetchAll
+// reports possiblyIncomplete=true rather than silently under-reporting the
+// blast radius as if the result set were exhaustive — the CRITICAL finding
+// this fixes: a single-page Fetch on a repo with >50 issues could report
+// "0 items affected" when older closed issues existed beyond page 1.
+func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing.T) {
+	origCap := maxPreviewFetchPages
+	maxPreviewFetchPages = 2
+	t.Cleanup(func() { maxPreviewFetchPages = origCap })
+
+	requestedPages := 0
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestedPages++
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		w.Write([]byte(fakeGithubIssuesPage((page-1)*githubIssuesPerPage+1, githubIssuesPerPage)))
+	})
+
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Equal(t, 2, requestedPages, "should stop at the cap rather than fetching indefinitely")
+	require.Len(t, items, 2*githubIssuesPerPage)
+	require.True(t, possiblyIncomplete, "every page was full up to the cap, so more issues may exist beyond it")
+}
+
+// TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing mirrors
+// Fetch's "disabled source" contract: FetchAll must not attempt any request
+// when no token is configured.
+func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) {
+	p := NewGitHubIssuesPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
+	items, cursor, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "old-cursor")
+	require.NoError(t, err)
+	require.Empty(t, items)
+	require.Equal(t, "old-cursor", cursor)
+	require.False(t, possiblyIncomplete)
 }
 
 func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {

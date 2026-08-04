@@ -559,6 +559,12 @@ message PreviewBackwardSyncImpactResponse {
   // Up to 5 titles from the eligible set, for display in the confirmation
   // dialog. Not necessarily all N items when item_count > 5.
   repeated string sample_titles = 2;
+  // True if the underlying fetch hit its page cap while the last page was
+  // still full — meaning there may be more matching items beyond what was
+  // counted, so item_count/sample_titles must be treated as a lower bound
+  // rather than an exhaustive count. Only ever true on repos with an
+  // unusually large issue history (see maxPreviewFetchPages).
+  bool possibly_incomplete = 3;
 }
 
 message CreatePipelineModeRequest {

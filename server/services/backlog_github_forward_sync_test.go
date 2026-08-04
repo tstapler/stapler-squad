@@ -264,6 +264,72 @@ func TestForwardSyncSubscriber_UsesCloseIssueResponseTimestampForWatermark(t *te
 	require.Greater(t, time.Since(*refreshed.GitHubSyncedIssueUpdatedAt), 24*time.Hour, "watermark must be the mocked 2019 timestamp, not wall-clock time")
 }
 
+// TestForwardSyncSubscriber_PersistsWatermarkWhenPostCommentFails is the
+// regression test for handleForwardSyncClose's comment-is-best-effort
+// contract (backlog_github_forward_sync.go's comment above the
+// PostIssueComment call): a failed follow-up comment must not prevent the
+// loop-prevention watermark from being persisted, since the close itself
+// already succeeded by that point. Previously untested — fakeCloserPlugin
+// already had commentErr for exactly this, but no test exercised it.
+func TestForwardSyncSubscriber_PersistsWatermarkWhenPostCommentFails(t *testing.T) {
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
+	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
+
+	fixedTimestamp := time.Date(2021, 5, 4, 12, 0, 0, 0, time.UTC)
+	fake := &fakeForwardSyncCloserPlugin{
+		pluginID:       "fake_closer",
+		closeUpdatedAt: fixedTimestamp,
+		commentErr:     fmt.Errorf("github: comment failed"),
+	}
+	registry := session.NewPluginRegistry()
+	registry.Register(fake)
+	syncLoop := session.NewSyncLoop(storage, registry)
+
+	handleForwardSyncClose(context.Background(), registry, syncLoop, storage, item)
+
+	require.Equal(t, 1, fake.closeCallCount(), "CloseIssue must still have been called")
+	require.Equal(t, 1, fake.commentCallCount(), "PostIssueComment must still have been attempted")
+
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed.GitHubSyncedIssueUpdatedAt, "watermark must be persisted even though the comment failed")
+	require.True(t, refreshed.GitHubSyncedIssueUpdatedAt.Equal(fixedTimestamp))
+}
+
+// TestForwardSyncSubscriber_NoOpForLocallyCreatedItem verifies the most
+// common real-world case has zero-blast-radius coverage: a backlog item with
+// no SourceID/ExternalID (the vast majority of items, which were never
+// imported from GitHub) must never trigger CloseIssue when it transitions to
+// done. This exercises handleForwardSyncClose's
+// `current.SourceID == "" || current.ExternalID == ""` early return.
+func TestForwardSyncSubscriber_NoOpForLocallyCreatedItem(t *testing.T) {
+	storage := newForwardSyncTestStorage(t)
+
+	// A plain, locally-created backlog item — no source, no external ID.
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title:  "locally created item",
+		Status: string(session.BacklogStatusDone),
+	})
+	require.NoError(t, err)
+
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "fake_closer"}
+	registry := session.NewPluginRegistry()
+	registry.Register(fake)
+	syncLoop := session.NewSyncLoop(storage, registry)
+
+	require.NotPanics(t, func() {
+		handleForwardSyncClose(context.Background(), registry, syncLoop, storage, item)
+	})
+
+	require.Equal(t, 0, fake.closeCallCount(), "a locally-created item must never trigger CloseIssue")
+	require.Equal(t, 0, fake.commentCallCount())
+
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Nil(t, refreshed.GitHubSyncedIssueUpdatedAt)
+}
+
 // TestForwardSyncSubscriber_RecordsFailureOnCloseError is the regression test
 // for pre-mortem P1 #3: a CloseIssue failure must be persisted via
 // storage.RecordSourceSyncFailure so it's queryable (Story 4.3.2's row-level

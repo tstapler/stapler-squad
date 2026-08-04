@@ -379,6 +379,46 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 	require.Equal(t, 1, eventsA[0].ItemsCreated, "source B's sync must not count as an update to source A's item")
 }
 
+// TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing verifies
+// the batched lookup (replacing PreviewBackwardSyncImpact's former N+1
+// per-issue query loop) preserves GetBacklogItemByExternalID's two
+// invariants at once: results are scoped per-source (no cross-source
+// collision on numerically-identical external IDs), and external IDs with no
+// local match are simply absent from the returned map rather than erroring.
+func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
+	require.NoError(t, err)
+	srcB, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
+	require.NoError(t, err)
+
+	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "A1", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "1"})
+	require.NoError(t, err)
+	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "A2", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "2"})
+	require.NoError(t, err)
+	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "B1", Status: string(BacklogStatusIdea), SourceID: srcB.ID, ExternalID: "1"})
+	require.NoError(t, err)
+
+	// "3" doesn't exist at all; "1" exists on both sources but this query is
+	// scoped to srcA, so only srcA's item must come back.
+	results, err := er.GetBacklogItemsByExternalIDs(ctx, srcA.ID, []string{"1", "2", "3"})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, "A1", results["1"].Title)
+	require.Equal(t, "A2", results["2"].Title)
+	_, missingFound := results["3"]
+	require.False(t, missingFound, "external ID with no local match must be absent from the map, not an error")
+
+	// Empty input returns an empty map, not an error.
+	empty, err := er.GetBacklogItemsByExternalIDs(ctx, srcA.ID, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
 // Two concurrent syncs of the SAME source (e.g. a manual TriggerSync racing
 // the periodic tick) must not both miss the same not-yet-created item's
 // external_id lookup and both create it — the per-source lock in SyncOne
@@ -1167,4 +1207,66 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "genuinely newer external state must be processed")
 	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
 	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(t2))
+}
+
+// alwaysDenyWorkflowEngine is a WorkflowEngine stub whose CanTransition
+// always returns false, used to force GuardedTransitionAllowed(...) == false
+// even when determineBackwardSyncTarget finds a structurally valid target —
+// exercising SyncOne's guard-denied branch (backlog_sync.go's `if
+// GuardedTransitionAllowed(...) { ... } else { ...skipped++ }`), which no
+// existing test reached: the no-valid-target skip
+// (TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem) only covers the
+// determineBackwardSyncTarget-returns-false branch, a different code path.
+type alwaysDenyWorkflowEngine struct{}
+
+func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus) bool { return false }
+func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus) error {
+	return nil
+}
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus) []BacklogStatus { return nil }
+
+// TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied is the
+// regression test for the GuardedTransitionAllowed-returns-false branch
+// inside SyncOne's closed-issue block: determineBackwardSyncTarget finds a
+// structurally valid target (ready -> archived), but the injected workflow
+// engine's guard denies it. The item must stay at its original status
+// (never transitioned) and be counted as skipped, not updated or errored.
+func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testing.T) {
+	issueUpdatedAt := time.Now()
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: issueUpdatedAt},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+	sl.workflowEngine = alwaysDenyWorkflowEngine{}
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusReady),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReady), refetched.Status, "a guard-denied transition must never be applied")
+
+	// Note: ItemsUpdated can still be non-zero here — Title/Description/
+	// Priority field-sync (unconditional, separate from the backward-sync
+	// status block) may independently count as an update in the same tick.
+	// The status-block-specific assertion is refetched.Status staying Ready.
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, 0, events[0].ItemsErrored)
+	require.Greater(t, events[0].ItemsSkipped, 0, "guard-denied transition should be counted as skipped")
 }

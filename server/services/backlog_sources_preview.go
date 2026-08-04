@@ -51,7 +51,7 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 	previewCtx, cancel := context.WithTimeout(ctx, defaultTriggerSyncTimeout)
 	defer cancel()
 
-	itemCount, sampleTitles, err := sl.PreviewBackwardSyncImpactByID(previewCtx, req.Msg.SourceId)
+	itemCount, sampleTitles, possiblyIncomplete, err := sl.PreviewBackwardSyncImpactByID(previewCtx, req.Msg.SourceId)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
@@ -60,7 +60,8 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 	}
 
 	return connect.NewResponse(&sessionv1.PreviewBackwardSyncImpactResponse{
-		ItemCount:    int32(itemCount),
-		SampleTitles: sampleTitles,
+		ItemCount:          int32(itemCount),
+		SampleTitles:       sampleTitles,
+		PossiblyIncomplete: possiblyIncomplete,
 	}), nil
 }

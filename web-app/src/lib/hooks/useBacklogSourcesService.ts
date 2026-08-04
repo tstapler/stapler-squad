@@ -40,6 +40,13 @@ export interface SyncHistoryResult {
 export interface BackwardSyncImpactPreview {
   itemCount: number;
   sampleTitles: string[];
+  /**
+   * True when the server-side fetch hit its pagination cap while still
+   * seeing full pages — itemCount/sampleTitles are a lower bound, not an
+   * exhaustive count, on repos with an unusually large issue history. See
+   * PreviewBackwardSyncImpactResponse.possibly_incomplete.
+   */
+  possiblyIncomplete: boolean;
 }
 
 function tsToIso(ts?: { seconds: bigint }): string | undefined {
@@ -282,7 +289,11 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
       try {
         const resp = await clientRef.current.previewBackwardSyncImpact({ sourceId });
         setLastError(null);
-        return { itemCount: resp.itemCount, sampleTitles: resp.sampleTitles ?? [] };
+        return {
+          itemCount: resp.itemCount,
+          sampleTitles: resp.sampleTitles ?? [],
+          possiblyIncomplete: resp.possiblyIncomplete ?? false,
+        };
       } catch (err) {
         console.error("[useBacklogSourcesService] previewBackwardSyncImpact:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));

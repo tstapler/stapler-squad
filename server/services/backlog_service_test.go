@@ -3511,6 +3511,59 @@ func TestUpdateItemSource_RoundTripsForwardBackwardSyncEnabled(t *testing.T) {
 	assert.Equal(t, "wontfix", found.ForwardSyncCloseLabel)
 }
 
+// TestUpdateItemSource_ClearsForwardSyncCloseLabel verifies that sending an
+// empty ForwardSyncCloseLabel actually clears a previously-set label.
+// UpdateItemSource is a full-state overwrite (see the frontend's
+// useBacklogSourcesService.ts comment), so guarding the write on a non-empty
+// string — as the handler previously did — silently ignored a user's attempt
+// to clear the field via blur-triggered updates in BacklogSourcesSettings.tsx.
+func TestUpdateItemSource_ClearsForwardSyncCloseLabel(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	created, err := svc.CreateItemSource(context.Background(), &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "My GitHub",
+		},
+	})
+	require.NoError(t, err)
+	sourceID := created.Msg.Source.Id
+
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "wontfix",
+		},
+	})
+	require.NoError(t, err)
+
+	// Now clear it — this must actually persist as empty, not be silently
+	// ignored because the RPC field is the empty string.
+	_, err = svc.UpdateItemSource(context.Background(), &connect.Request[sessionv1.UpdateItemSourceRequest]{
+		Msg: &sessionv1.UpdateItemSourceRequest{
+			SourceId:              sourceID,
+			DisplayName:           "My GitHub",
+			ForwardSyncCloseLabel: "",
+		},
+	})
+	require.NoError(t, err)
+
+	listResp, err := svc.ListItemSources(context.Background(), &connect.Request[sessionv1.ListItemSourcesRequest]{})
+	require.NoError(t, err)
+
+	var found *sessionv1.ItemSource
+	for _, s := range listResp.Msg.Sources {
+		if s.Id == sourceID {
+			found = s
+			break
+		}
+	}
+	require.NotNil(t, found, "updated source not found in ListItemSources")
+	assert.Equal(t, "", found.ForwardSyncCloseLabel, "close label should have been cleared, not left unchanged")
+}
+
 // TestUpdateItemSource_ReturnsErrorForUnknownSourceId verifies UpdateItemSource
 // surfaces a NotFound error (rather than silently succeeding) when the target
 // source id does not exist — the error path counterpart to the round-trip test.

@@ -200,14 +200,14 @@ const maxBackwardSyncPreviewSamples = 5
 
 // PreviewBackwardSyncImpactByID looks up an ItemSource by ID and previews the
 // impact of enabling backward sync for it — see PreviewBackwardSyncImpact.
-func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID string) (itemCount int, sampleTitles []string, err error) {
+func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID string) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
 	er, ok := sl.storage.repo.(*EntRepository)
 	if !ok {
-		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpactByID: storage backend does not support ent operations")
+		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpactByID: storage backend does not support ent operations")
 	}
 	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
 	if err != nil {
-		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpactByID: %w", err)
+		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpactByID: %w", err)
 	}
 	return sl.PreviewBackwardSyncImpact(ctx, entSrc)
 }
@@ -229,37 +229,64 @@ func (sl *SyncLoop) PreviewBackwardSyncImpactByID(ctx context.Context, sourceID 
 // been forward-syncing for a while before backward sync is ever considered,
 // advancing the cursor well past issues that are now closed but haven't
 // changed since).
-func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.ItemSource) (itemCount int, sampleTitles []string, err error) {
+//
+// If the plugin implements PaginatedFetcher, the full result set is fetched
+// across all pages (bounded by the plugin's own cap) rather than just the
+// newest page — GitHub's Issues API sorts by `created` descending by
+// default, so a single-page Fetch would silently miss older closed issues on
+// repos with more than one page of history, undercounting the blast radius.
+// possiblyIncomplete is true when the underlying fetch hit its page cap,
+// meaning the count/titles returned are a lower bound, not exhaustive.
+func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.ItemSource) (itemCount int, sampleTitles []string, possiblyIncomplete bool, err error) {
 	er, ok := sl.storage.repo.(*EntRepository)
 	if !ok {
-		return 0, nil, fmt.Errorf("PreviewBackwardSyncImpact: storage backend does not support ent operations")
+		return 0, nil, false, fmt.Errorf("PreviewBackwardSyncImpact: storage backend does not support ent operations")
 	}
 
 	plugin, ok := sl.registry.Get(source.PluginID)
 	if !ok {
-		return 0, nil, fmt.Errorf("no plugin registered for plugin_id %q", source.PluginID)
+		return 0, nil, false, fmt.Errorf("no plugin registered for plugin_id %q", source.PluginID)
 	}
 
 	decryptedConfig, err := sl.DecryptConfigToken(source.Config)
 	if err != nil {
-		return 0, nil, fmt.Errorf("decrypt config: %w", err)
+		return 0, nil, false, fmt.Errorf("decrypt config: %w", err)
 	}
 
 	cfg := PluginConfig{Raw: decryptedConfig}
-	items, _, fetchErr := plugin.Fetch(ctx, cfg, "")
-	if fetchErr != nil {
-		return 0, nil, fmt.Errorf("fetch: %w", fetchErr)
+
+	var items []ExternalItem
+	if paginated, ok := plugin.(PaginatedFetcher); ok {
+		var fetchErr error
+		items, _, possiblyIncomplete, fetchErr = paginated.FetchAll(ctx, cfg, "")
+		if fetchErr != nil {
+			return 0, nil, false, fmt.Errorf("fetch: %w", fetchErr)
+		}
+	} else {
+		var fetchErr error
+		items, _, fetchErr = plugin.Fetch(ctx, cfg, "")
+		if fetchErr != nil {
+			return 0, nil, false, fmt.Errorf("fetch: %w", fetchErr)
+		}
 	}
 
+	closedExternalIDs := make([]string, 0, len(items))
 	for _, extItem := range items {
-		if extItem.State != "closed" {
-			continue
+		if extItem.State == "closed" {
+			closedExternalIDs = append(closedExternalIDs, extItem.ExternalID)
 		}
-		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
-		if lookupErr != nil {
-			// Not a locally-imported item (or a lookup error) — either way it's
-			// not an "already-imported item" this preview is about, so it's
-			// excluded rather than counted or treated as fatal to the whole call.
+	}
+
+	// Batch the local-item lookup instead of one query per closed issue.
+	existingByExternalID, lookupErr := er.GetBacklogItemsByExternalIDs(ctx, source.ID.String(), closedExternalIDs)
+	if lookupErr != nil {
+		return 0, nil, false, fmt.Errorf("batch lookup backlog items: %w", lookupErr)
+	}
+
+	for _, externalID := range closedExternalIDs {
+		existing, found := existingByExternalID[externalID]
+		if !found {
+			// Not a locally-imported item — excluded rather than counted.
 			continue
 		}
 		if _, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
@@ -270,7 +297,7 @@ func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.I
 		}
 	}
 
-	return itemCount, sampleTitles, nil
+	return itemCount, sampleTitles, possiblyIncomplete, nil
 }
 
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls

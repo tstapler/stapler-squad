@@ -75,6 +75,7 @@ export function BacklogSourcesSettings() {
     source: ItemSource;
     itemCount: number;
     sampleTitles: string[];
+    possiblyIncomplete: boolean;
   } | null>(null);
 
   const [pluginId, setPluginId] = useState(PLUGIN_SCHEMAS[0].id);
@@ -195,15 +196,26 @@ export function BacklogSourcesSettings() {
       return;
     }
 
-    if (preview.itemCount === 0) {
-      // No impact to preview — flip immediately, no dialog (don't add
-      // friction where there's nothing to warn about).
+    if (preview.itemCount === 0 && !preview.possiblyIncomplete) {
+      // No impact to preview, and the fetch was exhaustive — flip
+      // immediately, no dialog (don't add friction where there's nothing to
+      // warn about). If possiblyIncomplete is true, itemCount: 0 is not
+      // trustworthy as "nothing to warn about" — the underlying fetch hit
+      // its page cap, so older closed issues could exist beyond what was
+      // sampled (the exact under-reporting failure mode PreviewBackwardSyncImpact
+      // exists to prevent) — fall through to the confirmation dialog instead
+      // of silently skipping it.
       const updated = await setBackwardSyncEnabled(source, true);
       if (updated) await refresh();
       return;
     }
 
-    setBackwardSyncConfirm({ source, itemCount: preview.itemCount, sampleTitles: preview.sampleTitles });
+    setBackwardSyncConfirm({
+      source,
+      itemCount: preview.itemCount,
+      sampleTitles: preview.sampleTitles,
+      possiblyIncomplete: preview.possiblyIncomplete,
+    });
   };
 
   const handleConfirmBackwardSync = async () => {
@@ -477,6 +489,7 @@ export function BacklogSourcesSettings() {
           sourceDisplayName={backwardSyncConfirm.source.displayName}
           itemCount={backwardSyncConfirm.itemCount}
           sampleTitles={backwardSyncConfirm.sampleTitles}
+          possiblyIncomplete={backwardSyncConfirm.possiblyIncomplete}
           onConfirm={handleConfirmBackwardSync}
           onCancel={handleCancelBackwardSync}
         />

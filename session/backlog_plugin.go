@@ -15,6 +15,21 @@ type ItemSourcePlugin interface {
 	MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData
 }
 
+// PaginatedFetcher is an optional capability an ItemSourcePlugin can
+// implement for retrieving its complete result set across all pages, rather
+// than Fetch's single-page/incremental-sync behavior. Consumers that need
+// the full current state regardless of page size (e.g.
+// SyncLoop.PreviewBackwardSyncImpact) should type-assert for this interface
+// and prefer FetchAll when a plugin implements it, falling back to a plain
+// Fetch call otherwise.
+type PaginatedFetcher interface {
+	// FetchAll retrieves items across multiple pages up to an
+	// implementation-defined cap, returning the aggregated items, the newest
+	// cursor value seen, and possiblyIncomplete=true if the cap was hit
+	// while more results may still exist beyond it.
+	FetchAll(ctx context.Context, config PluginConfig, cursor string) (items []ExternalItem, newCursor string, possiblyIncomplete bool, err error)
+}
+
 // PluginConfig is opaque config passed to a plugin. Plugins decode their own fields.
 type PluginConfig struct {
 	Raw string // JSON

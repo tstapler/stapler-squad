@@ -9,6 +9,13 @@ interface BackwardSyncConfirmDialogProps {
   itemCount: number;
   /** Up to 5 titles from the eligible set (see PreviewBackwardSyncImpact). */
   sampleTitles: string[];
+  /**
+   * True when the preview's underlying fetch hit its pagination cap — on
+   * repos with an unusually large issue history, itemCount/sampleTitles are
+   * a lower bound, not an exhaustive count. Surfaced as an explicit caveat
+   * rather than implying full coverage.
+   */
+  possiblyIncomplete: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -33,6 +40,7 @@ export function BackwardSyncConfirmDialog({
   sourceDisplayName,
   itemCount,
   sampleTitles,
+  possiblyIncomplete,
   onConfirm,
   onCancel,
 }: BackwardSyncConfirmDialogProps) {
@@ -92,6 +100,12 @@ export function BackwardSyncConfirmDialog({
           linked GitHub issue is closed and can&apos;t be undone by disabling this toggle again
           {titlesText ? `: ${titlesText}` : ""}. Continue?
         </p>
+        {possiblyIncomplete && (
+          <p className={styles.body} data-testid="backward-sync-confirm-incomplete-caveat">
+            This repository has a large issue history — the count above may be incomplete. More
+            already-closed items than shown could be archived once enabled.
+          </p>
+        )}
         <div className={styles.actions}>
           <button
             type="button"

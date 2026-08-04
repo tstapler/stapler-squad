@@ -16,6 +16,14 @@ import (
 
 const githubIssuesPerPage = 50
 
+// maxPreviewFetchPages bounds FetchAll's pagination loop (used only by
+// PreviewBackwardSyncImpact) so a repo with an enormous issue history can't
+// make the preview RPC do unbounded work. 20 pages * githubIssuesPerPage (50)
+// = up to 1000 issues fetched per preview call by default. A var (not a
+// const) so tests can shrink it to exercise the cap-hit/possiblyIncomplete
+// path without fabricating 1000 issues of fixture data.
+var maxPreviewFetchPages = 20
+
 // githubAPIBaseURL is the default base URL used when a plugin config doesn't
 // specify a Host. Overridden in tests (session/backlog_plugin_github_test.go)
 // to point at an httptest server; shared by both the Issues and PRs plugins.
@@ -73,30 +81,99 @@ func (g *GitHubIssuesPlugin) PluginID() string {
 // an ISO 8601 timestamp passed as the `since` query parameter. Returns the
 // updated cursor (the most recent updated_at seen) and the fetched items.
 // If the token field is empty, Fetch returns an empty list and the original cursor.
+//
+// Fetch is single-page (githubIssuesPerPage per call) — correct for the
+// incremental sync path, where the cursor bounds results to items updated
+// since the last tick. Callers that need the full result set regardless of
+// page size (e.g. PreviewBackwardSyncImpact) must use FetchAll instead; a
+// single Fetch call silently misses older items on repos with more than one
+// page of history, since GitHub sorts by `created` descending by default.
 func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
-	var cfg githubPluginConfig
-	if config.Raw != "" {
-		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
-			return nil, cursor, fmt.Errorf("github_issues: parse config: %w", err)
+	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
+	if err != nil {
+		return nil, cursor, err
+	}
+	if disabled {
+		return nil, cursor, nil
+	}
+
+	issues, err := g.fetchIssuesPage(ctx, cfg, cursor, 1)
+	if err != nil {
+		return nil, cursor, err
+	}
+	items, newCursor := convertGithubIssues(issues, cfg.LabelPriorityMap, cursor)
+	return items, newCursor, nil
+}
+
+// FetchAll retrieves every GitHub issue across up to maxPreviewFetchPages
+// pages, aggregating results the way Fetch's single-page call cannot. Used
+// only by PreviewBackwardSyncImpact, which needs to see the true state of
+// all already-imported items rather than just the newest page.
+//
+// possiblyIncomplete is true if the page cap was hit while the last page
+// fetched was still full — meaning there may be more issues beyond what was
+// returned, and callers must not treat the result as exhaustive.
+func (g *GitHubIssuesPlugin) FetchAll(ctx context.Context, config PluginConfig, cursor string) (items []ExternalItem, newCursor string, possiblyIncomplete bool, err error) {
+	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
+	if err != nil {
+		return nil, cursor, false, err
+	}
+	if disabled {
+		return nil, cursor, false, nil
+	}
+
+	var allIssues []githubIssue
+	for page := 1; page <= maxPreviewFetchPages; page++ {
+		issues, fetchErr := g.fetchIssuesPage(ctx, cfg, cursor, page)
+		if fetchErr != nil {
+			return nil, cursor, false, fetchErr
+		}
+		allIssues = append(allIssues, issues...)
+		if len(issues) < githubIssuesPerPage {
+			// Short (or empty) page — no more results.
+			possiblyIncomplete = false
+			items, newCursor = convertGithubIssues(allIssues, cfg.LabelPriorityMap, cursor)
+			return items, newCursor, possiblyIncomplete, nil
+		}
+		if page == maxPreviewFetchPages {
+			// Hit the cap on a full page — there may be more beyond it.
+			possiblyIncomplete = true
 		}
 	}
 
-	// Token is required; disabled when absent.
+	items, newCursor = convertGithubIssues(allIssues, cfg.LabelPriorityMap, cursor)
+	return items, newCursor, possiblyIncomplete, nil
+}
+
+// decodeGithubIssuesFetchConfig parses config the way Fetch/FetchAll do.
+// disabled is true if the token is absent (source disabled, not an error) —
+// callers must check disabled before touching cfg, which is only valid when
+// disabled is false and err is nil.
+func decodeGithubIssuesFetchConfig(config PluginConfig) (cfg githubPluginConfig, disabled bool, err error) {
+	if config.Raw != "" {
+		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
+			return githubPluginConfig{}, false, fmt.Errorf("github_issues: parse config: %w", err)
+		}
+	}
 	if cfg.Token == "" {
-		return nil, cursor, nil
+		return githubPluginConfig{}, true, nil
 	}
 	if cfg.Owner == "" || cfg.Repo == "" {
-		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
+		return githubPluginConfig{}, false, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
+	return cfg, false, nil
+}
 
-	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=all&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage))
+// fetchIssuesPage fetches a single page of raw issues from the GitHub API.
+func (g *GitHubIssuesPlugin) fetchIssuesPage(ctx context.Context, cfg githubPluginConfig, cursor string, page int) ([]githubIssue, error) {
+	url := githubAPIURL(cfg.Host, fmt.Sprintf("repos/%s/%s/issues?state=all&per_page=%d&page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage, page))
 	if cursor != "" {
 		url += "&since=" + cursor
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: build request: %w", err)
+		return nil, fmt.Errorf("github_issues: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "token "+cfg.Token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
@@ -104,28 +181,33 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: request failed: %w", err)
+		return nil, fmt.Errorf("github_issues: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Handle rate limiting.
 	if resp.StatusCode == http.StatusTooManyRequests ||
 		(resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") {
-		return nil, cursor, fmt.Errorf("github_issues: rate limited (status %d)", resp.StatusCode)
+		return nil, fmt.Errorf("github_issues: rate limited (status %d)", resp.StatusCode)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, cursor, fmt.Errorf("github_issues: unexpected status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("github_issues: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var issues []githubIssue
 	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
-		return nil, cursor, fmt.Errorf("github_issues: decode response: %w", err)
+		return nil, fmt.Errorf("github_issues: decode response: %w", err)
 	}
+	return issues, nil
+}
 
+// convertGithubIssues maps raw GitHub issues to ExternalItems and computes
+// the new cursor (the most recent updated_at seen, starting from cursor).
+func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, cursor string) ([]ExternalItem, string) {
 	if len(issues) == 0 {
-		return nil, cursor, nil
+		return nil, cursor
 	}
 
 	items := make([]ExternalItem, 0, len(issues))
@@ -135,7 +217,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		// Compute priority from label map.
 		priority := 3
 		for _, label := range issue.Labels {
-			if p, ok := cfg.LabelPriorityMap[label.Name]; ok {
+			if p, ok := labelPriorityMap[label.Name]; ok {
 				priority = p
 				break
 			}
@@ -169,7 +251,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		}
 	}
 
-	return items, newCursor, nil
+	return items, newCursor
 }
 
 // decodeGithubIssuesConfig parses a PluginConfig's raw JSON the same way Fetch

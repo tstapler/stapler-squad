@@ -4392,9 +4392,15 @@ type PreviewBackwardSyncImpactResponse struct {
 	ItemCount int32 `protobuf:"varint,1,opt,name=item_count,json=itemCount,proto3" json:"item_count,omitempty"`
 	// Up to 5 titles from the eligible set, for display in the confirmation
 	// dialog. Not necessarily all N items when item_count > 5.
-	SampleTitles  []string `protobuf:"bytes,2,rep,name=sample_titles,json=sampleTitles,proto3" json:"sample_titles,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SampleTitles []string `protobuf:"bytes,2,rep,name=sample_titles,json=sampleTitles,proto3" json:"sample_titles,omitempty"`
+	// True if the underlying fetch hit its page cap while the last page was
+	// still full — meaning there may be more matching items beyond what was
+	// counted, so item_count/sample_titles must be treated as a lower bound
+	// rather than an exhaustive count. Only ever true on repos with an
+	// unusually large issue history (see maxPreviewFetchPages).
+	PossiblyIncomplete bool `protobuf:"varint,3,opt,name=possibly_incomplete,json=possiblyIncomplete,proto3" json:"possibly_incomplete,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PreviewBackwardSyncImpactResponse) Reset() {
@@ -4439,6 +4445,13 @@ func (x *PreviewBackwardSyncImpactResponse) GetSampleTitles() []string {
 		return x.SampleTitles
 	}
 	return nil
+}
+
+func (x *PreviewBackwardSyncImpactResponse) GetPossiblyIncomplete() bool {
+	if x != nil {
+		return x.PossiblyIncomplete
+	}
+	return false
 }
 
 type CreatePipelineModeRequest struct {
@@ -7950,11 +7963,12 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\x06events\x18\x01 \x03(\v2\x1b.session.v1.SourceSyncEventR\x06events\x12\x1c\n" +
 	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"?\n" +
 	" PreviewBackwardSyncImpactRequest\x12\x1b\n" +
-	"\tsource_id\x18\x01 \x01(\tR\bsourceId\"g\n" +
+	"\tsource_id\x18\x01 \x01(\tR\bsourceId\"\x98\x01\n" +
 	"!PreviewBackwardSyncImpactResponse\x12\x1d\n" +
 	"\n" +
 	"item_count\x18\x01 \x01(\x05R\titemCount\x12#\n" +
-	"\rsample_titles\x18\x02 \x03(\tR\fsampleTitles\"\xe3\x04\n" +
+	"\rsample_titles\x18\x02 \x03(\tR\fsampleTitles\x12/\n" +
+	"\x13possibly_incomplete\x18\x03 \x01(\bR\x12possiblyIncomplete\"\xe3\x04\n" +
 	"\x19CreatePipelineModeRequest\x12\x12\n" +
 	"\x04slug\x18\x01 \x01(\tR\x04slug\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
