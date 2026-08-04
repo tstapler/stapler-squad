@@ -245,6 +245,19 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
 
+	// Loaded once, up front: needed both to value-diff Title/Description/Priority
+	// against the request (see touchedFields below — a presence-only check would
+	// falsely mark them user-modified on nearly every edit, since the only
+	// frontend edit form always resubmits the current title verbatim) and to
+	// merge into the existing UserModifiedFields raw string.
+	existing, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
+	}
+
 	update := session.BacklogItemUpdate{}
 	if req.Msg.Title != "" {
 		title := req.Msg.Title
@@ -260,6 +273,30 @@ func (s *BacklogService) UpdateBacklogItem(
 	if req.Msg.Priority != 0 {
 		prio := int(req.Msg.Priority)
 		update.Priority = &prio
+	}
+
+	// touchedFields is a VALUE-DIFF against the existing item's current values,
+	// not a bare presence check — see plan.md Epic 0.3 Task 0.3.2b's pre-mortem
+	// P1 #2 correction. The only frontend edit form always resubmits the
+	// current Title verbatim regardless of which field the user actually
+	// changed, so a presence-only check would falsely mark Title as
+	// user-modified on nearly every edit.
+	var touchedFields []string
+	if req.Msg.Title != "" && req.Msg.Title != existing.Title {
+		touchedFields = append(touchedFields, "title")
+	}
+	if req.Msg.Description != "" && req.Msg.Description != existing.Description {
+		touchedFields = append(touchedFields, "description")
+	}
+	if req.Msg.Priority != 0 && int(req.Msg.Priority) != existing.Priority {
+		touchedFields = append(touchedFields, "priority")
+	}
+	if len(touchedFields) > 0 {
+		merged, mergeErr := session.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)
+		if mergeErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to merge user modified fields: %w", mergeErr))
+		}
+		update.UserModifiedFields = &merged
 	}
 	if req.Msg.RepoPath != "" {
 		rp, resolveErr := s.resolveRepoPathInput(req.Msg.RepoPath)
@@ -710,6 +747,12 @@ func (s *BacklogService) UpdateItemSource(
 	}
 	enabled := req.Msg.Enabled
 	update.Enabled = &enabled
+	fwd := req.Msg.ForwardSyncEnabled
+	update.ForwardSyncEnabled = &fwd
+	bwd := req.Msg.BackwardSyncEnabled
+	update.BackwardSyncEnabled = &bwd
+	label := req.Msg.ForwardSyncCloseLabel
+	update.ForwardSyncCloseLabel = &label
 	if req.Msg.Token != "" {
 		// UpdateItemSource replaces the config wholesale (no prior config to merge).
 		tokenJSON, mergeErr := encryptAndMergeToken(s.cfg, req.Msg.Token, "")
@@ -721,7 +764,12 @@ func (s *BacklogService) UpdateItemSource(
 
 	updated, err := s.sourceBackend.UpdateItemSource(ctx, req.Msg.SourceId, update)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		// EntRepository.UpdateItemSource re-wraps ent's *ent.NotFoundError as
+		// session.ErrNotFound before returning (session/ent_repository_backlog.go),
+		// so the check here must match against that sentinel — ent.IsNotFound
+		// would never match since the original *ent.NotFoundError is not preserved
+		// in the wrap chain.
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update item source: %w", err))

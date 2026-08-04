@@ -66,6 +66,48 @@ func (_c *ItemSourceCreate) SetNillableEnabled(v *bool) *ItemSourceCreate {
 	return _c
 }
 
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (_c *ItemSourceCreate) SetForwardSyncEnabled(v bool) *ItemSourceCreate {
+	_c.mutation.SetForwardSyncEnabled(v)
+	return _c
+}
+
+// SetNillableForwardSyncEnabled sets the "forward_sync_enabled" field if the given value is not nil.
+func (_c *ItemSourceCreate) SetNillableForwardSyncEnabled(v *bool) *ItemSourceCreate {
+	if v != nil {
+		_c.SetForwardSyncEnabled(*v)
+	}
+	return _c
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (_c *ItemSourceCreate) SetBackwardSyncEnabled(v bool) *ItemSourceCreate {
+	_c.mutation.SetBackwardSyncEnabled(v)
+	return _c
+}
+
+// SetNillableBackwardSyncEnabled sets the "backward_sync_enabled" field if the given value is not nil.
+func (_c *ItemSourceCreate) SetNillableBackwardSyncEnabled(v *bool) *ItemSourceCreate {
+	if v != nil {
+		_c.SetBackwardSyncEnabled(*v)
+	}
+	return _c
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (_c *ItemSourceCreate) SetForwardSyncCloseLabel(v string) *ItemSourceCreate {
+	_c.mutation.SetForwardSyncCloseLabel(v)
+	return _c
+}
+
+// SetNillableForwardSyncCloseLabel sets the "forward_sync_close_label" field if the given value is not nil.
+func (_c *ItemSourceCreate) SetNillableForwardSyncCloseLabel(v *string) *ItemSourceCreate {
+	if v != nil {
+		_c.SetForwardSyncCloseLabel(*v)
+	}
+	return _c
+}
+
 // SetSyncCursor sets the "sync_cursor" field.
 func (_c *ItemSourceCreate) SetSyncCursor(v string) *ItemSourceCreate {
 	_c.mutation.SetSyncCursor(v)
@@ -205,6 +247,14 @@ func (_c *ItemSourceCreate) defaults() {
 		v := itemsource.DefaultEnabled
 		_c.mutation.SetEnabled(v)
 	}
+	if _, ok := _c.mutation.ForwardSyncEnabled(); !ok {
+		v := itemsource.DefaultForwardSyncEnabled
+		_c.mutation.SetForwardSyncEnabled(v)
+	}
+	if _, ok := _c.mutation.BackwardSyncEnabled(); !ok {
+		v := itemsource.DefaultBackwardSyncEnabled
+		_c.mutation.SetBackwardSyncEnabled(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := itemsource.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -229,6 +279,12 @@ func (_c *ItemSourceCreate) check() error {
 	}
 	if _, ok := _c.mutation.Enabled(); !ok {
 		return &ValidationError{Name: "enabled", err: errors.New(`ent: missing required field "ItemSource.enabled"`)}
+	}
+	if _, ok := _c.mutation.ForwardSyncEnabled(); !ok {
+		return &ValidationError{Name: "forward_sync_enabled", err: errors.New(`ent: missing required field "ItemSource.forward_sync_enabled"`)}
+	}
+	if _, ok := _c.mutation.BackwardSyncEnabled(); !ok {
+		return &ValidationError{Name: "backward_sync_enabled", err: errors.New(`ent: missing required field "ItemSource.backward_sync_enabled"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "ItemSource.created_at"`)}
@@ -287,6 +343,18 @@ func (_c *ItemSourceCreate) createSpec() (*ItemSource, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Enabled(); ok {
 		_spec.SetField(itemsource.FieldEnabled, field.TypeBool, value)
 		_node.Enabled = value
+	}
+	if value, ok := _c.mutation.ForwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncEnabled, field.TypeBool, value)
+		_node.ForwardSyncEnabled = value
+	}
+	if value, ok := _c.mutation.BackwardSyncEnabled(); ok {
+		_spec.SetField(itemsource.FieldBackwardSyncEnabled, field.TypeBool, value)
+		_node.BackwardSyncEnabled = value
+	}
+	if value, ok := _c.mutation.ForwardSyncCloseLabel(); ok {
+		_spec.SetField(itemsource.FieldForwardSyncCloseLabel, field.TypeString, value)
+		_node.ForwardSyncCloseLabel = value
 	}
 	if value, ok := _c.mutation.SyncCursor(); ok {
 		_spec.SetField(itemsource.FieldSyncCursor, field.TypeString, value)
@@ -439,6 +507,48 @@ func (u *ItemSourceUpsert) SetEnabled(v bool) *ItemSourceUpsert {
 // UpdateEnabled sets the "enabled" field to the value that was provided on create.
 func (u *ItemSourceUpsert) UpdateEnabled() *ItemSourceUpsert {
 	u.SetExcluded(itemsource.FieldEnabled)
+	return u
+}
+
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (u *ItemSourceUpsert) SetForwardSyncEnabled(v bool) *ItemSourceUpsert {
+	u.Set(itemsource.FieldForwardSyncEnabled, v)
+	return u
+}
+
+// UpdateForwardSyncEnabled sets the "forward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsert) UpdateForwardSyncEnabled() *ItemSourceUpsert {
+	u.SetExcluded(itemsource.FieldForwardSyncEnabled)
+	return u
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (u *ItemSourceUpsert) SetBackwardSyncEnabled(v bool) *ItemSourceUpsert {
+	u.Set(itemsource.FieldBackwardSyncEnabled, v)
+	return u
+}
+
+// UpdateBackwardSyncEnabled sets the "backward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsert) UpdateBackwardSyncEnabled() *ItemSourceUpsert {
+	u.SetExcluded(itemsource.FieldBackwardSyncEnabled)
+	return u
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (u *ItemSourceUpsert) SetForwardSyncCloseLabel(v string) *ItemSourceUpsert {
+	u.Set(itemsource.FieldForwardSyncCloseLabel, v)
+	return u
+}
+
+// UpdateForwardSyncCloseLabel sets the "forward_sync_close_label" field to the value that was provided on create.
+func (u *ItemSourceUpsert) UpdateForwardSyncCloseLabel() *ItemSourceUpsert {
+	u.SetExcluded(itemsource.FieldForwardSyncCloseLabel)
+	return u
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (u *ItemSourceUpsert) ClearForwardSyncCloseLabel() *ItemSourceUpsert {
+	u.SetNull(itemsource.FieldForwardSyncCloseLabel)
 	return u
 }
 
@@ -601,6 +711,55 @@ func (u *ItemSourceUpsertOne) SetEnabled(v bool) *ItemSourceUpsertOne {
 func (u *ItemSourceUpsertOne) UpdateEnabled() *ItemSourceUpsertOne {
 	return u.Update(func(s *ItemSourceUpsert) {
 		s.UpdateEnabled()
+	})
+}
+
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (u *ItemSourceUpsertOne) SetForwardSyncEnabled(v bool) *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetForwardSyncEnabled(v)
+	})
+}
+
+// UpdateForwardSyncEnabled sets the "forward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsertOne) UpdateForwardSyncEnabled() *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateForwardSyncEnabled()
+	})
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (u *ItemSourceUpsertOne) SetBackwardSyncEnabled(v bool) *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetBackwardSyncEnabled(v)
+	})
+}
+
+// UpdateBackwardSyncEnabled sets the "backward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsertOne) UpdateBackwardSyncEnabled() *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateBackwardSyncEnabled()
+	})
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (u *ItemSourceUpsertOne) SetForwardSyncCloseLabel(v string) *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetForwardSyncCloseLabel(v)
+	})
+}
+
+// UpdateForwardSyncCloseLabel sets the "forward_sync_close_label" field to the value that was provided on create.
+func (u *ItemSourceUpsertOne) UpdateForwardSyncCloseLabel() *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateForwardSyncCloseLabel()
+	})
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (u *ItemSourceUpsertOne) ClearForwardSyncCloseLabel() *ItemSourceUpsertOne {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.ClearForwardSyncCloseLabel()
 	})
 }
 
@@ -938,6 +1097,55 @@ func (u *ItemSourceUpsertBulk) SetEnabled(v bool) *ItemSourceUpsertBulk {
 func (u *ItemSourceUpsertBulk) UpdateEnabled() *ItemSourceUpsertBulk {
 	return u.Update(func(s *ItemSourceUpsert) {
 		s.UpdateEnabled()
+	})
+}
+
+// SetForwardSyncEnabled sets the "forward_sync_enabled" field.
+func (u *ItemSourceUpsertBulk) SetForwardSyncEnabled(v bool) *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetForwardSyncEnabled(v)
+	})
+}
+
+// UpdateForwardSyncEnabled sets the "forward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsertBulk) UpdateForwardSyncEnabled() *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateForwardSyncEnabled()
+	})
+}
+
+// SetBackwardSyncEnabled sets the "backward_sync_enabled" field.
+func (u *ItemSourceUpsertBulk) SetBackwardSyncEnabled(v bool) *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetBackwardSyncEnabled(v)
+	})
+}
+
+// UpdateBackwardSyncEnabled sets the "backward_sync_enabled" field to the value that was provided on create.
+func (u *ItemSourceUpsertBulk) UpdateBackwardSyncEnabled() *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateBackwardSyncEnabled()
+	})
+}
+
+// SetForwardSyncCloseLabel sets the "forward_sync_close_label" field.
+func (u *ItemSourceUpsertBulk) SetForwardSyncCloseLabel(v string) *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.SetForwardSyncCloseLabel(v)
+	})
+}
+
+// UpdateForwardSyncCloseLabel sets the "forward_sync_close_label" field to the value that was provided on create.
+func (u *ItemSourceUpsertBulk) UpdateForwardSyncCloseLabel() *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.UpdateForwardSyncCloseLabel()
+	})
+}
+
+// ClearForwardSyncCloseLabel clears the value of the "forward_sync_close_label" field.
+func (u *ItemSourceUpsertBulk) ClearForwardSyncCloseLabel() *ItemSourceUpsertBulk {
+	return u.Update(func(s *ItemSourceUpsert) {
+		s.ClearForwardSyncCloseLabel()
 	})
 }
 

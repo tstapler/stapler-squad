@@ -302,6 +302,26 @@ func (_c *BacklogItemCreate) SetNillableExternalID(v *string) *BacklogItemCreate
 	return _c
 }
 
+// SetExternalURL sets the "external_url" field.
+func (_c *BacklogItemCreate) SetExternalURL(v string) *BacklogItemCreate {
+	_c.mutation.SetExternalURL(v)
+	return _c
+}
+
+// SetNillableExternalURL sets the "external_url" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableExternalURL(v *string) *BacklogItemCreate {
+	if v != nil {
+		_c.SetExternalURL(*v)
+	}
+	return _c
+}
+
+// SetLabels sets the "labels" field.
+func (_c *BacklogItemCreate) SetLabels(v []string) *BacklogItemCreate {
+	_c.mutation.SetLabels(v)
+	return _c
+}
+
 // SetUserModifiedStatusAt sets the "user_modified_status_at" field.
 func (_c *BacklogItemCreate) SetUserModifiedStatusAt(v time.Time) *BacklogItemCreate {
 	_c.mutation.SetUserModifiedStatusAt(v)
@@ -424,6 +444,20 @@ func (_c *BacklogItemCreate) SetPrFeedbackAddressedAt(v time.Time) *BacklogItemC
 func (_c *BacklogItemCreate) SetNillablePrFeedbackAddressedAt(v *time.Time) *BacklogItemCreate {
 	if v != nil {
 		_c.SetPrFeedbackAddressedAt(*v)
+	}
+	return _c
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (_c *BacklogItemCreate) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemCreate {
+	_c.mutation.SetGithubSyncedIssueUpdatedAt(v)
+	return _c
+}
+
+// SetNillableGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field if the given value is not nil.
+func (_c *BacklogItemCreate) SetNillableGithubSyncedIssueUpdatedAt(v *time.Time) *BacklogItemCreate {
+	if v != nil {
+		_c.SetGithubSyncedIssueUpdatedAt(*v)
 	}
 	return _c
 }
@@ -878,6 +912,14 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 		_spec.SetField(backlogitem.FieldExternalID, field.TypeString, value)
 		_node.ExternalID = value
 	}
+	if value, ok := _c.mutation.ExternalURL(); ok {
+		_spec.SetField(backlogitem.FieldExternalURL, field.TypeString, value)
+		_node.ExternalURL = value
+	}
+	if value, ok := _c.mutation.Labels(); ok {
+		_spec.SetField(backlogitem.FieldLabels, field.TypeJSON, value)
+		_node.Labels = value
+	}
 	if value, ok := _c.mutation.UserModifiedStatusAt(); ok {
 		_spec.SetField(backlogitem.FieldUserModifiedStatusAt, field.TypeTime, value)
 		_node.UserModifiedStatusAt = &value
@@ -913,6 +955,10 @@ func (_c *BacklogItemCreate) createSpec() (*BacklogItem, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.PrFeedbackAddressedAt(); ok {
 		_spec.SetField(backlogitem.FieldPrFeedbackAddressedAt, field.TypeTime, value)
 		_node.PrFeedbackAddressedAt = &value
+	}
+	if value, ok := _c.mutation.GithubSyncedIssueUpdatedAt(); ok {
+		_spec.SetField(backlogitem.FieldGithubSyncedIssueUpdatedAt, field.TypeTime, value)
+		_node.GithubSyncedIssueUpdatedAt = &value
 	}
 	if value, ok := _c.mutation.ShippedFileStats(); ok {
 		_spec.SetField(backlogitem.FieldShippedFileStats, field.TypeString, value)
@@ -1383,6 +1429,42 @@ func (u *BacklogItemUpsert) ClearExternalID() *BacklogItemUpsert {
 	return u
 }
 
+// SetExternalURL sets the "external_url" field.
+func (u *BacklogItemUpsert) SetExternalURL(v string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldExternalURL, v)
+	return u
+}
+
+// UpdateExternalURL sets the "external_url" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateExternalURL() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldExternalURL)
+	return u
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (u *BacklogItemUpsert) ClearExternalURL() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldExternalURL)
+	return u
+}
+
+// SetLabels sets the "labels" field.
+func (u *BacklogItemUpsert) SetLabels(v []string) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldLabels, v)
+	return u
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateLabels() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldLabels)
+	return u
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (u *BacklogItemUpsert) ClearLabels() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldLabels)
+	return u
+}
+
 // SetUserModifiedStatusAt sets the "user_modified_status_at" field.
 func (u *BacklogItemUpsert) SetUserModifiedStatusAt(v time.Time) *BacklogItemUpsert {
 	u.Set(backlogitem.FieldUserModifiedStatusAt, v)
@@ -1560,6 +1642,24 @@ func (u *BacklogItemUpsert) UpdatePrFeedbackAddressedAt() *BacklogItemUpsert {
 // ClearPrFeedbackAddressedAt clears the value of the "pr_feedback_addressed_at" field.
 func (u *BacklogItemUpsert) ClearPrFeedbackAddressedAt() *BacklogItemUpsert {
 	u.SetNull(backlogitem.FieldPrFeedbackAddressedAt)
+	return u
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsert) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemUpsert {
+	u.Set(backlogitem.FieldGithubSyncedIssueUpdatedAt, v)
+	return u
+}
+
+// UpdateGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field to the value that was provided on create.
+func (u *BacklogItemUpsert) UpdateGithubSyncedIssueUpdatedAt() *BacklogItemUpsert {
+	u.SetExcluded(backlogitem.FieldGithubSyncedIssueUpdatedAt)
+	return u
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsert) ClearGithubSyncedIssueUpdatedAt() *BacklogItemUpsert {
+	u.SetNull(backlogitem.FieldGithubSyncedIssueUpdatedAt)
 	return u
 }
 
@@ -2036,6 +2136,48 @@ func (u *BacklogItemUpsertOne) ClearExternalID() *BacklogItemUpsertOne {
 	})
 }
 
+// SetExternalURL sets the "external_url" field.
+func (u *BacklogItemUpsertOne) SetExternalURL(v string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetExternalURL(v)
+	})
+}
+
+// UpdateExternalURL sets the "external_url" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateExternalURL() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateExternalURL()
+	})
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (u *BacklogItemUpsertOne) ClearExternalURL() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearExternalURL()
+	})
+}
+
+// SetLabels sets the "labels" field.
+func (u *BacklogItemUpsertOne) SetLabels(v []string) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetLabels(v)
+	})
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateLabels() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateLabels()
+	})
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (u *BacklogItemUpsertOne) ClearLabels() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearLabels()
+	})
+}
+
 // SetUserModifiedStatusAt sets the "user_modified_status_at" field.
 func (u *BacklogItemUpsertOne) SetUserModifiedStatusAt(v time.Time) *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
@@ -2243,6 +2385,27 @@ func (u *BacklogItemUpsertOne) UpdatePrFeedbackAddressedAt() *BacklogItemUpsertO
 func (u *BacklogItemUpsertOne) ClearPrFeedbackAddressedAt() *BacklogItemUpsertOne {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPrFeedbackAddressedAt()
+	})
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsertOne) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetGithubSyncedIssueUpdatedAt(v)
+	})
+}
+
+// UpdateGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertOne) UpdateGithubSyncedIssueUpdatedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateGithubSyncedIssueUpdatedAt()
+	})
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsertOne) ClearGithubSyncedIssueUpdatedAt() *BacklogItemUpsertOne {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearGithubSyncedIssueUpdatedAt()
 	})
 }
 
@@ -2898,6 +3061,48 @@ func (u *BacklogItemUpsertBulk) ClearExternalID() *BacklogItemUpsertBulk {
 	})
 }
 
+// SetExternalURL sets the "external_url" field.
+func (u *BacklogItemUpsertBulk) SetExternalURL(v string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetExternalURL(v)
+	})
+}
+
+// UpdateExternalURL sets the "external_url" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateExternalURL() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateExternalURL()
+	})
+}
+
+// ClearExternalURL clears the value of the "external_url" field.
+func (u *BacklogItemUpsertBulk) ClearExternalURL() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearExternalURL()
+	})
+}
+
+// SetLabels sets the "labels" field.
+func (u *BacklogItemUpsertBulk) SetLabels(v []string) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetLabels(v)
+	})
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateLabels() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateLabels()
+	})
+}
+
+// ClearLabels clears the value of the "labels" field.
+func (u *BacklogItemUpsertBulk) ClearLabels() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearLabels()
+	})
+}
+
 // SetUserModifiedStatusAt sets the "user_modified_status_at" field.
 func (u *BacklogItemUpsertBulk) SetUserModifiedStatusAt(v time.Time) *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
@@ -3105,6 +3310,27 @@ func (u *BacklogItemUpsertBulk) UpdatePrFeedbackAddressedAt() *BacklogItemUpsert
 func (u *BacklogItemUpsertBulk) ClearPrFeedbackAddressedAt() *BacklogItemUpsertBulk {
 	return u.Update(func(s *BacklogItemUpsert) {
 		s.ClearPrFeedbackAddressedAt()
+	})
+}
+
+// SetGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsertBulk) SetGithubSyncedIssueUpdatedAt(v time.Time) *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.SetGithubSyncedIssueUpdatedAt(v)
+	})
+}
+
+// UpdateGithubSyncedIssueUpdatedAt sets the "github_synced_issue_updated_at" field to the value that was provided on create.
+func (u *BacklogItemUpsertBulk) UpdateGithubSyncedIssueUpdatedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.UpdateGithubSyncedIssueUpdatedAt()
+	})
+}
+
+// ClearGithubSyncedIssueUpdatedAt clears the value of the "github_synced_issue_updated_at" field.
+func (u *BacklogItemUpsertBulk) ClearGithubSyncedIssueUpdatedAt() *BacklogItemUpsertBulk {
+	return u.Update(func(s *BacklogItemUpsert) {
+		s.ClearGithubSyncedIssueUpdatedAt()
 	})
 }
 

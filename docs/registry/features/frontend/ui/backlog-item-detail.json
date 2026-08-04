@@ -24,7 +24,9 @@
     "Backlog item ID + deep link > visiting /backlog?item=<id> opens the matching item detail pane directly",
     "Backlog item ID + deep link > an invalid item ID shows the not-found state on both /backlog and /backlog/board without crashing",
     "Backlog item ID + deep link > a malformed item ID shows the not-found state without crashing",
-    "Backlog item ID + deep link > copy buttons are 44px+ touch targets on a mobile viewport"
+    "Backlog item ID + deep link > copy buttons are 44px+ touch targets on a mobile viewport",
+    "BacklogItemDetail_should_OmitSourceSection_When_ExternalUrlEmpty",
+    "BacklogItemDetail_should_RenderSourceSection_When_ExternalUrlPresent"
   ],
-  "lastModified": "2026-07-24T00:00:00Z"
+  "lastModified": "2026-08-03T00:00:00Z"
 }

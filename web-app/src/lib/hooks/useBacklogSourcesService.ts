@@ -13,6 +13,12 @@ export interface ItemSource {
   enabled: boolean;
   tokenConfigured: boolean;
   lastSyncedAt?: string;
+  /** When true, marking a linked backlog item done closes its GitHub issue. */
+  forwardSyncEnabled: boolean;
+  /** When true, a closed/relabeled GitHub issue updates its linked backlog item. */
+  backwardSyncEnabled: boolean;
+  /** Optional label applied to the GitHub issue on close (forward sync only). */
+  forwardSyncCloseLabel: string;
 }
 
 export interface SourceSyncEvent {
@@ -31,6 +37,18 @@ export interface SyncHistoryResult {
   truncated: boolean;
 }
 
+export interface BackwardSyncImpactPreview {
+  itemCount: number;
+  sampleTitles: string[];
+  /**
+   * True when the server-side fetch hit its pagination cap while still
+   * seeing full pages — itemCount/sampleTitles are a lower bound, not an
+   * exhaustive count, on repos with an unusually large issue history. See
+   * PreviewBackwardSyncImpactResponse.possibly_incomplete.
+   */
+  possiblyIncomplete: boolean;
+}
+
 function tsToIso(ts?: { seconds: bigint }): string | undefined {
   return ts ? new Date(Number(ts.seconds) * 1000).toISOString() : undefined;
 }
@@ -43,6 +61,9 @@ function mapItemSource(p: ItemSourceProto): ItemSource {
     enabled: p.enabled,
     tokenConfigured: p.tokenConfigured,
     lastSyncedAt: tsToIso(p.lastSyncedAt),
+    forwardSyncEnabled: p.forwardSyncEnabled,
+    backwardSyncEnabled: p.backwardSyncEnabled,
+    forwardSyncCloseLabel: p.forwardSyncCloseLabel,
   };
 }
 
@@ -69,10 +90,14 @@ export interface CreateItemSourceInput {
 interface UseBacklogSourcesServiceReturn {
   listItemSources: () => Promise<ItemSource[]>;
   createItemSource: (data: CreateItemSourceInput) => Promise<ItemSource | null>;
-  setItemSourceEnabled: (id: string, displayName: string, enabled: boolean) => Promise<ItemSource | null>;
+  setItemSourceEnabled: (source: ItemSource, enabled: boolean) => Promise<ItemSource | null>;
+  setForwardSyncEnabled: (source: ItemSource, enabled: boolean) => Promise<ItemSource | null>;
+  setBackwardSyncEnabled: (source: ItemSource, enabled: boolean) => Promise<ItemSource | null>;
+  setForwardSyncCloseLabel: (source: ItemSource, closeLabel: string) => Promise<ItemSource | null>;
   deleteItemSource: (id: string) => Promise<boolean>;
   triggerSync: (id: string) => Promise<boolean>;
   getSyncHistory: (id: string) => Promise<SyncHistoryResult>;
+  previewBackwardSyncImpact: (sourceId: string) => Promise<BackwardSyncImpactPreview | null>;
   lastError: Error | null;
   clearError: () => void;
 }
@@ -123,19 +148,103 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
   }, []);
 
   const setItemSourceEnabled = useCallback(
-    async (id: string, displayName: string, enabled: boolean): Promise<ItemSource | null> => {
+    async (source: ItemSource, enabled: boolean): Promise<ItemSource | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
         const resp = await clientRef.current.updateItemSource({
-          sourceId: id,
-          displayName,
+          sourceId: source.id,
+          displayName: source.displayName,
           enabled,
           token: "",
+          forwardSyncEnabled: source.forwardSyncEnabled,
+          backwardSyncEnabled: source.backwardSyncEnabled,
+          forwardSyncCloseLabel: source.forwardSyncCloseLabel,
         });
         return resp.source ? mapItemSource(resp.source) : null;
       } catch (err) {
         console.error("[useBacklogSourcesService] updateItemSource:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
+  // The three sync-direction setters below all round-trip the FULL current
+  // source state through UpdateItemSource, only changing the one field the
+  // caller intends to change — UpdateItemSource's fields are all
+  // unconditionally overwritten (not partial-update), so passing anything
+  // other than the current live value for every other field risks silently
+  // reverting it (e.g. re-disabling `enabled` or clobbering the close
+  // label) out from under a concurrent edit. Mirrors setItemSourceEnabled's
+  // pattern above, generalized to take the whole ItemSource rather than a
+  // narrow (id, displayName, enabled) tuple.
+  const setForwardSyncEnabled = useCallback(
+    async (source: ItemSource, enabled: boolean): Promise<ItemSource | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.updateItemSource({
+          sourceId: source.id,
+          displayName: source.displayName,
+          enabled: source.enabled,
+          token: "",
+          forwardSyncEnabled: enabled,
+          backwardSyncEnabled: source.backwardSyncEnabled,
+          forwardSyncCloseLabel: source.forwardSyncCloseLabel,
+        });
+        return resp.source ? mapItemSource(resp.source) : null;
+      } catch (err) {
+        console.error("[useBacklogSourcesService] setForwardSyncEnabled:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
+  const setBackwardSyncEnabled = useCallback(
+    async (source: ItemSource, enabled: boolean): Promise<ItemSource | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.updateItemSource({
+          sourceId: source.id,
+          displayName: source.displayName,
+          enabled: source.enabled,
+          token: "",
+          forwardSyncEnabled: source.forwardSyncEnabled,
+          backwardSyncEnabled: enabled,
+          forwardSyncCloseLabel: source.forwardSyncCloseLabel,
+        });
+        return resp.source ? mapItemSource(resp.source) : null;
+      } catch (err) {
+        console.error("[useBacklogSourcesService] setBackwardSyncEnabled:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
+  const setForwardSyncCloseLabel = useCallback(
+    async (source: ItemSource, closeLabel: string): Promise<ItemSource | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.updateItemSource({
+          sourceId: source.id,
+          displayName: source.displayName,
+          enabled: source.enabled,
+          token: "",
+          forwardSyncEnabled: source.forwardSyncEnabled,
+          backwardSyncEnabled: source.backwardSyncEnabled,
+          forwardSyncCloseLabel: closeLabel,
+        });
+        return resp.source ? mapItemSource(resp.source) : null;
+      } catch (err) {
+        console.error("[useBacklogSourcesService] setForwardSyncCloseLabel:", err);
         setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
@@ -169,6 +278,31 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     }
   }, []);
 
+  // previewBackwardSyncImpact returns null on any RPC failure (network,
+  // upstream Fetch/rate-limit, etc.) rather than swallowing it into a
+  // misleading itemCount: 0 — the caller (BacklogSourcesSettings) must be
+  // able to tell "nothing to warn about" apart from "couldn't check" and
+  // show a distinct inline error for the latter (Epic 4.4, Story 4.4.2).
+  const previewBackwardSyncImpact = useCallback(
+    async (sourceId: string): Promise<BackwardSyncImpactPreview | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const resp = await clientRef.current.previewBackwardSyncImpact({ sourceId });
+        setLastError(null);
+        return {
+          itemCount: resp.itemCount,
+          sampleTitles: resp.sampleTitles ?? [],
+          possiblyIncomplete: resp.possiblyIncomplete ?? false,
+        };
+      } catch (err) {
+        console.error("[useBacklogSourcesService] previewBackwardSyncImpact:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      }
+    },
+    []
+  );
+
   const getSyncHistory = useCallback(async (id: string): Promise<SyncHistoryResult> => {
     if (!clientRef.current) return { events: [], truncated: false };
     try {
@@ -187,12 +321,29 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
       listItemSources,
       createItemSource,
       setItemSourceEnabled,
+      setForwardSyncEnabled,
+      setBackwardSyncEnabled,
+      setForwardSyncCloseLabel,
       deleteItemSource,
       triggerSync,
       getSyncHistory,
+      previewBackwardSyncImpact,
       lastError,
       clearError,
     }),
-    [listItemSources, createItemSource, setItemSourceEnabled, deleteItemSource, triggerSync, getSyncHistory, lastError, clearError]
+    [
+      listItemSources,
+      createItemSource,
+      setItemSourceEnabled,
+      setForwardSyncEnabled,
+      setBackwardSyncEnabled,
+      setForwardSyncCloseLabel,
+      deleteItemSource,
+      triggerSync,
+      getSyncHistory,
+      previewBackwardSyncImpact,
+      lastError,
+      clearError,
+    ]
   );
 }

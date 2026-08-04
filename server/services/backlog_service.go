@@ -589,17 +589,21 @@ type triageResultJSON struct {
 // Used by ListBacklogItems to avoid over-hydrating description/plan fields.
 func backlogItemSummaryToProto(item *session.BacklogItemSummary, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:         item.ID,
-		Title:      item.Title,
-		Priority:   int32(item.Priority),
-		Status:     string(item.Status),
-		RepoPath:   item.RepoPath,
-		Notes:      item.Notes,
-		ExternalId: item.ExternalID,
-		PrUrl:      item.PrURL,
-		PrNumber:   int32(item.PrNumber),
-		CreatedAt:  timestamppb.New(item.CreatedAt),
-		UpdatedAt:  timestamppb.New(item.UpdatedAt),
+		Id:          item.ID,
+		Title:       item.Title,
+		Priority:    int32(item.Priority),
+		Status:      string(item.Status),
+		RepoPath:    item.RepoPath,
+		Notes:       item.Notes,
+		ExternalId:  item.ExternalID,
+		Labels:      item.Labels,
+		PrUrl:       item.PrURL,
+		PrNumber:    int32(item.PrNumber),
+		CreatedAt:   timestamppb.New(item.CreatedAt),
+		UpdatedAt:   timestamppb.New(item.UpdatedAt),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.ArchivedAt != nil {
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
@@ -651,11 +655,15 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 		PlanArtifactsPath: item.PlanArtifactsPath,
 		Notes:             item.Notes,
 		ExternalId:        item.ExternalID,
+		Labels:            item.Labels,
 		SourceId:          item.SourceID,
 		PrUrl:             item.PrURL,
 		PrNumber:          int32(item.PrNumber),
 		CreatedAt:         timestamppb.New(item.CreatedAt),
 		UpdatedAt:         timestamppb.New(item.UpdatedAt),
+	}
+	if item.ExternalURL != "" {
+		p.ExternalUrl = &item.ExternalURL
 	}
 	if item.PlanApprovedAt != nil {
 		p.PlanApprovedAt = timestamppb.New(*item.PlanApprovedAt)
@@ -735,13 +743,16 @@ func backlogItemToProto(item *session.BacklogItemData, costFor func(tmuxUUID str
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
 func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
-		Id:              src.ID,
-		PluginId:        src.PluginID,
-		DisplayName:     src.DisplayName,
-		Enabled:         src.Enabled,
-		TokenConfigured: src.TokenConfigured,
-		CreatedAt:       timestamppb.New(src.CreatedAt),
-		UpdatedAt:       timestamppb.New(src.UpdatedAt),
+		Id:                    src.ID,
+		PluginId:              src.PluginID,
+		DisplayName:           src.DisplayName,
+		Enabled:               src.Enabled,
+		ForwardSyncEnabled:    src.ForwardSyncEnabled,
+		BackwardSyncEnabled:   src.BackwardSyncEnabled,
+		ForwardSyncCloseLabel: src.ForwardSyncCloseLabel,
+		TokenConfigured:       src.TokenConfigured,
+		CreatedAt:             timestamppb.New(src.CreatedAt),
+		UpdatedAt:             timestamppb.New(src.UpdatedAt),
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)
