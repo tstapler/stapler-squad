@@ -998,6 +998,113 @@ func (r *EntRepository) TransitionBacklogItemStatus(ctx context.Context, id stri
 	return &result, nil
 }
 
+// TransitionBacklogItemStatusWithPRFields atomically transitions a backlog
+// item's status while also persisting its PrURL/PrNumber, as a single
+// UPDATE ... WHERE statement — the same CAS precondition guards both writes
+// together, so a reader can never observe the status having changed without
+// the PR fields already being set, or vice versa.
+//
+// This exists to close a narrower race than the one
+// Storage.SetBacklogItemPRAndTransition originally had: an earlier fix
+// reordered that function to run the status transition (review ->
+// pr_pending) before a separate PrURL/PrNumber field write, which fixed the
+// lost-update bug (two racing callers clobbering each other's PR number) but
+// left a smaller gap — between the transition committing and the field write
+// committing, a concurrent reader could observe status=pr_pending with
+// PrNumber==0. That exact shape is what the pr_pending_no_pr / BUG-040 stuck
+// detector (reconcilePRPendingWithoutPRItems, session/backlog_lifecycle.go)
+// exists to flag as a HIGH-priority, non-auto-recoverable alert, and its
+// resolution condition (selfHealStuck) is anchored on the item leaving
+// pr_pending entirely — so a reconcile tick landing in that multi-millisecond
+// window could raise a spurious stuck alert that stays open for days on a
+// perfectly healthy item. Folding both writes into one atomic UPDATE removes
+// the window rather than narrowing it.
+//
+// Not part of the Repository interface — Storage type-asserts s.repo to
+// *EntRepository to call this, the same pattern already used for
+// ListItemSessions (see server/mcp/tools_backlog.go's listItemSessionsFn doc
+// comment): EntRepository has no second real implementation to abstract
+// this over, so adding it to the interface would be pure speculation
+// (see .claude/rules/interface-pollution-checklist.md).
+func (r *EntRepository) TransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+	}
+
+	current, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
+	}
+
+	update := r.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
+	if precondition != nil {
+		if precondition.ExpectedStatus != "" {
+			update = update.Where(backlogitem.StatusEQ(precondition.ExpectedStatus))
+		}
+		if precondition.ExpectedUpdatedAt != nil {
+			update = update.Where(backlogitem.UpdatedAtEQ(*precondition.ExpectedUpdatedAt))
+		}
+	}
+
+	now := time.Now()
+	affected, err := update.
+		SetStatus(string(toStatus)).
+		SetUserModifiedStatusAt(now).
+		SetPrURL(prURL).
+		SetPrNumber(prNumber).
+		Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition backlog item %s status with PR fields: %w", id, err)
+	}
+	if affected == 0 {
+		// The row either no longer exists or the precondition no longer holds —
+		// re-fetch to report which. Mirrors TransitionBacklogItemStatus's
+		// identical affected==0 handling.
+		latest, getErr := r.client.BacklogItem.Get(ctx, parsedID)
+		if getErr != nil {
+			if ent.IsNotFound(getErr) {
+				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			}
+			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
+		}
+		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
+			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+		}
+		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+	}
+
+	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload backlog item %s after transition: %w", id, err)
+	}
+
+	fromStatus := current.Status
+	if precondition != nil && precondition.ExpectedStatus != "" {
+		fromStatus = precondition.ExpectedStatus
+	}
+	note := ""
+	if precondition != nil {
+		note = precondition.Note
+	}
+	recordStatusEvent(ctx, r.client.BacklogStatusEvent, parsedID, fromStatus, string(toStatus), triggeredBy, note)
+
+	result := backlogItemToData(item)
+
+	// Best-effort publish: never blocks or fails the transition itself.
+	r.attachItemSessionsForPublish(ctx, &result)
+	r.publishItemChanged(&result, BacklogItemChange{
+		Kind:      ChangeStatusTransition,
+		OldStatus: fromStatus,
+		NewStatus: string(toStatus),
+	})
+
+	return &result, nil
+}
+
 // publishItemChanged is a defense-in-depth wrapper around
 // r.itemChangePublisher.PublishItemChanged: nil-checked (a publisher may not
 // be wired, e.g. in tests or before server/dependencies.go calls

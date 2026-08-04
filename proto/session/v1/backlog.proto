@@ -1061,6 +1061,11 @@ enum StuckReason {
   // ReconcilePRPending's comment-feedback-driven fix attempts have exhausted
   // the shared rework cap.
   STUCK_REASON_PR_NEEDS_FIX = 13;
+  // STUCK_REASON_RESPAWN_BLOCKED_ACTIVE: see domain.StuckReasonRespawnBlockedActive
+  // (session/domain/backlog.go) — an automated respawn attempt
+  // (AutoRespawnAutonomousWork, AutoReopenForPRFix, or AutoRespawnReview) was
+  // skipped because the item already has an active work or review session.
+  STUCK_REASON_RESPAWN_BLOCKED_ACTIVE = 14;
 }
 
 // StuckBacklogItem is a single open (unresolved, un-snoozed) BacklogStuckState

@@ -764,17 +764,30 @@ func (s *Storage) SetBacklogItemPRAndTransition(ctx context.Context, itemID, prU
 		return nil // already recorded — idempotent no-op
 	}
 
-	prURLCopy, prNumCopy := prURL, prNumber
-	if _, err := s.UpdateBacklogItem(ctx, itemID, BacklogItemUpdate{
-		PrURL:    &prURLCopy,
-		PrNumber: &prNumCopy,
-	}, nil); err != nil {
-		return fmt.Errorf("persist PR fields: %w", err)
+	// The status transition (review -> pr_pending) and the PrURL/PrNumber
+	// field write must land as a single atomic UPDATE, not two separate
+	// calls — even with the transition ordered first (closing the original
+	// lost-update race: two racing callers with different PR numbers both
+	// unconditionally passing a field-write precondition before either
+	// transitioned), two separate calls still leave a narrower gap between
+	// them where a concurrent reader can observe status=pr_pending with
+	// PrNumber==0. That exact shape is what the pr_pending_no_pr / BUG-040
+	// stuck detector (reconcilePRPendingWithoutPRItems,
+	// session/backlog_lifecycle.go) exists to flag as a HIGH-priority,
+	// non-auto-recoverable alert — and its resolution condition is anchored
+	// on the item leaving pr_pending entirely, so a reconcile tick landing in
+	// that window could raise a spurious alert that stays open for days.
+	// TransitionBacklogItemStatusWithPRFields folds both writes into one
+	// UPDATE ... WHERE statement guarded by the same CAS precondition, so
+	// they always commit together — no reader can ever observe one without
+	// the other.
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SetBacklogItemPRAndTransition requires an *EntRepository backend, got %T", s.repo)
 	}
-
 	precondition := &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReview), Note: summary}
-	if _, err := s.TransitionBacklogItemStatus(ctx, itemID, BacklogStatusPRPending, precondition, TriggeredBySystem); err != nil {
-		return fmt.Errorf("transition to pr_pending: %w", err)
+	if _, err := er.TransitionBacklogItemStatusWithPRFields(ctx, itemID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem); err != nil {
+		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
 	// Best-effort from here: the primary contract (PR fields persisted, item

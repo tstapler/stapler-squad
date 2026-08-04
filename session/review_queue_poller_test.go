@@ -921,3 +921,115 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 		t.Errorf("custom-socket instance: got status %v, want Active (server-down must skip, not falsely mark Stopped)", instCustom.Status)
 	}
 }
+
+// stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
+// each key it was queried with so tests can assert lookup order.
+type stubApprovalMetadataProvider struct {
+	bySessionID map[string][]ApprovalMetadata
+	queried     []string
+}
+
+func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata {
+	s.queried = append(s.queried, sessionID)
+	return s.bySessionID[sessionID]
+}
+
+// TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID is the regression test for the bug
+// fixed alongside this test: ApprovalHandler.resolveSessionID stores PendingApproval.SessionID
+// keyed by the session's UUID (Title only as a fallback when no UUID exists — see
+// approval_handler.go's stableIDForData), but checkSession's enrichment step queried the
+// provider by snap.Title. That mismatch silently dropped pending_approval_id (and therefore
+// the escalation reason) from every real queue item. This test seeds the stub provider ONLY
+// under the UUID key — pre-fix, the first (and only) lookup by Title would find nothing and
+// the escalation-reason fields would be absent from item.Metadata.
+func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "session-title-not-used-as-key",
+		UUID:   "session-uuid-1234",
+		Status: Running,
+	}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.UUID: {{
+				ApprovalID:         "approval-1",
+				ToolName:           "Bash",
+				EscalationReason:   "No matching rule; escalated for manual review.",
+				EscalationCategory: "no-match",
+			}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["pending_approval_id"]; got != "approval-1" {
+		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-1", provider.queried)
+	}
+	if got := item.Metadata["escalation_reason"]; got != "No matching rule; escalated for manual review." {
+		t.Errorf("escalation_reason = %q, want the seeded reason (queried keys: %v)", got, provider.queried)
+	}
+	if got := item.Metadata["escalation_reason_category"]; got != "no-match" {
+		t.Errorf("escalation_reason_category = %q, want %q", got, "no-match")
+	}
+}
+
+// TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback covers the second half of
+// checkSession's UUID-then-Title lookup: when a session has no UUID (or the UUID lookup
+// misses), the provider must still be queried by Title so approvals keyed the old/fallback
+// way are found. Seeds the stub ONLY under the Title key — pre-fix (or if this fallback were
+// ever removed) the UUID-only lookup would miss and no metadata would be attached.
+func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "session-with-no-uuid",
+		UUID:   "", // no stable UUID — resolveSessionID would have fallen back to Title too
+		Status: Running,
+	}
+	inst.started.Store(true)
+	ctrl.sessionName = inst.Title
+	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	provider := &stubApprovalMetadataProvider{
+		bySessionID: map[string][]ApprovalMetadata{
+			inst.Title: {{
+				ApprovalID:         "approval-title-fallback",
+				EscalationReason:   "No matching rule; escalated for manual review.",
+				EscalationCategory: "no-match",
+			}},
+		},
+	}
+	poller.SetApprovalProvider(provider)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if got := item.Metadata["pending_approval_id"]; got != "approval-title-fallback" {
+		t.Errorf("pending_approval_id = %q, want %q (queried keys: %v)", got, "approval-title-fallback", provider.queried)
+	}
+}

@@ -64,6 +64,7 @@ const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   spawn_session_autonomous: "Autonomous session started.",
   restart_session: "Session restarted.",
   approve_plan: "Plan approved.",
+  retry_triage: "Triage re-triggered.",
   mark_done: "Marked done.",
   override_done: "Overridden to done.",
   re_review: "Re-review triggered.",
@@ -486,6 +487,25 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item?.triageStatus]);
 
+  // retriggerTriageCore is shared by the standalone "Retry" button (InlineError,
+  // shown for the triage-failed banner) and the "retry_triage" action dispatched
+  // from ActionsSection's approve-plan-replacement affordance for a queued/ready
+  // item that's gated on plan approval with no usable triage result (see
+  // itemActions.ts — docs/tasks/backlog-feature-improvement.md's 2026-08-03
+  // entry, item be676dab). TriggerTriage only ever accepts idea/ready, so a
+  // queued item needs the same reset-to-idea step the manual "Return to Triage"
+  // action performs first — mirrors AutoRespawnTriage's server-side handling of
+  // the identical generalized case (server/services/backlog_service_triage.go).
+  const retriggerTriageCore = useCallback(
+    async (targetItemId: string, currentStatus: string) => {
+      if (currentStatus !== "idea" && currentStatus !== "ready") {
+        await transitionStatus(targetItemId, "idea");
+      }
+      await triggerTriage(targetItemId);
+    },
+    [transitionStatus, triggerTriage]
+  );
+
   const handleAction = useCallback(
     async (action: string) => {
       if (!item) return;
@@ -515,6 +535,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             break;
           case "approve_plan":
             await approvePlan(item.id);
+            break;
+          case "retry_triage":
+            await retriggerTriageCore(item.id, item.status);
             break;
           case "mark_done":
             await transitionStatus(item.id, "done");
@@ -571,7 +594,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         if (mountedRef.current) setActionLoading(null);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
+    [item, transitionStatus, triggerTriage, retriggerTriageCore, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, triggerShipPR, archiveBacklogItem, deleteBacklogItem, onClose, load, showActionToast]
   );
 
   // Extracted verbatim from the inline manual-review-submit onClick handler
@@ -707,7 +730,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     const toastKey = `${item.id}:retrigger_triage`;
     setActionLoading("retrigger_triage");
     try {
-      await triggerTriage(item.id);
+      await retriggerTriageCore(item.id, item.status);
       showActionToast("Triage re-triggered.", "success", toastKey);
       await load();
     } catch (e) {
@@ -718,7 +741,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     } finally {
       if (mountedRef.current) setActionLoading(null);
     }
-  }, [item, triggerTriage, load, showActionToast]);
+  }, [item, retriggerTriageCore, load, showActionToast]);
 
   const handleRefineTriage = useCallback(
     async (feedback: string) => {
@@ -1118,12 +1141,40 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         {/* Planning record — read-only triage result for items past idea status */}
         <PlanningSection item={item} />
 
-        {/* Triage failed banner */}
-        {item.triageStatus === "failed" && item.status === "idea" && (
-          <div className={styles.section}>
-            <InlineError type="permanent" onRetry={handleRetriggerTriage} />
-          </div>
-        )}
+        {/* Triage failed banner — generalized 2026-08-03
+            (docs/tasks/backlog-feature-improvement.md, item be676dab) from
+            idea-only to also cover a queued item gated on plan approval: a
+            triage session can end with no usable result AFTER the item has
+            already advanced past idea (e.g. queued via the WIP cap), and
+            before this fix that state rendered nothing at all — no summary,
+            no retry affordance, just the stuck badge. Not extended to
+            "ready": a ready item's CURRENT plan is reliably in place (see
+            itemActions.ts's doc comment), so a failed *later* refine attempt
+            there shouldn't imply the existing plan is invalid. */}
+        {item.triageStatus === "failed" &&
+          !item.skipPlanning &&
+          !item.planApproved &&
+          (item.status === "idea" || item.status === "queued") && (
+            <div className={styles.section}>
+              <InlineError
+                type="permanent"
+                customMessage={
+                  item.status === "queued"
+                    ? "This item's most recent triage session ended without producing a usable plan. Retry triage to generate one."
+                    : undefined
+                }
+                // InlineError itself has no disabled/loading state (unmodified,
+                // pre-existing component) — guard the same way
+                // TriageLoadingIndicator's onCancel does above, swapping in a
+                // no-op while a retry is already in flight. Without this, a
+                // double-click fires two concurrent retriggerTriageCore calls,
+                // each doing transitionStatus(id,"idea") + triggerTriage(id) —
+                // worse for a queued item (two competing status resets) than the
+                // pre-existing idea-only exposure of this same button.
+                onRetry={actionLoading !== null ? () => {} : handleRetriggerTriage}
+              />
+            </div>
+          )}
 
         {/* Diff modal — reused by the review-flow "View Changes" button above and
             the Version Control section's "View Diff" button below; works for any
