@@ -35,7 +35,7 @@ describe("SourceSection", () => {
     expect(screen.getByRole("link", { name: /Issue #42/ })).toBeInTheDocument();
   });
 
-  it("is collapsed by default", () => {
+  it("SourceSection_should_BeCollapsed_When_DefaultExpandedFalse", () => {
     render(
       <SourceSection
         externalUrl="https://github.com/acme/widget/issues/42"
@@ -48,5 +48,22 @@ describe("SourceSection", () => {
     const header = screen.getByTestId("collapsible-header-source");
     expect(header).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: /Issue #42/ })).not.toBeInTheDocument();
+  });
+
+  it("SourceSection_should_OmitIssueNumber_When_ExternalIdMissing", () => {
+    render(
+      <SourceSection
+        externalUrl="https://github.com/acme/widget/issues/42"
+        externalId={undefined}
+        labels={[]}
+        defaultExpanded={true}
+      />
+    );
+
+    // No literal "Issue #undefined" — falls back to a bare "Issue" label,
+    // but the link itself (still the real provenance URL) is preserved.
+    const link = screen.getByRole("link", { name: "Issue" });
+    expect(link).toHaveAttribute("href", "https://github.com/acme/widget/issues/42");
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
   });
 });

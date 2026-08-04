@@ -23,6 +23,11 @@ export interface SourceSectionProps {
  * PullRequestSection's pattern: the parent (BacklogItemDetail.tsx) decides
  * whether to render this at all (`item.externalUrl` truthy), this component
  * never re-derives that guard itself.
+ *
+ * externalId is still optional in the type — nothing enforces that it always
+ * accompanies a real externalUrl — so the issue number portion is rendered
+ * defensively: only shown when externalId is actually present, to avoid a
+ * literal "Issue #undefined".
  */
 export function SourceSection({ externalUrl, externalId, labels, defaultExpanded }: SourceSectionProps) {
   return (
@@ -36,7 +41,7 @@ export function SourceSection({ externalUrl, externalId, labels, defaultExpanded
           title="Open on GitHub"
         >
           <CircleDot aria-hidden="true" size={14} />
-          Issue #{externalId}
+          {externalId ? `Issue #${externalId}` : "Issue"}
         </a>
         {labels.length > 0 && (
           <div className={styles.labels}>

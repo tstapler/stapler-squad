@@ -194,7 +194,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
 
       <div className={styles.cardFooter}>
         <AcSummary item={item} />
-        {item.externalUrl && (
+        {item.externalUrl && item.externalId && (
           <a
             href={item.externalUrl}
             target="_blank"

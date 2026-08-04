@@ -372,6 +372,16 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 		update := BacklogItemUpdate{}
 		anyField := false
+		// anyChange tracks whether the closed/reopened blocks below already
+		// accounted for this item this tick (via their own updated/errored/
+		// skipped increment, or — for the reopened log-only case — the
+		// updated++ alongside its watermark write). Those blocks bypass
+		// anyField/BacklogItemUpdate entirely, so without this flag the
+		// generic `if !anyField { skipped++ }` fallback below would ALSO fire
+		// for the same item, double-counting it across created+updated+
+		// skipped+errored and breaking the SourceSyncEvent aggregate's
+		// partition-of-item-count invariant.
+		anyChange := false
 
 		if !ContainsModifiedField(modifiedFields, "title") {
 			update.Title = &data.Title
@@ -420,62 +430,95 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// counters above/below — both are legitimate, independent counts of
 		// different kinds of change for the same item in the same tick.
 		if source.BackwardSyncEnabled && extItem.State == "closed" {
-			alreadyReconciled := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
-			if !alreadyReconciled {
-				advanceWatermark := true
-				if target, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
-					guardInput := BacklogItemTransitionInput{
-						Status:            BacklogStatus(existing.Status),
-						AcCriteria:        AcCriteriaJSON(existing.AcceptanceCriteria),
-						PlanApproved:      existing.PlanApproved,
-						SkipPlanning:      existing.SkipPlanning,
-						PlanArtifactsPath: existing.PlanArtifactsPath,
-					}
-					if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
-						if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
-							log.WarningLog.Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
-							errored++
-							advanceWatermark = false
+			// extItem.IssueUpdatedAt can be the zero time.Time if GitHub's
+			// updated_at failed to parse (see IssueUpdatedAt's assignment in
+			// backlog_plugin_github.go's Fetch) or was never populated. A zero
+			// value is never After() a real watermark, so treating it as a
+			// normal timestamp would either (a) make alreadyReconciled
+			// short-circuit forever even against a real, older watermark, or
+			// (b) persist a zero watermark that then suppresses all future
+			// reprocessing. Skip the loop-prevention/watermark logic entirely
+			// this tick rather than risk either.
+			if extItem.IssueUpdatedAt.IsZero() {
+				log.WarningLog.Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
+			} else {
+				alreadyReconciled := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
+				if !alreadyReconciled {
+					anyChange = true
+					advanceWatermark := true
+					if target, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
+						guardInput := BacklogItemTransitionInput{
+							Status:            BacklogStatus(existing.Status),
+							AcCriteria:        AcCriteriaJSON(existing.AcceptanceCriteria),
+							PlanApproved:      existing.PlanApproved,
+							SkipPlanning:      existing.SkipPlanning,
+							PlanArtifactsPath: existing.PlanArtifactsPath,
+						}
+						if GuardedTransitionAllowed(sl.workflowEngine, guardInput, target) {
+							if _, transErr := sl.storage.TransitionBacklogItemStatus(ctx, existing.ID.String(), target, nil, TriggeredByGitHubSync); transErr != nil { //nolint:silenttransition retried next sync tick — advanceWatermark stays false so alreadyReconciled won't suppress reprocessing; errored++ also surfaces via CreateSourceSyncEvent's aggregate count
+								log.WarningLog.Printf("[SyncLoop] backward-sync transition failed item=%s: %v", existing.ID, transErr)
+								errored++
+								advanceWatermark = false
+							} else {
+								updated++
+							}
 						} else {
-							updated++
+							log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
+							skipped++
 						}
 					} else {
-						log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (no valid target for closed issue)", existing.ID, existing.Status)
+						log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
 						skipped++
+						// Nothing changed locally — don't advance the watermark, or a
+						// later manual revert to a pre-work status (with no further
+						// GitHub-side change) would have alreadyReconciled short-circuit
+						// before determineBackwardSyncTarget is even consulted again,
+						// permanently suppressing an otherwise-legitimate auto-archive.
+						// Same fix pattern as the transition-failure branch above.
+						advanceWatermark = false
 					}
-				} else {
-					log.InfoLog.Printf("[SyncLoop] backward-sync skip item=%s status=%s (mid-flight or terminal, no auto-archive)", existing.ID, existing.Status)
-					skipped++
-					// Nothing changed locally — don't advance the watermark, or a
-					// later manual revert to a pre-work status (with no further
-					// GitHub-side change) would have alreadyReconciled short-circuit
-					// before determineBackwardSyncTarget is even consulted again,
-					// permanently suppressing an otherwise-legitimate auto-archive.
-					// Same fix pattern as the transition-failure branch above.
-					advanceWatermark = false
-				}
-				if advanceWatermark {
-					watermark := extItem.IssueUpdatedAt
-					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
-						log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+					if advanceWatermark {
+						watermark := extItem.IssueUpdatedAt
+						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+							log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+						}
 					}
 				}
 			}
 		}
 
 		if source.BackwardSyncEnabled && extItem.State == "open" && (existing.Status == string(BacklogStatusArchived) || existing.Status == string(BacklogStatusDone)) {
-			alreadyLogged := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
-			if !alreadyLogged {
-				log.InfoLog.Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
-				watermark := extItem.IssueUpdatedAt
-				if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
-					log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+			// See the zero-time guard comment in the closed-issue block above —
+			// same rationale applies here.
+			if extItem.IssueUpdatedAt.IsZero() {
+				log.WarningLog.Printf("[SyncLoop] backward-sync skip item=%s: GitHub issue_updated_at is missing/unparseable (zero time) — skipping loop-prevention/watermark logic this tick", existing.ID)
+			} else {
+				alreadyLogged := existing.GithubSyncedIssueUpdatedAt != nil && !extItem.IssueUpdatedAt.After(*existing.GithubSyncedIssueUpdatedAt)
+				if !alreadyLogged {
+					log.InfoLog.Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
+					watermark := extItem.IssueUpdatedAt
+					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+						log.WarningLog.Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
+					} else {
+						// This is a real (if content-free) change to the item's
+						// sync state — count it as updated rather than letting it
+						// fall into the generic skipped++ fallback below, which is
+						// reserved for "nothing happened this tick".
+						anyChange = true
+						updated++
+					}
 				}
 			}
 		}
 
-		if !anyField {
+		if !anyField && !anyChange {
 			skipped++
+			continue
+		}
+		if !anyField {
+			// anyChange is true: the closed/reopened block above already
+			// recorded this item's outcome (updated/errored/skipped) — there
+			// are no content fields to apply via BacklogItemUpdate below.
 			continue
 		}
 

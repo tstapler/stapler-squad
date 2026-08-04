@@ -1270,3 +1270,102 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 	require.Equal(t, 0, events[0].ItemsErrored)
 	require.Greater(t, events[0].ItemsSkipped, 0, "guard-denied transition should be counted as skipped")
 }
+
+// TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile is the
+// regression test for the Copilot review finding on IssueUpdatedAt: a fetched
+// item with a zero (unparsed/missing) IssueUpdatedAt must not be treated as
+// "already reconciled" against a real existing watermark — a zero time.Time
+// is never After() anything, so without the IsZero() guard, alreadyReconciled
+// would short-circuit forever and the closed issue would never be archived,
+// even though the real watermark is a well-defined, older timestamp.
+func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			// IssueUpdatedAt deliberately left at its zero value, simulating a
+			// GitHub updated_at that failed to parse.
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed"},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	existingWatermark := time.Now().Add(-1 * time.Hour)
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:                      "Issue",
+		Status:                     string(BacklogStatusReady),
+		ExternalID:                 "ext-1",
+		SourceID:                   sourceID,
+		GitHubSyncedIssueUpdatedAt: &existingWatermark,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusReady), refetched.Status, "a zero IssueUpdatedAt must not falsely short-circuit as already-reconciled or apply any transition")
+	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
+	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(existingWatermark), "the real existing watermark must not be overwritten with the zero value")
+}
+
+// TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce is the
+// regression test for the Copilot review finding on double-counting: an item
+// archived via the closed-issue backward-sync block must be counted in
+// ItemsUpdated exactly once — not also in ItemsSkipped — since status
+// transitions bypass BacklogItemUpdate/anyField entirely and used to always
+// fall through to the generic `if !anyField { skipped++ }` fallback too.
+// Title/description/priority are locked via UserModifiedFields so anyField
+// stays false — isolating the status-transition-only path the finding
+// describes (an item with unlocked content fields also gets a second,
+// legitimate updated++ from the field-sync path below, which is a separate,
+// pre-existing concern this fix does not change).
+func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id: "fake",
+		items: []ExternalItem{
+			{ExternalID: "ext-1", Title: "Issue", Priority: 3, State: "closed", IssueUpdatedAt: time.Now()},
+		},
+	}
+	storage, cleanup, sl, sourceID := newTestBackwardSyncSetup(t, plugin, true)
+	defer cleanup()
+
+	ctx := context.Background()
+	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		Title:      "Issue",
+		Status:     string(BacklogStatusReady),
+		ExternalID: "ext-1",
+		SourceID:   sourceID,
+	})
+	require.NoError(t, err)
+
+	er := storage.repo.(*EntRepository)
+	createdUUID, err := uuid.Parse(created.ID)
+	require.NoError(t, err)
+	// Also lock labels — otherwise Labels' own unconditional-under-
+	// BackwardSyncEnabled write (Epic 2.3) would set anyField=true itself,
+	// masking the status-transition-only path under test.
+	_, err = er.client.BacklogItem.UpdateOneID(createdUUID).
+		SetUserModifiedFields(`["title","description","priority","labels"]`).
+		Save(ctx)
+	require.NoError(t, err)
+
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+	require.NoError(t, sl.SyncOne(ctx, entSrc))
+
+	refetched, err := storage.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(BacklogStatusArchived), refetched.Status)
+
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, 1, events[0].ItemsUpdated, "the archived item must be counted in updated exactly once")
+	require.Equal(t, 0, events[0].ItemsSkipped, "the archived item must not ALSO be counted as skipped")
+	require.Equal(t, 0, events[0].ItemsErrored)
+	require.Equal(t, 1, events[0].ItemsCreated+events[0].ItemsUpdated+events[0].ItemsSkipped+events[0].ItemsErrored, "aggregate counts must partition the single synced item exactly once")
+}

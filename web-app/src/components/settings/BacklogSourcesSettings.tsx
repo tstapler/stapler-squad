@@ -21,10 +21,25 @@ function formatDate(iso?: string): string {
 // Non-transient sync failures (auth revoked/expired) warrant a persistent,
 // row-level warning that doesn't require expanding history to notice
 // (Story 4.3.2) — a rate limit or a one-off network blip does not.
+//
+// A bare "403" match used to be enough, but GitHub's rate-limit response is
+// ALSO a 403 (session/backlog_plugin_github.go's Fetch/CloseIssue render it
+// as "github_issues: rate limited (status 403)" / "... rate limited closing
+// issue ..."), so a bare "403" false-positives on transient rate-limiting.
+// Match on 401 (GitHub never uses 401 for rate limiting) and specific auth
+// phrasing instead, and explicitly exclude anything already identified as a
+// rate limit.
 function isAuthFailure(errorMessage?: string): boolean {
   if (!errorMessage) return false;
   const lower = errorMessage.toLowerCase();
-  return lower.includes("401") || lower.includes("403") || lower.includes("revoked");
+  if (lower.includes("rate limit")) return false;
+  return (
+    lower.includes("401") ||
+    lower.includes("403") ||
+    lower.includes("bad credentials") ||
+    lower.includes("revoked") ||
+    lower.includes("requires authentication")
+  );
 }
 
 export function BacklogSourcesSettings() {

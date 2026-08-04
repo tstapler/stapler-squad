@@ -659,4 +659,50 @@ describe("BacklogSourcesSettings — Story 4.3.2: row-level non-transient-failur
 
     expect(screen.queryByTestId("source-row-src-1-auth-warning")).not.toBeInTheDocument();
   });
+
+  it("BacklogSourcesSettings_should_NotShowRowLevelWarning_When_MostRecentEventIsRateLimited403", async () => {
+    // Regression test: GitHub's rate-limit response is also a 403
+    // ("github_issues: rate limited (status 403)"), which used to
+    // false-positive against the old bare-"403" isAuthFailure match.
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-4",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 0,
+          itemsUpdated: 0,
+          itemsSkipped: 0,
+          itemsErrored: 1,
+          errorMessage: "github_issues: rate limited (status 403)",
+        },
+      ],
+      truncated: false,
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    expect(screen.queryByTestId("source-row-src-1-auth-warning")).not.toBeInTheDocument();
+  });
+
+  it("BacklogSourcesSettings_should_ShowRowLevelWarning_When_MostRecentEventIsBadCredentials401", async () => {
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-5",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 0,
+          itemsUpdated: 0,
+          itemsSkipped: 0,
+          itemsErrored: 1,
+          errorMessage: "github_issues: unexpected status 401: Bad credentials",
+        },
+      ],
+      truncated: false,
+    });
+    render(<BacklogSourcesSettings />);
+
+    expect(await screen.findByTestId("source-row-src-1-auth-warning")).toBeInTheDocument();
+  });
 });

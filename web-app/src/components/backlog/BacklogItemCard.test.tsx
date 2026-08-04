@@ -248,6 +248,22 @@ describe("BacklogItemCard — GitHub provenance badge (Epic 4.1, backlog-github-
     expect(screen.queryByRole("link", { name: /Imported from GitHub issue/ })).not.toBeInTheDocument();
   });
 
+  it("BacklogItemCard_should_OmitProvenanceBadge_When_ExternalUrlPresentButExternalIdMissing", () => {
+    // Guards against a literal "Imported from GitHub issue #undefined" / "#undefined"
+    // badge — nothing in the type system enforces externalId always accompanying
+    // a real externalUrl, so the badge must not render on externalUrl alone.
+    render(
+      <BacklogItemCard
+        item={makeItem({ externalUrl: "https://github.com/acme/widget/issues/42", externalId: undefined })}
+        onAction={jest.fn()}
+        onClick={jest.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("link", { name: /Imported from GitHub issue/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
   it("BacklogItemCard_should_NotTriggerOnClick_When_ProvenanceBadgeClicked", () => {
     const onClick = jest.fn();
     render(
